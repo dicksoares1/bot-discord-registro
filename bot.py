@@ -4,12 +4,6 @@ from discord.ext import commands
 
 TOKEN = os.getenv("TOKEN")
 
-print("DEBUG | TOKEN =", TOKEN)
-
-if TOKEN is None:
-    raise RuntimeError("❌ TOKEN NÃO FOI ENCONTRADO NO RAILWAY")
-
-
 # IDs (SUBSTITUA PELOS REAIS – SEM ASPAS)
 AGREGADO_ROLE_ID = 1422847202937536532
 CONVIDADO_ROLE_ID = 1337382961456353342
@@ -105,4 +99,5 @@ async def setup_registro(interaction: discord.Interaction):
 
 
 bot.run(TOKEN)
+
 
