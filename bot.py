@@ -7,9 +7,6 @@ print("TODAS AS VARIÁVEIS:", os.environ)
 TOKEN = os.environ.get("TOKEN")
 print("TOKEN LIDO:", TOKEN)
 
-if TOKEN is None:
-    raise RuntimeError("❌ TOKEN NÃO FOI ENCONTRADO NO RAILWAY")
-
 intents = discord.Intents.default()
 intents.members = True
 
@@ -108,6 +105,7 @@ async def setup_registro(interaction: discord.Interaction):
 
 
 bot.run(TOKEN)
+
 
 
 
