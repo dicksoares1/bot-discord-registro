@@ -1,10 +1,17 @@
 import os
+import discord
+from discord.ext import commands
 
 print("TODAS AS VARIÁVEIS:", os.environ)
 
 TOKEN = os.environ.get("TOKEN")
 print("TOKEN LIDO:", TOKEN)
 
+if TOKEN is None:
+    raise RuntimeError("❌ TOKEN NÃO FOI ENCONTRADO NO RAILWAY")
+
+intents = discord.Intents.default()
+intents.members = True
 
 # IDs (SUBSTITUA PELOS REAIS – SEM ASPAS)
 AGREGADO_ROLE_ID = 1422847202937536532
@@ -101,6 +108,7 @@ async def setup_registro(interaction: discord.Interaction):
 
 
 bot.run(TOKEN)
+
 
 
 
