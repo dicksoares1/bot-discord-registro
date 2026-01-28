@@ -17,6 +17,8 @@ CANAL_REGISTRO_ID = 1229556030397218878
 CANAL_LOG_REGISTRO_ID = 1462457604939841851
 CANAL_CALCULADORA_ID = 1460984821458272347  # calculadora-de-vendas
 CANAL_ENCOMENDAS_ID = 1460980984811098294  # encomendas
+GUILD_ID = 1229526644193099880
+
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -159,13 +161,17 @@ async def on_member_join(member):
 
 @bot.event
 async def on_ready():
+    guild = discord.Object(id=GUILD_ID)
+
     bot.add_view(RegistroView())
     bot.add_view(CalculadoraView())
     bot.add_view(StatusView())
 
-    await bot.tree.sync()
-    
-    print("✅ Bot online!")
+    bot.tree.copy_global_to(guild=guild)
+    await bot.tree.sync(guild=guild)
+
+    print("✅ Bot online e comandos sincronizados para o servidor!")
+
 
 @bot.tree.command(name="setup_registro")
 @commands.has_permissions(administrator=True)
@@ -202,6 +208,7 @@ async def setup_calculadora(interaction: discord.Interaction):
     )
 
 bot.run(TOKEN)
+
 
 
 
