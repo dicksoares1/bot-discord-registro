@@ -149,7 +149,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             inline=False
         )
 
-        embed.set_footer(text="🛡 Sistema de Encomendas • FiveM")
+        embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
 
         canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
         await canal.send(embed=embed, view=StatusView())
@@ -304,5 +304,6 @@ async def setup_calculadora(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Calculadora configurada.", ephemeral=True)
 
 bot.run(TOKEN)
+
 
 
