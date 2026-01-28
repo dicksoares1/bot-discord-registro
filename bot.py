@@ -97,97 +97,100 @@ async def setup_registro(interaction: discord.Interaction):
 # ==================================================
 # ============== CALCULADORA =======================
 # ==================================================
-class CalculadoraModal(discord.ui.Modal, title="🧮 Calculadora de Vendas"):
-    obs = discord.ui.TextInput(label="Observações gerais", required=False)
-    qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$ 50)", required=True)
-    qtd_sub = discord.ui.TextInput(label="Quantidade SUB (R$ 90)", required=True)
+class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
+    organizacao = discord.ui.TextInput(
+        label="Organização",
+        placeholder="Ex: VDR 442",
+        required=True
+    )
+
+    qtd_pt = discord.ui.TextInput(
+        label="Quantidade PT (R$50)",
+        placeholder="Somente números",
+        required=True
+    )
+
+    qtd_sub = discord.ui.TextInput(
+        label="Quantidade SUB (R$90)",
+        placeholder="Somente números",
+        required=True
+    )
+
+    observacoes = discord.ui.TextInput(
+        label="Observações gerais",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
             pt = int(self.qtd_pt.value)
             sub = int(self.qtd_sub.value)
         except ValueError:
-            await interaction.response.send_message("❌ Use apenas números.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Quantidades inválidas. Use apenas números.",
+                ephemeral=True
+            )
             return
 
-        total = pt * PRECO_PT + sub * PRECO_SUB
+        total_pt = pt * 50
+        total_sub = sub * 90
+        total = total_pt + total_sub
 
-        embed = discord.Embed(title="📦 Nova Encomenda", color=0x3498db)
-        embed.add_field(name="📝 Observações", value=self.obs.value or "Nenhuma", inline=False)
-        embed.add_field(name="🔫 PT", value=f"{pt} x R$ 50,00", inline=True)
-        embed.add_field(name="🔫 SUB", value=f"{sub} x R$ 90,00", inline=True)
+        embed = discord.Embed(
+            title="📦 Nova Encomenda",
+            color=0x1e3a8a
+        )
+
         embed.add_field(
-            name="💰 Total",
-            value=f"**R$ {total:,.2f}**".replace(",", "X").replace(".", ",").replace("X", "."),
+            name="👤 Vendedor",
+            value=interaction.user.mention,
             inline=False
         )
-        embed.add_field(name="📌 Status", value="*(nenhum)*", inline=False)
+
+        embed.add_field(
+            name="🏷 Organização",
+            value=self.organizacao.value,
+            inline=False
+        )
+
+        embed.add_field(
+            name="🔫 PT",
+            value=f"{pt} x R$50 = R${total_pt}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🔫 SUB",
+            value=f"{sub} x R$90 = R${total_sub}",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💰 Total",
+            value=f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            inline=False
+        )
+
+        embed.add_field(
+            name="📝 Observações",
+            value=self.observacoes.value or "Nenhuma",
+            inline=False
+        )
+
+        embed.add_field(
+            name="📌 Status",
+            value="⏳ Pagamento pendente",
+            inline=False
+        )
 
         canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
         await canal.send(embed=embed, view=StatusView())
 
-        await interaction.response.send_message("✅ Venda registrada!", ephemeral=True)
-
-
-class CalculadoraView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="🧮 Nova Venda",
-        style=discord.ButtonStyle.green,
-        custom_id="botao_calculadora"
-    )
-    async def abrir(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(CalculadoraModal())
-
-
-class StatusView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.status = set()
-
-    async def atualizar(self, interaction):
-        embed = interaction.message.embeds[0]
-        texto = "\n".join(self.status) if self.status else "*(nenhum)*"
-        embed.set_field_at(4, name="📌 Status", value=texto, inline=False)
-        await interaction.message.edit(embed=embed, view=self)
-
-    async def toggle(self, interaction, texto):
-        if texto in self.status:
-            self.status.remove(texto)
-        else:
-            self.status.add(texto)
-        await self.atualizar(interaction)
-        await interaction.response.defer()
-
-    @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="pago")
-    async def pago(self, i, b): await self.toggle(i, "💰 Pago")
-
-    @discord.ui.button(label="📦 Entregue", style=discord.ButtonStyle.success, custom_id="entregue")
-    async def entregue(self, i, b): await self.toggle(i, "📦 Entregue")
-
-    @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.secondary, custom_id="pendente")
-    async def pendente(self, i, b): await self.toggle(i, "⏳ Pagamento pendente")
-
-    @discord.ui.button(label="🚚 Falta entregar", style=discord.ButtonStyle.danger, custom_id="falta")
-    async def falta(self, i, b): await self.toggle(i, "🚚 Falta entregar")
-
-
-@bot.tree.command(name="setup_calculadora")
-@commands.has_permissions(administrator=True)
-async def setup_calculadora(interaction: discord.Interaction):
-    canal = interaction.guild.get_channel(CANAL_CALCULADORA_ID)
-
-    embed = discord.Embed(
-        title="🧮 Calculadora de Vendas",
-        description="Clique abaixo para registrar uma venda.",
-        color=0x2ecc71
-    )
-
-    await canal.send(embed=embed, view=CalculadoraView())
-    await interaction.response.send_message("✅ Calculadora configurada!", ephemeral=True)
-
+        await interaction.response.send_message(
+            "✅ Venda registrada com sucesso!",
+            ephemeral=True
+        )
 
 # =========================
 # EVENTOS GERAIS
@@ -207,4 +210,5 @@ async def on_ready():
 
 
 bot.run(TOKEN)
+
 
