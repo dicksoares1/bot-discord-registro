@@ -72,36 +72,45 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+    try:
         pt = int(self.qtd_pt.value)
         sub = int(self.qtd_sub.value)
-
-        except ValueError:
-    await interaction.response.send_message(
-        "❌ Use apenas números nas quantidades.",
-        ephemeral=True
-    )
-    return
-
-        total_pt = pt * 50
-        total_sub = sub * 90
-        total = total_pt + total_sub
-
-        embed = discord.Embed(title="📦 Nova Encomenda", color=0x1e3a8a)
-        embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
-        embed.add_field(name="🏷 Organização", value=self.organizacao.value, inline=False)
-        embed.add_field(name="🔫 PT", value=f"{pt} x R$50 = R${total_pt}", inline=True)
-        embed.add_field(name="🔫 SUB", value=f"{sub} x R$90 = R${total_sub}", inline=True)
-        embed.add_field(name="💰 Total", value=f"R${total}", inline=False)
-        embed.add_field(name="📝 Observações", value=self.observacoes.value or "Nenhuma", inline=False)
-        embed.add_field(name="📌 Status", value="⏳ Pagamento pendente", inline=False)
-
-        canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
-        await canal.send(embed=embed, view=StatusView())
-
+    except ValueError:
         await interaction.response.send_message(
-            "✅ Venda registrada com sucesso!",
+            "❌ Quantidades inválidas. Use apenas números.",
             ephemeral=True
         )
+        return
+
+    total_pt = pt * 50
+    total_sub = sub * 90
+    total = total_pt + total_sub
+
+    embed = discord.Embed(title="📦 Nova Encomenda", color=0x1e3a8a)
+    embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
+    embed.add_field(name="🏷 Organização", value=self.organizacao.value, inline=False)
+    embed.add_field(name="🔫 PT", value=f"{pt} x R$50 = R${total_pt}", inline=True)
+    embed.add_field(name="🔫 SUB", value=f"{sub} x R$90 = R${total_sub}", inline=True)
+    embed.add_field(name="💰 Total", value=f"R${total}", inline=False)
+    embed.add_field(
+        name="📝 Observações",
+        value=self.observacoes.value or "Nenhuma",
+        inline=False
+    )
+    embed.add_field(
+        name="📌 Status",
+        value="⏳ Pagamento pendente",
+        inline=False
+    )
+
+    canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
+    await canal.send(embed=embed, view=StatusView())
+
+    await interaction.response.send_message(
+        "✅ Venda registrada com sucesso!",
+        ephemeral=True
+    )
+
 
 class StatusView(discord.ui.View):
     def __init__(self):
@@ -220,6 +229,7 @@ async def setup_calculadora(interaction: discord.Interaction):
     )
 
 bot.run(TOKEN)
+
 
 
 
