@@ -33,7 +33,12 @@ def proximo_pedido():
             f.write("0")
 
     with open("pedido.txt", "r") as f:
-        numero = int(f.read().strip())
+        conteudo = f.read().strip()
+
+    if not conteudo.isdigit():
+        numero = 0
+    else:
+        numero = int(conteudo)
 
     numero += 1
 
@@ -41,6 +46,7 @@ def proximo_pedido():
         f.write(str(numero))
 
     return numero
+
 
 # ================= REGISTRO =================
 
@@ -243,3 +249,4 @@ async def setup_calculadora(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Calculadora configurada.", ephemeral=True)
 
 bot.run(TOKEN)
+
