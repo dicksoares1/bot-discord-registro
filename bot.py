@@ -22,6 +22,9 @@ GUILD_ID = 1229526644193099880
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+GUILD_ID = 1229526644193099880
+GUILD = discord.Object(id=GUILD_ID)
+
 class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
     nome = discord.ui.TextInput(label="Nome Completo")
     passaporte = discord.ui.TextInput(label="Passaporte")
@@ -168,14 +171,18 @@ async def on_ready():
     bot.add_view(StatusView())
 
     bot.tree.copy_global_to(guild=guild)
-    await bot.tree.sync(guild=guild)
+   await bot.tree.sync(guild=GUILD)
+print("🔄 Comandos sincronizados no servidor!")
 
-    print("✅ Bot online e comandos sincronizados para o servidor!")
 
-
-@bot.tree.command(name="setup_registro")
+@bot.tree.command(
+    name="setup_registro",
+    description="Configura o painel de registro",
+    guild=GUILD
+)
 @commands.has_permissions(administrator=True)
 async def setup_registro(interaction: discord.Interaction):
+
     canal = interaction.guild.get_channel(CANAL_REGISTRO_ID)
 
     embed = discord.Embed(
@@ -190,9 +197,14 @@ async def setup_registro(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@bot.tree.command(name="setup_calculadora")
+@bot.tree.command(
+    name="setup_calculadora",
+    description="Configura a calculadora de vendas",
+    guild=GUILD
+)
 @commands.has_permissions(administrator=True)
 async def setup_calculadora(interaction: discord.Interaction):
+
     canal = interaction.guild.get_channel(CANAL_CALCULADORA_ID)
 
     embed = discord.Embed(
@@ -208,6 +220,7 @@ async def setup_calculadora(interaction: discord.Interaction):
     )
 
 bot.run(TOKEN)
+
 
 
 
