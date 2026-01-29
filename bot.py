@@ -245,7 +245,15 @@ class FabricacaoView(discord.ui.View):
         fim = inicio + timedelta(minutes=total_min)
 
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
-        msg = await canal.send(embed=discord.Embed(title="🏭 Produção", description="Iniciando...", color=0x3498db))
+
+        # 🔹 CRIA APENAS UM POST (QUE SERÁ ATUALIZADO)
+        msg = await canal.send(
+            embed=discord.Embed(
+                title="🏭 Produção",
+                description="Iniciando...",
+                color=0x3498db
+            )
+        )
 
         producoes[pid] = {
             "galpao": galpao,
@@ -259,6 +267,8 @@ class FabricacaoView(discord.ui.View):
         }
 
         salvar_producoes(producoes)
+
+        # 🔁 INICIA ACOMPANHAMENTO NO MESMO POST
         bot.loop.create_task(acompanhar_producao(pid))
         await interaction.response.defer()
 
@@ -297,29 +307,41 @@ async def acompanhar_producao(pid):
             f"**Iniciado por:** <@{prod['autor']}>\n"
             f"Início: <t:{int(inicio.timestamp())}:t>\n"
             f"Término: <t:{int(fim.timestamp())}:t>\n\n"
-            f"**Restante:** {mins} min\n"
+            f"⏳ **Restante:** {mins} min\n"
             f"{barra(pct)}"
         )
 
         view = None
 
+        # 🟡 LIBERA 2ª TASK NO MESMO POST
         if not prod["segunda_task"] and (total - restante) >= prod["segunda_task_em"]:
             prod["segunda_task"] = True
+            producoes[pid] = prod
             salvar_producoes(producoes)
+
             desc += "\n\n🟡 **2ª Task Liberada**"
             view = SegundaTaskView(pid)
 
+        # 🟢 FINALIZA NO MESMO POST
         if restante <= 0:
             desc += "\n\n🟢 **Produção Finalizada**"
             del producoes[pid]
             salvar_producoes(producoes)
 
-        await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e), view=view)
+        await msg.edit(
+            embed=discord.Embed(
+                title="🏭 Produção",
+                description=desc,
+                color=0x34495e
+            ),
+            view=view
+        )
 
         if restante <= 0:
             return
 
-        await asyncio.sleep(180)
+        # 🔁 ATUALIZA A CADA 1 MINUTO
+        await asyncio.sleep(60)
 
 async def enviar_painel_fabricacao():
     canal = bot.get_channel(CANAL_FABRICACAO_ID)
@@ -328,7 +350,11 @@ async def enviar_painel_fabricacao():
             return
 
     await canal.send(
-        embed=discord.Embed(title="🏭 Fabricação", description="Selecione o galpão.", color=0x2c3e50),
+        embed=discord.Embed(
+            title="🏭 Fabricação",
+            description="Selecione o galpão.",
+            color=0x2c3e50
+        ),
         view=FabricacaoView()
     )
 
@@ -410,5 +436,6 @@ async def on_ready():
     print("✅ Bot online com Registro + Vendas + Produção + Lives")
 
 bot.run(TOKEN)
+
 
 
