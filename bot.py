@@ -187,23 +187,16 @@ class SegundaTaskView(discord.ui.View):
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
         producoes = carregar_producoes()
         if self.pid not in producoes:
-            await interaction.response.send_message("❌ Produção não encontrada.", ephemeral=True)
+            await interaction.response.defer()
             return
 
-        prod = producoes[self.pid]
+        producoes[self.pid]["segunda_task_confirmada"] = {
+            "user": interaction.user.id,
+            "time": datetime.utcnow().isoformat()
+        }
 
-        canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
-        await canal.send(embed=discord.Embed(
-            title="✅ 2ª Task Confirmada",
-            description=(
-                f"**Galpão:** {prod['galpao']}\n"
-                f"👤 **Confirmado por:** {interaction.user.mention}\n"
-                f"🕒 **Horário:** <t:{int(datetime.utcnow().timestamp())}:t>"
-            ),
-            color=0x2ecc71
-        ))
-
-        await interaction.response.send_message("🟢 2ª task registrada com sucesso!", ephemeral=True)
+        salvar_producoes(producoes)
+        await interaction.response.defer()
 
 class FabricacaoView(discord.ui.View):
     def __init__(self):
@@ -215,41 +208,32 @@ class FabricacaoView(discord.ui.View):
         inicio = datetime.utcnow()
         fim = inicio + timedelta(minutes=total_min)
 
-        segunda_task_em = (total_min - segunda_task_faltando_min) * 60
+        msg = await interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID).send(
+            embed=discord.Embed(title="🏭 Produção", description="Iniciando...", color=0x3498db)
+        )
 
         producoes[pid] = {
             "galpao": galpao,
             "autor": interaction.user.id,
             "inicio": inicio.isoformat(),
             "fim": fim.isoformat(),
-            "segunda_task_em": segunda_task_em,
-            "segunda_task": False
+            "segunda_task_em": (total_min - segunda_task_faltando_min) * 60,
+            "segunda_task": False,
+            "msg_id": msg.id,
+            "canal_id": CANAL_REGISTRO_GALPAO_ID
         }
 
         salvar_producoes(producoes)
-
-        canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
-        await canal.send(embed=discord.Embed(
-            title="🏭 Produção Iniciada",
-            description=(
-                f"**Galpão:** {galpao}\n"
-                f"👤 **Iniciado por:** {interaction.user.mention}\n"
-                f"🕒 **Início:** <t:{int(inicio.timestamp())}:t>\n"
-                f"🏁 **Término:** <t:{int(fim.timestamp())}:R>"
-            ),
-            color=0x3498db
-        ))
-
         bot.loop.create_task(acompanhar_producao(pid))
-        await interaction.response.send_message("✅ Produção iniciada!", ephemeral=True)
+        await interaction.response.defer()
 
     @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.primary, custom_id="fabricacao_sul")
     async def sul(self, interaction, button):
-        await self.iniciar(interaction, "Sul", total_min=130, segunda_task_faltando_min=80)
+        await self.iniciar(interaction, "Sul", 130, 80)
 
     @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.secondary, custom_id="fabricacao_norte")
     async def norte(self, interaction, button):
-        await self.iniciar(interaction, "Norte", total_min=65, segunda_task_faltando_min=40)
+        await self.iniciar(interaction, "Norte", 65, 40)
 
 async def acompanhar_producao(pid):
     while True:
@@ -258,6 +242,12 @@ async def acompanhar_producao(pid):
             return
 
         prod = producoes[pid]
+        canal = bot.get_channel(prod["canal_id"])
+        try:
+            msg = await canal.fetch_message(prod["msg_id"])
+        except:
+            return
+
         inicio = datetime.fromisoformat(prod["inicio"])
         fim = datetime.fromisoformat(prod["fim"])
 
@@ -266,50 +256,37 @@ async def acompanhar_producao(pid):
         pct = max(0, min(1, 1 - (restante / total)))
         mins = int(restante // 60)
 
-        canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
+        desc = (
+            f"**Galpão:** {prod['galpao']}\n"
+            f"👤 <@{prod['autor']}>\n"
+            f"🕒 Início: <t:{int(inicio.timestamp())}:t>\n"
+            f"🏁 Término: <t:{int(fim.timestamp())}:t>\n\n"
+            f"⏳ **Restante:** {mins} min\n"
+            f"{barra(pct)}"
+        )
 
-        await canal.send(embed=discord.Embed(
-            title="📊 Status da Produção",
-            description=(
-                f"**Galpão:** {prod['galpao']}\n"
-                f"👤 <@{prod['autor']}>\n"
-                f"⏳ **Restante:** {mins} min\n"
-                f"{barra(pct)}"
-            ),
-            color=0x34495e
-        ))
+        view = None
 
         if not prod["segunda_task"] and (total - restante) >= prod["segunda_task_em"]:
-            await canal.send(embed=discord.Embed(
-                title="🟡 2ª Task Liberada",
-                description=(
-                    f"**Galpão:** {prod['galpao']}\n"
-                    f"<@{prod['autor']}>\n"
-                    f"⏳ **Tempo restante:** {mins} minutos"
-                ),
-                color=0xf1c40f
-            ), view=SegundaTaskView(pid))
-
             prod["segunda_task"] = True
             salvar_producoes(producoes)
+            desc += "\n\n🟡 **2ª Task Liberada**"
+            view = SegundaTaskView(pid)
 
         if restante <= 0:
-            await canal.send(embed=discord.Embed(
-                title="🏁 Produção Finalizada",
-                description=f"**Galpão:** {prod['galpao']}\n<@{prod['autor']}>",
-                color=0x2ecc71
-            ))
+            desc += "\n\n🏁 **Produção Finalizada**"
             del producoes[pid]
             salvar_producoes(producoes)
+
+        await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e), view=view)
+
+        if restante <= 0:
             return
 
         await asyncio.sleep(180)
 
 async def enviar_painel_fabricacao():
     canal = bot.get_channel(CANAL_FABRICACAO_ID)
-    if not canal:
-        return
-
     async for m in canal.history(limit=10):
         if m.author == bot.user and m.embeds and m.embeds[0].title == "🏭 Fabricação":
             return
@@ -361,3 +338,4 @@ async def setup_calculadora(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Calculadora configurada.", ephemeral=True)
 
 bot.run(TOKEN)
+
