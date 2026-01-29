@@ -48,9 +48,16 @@ class SegundaTaskView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="✅ 2º Task Feita", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label="✅ 2º Task Feita",
+        style=discord.ButtonStyle.success,
+        custom_id="segunda_task_feita"
+    )
     async def segunda_task(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🟢 Segunda task confirmada!", ephemeral=True)
+        await interaction.response.send_message(
+            "🟢 Segunda task confirmada!",
+            ephemeral=True
+        )
 
 async def acompanhar_producao(producao_id):
     while True:
@@ -125,23 +132,103 @@ class FabricacaoView(discord.ui.View):
 
         bot.loop.create_task(acompanhar_producao(producao_id))
 
-    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.primary)
+    @discord.ui.button(
+        label="🏭 Galpões Sul",
+        style=discord.ButtonStyle.primary,
+        custom_id="fabricacao_sul"
+    )
     async def sul(self, interaction, button):
-        await self.iniciar(interaction, "Sul", 3900, 1500)  # 1h05 / 40min
+        await self.iniciar(interaction, "Sul", 3900, 1500)
 
-    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label="🏭 Galpões Norte",
+        style=discord.ButtonStyle.secondary,
+        custom_id="fabricacao_norte"
+    )
     async def norte(self, interaction, button):
-        await self.iniciar(interaction, "Norte", 7800, 1200)  # 2h10 / 1h50
+        await self.iniciar(interaction, "Norte", 7800, 1200)
 
 # ================= REGISTRO =================
-# (TODO O SEU CÓDIGO ORIGINAL DE REGISTRO E VENDAS — INTACTO)
-# ⚠️ NADA FOI REMOVIDO AQUI
+
+class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
+    nome = discord.ui.TextInput(label="Nome Completo")
+    passaporte = discord.ui.TextInput(label="Passaporte")
+    indicado = discord.ui.TextInput(label="Indicado por")
+    telefone = discord.ui.TextInput(label="Telefone In Game")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        membro = interaction.user
+        guild = interaction.guild
+
+        await membro.edit(nick=f"{self.passaporte.value} - {self.nome.value}")
+
+        agregado = guild.get_role(AGREGADO_ROLE_ID)
+        convidado = guild.get_role(CONVIDADO_ROLE_ID)
+
+        if agregado:
+            await membro.add_roles(agregado)
+        if convidado:
+            await membro.remove_roles(convidado)
+
+        canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
+        if canal_log:
+            embed = discord.Embed(title="📋 Novo Registro", color=0x2ecc71)
+            embed.add_field(name="Nome", value=self.nome.value)
+            embed.add_field(name="Passaporte", value=self.passaporte.value)
+            embed.add_field(name="Indicado por", value=self.indicado.value)
+            embed.add_field(name="Telefone", value=self.telefone.value)
+            embed.add_field(name="Usuário", value=membro.mention)
+            await canal_log.send(embed=embed)
+
+        await interaction.response.send_message("✅ Registro concluído!", ephemeral=True)
+
+class RegistroView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📋 Fazer Registro", style=discord.ButtonStyle.success, custom_id="registro_fazer")
+    async def registro(self, interaction, button):
+        await interaction.response.send_modal(RegistroModal())
+
+# ================= VENDAS =================
+
+class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
+    organizacao = discord.ui.TextInput(label="Organização")
+    qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$50)")
+    qtd_sub = discord.ui.TextInput(label="Quantidade SUB (R$90)")
+    observacoes = discord.ui.TextInput(label="Observações", style=discord.TextStyle.paragraph, required=False)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        pt = int(self.qtd_pt.value)
+        sub = int(self.qtd_sub.value)
+
+        total = (pt * 50) + (sub * 90)
+
+        embed = discord.Embed(title="📦 NOVA ENCOMENDA • FACÇÃO", color=0x1e3a8a)
+        embed.add_field(name="👤 Vendedor", value=interaction.user.mention)
+        embed.add_field(name="🏷 Organização", value=self.organizacao.value)
+        embed.add_field(name="💰 Total", value=f"R$ {total:,}".replace(",", "."))
+
+        canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
+        await canal.send(embed=embed)
+        await interaction.response.send_message("✅ Venda registrada!", ephemeral=True)
+
+class CalculadoraView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🧮 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calculadora_registrar")
+    async def registrar(self, interaction, button):
+        await interaction.response.send_modal(VendaModal())
 
 # ================= EVENTS =================
 
 @bot.event
 async def on_ready():
+    bot.add_view(RegistroView())
+    bot.add_view(CalculadoraView())
     bot.add_view(FabricacaoView())
+    bot.add_view(SegundaTaskView())
 
     producoes = carregar_producoes()
     for pid in producoes:
@@ -151,7 +238,7 @@ async def on_ready():
     if canal:
         embed = discord.Embed(
             title="🏭 Fabricação",
-            description="Escolha o galpão para iniciar a produção.",
+            description="Selecione o galpão para iniciar a produção.",
             color=0x2c3e50
         )
         await canal.send(embed=embed, view=FabricacaoView())
