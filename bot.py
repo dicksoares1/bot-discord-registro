@@ -166,12 +166,12 @@ async def on_submit(self, interaction: discord.Interaction):
         inline=False
     )
 
-        embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
+    embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
 
-        canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
-        await canal.send(embed=embed, view=StatusView())
+    canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
+    await canal.send(embed=embed, view=StatusView())
 
-        await interaction.response.send_message("✅ Encomenda registrada!", ephemeral=True)
+    await interaction.response.send_message("✅ Encomenda registrada!", ephemeral=True)
 
 # ================= STATUS =================
 
@@ -321,6 +321,7 @@ async def setup_calculadora(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Calculadora configurada.", ephemeral=True)
 
 bot.run(TOKEN)
+
 
 
 
