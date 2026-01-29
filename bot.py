@@ -88,6 +88,18 @@ class RegistroView(discord.ui.View):
 # ================= VENDAS (ORIGINAL) =====================
 # =========================================================
 
+# ================= CONFIG ORGANIZAÇÕES =================
+
+ORGANIZACOES_CONFIG = {
+    "VDR": {"emoji": "🔥", "cor": 0xe74c3c},
+    "POLICIA": {"emoji": "🚓", "cor": 0x3498db},
+    "EXERCITO": {"emoji": "🪖", "cor": 0x2ecc71},
+    "MAFIA": {"emoji": "💀", "cor": 0x8e44ad},
+    "CIVIL": {"emoji": "👤", "cor": 0x95a5a6},
+}
+
+# ================= STATUS VIEW =================
+
 class StatusView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -129,6 +141,8 @@ class StatusView(discord.ui.View):
     async def pendente(self, interaction, button):
         await self.toggle_status(interaction, "⏳ Pagamento pendente")
 
+# ================= VENDAS =================
+
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="Organização")
     qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$50)")
@@ -150,9 +164,21 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         # >>> FORMATAÇÃO EM REAIS (BR) <<<
         valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        embed = discord.Embed(title="📦 NOVA ENCOMENDA", color=0x1e3a8a)
+        # >>> ORGANIZAÇÃO TURBINADA <<<
+        org_raw = self.organizacao.value.strip()
+        org_nome = org_raw.upper()
+
+        config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
+        org_emoji = config["emoji"]
+        org_cor = config["cor"]
+
+        embed = discord.Embed(title="📦 NOVA ENCOMENDA", color=org_cor)
         embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
-        embed.add_field(name="🏷 Organização", value=self.organizacao.value, inline=False)
+        embed.add_field(
+            name="🏷 Organização",
+            value=f"**{org_emoji} {org_nome}**",
+            inline=False
+        )
         embed.add_field(name="🔫 PT", value=f"{pt} munições\n📦 {pacotes_pt} pacotes", inline=True)
         embed.add_field(name="🔫 SUB", value=f"{sub} munições\n📦 {pacotes_sub} pacotes", inline=True)
         embed.add_field(name="💰 Total", value=f"**R$ {valor_formatado}**", inline=False)
@@ -384,4 +410,5 @@ async def on_ready():
     print("✅ Bot online com Registro + Vendas + Produção + Lives")
 
 bot.run(TOKEN)
+
 
