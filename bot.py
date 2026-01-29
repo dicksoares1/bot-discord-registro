@@ -147,12 +147,15 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         pacotes_sub = sub // 50
         total = (pt * 50) + (sub * 90)
 
+        # >>> FORMATAÇÃO EM REAIS (BR) <<<
+        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
         embed = discord.Embed(title="📦 NOVA ENCOMENDA", color=0x1e3a8a)
         embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
         embed.add_field(name="🏷 Organização", value=self.organizacao.value, inline=False)
         embed.add_field(name="🔫 PT", value=f"{pt} munições\n📦 {pacotes_pt} pacotes", inline=True)
         embed.add_field(name="🔫 SUB", value=f"{sub} munições\n📦 {pacotes_sub} pacotes", inline=True)
-        embed.add_field(name="💰 Total", value=f"R$ {total}", inline=False)
+        embed.add_field(name="💰 Total", value=f"**R$ {valor_formatado}**", inline=False)
         embed.add_field(name="📌 Status", value="📦 A entregar", inline=False)
         embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
 
@@ -381,3 +384,4 @@ async def on_ready():
     print("✅ Bot online com Registro + Vendas + Produção + Lives")
 
 bot.run(TOKEN)
+
