@@ -3,114 +3,269 @@ import discord
 from discord.ext import commands
 from datetime import datetime
 
-TOKEN = os.environ["TOKEN"]
+# ================= CONFIG =================
+
+TOKEN = os.environ.get("TOKEN")
 
 intents = discord.Intents.default()
-intents.message_content = True
+intents.members = True
 
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents,
-    help_command=None
-)
+AGREGADO_ROLE_ID = 1422847202937536532
+CONVIDADO_ROLE_ID = 1337382961456353342
 
-# ================= VIEW =================
+CANAL_REGISTRO_ID = 1229556030397218878
+CANAL_LOG_REGISTRO_ID = 1462457604939841851
+CANAL_CALCULADORA_ID = 1460984821458272347
+CANAL_ENCOMENDAS_ID = 1460980984811098294
+
+GUILD_ID = 1229526644193099880
+GUILD = discord.Object(id=GUILD_ID)
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# ================= REGISTRO =================
+
+class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
+    nome = discord.ui.TextInput(label="Nome Completo")
+    passaporte = discord.ui.TextInput(label="Passaporte")
+    indicado = discord.ui.TextInput(label="Indicado por")
+    telefone = discord.ui.TextInput(label="Telefone In Game")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        membro = interaction.user
+        guild = interaction.guild
+
+        await membro.edit(nick=f"{self.passaporte.value} - {self.nome.value}")
+
+        agregado = guild.get_role(AGREGADO_ROLE_ID)
+        convidado = guild.get_role(CONVIDADO_ROLE_ID)
+
+        if agregado:
+            await membro.add_roles(agregado)
+        if convidado:
+            await membro.remove_roles(convidado)
+
+        canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
+        if canal_log:
+            embed = discord.Embed(title="📋 Novo Registro", color=0x2ecc71)
+            embed.add_field(name="Nome", value=self.nome.value)
+            embed.add_field(name="Passaporte", value=self.passaporte.value)
+            embed.add_field(name="Indicado por", value=self.indicado.value)
+            embed.add_field(name="Telefone", value=self.telefone.value)
+            embed.add_field(name="Usuário", value=membro.mention)
+            await canal_log.send(embed=embed)
+
+        await interaction.response.send_message(
+            "✅ Registro concluído com sucesso!",
+            ephemeral=True
+        )
+
+
+class RegistroView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="📋 Fazer Registro",
+        style=discord.ButtonStyle.success,
+        custom_id="registro_fazer"
+    )
+    async def registro(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RegistroModal())
+
+
+# ================= STATUS VIEW =================
 
 class StatusView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    def _get_status(self, embed):
-        for field in embed.fields:
-            if field.name == "📌 Status":
-                return [] if field.value == "—" else field.value.split("\n")
-        return []
+    async def toggle_status(self, interaction, label):
+        embed = interaction.message.embeds[0]
 
-    def _set_status(self, embed, status):
-        valor = "\n".join(status) if status else "—"
+        campo = embed.fields[-1]
+        status_atual = campo.value.split("\n")
 
-        for i, field in enumerate(embed.fields):
-            if field.name == "📌 Status":
-                embed.set_field_at(i, name="📌 Status", value=valor, inline=False)
-                return
+        if label.startswith("✅ Entregue"):
+            agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+            label = f"✅ Entregue • {agora}"
 
-        embed.add_field(name="📌 Status", value=valor, inline=False)
-
-    async def _get_embed(self, interaction):
-        if not interaction.message.embeds:
-            await interaction.response.send_message(
-                "❌ Mensagem sem embed.",
-                ephemeral=True
-            )
-            return None
-        return interaction.message.embeds[0]
-
-    async def toggle(self, interaction, texto):
-        await interaction.response.defer()
-
-        embed = await self._get_embed(interaction)
-        if not embed:
-            return
-
-        status = self._get_status(embed)
-
-        if texto in status:
-            status.remove(texto)
+        if label in status_atual:
+            status_atual.remove(label)
         else:
-            status.append(texto)
+            status_atual.append(label)
 
-        self._set_status(embed, status)
+        if not status_atual:
+            status_atual = ["⏳ Pagamento pendente"]
+
+        embed.set_field_at(
+            -1,
+            name="📌 Status",
+            value="\n".join(status_atual),
+            inline=False
+        )
+
         await interaction.message.edit(embed=embed)
-
-    async def marcar_entregue(self, interaction):
         await interaction.response.defer()
-
-        embed = await self._get_embed(interaction)
-        if not embed:
-            return
-
-        status = [s for s in self._get_status(embed) if not s.startswith("✅ Entregue")]
-        agora = datetime.now().strftime("%d/%m/%Y às %H:%M")
-        status.append(f"✅ Entregue — {agora}")
-
-        self._set_status(embed, status)
-        await interaction.message.edit(embed=embed)
-
-    @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
-    async def pago(self, interaction, button):
-        await self.toggle(interaction, "💰 Pago")
-
-    @discord.ui.button(label="📦 A entregar", style=discord.ButtonStyle.secondary, custom_id="status_entregar")
-    async def entregar(self, interaction, button):
-        await self.toggle(interaction, "📦 A entregar")
-
-    @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
-    async def pendente(self, interaction, button):
-        await self.toggle(interaction, "⏳ Pagamento pendente")
 
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
     async def entregue(self, interaction, button):
-        await self.marcar_entregue(interaction)
+        await self.toggle_status(interaction, "✅ Entregue")
 
-# ================= COMANDO =================
+    @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
+    async def pago(self, interaction, button):
+        await self.toggle_status(interaction, "💰 Pago")
 
-@bot.command()
-async def status(ctx):
-    embed = discord.Embed(
-        title="📦 Pedido",
-        description="Controle de status",
-        color=discord.Color.blue()
+    @discord.ui.button(label="📦 A entregar", style=discord.ButtonStyle.secondary, custom_id="status_a_entregar")
+    async def a_entregar(self, interaction, button):
+        await self.toggle_status(interaction, "📦 A entregar")
+
+    @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
+    async def pendente(self, interaction, button):
+        await self.toggle_status(interaction, "⏳ Pagamento pendente")
+
+
+# ================= VENDAS =================
+
+class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
+    organizacao = discord.ui.TextInput(label="Organização")
+    qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$50)")
+    qtd_sub = discord.ui.TextInput(label="Quantidade SUB (R$90)")
+    observacoes = discord.ui.TextInput(
+        label="Observações",
+        style=discord.TextStyle.paragraph,
+        required=False
     )
-    embed.add_field(name="📌 Status", value="—", inline=False)
-    await ctx.send(embed=embed, view=StatusView())
 
-# ================= READY =================
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            pt = int(self.qtd_pt.value.strip())
+            sub = int(self.qtd_sub.value.strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ Quantidades inválidas. Use apenas números.",
+                ephemeral=True
+            )
+            return
+
+        pacotes_pt = pt // 50
+        pacotes_sub = sub // 50
+
+        total = (pt * 50) + (sub * 90)
+
+        embed = discord.Embed(
+            title="📦 NOVA ENCOMENDA • FACÇÃO",
+            color=0x1e3a8a
+        )
+
+        embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
+        embed.add_field(name="🏷 Organização", value=self.organizacao.value, inline=False)
+
+        embed.add_field(
+            name="🔫 PT",
+            value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🔫 SUB",
+            value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💰 Total",
+            value=f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            inline=False
+        )
+
+        embed.add_field(
+            name="📝 Observações",
+            value=self.observacoes.value or "Nenhuma",
+            inline=False
+        )
+
+        embed.add_field(
+            name="📌 Status",
+            value="⏳ Pagamento pendente",
+            inline=False
+        )
+
+        embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
+
+        canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
+        await canal.send(embed=embed, view=StatusView())
+
+        await interaction.response.send_message(
+            "✅ Venda registrada com sucesso!",
+            ephemeral=True
+        )
+
+
+class CalculadoraView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🧮 Registrar Venda",
+        style=discord.ButtonStyle.primary,
+        custom_id="calculadora_registrar"
+    )
+    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VendaModal())
+
+
+# ================= EVENTS =================
 
 @bot.event
 async def on_ready():
+    bot.add_view(RegistroView())
+    bot.add_view(CalculadoraView())
     bot.add_view(StatusView())
-    print("✅ Bot online no Railway")
 
-# ================= START =================
+    bot.tree.copy_global_to(guild=GUILD)
+    await bot.tree.sync(guild=GUILD)
+
+    print("✅ Bot online e operacional!")
+
+
+@bot.event
+async def on_member_join(member):
+    cargo = member.guild.get_role(CONVIDADO_ROLE_ID)
+    if cargo:
+        await member.add_roles(cargo)
+
+
+# ================= COMMANDS =================
+
+@bot.tree.command(name="setup_registro", description="Configura o painel de registro", guild=GUILD)
+@commands.has_permissions(administrator=True)
+async def setup_registro(interaction: discord.Interaction):
+    canal = interaction.guild.get_channel(CANAL_REGISTRO_ID)
+
+    embed = discord.Embed(
+        title="📋 Registro",
+        description="Clique no botão abaixo para se registrar.",
+        color=0x2ecc71
+    )
+
+    await canal.send(embed=embed, view=RegistroView())
+    await interaction.response.send_message("✅ Registro configurado.", ephemeral=True)
+
+
+@bot.tree.command(name="setup_calculadora", description="Configura a calculadora de vendas", guild=GUILD)
+@commands.has_permissions(administrator=True)
+async def setup_calculadora(interaction: discord.Interaction):
+    canal = interaction.guild.get_channel(CANAL_CALCULADORA_ID)
+
+    embed = discord.Embed(
+        title="🧮 Calculadora de Vendas",
+        description="Clique no botão abaixo para registrar uma venda.",
+        color=0x1e3a8a
+    )
+
+    await canal.send(embed=embed, view=CalculadoraView())
+    await interaction.response.send_message("✅ Calculadora configurada.", ephemeral=True)
+
 
 bot.run(TOKEN)
