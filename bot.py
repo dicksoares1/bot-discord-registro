@@ -537,6 +537,43 @@ async def on_member_remove(member):
             except:
                 pass
 
+# ================= ATUALIZA META AO TROCAR CARGO =================
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    # Só continua se os cargos realmente mudaram
+    if before.roles == after.roles:
+        return
+
+    metas = carregar_metas()
+    data = metas.get(str(after.id))
+
+    # Se não tem sala de meta, não faz nada
+    if not data:
+        return
+
+    nova_categoria_id = obter_categoria_meta(after)
+
+    # Se não encontrou categoria válida, não faz nada
+    if not nova_categoria_id:
+        return
+
+    canal = after.guild.get_channel(data["canal_id"])
+    nova_categoria = after.guild.get_channel(nova_categoria_id)
+
+    if not canal or not nova_categoria:
+        return
+
+    # Se já está na categoria correta, não faz nada
+    if canal.category_id == nova_categoria_id:
+        return
+
+    try:
+        await canal.edit(category=nova_categoria)
+        print(f"🔁 Sala de meta movida para nova categoria: {after.display_name}")
+    except Exception as e:
+        print(f"❌ Erro ao mover sala de meta: {e}")
+
 # ================= PAINEL METAS =================
 
 async def enviar_painel_metas():
@@ -587,4 +624,5 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
