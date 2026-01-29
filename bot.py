@@ -209,12 +209,37 @@ class SegundaTaskView(discord.ui.View):
     @discord.ui.button(label="✅ 2º Task Feita", style=discord.ButtonStyle.success, custom_id="segunda_task_feita")
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
         producoes = carregar_producoes()
-        if self.pid in producoes:
-            producoes[self.pid]["segunda_task_confirmada"] = {
-                "user": interaction.user.id,
-                "time": datetime.utcnow().isoformat()
-            }
-            salvar_producoes(producoes)
+        if self.pid not in producoes:
+            await interaction.response.defer()
+            return
+
+        prod = producoes[self.pid]
+
+        # Marca como confirmada
+        prod["segunda_task_confirmada"] = {
+            "user": interaction.user.id,
+            "time": datetime.utcnow().isoformat()
+        }
+
+        producoes[self.pid] = prod
+        salvar_producoes(producoes)
+
+        # Atualiza a mensagem removendo botão e mostrando quem confirmou
+        canal = interaction.guild.get_channel(prod["canal_id"])
+        try:
+            msg = await canal.fetch_message(prod["msg_id"])
+            embed = msg.embeds[0]
+
+            embed.description += (
+                f"\n\n🟢 **2ª Task OK**\n"
+                f"👤 Confirmado por: {interaction.user.mention}"
+            )
+
+            # Remove o botão
+            await msg.edit(embed=embed, view=None)
+        except:
+            pass
+
         await interaction.response.defer()
 
 class FabricacaoView(discord.ui.View):
@@ -624,5 +649,6 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
