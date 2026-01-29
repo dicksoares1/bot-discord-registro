@@ -143,7 +143,7 @@ class FabricacaoView(discord.ui.View):
         custom_id="fabricacao_sul"
     )
     async def sul(self, interaction, button):
-        await self.iniciar(interaction, "Sul", 3900, 1500)
+        await self.iniciar(interaction, "Sul", 7800, 1500)
 
     @discord.ui.button(
         label="🏭 Galpões Norte",
@@ -151,7 +151,7 @@ class FabricacaoView(discord.ui.View):
         custom_id="fabricacao_norte"
     )
     async def norte(self, interaction, button):
-        await self.iniciar(interaction, "Norte", 7800, 1200)
+        await self.iniciar(interaction, "Norte", 3900, 1200)
 
 # ================= EVENTS =================
 
@@ -176,3 +176,4 @@ async def on_ready():
     print("✅ Bot online • Produções restauradas com sucesso!")
 
 bot.run(TOKEN)
+
