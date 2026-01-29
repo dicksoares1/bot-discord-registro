@@ -44,19 +44,39 @@ def proximo_pedido():
 
 
 def registrar_venda_dia(pt, sub, total):
-    if os.path.exists("vendas_hoje.json"):
-        with open("vendas_hoje.json", "r") as f:
-            dados = json.load(f)
-    else:
-        dados = {"pt": 0, "sub": 0, "total": 0, "pedidos": 0}
+    arquivo = "vendas_hoje.json"
 
+    dados_padrao = {
+        "pt": 0,
+        "sub": 0,
+        "total": 0,
+        "pedidos": 0
+    }
+
+    # Se não existir, cria
+    if not os.path.exists(arquivo):
+        dados = dados_padrao
+    else:
+        try:
+            with open(arquivo, "r", encoding="utf-8") as f:
+                conteudo = f.read().strip()
+                if not conteudo:
+                    dados = dados_padrao
+                else:
+                    dados = json.loads(conteudo)
+        except (json.JSONDecodeError, ValueError):
+            dados = dados_padrao
+
+    # Soma os valores
     dados["pt"] += pt
     dados["sub"] += sub
     dados["total"] += total
     dados["pedidos"] += 1
 
-    with open("vendas_hoje.json", "w") as f:
-        json.dump(dados, f)
+    # Salva novamente
+    with open(arquivo, "w", encoding="utf-8") as f:
+        json.dump(dados, f, ensure_ascii=False, indent=2)
+
 
 # ================= REGISTRO =================
 
@@ -278,3 +298,4 @@ async def setup_calculadora(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Calculadora configurada.", ephemeral=True)
 
 bot.run(TOKEN)
+
