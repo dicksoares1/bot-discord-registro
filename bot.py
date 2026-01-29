@@ -2,7 +2,7 @@ import os
 import json
 import asyncio
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from datetime import datetime, timedelta
 
 # ================= CONFIG =================
@@ -32,7 +32,6 @@ GUILD = discord.Object(id=GUILD_ID)
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ================= REGISTRO =================
-
 class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
     nome = discord.ui.TextInput(label="Nome Completo")
     passaporte = discord.ui.TextInput(label="Passaporte")
@@ -76,7 +75,6 @@ class RegistroView(discord.ui.View):
 
 
 # ================= STATUS VIEW =================
-
 class StatusView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -120,7 +118,6 @@ class StatusView(discord.ui.View):
 
 
 # ================= VENDAS =================
-
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="Organização")
     qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$50)")
@@ -181,6 +178,7 @@ def barra(pct, size=20):
     cheio = int(pct * size)
     return "🟩" * cheio + "⬜" * (size - cheio)
 
+
 class SegundaTaskView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -188,6 +186,7 @@ class SegundaTaskView(discord.ui.View):
     @discord.ui.button(label="✅ 2º Task Feita", style=discord.ButtonStyle.success, custom_id="segunda_task_feita")
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("🟢 Segunda task confirmada!", ephemeral=True)
+
 
 class FabricacaoView(discord.ui.View):
     def __init__(self):
@@ -213,7 +212,12 @@ class FabricacaoView(discord.ui.View):
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
         await canal.send(embed=discord.Embed(
             title="🏭 Produção Iniciada",
-            description=f"**Galpão:** {galpao}\n**Iniciado por:** {interaction.user.mention}",
+            description=(
+                f"**Galpão:** {galpao}\n"
+                f"**Iniciado por:** {interaction.user.mention}\n"
+                f"🕒 **Início:** <t:{int(inicio.timestamp())}:t>\n"
+                f"🏁 **Término:** <t:{int(fim.timestamp())}:R>"
+            ),
             color=0x3498db
         ))
 
@@ -222,11 +226,16 @@ class FabricacaoView(discord.ui.View):
 
     @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.primary, custom_id="fabricacao_sul")
     async def sul(self, interaction, button):
-        await self.iniciar(interaction, "Sul", 130*60, 40*60)
+        total = 130 * 60
+        segunda_task_em = 50 * 60
+        await self.iniciar(interaction, "Sul", total, segunda_task_em)
 
     @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.secondary, custom_id="fabricacao_norte")
     async def norte(self, interaction, button):
-        await self.iniciar(interaction, "Norte", 65*60, 40*60)
+        total = 65 * 60
+        segunda_task_em = 25 * 60
+        await self.iniciar(interaction, "Norte", total, segunda_task_em)
+
 
 async def acompanhar_producao(pid):
     while True:
@@ -240,15 +249,20 @@ async def acompanhar_producao(pid):
         total = (fim - inicio).total_seconds()
         restante = (fim - datetime.utcnow()).total_seconds()
 
-        pct = max(0, min(1, 1 - (restante / total)))
-
         if not prod["segunda_task"] and (total - restante) >= prod["segunda_task_em"]:
             canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
+            minutos_restantes = int(restante // 60)
+
             await canal.send(embed=discord.Embed(
                 title="🟡 2ª Task Liberada",
-                description=f"**Galpão:** {prod['galpao']}\n<@{prod['autor']}>",
+                description=(
+                    f"**Galpão:** {prod['galpao']}\n"
+                    f"<@{prod['autor']}>\n"
+                    f"⏳ **Tempo restante:** {minutos_restantes} minutos"
+                ),
                 color=0xf1c40f
             ), view=SegundaTaskView())
+
             prod["segunda_task"] = True
             salvar_producoes(producoes)
 
@@ -259,19 +273,64 @@ async def acompanhar_producao(pid):
 
         await asyncio.sleep(30)
 
+
+# ================= PAINEL EM TEMPO REAL =================
+
+@tasks.loop(seconds=30)
+async def atualizar_painel_fabricacao():
+    canal = bot.get_channel(CANAL_FABRICACAO_ID)
+    if not canal:
+        return
+
+    producoes = carregar_producoes()
+
+    embed = discord.Embed(title="🏭 Fabricação • Status em Tempo Real", color=0x2c3e50)
+
+    if not producoes:
+        embed.description = "Nenhuma produção ativa no momento."
+    else:
+        for pid, prod in producoes.items():
+            inicio = datetime.fromisoformat(prod["inicio"])
+            fim = datetime.fromisoformat(prod["fim"])
+            total = (fim - inicio).total_seconds()
+            restante = max(0, (fim - datetime.utcnow()).total_seconds())
+            pct = max(0, min(1, 1 - (restante / total)))
+
+            mins = int(restante // 60)
+            barra_txt = barra(pct)
+
+            embed.add_field(
+                name=f"🏭 Galpão {prod['galpao']}",
+                value=(
+                    f"👤 <@{prod['autor']}>\n"
+                    f"⏳ **Restante:** {mins} min\n"
+                    f"{barra_txt}"
+                ),
+                inline=False
+            )
+
+    async for m in canal.history(limit=10):
+        if m.author == bot.user and m.embeds and "Fabricação" in m.embeds[0].title:
+            await m.edit(embed=embed, view=FabricacaoView())
+            return
+
+    await canal.send(embed=embed, view=FabricacaoView())
+
+
 async def enviar_painel_fabricacao():
     canal = bot.get_channel(CANAL_FABRICACAO_ID)
     if not canal:
         return
 
     async for m in canal.history(limit=10):
-        if m.author == bot.user and m.embeds and m.embeds[0].title == "🏭 Fabricação":
+        if m.author == bot.user and m.embeds and "Fabricação" in m.embeds[0].title:
             return
 
     await canal.send(
-        embed=discord.Embed(title="🏭 Fabricação", description="Selecione o galpão.", color=0x2c3e50),
+        embed=discord.Embed(title="🏭 Fabricação • Status em Tempo Real", color=0x2c3e50),
         view=FabricacaoView()
     )
+
 
 # ================= EVENTS =================
 
@@ -287,17 +346,20 @@ async def on_ready():
         bot.loop.create_task(acompanhar_producao(pid))
 
     await enviar_painel_fabricacao()
+    atualizar_painel_fabricacao.start()
 
     bot.tree.copy_global_to(guild=GUILD)
     await bot.tree.sync(guild=GUILD)
 
-    print("✅ Bot online com Registro, Vendas e Produção")
+    print("✅ Bot online com Registro, Vendas e Produção + Painel em Tempo Real")
+
 
 @bot.event
 async def on_member_join(member):
     cargo = member.guild.get_role(CONVIDADO_ROLE_ID)
     if cargo:
         await member.add_roles(cargo)
+
 
 # ================= COMMANDS =================
 
@@ -308,11 +370,13 @@ async def setup_registro(interaction: discord.Interaction):
     await canal.send(embed=discord.Embed(title="📋 Registro", color=0x2ecc71), view=RegistroView())
     await interaction.response.send_message("✅ Registro configurado.", ephemeral=True)
 
+
 @bot.tree.command(name="setup_calculadora", description="Configura a calculadora de vendas", guild=GUILD)
 @commands.has_permissions(administrator=True)
 async def setup_calculadora(interaction: discord.Interaction):
     canal = interaction.guild.get_channel(CANAL_CALCULADORA_ID)
     await canal.send(embed=discord.Embed(title="🧮 Calculadora de Vendas", color=0x1e3a8a), view=CalculadoraView())
     await interaction.response.send_message("✅ Calculadora configurada.", ephemeral=True)
+
 
 bot.run(TOKEN)
