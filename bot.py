@@ -28,8 +28,8 @@ CANAL_REGISTRO_GALPAO_ID = 1356174712337862819
 ARQUIVO_PRODUCOES = "producoes.json"
 
 # LIVES
-CANAL_CADASTRO_LIVE_ID = 1466464557215256790  # TROQUE
-CANAL_DIVULGACAO_LIVE_ID = 1243325102917943335  # TROQUE
+CANAL_CADASTRO_LIVE_ID = 1466464557215256790
+CANAL_DIVULGACAO_LIVE_ID = 1243325102917943335
 ARQUIVO_LIVES = "lives.json"
 
 TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID")
@@ -41,7 +41,7 @@ GUILD = discord.Object(id=GUILD_ID)
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================================================
-# ================= REGISTRO (ORIGINAL) ===================
+# ================= REGISTRO ===============================
 # =========================================================
 
 class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
@@ -85,10 +85,8 @@ class RegistroView(discord.ui.View):
         await interaction.response.send_modal(RegistroModal())
 
 # =========================================================
-# ================= VENDAS (ORIGINAL) =====================
+# ================= VENDAS ================================
 # =========================================================
-
-# ================= CONFIG ORGANIZAÇÕES =================
 
 ORGANIZACOES_CONFIG = {
     "VDR": {"emoji": "🔥", "cor": 0xe74c3c},
@@ -97,8 +95,6 @@ ORGANIZACOES_CONFIG = {
     "MAFIA": {"emoji": "💀", "cor": 0x8e44ad},
     "CIVIL": {"emoji": "👤", "cor": 0x95a5a6},
 }
-
-# ================= STATUS VIEW =================
 
 class StatusView(discord.ui.View):
     def __init__(self):
@@ -141,8 +137,6 @@ class StatusView(discord.ui.View):
     async def pendente(self, interaction, button):
         await self.toggle_status(interaction, "⏳ Pagamento pendente")
 
-# ================= VENDAS =================
-
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="Organização")
     qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$50)")
@@ -161,24 +155,14 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         pacotes_sub = sub // 50
         total = (pt * 50) + (sub * 90)
 
-        # >>> FORMATAÇÃO EM REAIS (BR) <<<
         valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        # >>> ORGANIZAÇÃO TURBINADA <<<
-        org_raw = self.organizacao.value.strip()
-        org_nome = org_raw.upper()
-
+        org_nome = self.organizacao.value.strip().upper()
         config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
-        org_emoji = config["emoji"]
-        org_cor = config["cor"]
 
-        embed = discord.Embed(title="📦 NOVA ENCOMENDA", color=org_cor)
+        embed = discord.Embed(title="📦 NOVA ENCOMENDA", color=config["cor"])
         embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
-        embed.add_field(
-            name="🏷 Organização",
-            value=f"**{org_emoji} {org_nome}**",
-            inline=False
-        )
+        embed.add_field(name="🏷 Organização", value=f"**{config['emoji']} {org_nome}**", inline=False)
         embed.add_field(name="🔫 PT", value=f"{pt} munições\n📦 {pacotes_pt} pacotes", inline=True)
         embed.add_field(name="🔫 SUB", value=f"{sub} munições\n📦 {pacotes_sub} pacotes", inline=True)
         embed.add_field(name="💰 Total", value=f"**R$ {valor_formatado}**", inline=False)
@@ -196,7 +180,6 @@ class CalculadoraView(discord.ui.View):
     @discord.ui.button(label="🧮 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calculadora_registrar")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VendaModal())
-
 # =========================================================
 # ================= PRODUÇÃO ===============================
 # =========================================================
@@ -246,13 +229,8 @@ class FabricacaoView(discord.ui.View):
 
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
 
-        # 🔹 CRIA APENAS UM POST (QUE SERÁ ATUALIZADO)
         msg = await canal.send(
-            embed=discord.Embed(
-                title="🏭 Produção",
-                description="Iniciando...",
-                color=0x3498db
-            )
+            embed=discord.Embed(title="🏭 Produção", description="Iniciando...", color=0x3498db)
         )
 
         producoes[pid] = {
@@ -267,8 +245,6 @@ class FabricacaoView(discord.ui.View):
         }
 
         salvar_producoes(producoes)
-
-        # 🔁 INICIA ACOMPANHAMENTO NO MESMO POST
         bot.loop.create_task(acompanhar_producao(pid))
         await interaction.response.defer()
 
@@ -313,34 +289,25 @@ async def acompanhar_producao(pid):
 
         view = None
 
-        # 🟡 LIBERA 2ª TASK NO MESMO POST
         if not prod["segunda_task"] and (total - restante) >= prod["segunda_task_em"]:
             prod["segunda_task"] = True
-            producoes[pid] = prod
             salvar_producoes(producoes)
-
             desc += "\n\n🟡 **2ª Task Liberada**"
             view = SegundaTaskView(pid)
 
-        # 🟢 FINALIZA NO MESMO POST
         if restante <= 0:
             desc += "\n\n🟢 **Produção Finalizada**"
             del producoes[pid]
             salvar_producoes(producoes)
 
         await msg.edit(
-            embed=discord.Embed(
-                title="🏭 Produção",
-                description=desc,
-                color=0x34495e
-            ),
+            embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e),
             view=view
         )
 
         if restante <= 0:
             return
 
-        # 🔁 ATUALIZA A CADA 1 MINUTO
         await asyncio.sleep(60)
 
 async def enviar_painel_fabricacao():
@@ -350,16 +317,12 @@ async def enviar_painel_fabricacao():
             return
 
     await canal.send(
-        embed=discord.Embed(
-            title="🏭 Fabricação",
-            description="Selecione o galpão.",
-            color=0x2c3e50
-        ),
+        embed=discord.Embed(title="🏭 Fabricação", description="Selecione o galpão.", color=0x2c3e50),
         view=FabricacaoView()
     )
 
 # =========================================================
-# ================= LIVES (BOTÃO) =========================
+# ================= LIVES ================================
 # =========================================================
 
 def carregar_lives():
@@ -376,7 +339,7 @@ def salvar_lives(dados):
         json.dump(dados, f, indent=4)
 
 class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
-    link = discord.ui.TextInput(label="Cole o link da sua live (Twitch)", placeholder="https://twitch.tv/seucanal")
+    link = discord.ui.TextInput(label="Cole o link da sua live", placeholder="https://twitch.tv/seucanal")
 
     async def on_submit(self, interaction: discord.Interaction):
         lives = carregar_lives()
@@ -414,28 +377,214 @@ async def enviar_painel_lives():
     )
 
     await canal.send(embed=embed, view=CadastrarLiveView())
+# =========================================================
+# ================= METAS ================================
+# =========================================================
+
+# CANAIS / CATEGORIAS
+CANAL_SOLICITAR_SALA_ID = 1337374500366450741
+
+CATEGORIA_META_GERENTE_ID = 1337374002422743122
+CATEGORIA_META_RESPONSAVEIS_ID = 1462810826992783422
+CATEGORIA_META_SOLDADO_ID = 1461335635519475894
+CATEGORIA_META_MEMBRO_ID = 1461335697209163900
+CATEGORIA_META_AGREGADO_ID = 1461335748870541323
+
+# CARGOS
+CARGO_GERENTE_ID = 1324499473296134154
+CARGO_RESP_METAS_ID = 1337407399656423485
+CARGO_RESP_ACAO_ID = 1337379517274259509
+CARGO_RESP_VENDAS_ID = 1337379530586980352
+CARGO_RESP_PRODUCAO_ID = 1337379524949573662
+CARGO_SOLDADO_ID = 1422845498863259700
+CARGO_MEMBRO_ID = 1422847198789369926
+CARGO_AGREGADO_ID = 1422847202937536532
+
+ARQUIVO_METAS = "metas.json"
+
+# ================= UTIL METAS =================
+
+def carregar_metas():
+    if not os.path.exists(ARQUIVO_METAS):
+        return {}
+    try:
+        with open(ARQUIVO_METAS, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def salvar_metas(dados):
+    with open(ARQUIVO_METAS, "w") as f:
+        json.dump(dados, f, indent=4)
+
+def obter_categoria_meta(member: discord.Member):
+    roles = [r.id for r in member.roles]
+
+    # PRIORIDADE (MAIS ALTO PRIMEIRO)
+    if CARGO_GERENTE_ID in roles:
+        return CATEGORIA_META_GERENTE_ID
+    if any(r in roles for r in [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]):
+        return CATEGORIA_META_RESPONSAVEIS_ID
+    if CARGO_SOLDADO_ID in roles:
+        return CATEGORIA_META_SOLDADO_ID
+    if CARGO_MEMBRO_ID in roles:
+        return CATEGORIA_META_MEMBRO_ID
+    if CARGO_AGREGADO_ID in roles:
+        return CATEGORIA_META_AGREGADO_ID
+
+    return None
+
+def tem_meta(member_id):
+    metas = carregar_metas()
+    return str(member_id) in metas
+
+# ================= BOTÕES =================
+
+class MetaView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📁 Solicitar Sala de Meta", style=discord.ButtonStyle.primary, custom_id="meta_criar")
+    async def criar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        member = interaction.user
+        guild = interaction.guild
+
+        if tem_meta(member.id):
+            await interaction.response.send_message("❌ Você já possui uma sala de meta.", ephemeral=True)
+            return
+
+        categoria_id = obter_categoria_meta(member)
+        if not categoria_id:
+            await interaction.response.send_message("❌ Você não possui cargo autorizado para metas.", ephemeral=True)
+            return
+
+        categoria = guild.get_channel(categoria_id)
+
+        nome_canal = f"📁・{member.display_name}".lower().replace(" ", "-")
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        }
+
+        gerente_role = guild.get_role(CARGO_GERENTE_ID)
+        if gerente_role:
+            overwrites[gerente_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
+
+        canal = await guild.create_text_channel(
+            name=nome_canal,
+            category=categoria,
+            overwrites=overwrites
+        )
+
+        metas = carregar_metas()
+        metas[str(member.id)] = {
+            "canal_id": canal.id,
+            "categoria_id": categoria_id
+        }
+        salvar_metas(metas)
+
+        # 📌 MENSAGEM FIXADA
+        aviso = await canal.send(
+            "📢 **ALGUNS AVISOS IMPORTANTES SOBRE ESSA SALA** 📢\n\n"
+            "📌 Apenas você e a Gerência tem acesso a essa sala.\n"
+            "📌 Aqui explica tudo como funciona a meta da Fac ⁠📢・faq-meta\n"
+            "📌 Responsável por cuidar de metas: @RESP | Metas"
+        )
+        await aviso.pin()
+
+        await interaction.response.send_message("✅ Sua sala de meta foi criada!", ephemeral=True)
+
+class MetaGerenteView(discord.ui.View):
+    def __init__(self, member_id):
+        super().__init__(timeout=None)
+        self.member_id = member_id
+
+    @discord.ui.button(label="🧹 Apagar Sala", style=discord.ButtonStyle.danger, custom_id="meta_apagar")
+    async def apagar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
+            await interaction.response.send_message("❌ Apenas Gerentes podem apagar.", ephemeral=True)
+            return
+
+        metas = carregar_metas()
+        data = metas.get(str(self.member_id))
+
+        if not data:
+            await interaction.response.defer()
+            return
+
+        canal = interaction.guild.get_channel(data["canal_id"])
+        if canal:
+            await canal.delete()
+
+        del metas[str(self.member_id)]
+        salvar_metas(metas)
+
+        await interaction.response.send_message("🧹 Sala apagada com sucesso.", ephemeral=True)
+
+# ================= EVENTOS METAS =================
+
+@bot.event
+async def on_member_remove(member):
+    metas = carregar_metas()
+    data = metas.get(str(member.id))
+
+    if data:
+        canal = member.guild.get_channel(data["canal_id"])
+        if canal:
+            try:
+                await canal.send("⚠️ Usuário saiu do servidor. Sala aguardando exclusão por um Gerente.")
+            except:
+                pass
+
+# ================= PAINEL METAS =================
+
+async def enviar_painel_metas():
+    canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
+    if not canal:
+        return
+
+    async for m in canal.history(limit=10):
+        if m.author == bot.user and m.embeds and m.embeds[0].title == "📁 Solicitação de Sala de Meta":
+            return
+
+    embed = discord.Embed(
+        title="📁 Solicitação de Sala de Meta",
+        description="Clique no botão abaixo para criar sua sala de meta.",
+        color=0xf1c40f
+    )
+
+    await canal.send(embed=embed, view=MetaView())
 
 # =========================================================
-# ================= EVENTS ================================
+# ================= EVENTS (FINAL) ========================
 # =========================================================
 
 @bot.event
 async def on_ready():
+    # Views persistentes
     bot.add_view(RegistroView())
     bot.add_view(CalculadoraView())
     bot.add_view(StatusView())
     bot.add_view(FabricacaoView())
     bot.add_view(CadastrarLiveView())
+    bot.add_view(MetaView())
 
+    # Restaura produções ativas
     for pid in carregar_producoes():
         bot.loop.create_task(acompanhar_producao(pid))
 
+    # Envia painéis automáticos
     await enviar_painel_fabricacao()
     await enviar_painel_lives()
+    await enviar_painel_metas()
 
-    print("✅ Bot online com Registro + Vendas + Produção + Lives")
+    print("✅ Bot online com Registro + Vendas + Produção + Lives + Metas")
+
+
+# =========================================================
+# ================= START BOT =============================
+# =========================================================
 
 bot.run(TOKEN)
-
-
 
