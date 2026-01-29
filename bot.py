@@ -14,9 +14,6 @@ bot = commands.Bot(
     help_command=None
 )
 
-# 🚫 desativa resolução de slash commands antigos
-bot.tree.interaction_check = lambda i: False
-
 # ================= VIEW =================
 
 class StatusView(discord.ui.View):
@@ -65,7 +62,7 @@ class StatusView(discord.ui.View):
         self._set_status(embed, status)
         await interaction.message.edit(embed=embed)
 
-    async def entregue(self, interaction):
+    async def marcar_entregue(self, interaction):
         await interaction.response.defer()
 
         embed = await self._get_embed(interaction)
@@ -92,8 +89,8 @@ class StatusView(discord.ui.View):
         await self.toggle(interaction, "⏳ Pagamento pendente")
 
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
-    async def entregue_btn(self, interaction, button):
-        await self.entregue(interaction)
+    async def entregue(self, interaction, button):
+        await self.marcar_entregue(interaction)
 
 # ================= COMANDO =================
 
@@ -112,7 +109,7 @@ async def status(ctx):
 @bot.event
 async def on_ready():
     bot.add_view(StatusView())
-    print("✅ Bot rodando no Railway")
+    print("✅ Bot online no Railway")
 
 # ================= START =================
 
