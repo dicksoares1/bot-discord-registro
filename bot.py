@@ -476,11 +476,13 @@ async def verificar_lives_twitch():
         link = data.get("link", "")
         divulgado = data.get("divulgado", False)
 
-        canal_twitch = (
-            link.replace("https://twitch.tv/", "")
-                .replace("https://www.twitch.tv/", "")
-                .strip()
-        )
+        # 🔧 LIMPA LINK DA TWITCH (À PROVA DE ERRO)
+        canal_twitch = link.lower().strip()
+        canal_twitch = canal_twitch.replace("https://", "")
+        canal_twitch = canal_twitch.replace("http://", "")
+        canal_twitch = canal_twitch.replace("www.", "")
+        canal_twitch = canal_twitch.replace("twitch.tv/", "")
+        canal_twitch = canal_twitch.split("/")[0].strip()
 
         if not canal_twitch:
             continue
@@ -510,11 +512,43 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
         placeholder="https://twitch.tv/seucanal"
     )
 
+    def extrair_canal_twitch(self, link):
+        canal = link.lower().strip()
+        canal = canal.replace("https://", "")
+        canal = canal.replace("http://", "")
+        canal = canal.replace("www.", "")
+        canal = canal.replace("twitch.tv/", "")
+        canal = canal.split("/")[0].strip()
+        return canal
+
     async def on_submit(self, interaction: discord.Interaction):
         lives = carregar_lives()
 
+        novo_link = self.link.value.strip()
+        novo_canal = self.extrair_canal_twitch(novo_link)
+
+        if not novo_canal:
+            await interaction.response.send_message(
+                "❌ Link da Twitch inválido. Envie no formato:\nhttps://twitch.tv/seucanal",
+                ephemeral=True
+            )
+            return
+
+        # 🚫 BLOQUEAR CANAL JÁ CADASTRADO
+        for uid, data in lives.items():
+            canal_existente = self.extrair_canal_twitch(data.get("link", ""))
+
+            if canal_existente == novo_canal:
+                await interaction.response.send_message(
+                    f"❌ Esse canal da Twitch já está cadastrado por outro usuário.\n"
+                    f"Canal: **{novo_canal}**",
+                    ephemeral=True
+                )
+                return
+
+        # ✅ CADASTRAR NORMALMENTE
         lives[str(interaction.user.id)] = {
-            "link": self.link.value.strip(),
+            "link": novo_link,
             "divulgado": False
         }
 
@@ -524,7 +558,7 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
             title="✅ Live cadastrada!",
             description=(
                 f"{interaction.user.mention}\n"
-                f"{self.link.value}\n\n"
+                f"{novo_link}\n\n"
                 f"📡 A live será divulgada automaticamente quando você entrar AO VIVO."
             ),
             color=0x2ecc71
@@ -806,6 +840,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
