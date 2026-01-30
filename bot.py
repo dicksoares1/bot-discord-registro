@@ -72,10 +72,25 @@ async def checar_se_esta_ao_vivo(canal_twitch):
         async with session.get(url, headers=headers) as resp:
             if resp.status != 200:
                 print("❌ Erro Twitch API:", resp.status)
-                return False
+                return False, None, None, None
 
             data = await resp.json()
-            return len(data.get("data", [])) > 0
+            streams = data.get("data", [])
+
+            if not streams:
+                return False, None, None, None
+
+            stream = streams[0]
+
+            titulo = stream.get("title")
+            jogo = stream.get("game_name")
+
+            # Thumbnail (trocar {width} e {height})
+            thumbnail = stream.get("thumbnail_url")
+            if thumbnail:
+                thumbnail = thumbnail.replace("{width}", "640").replace("{height}", "360")
+
+            return True, titulo, jogo, thumbnail
 
 GUILD_ID = 1229526644193099880
 GUILD = discord.Object(id=GUILD_ID)
@@ -419,7 +434,7 @@ def salvar_lives(dados):
     with open(ARQUIVO_LIVES, "w") as f:
         json.dump(dados, f, indent=4)
 
-async def divulgar_live(user_id, link):
+async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
     try:
         canal = await bot.fetch_channel(CANAL_DIVULGACAO_LIVE_ID)
     except Exception as e:
@@ -428,17 +443,24 @@ async def divulgar_live(user_id, link):
 
     user = await bot.fetch_user(int(user_id))
 
+    descricao = (
+        f"👤 Streamer: {user.mention}\n"
+        f"🎮 Jogo: **{jogo or 'Não informado'}**\n"
+        f"📝 Título: **{titulo or 'Sem título'}**\n\n"
+        f"🔗 {link}\n\n"
+        f"🚨 Está AO VIVO agora! Corre lá!"
+    )
+
     embed = discord.Embed(
-        title="🔴 LIVE AO VIVO!",
-        description=(
-            f"👤 Streamer: {user.mention}\n"
-            f"🔗 Link: {link}\n\n"
-            f"🚨 Está AO VIVO agora! Corre lá!"
-        ),
+        title="🔴 LIVE AO VIVO NA TWITCH!",
+        description=descricao,
         color=0x9146FF
     )
 
-    # @everyone
+    # 🖼️ THUMBNAIL DA LIVE
+    if thumbnail:
+        embed.set_image(url=thumbnail)
+
     await canal.send(content="@everyone", embed=embed)
 
 # ================= LOOP TWITCH =================
@@ -448,12 +470,12 @@ async def verificar_lives_twitch():
     print("🔄 Verificando lives na Twitch...")
 
     lives = carregar_lives()
+    alterado = False
 
     for user_id, data in lives.items():
-        if data.get("divulgado"):
-            continue
-
         link = data.get("link", "")
+        divulgado = data.get("divulgado", False)
+
         canal_twitch = (
             link.replace("https://twitch.tv/", "")
                 .replace("https://www.twitch.tv/", "")
@@ -463,14 +485,24 @@ async def verificar_lives_twitch():
         if not canal_twitch:
             continue
 
-        ao_vivo = await checar_se_esta_ao_vivo(canal_twitch)
+        ao_vivo, titulo, jogo, thumbnail = await checar_se_esta_ao_vivo(canal_twitch)
 
         print(f"🎮 {canal_twitch} ao vivo? {ao_vivo}")
 
-        if ao_vivo:
-            await divulgar_live(user_id, link)
+        # 🔴 FICOU OFFLINE → RESETAR
+        if not ao_vivo and divulgado:
+            print(f"🔁 {canal_twitch} ficou OFFLINE. Resetando divulgado.")
+            lives[user_id]["divulgado"] = False
+            alterado = True
+
+        # 🟢 FICOU AO VIVO → DIVULGAR
+        if ao_vivo and not divulgado:
+            await divulgar_live(user_id, link, titulo, jogo, thumbnail)
             lives[user_id]["divulgado"] = True
-            salvar_lives(lives)
+            alterado = True
+
+    if alterado:
+        salvar_lives(lives)
 
 class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
     link = discord.ui.TextInput(
@@ -774,6 +806,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
