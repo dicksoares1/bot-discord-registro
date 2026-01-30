@@ -377,26 +377,27 @@ def salvar_lives(dados):
     with open(ARQUIVO_LIVES, "w") as f:
         json.dump(dados, f, indent=4)
 
-async def divulgar_live(user, link):
+async def divulgar_live(user_id, link):
     try:
         canal = await bot.fetch_channel(CANAL_DIVULGACAO_LIVE_ID)
     except Exception as e:
         print("❌ Erro ao buscar canal divulgação:", e)
         return
 
-    print("CANAL DIVULGAÇÃO:", canal)
+    user = await bot.fetch_user(int(user_id))
 
     embed = discord.Embed(
         title="🔴 LIVE AO VIVO!",
         description=(
             f"👤 Streamer: {user.mention}\n"
             f"🔗 Link: {link}\n\n"
-            f"🚨 Vem acompanhar a live!"
+            f"🚨 Está AO VIVO agora! Corre lá!"
         ),
         color=0x9146FF
     )
 
-    await canal.send(embed=embed)
+    # @everyone
+    await canal.send(content="@everyone", embed=embed)
 
 class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
     link = discord.ui.TextInput(
@@ -409,22 +410,22 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
 
         lives[str(interaction.user.id)] = {
             "link": self.link.value.strip(),
-            "divulgado": True
+            "divulgado": False
         }
 
         salvar_lives(lives)
 
-        # 🔴 DIVULGAR AUTOMATICAMENTE
-        await divulgar_live(interaction.user, self.link.value.strip())
-
         embed = discord.Embed(
-            title="✅ Live cadastrada e divulgada!",
-            description=f"{interaction.user.mention}\n{self.link.value}",
+            title="✅ Live cadastrada!",
+            description=(
+                f"{interaction.user.mention}\n"
+                f"{self.link.value}\n\n"
+                f"📡 A live será divulgada automaticamente quando você entrar AO VIVO."
+            ),
             color=0x2ecc71
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
 
 class CadastrarLiveView(discord.ui.View):
     def __init__(self):
@@ -697,6 +698,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
