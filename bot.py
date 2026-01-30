@@ -696,7 +696,9 @@ class MetaView(discord.ui.View):
 
         gerente_role = guild.get_role(CARGO_GERENTE_ID)
         if gerente_role:
-            overwrites[gerente_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
+            overwrites[gerente_role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, manage_channels=True
+            )
 
         canal = await guild.create_text_channel(
             name=nome_canal,
@@ -706,31 +708,32 @@ class MetaView(discord.ui.View):
 
         metas = carregar_metas()
         metas[str(member.id)] = {
-            "canal_id": canal.id,
-            "categoria_id": categoria_id
+            "canal_id": canal.id
         }
         salvar_metas(metas)
 
-        # 📌 MENSAGEM FIXADA
+        cargo_resp_metas = guild.get_role(CARGO_RESP_METAS_ID)
+
         aviso = await canal.send(
-            "📢 **ALGUNS AVISOS IMPORTANTES SOBRE ESSA SALA** 📢\n\n"
-            "📌 Apenas você e a Gerência tem acesso a essa sala.\n"
-            "📌 Aqui explica tudo como funciona a meta da Fac ⁠📢・faq-meta\n"
-            "📌 Responsável por cuidar de metas: @RESP | Metas"
+            f"📢 **ALGUNS AVISOS IMPORTANTES SOBRE ESSA SALA** 📢\n\n"
+            f"📌 Apenas você {member.mention} e a Gerência tem acesso a essa sala.\n"
+            f"📌 Aqui explica tudo como funciona a meta da Fac ⁠📢・faq-meta\n"
+            f"📌 Responsável por cuidar de metas: {cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}",
+            view=MetaFecharView(member.id)
         )
         await aviso.pin()
 
         await interaction.response.send_message("✅ Sua sala de meta foi criada!", ephemeral=True)
 
-class MetaGerenteView(discord.ui.View):
+class MetaFecharView(discord.ui.View):
     def __init__(self, member_id):
         super().__init__(timeout=None)
         self.member_id = member_id
 
-    @discord.ui.button(label="🧹 Apagar Sala", style=discord.ButtonStyle.danger, custom_id="meta_apagar")
-    async def apagar(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🧹 Fechar Sala", style=discord.ButtonStyle.danger, custom_id="meta_fechar")
+    async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            await interaction.response.send_message("❌ Apenas Gerentes podem apagar.", ephemeral=True)
+            await interaction.response.send_message("❌ Apenas Gerentes podem fechar esta sala.", ephemeral=True)
             return
 
         metas = carregar_metas()
@@ -747,7 +750,7 @@ class MetaGerenteView(discord.ui.View):
         del metas[str(self.member_id)]
         salvar_metas(metas)
 
-        await interaction.response.send_message("🧹 Sala apagada com sucesso.", ephemeral=True)
+        await interaction.response.send_message("🧹 Sala de meta fechada com sucesso.", ephemeral=True)
 
 # ================= EVENTOS METAS =================
 
@@ -768,20 +771,15 @@ async def on_member_remove(member):
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    # Só continua se os cargos realmente mudaram
     if before.roles == after.roles:
         return
 
     metas = carregar_metas()
     data = metas.get(str(after.id))
-
-    # Se não tem sala de meta, não faz nada
     if not data:
         return
 
     nova_categoria_id = obter_categoria_meta(after)
-
-    # Se não encontrou categoria válida, não faz nada
     if not nova_categoria_id:
         return
 
@@ -791,13 +789,12 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     if not canal or not nova_categoria:
         return
 
-    # Se já está na categoria correta, não faz nada
     if canal.category_id == nova_categoria_id:
         return
 
     try:
         await canal.edit(category=nova_categoria)
-        print(f"🔁 Sala de meta movida para nova categoria: {after.display_name}")
+        await canal.send("🔁 Sala movida automaticamente para a categoria correta devido à mudança de cargo.")
     except Exception as e:
         print(f"❌ Erro ao mover sala de meta: {e}")
 
@@ -833,6 +830,7 @@ async def on_ready():
     bot.add_view(FabricacaoView())
     bot.add_view(CadastrarLiveView())
     bot.add_view(MetaView())
+    bot.add_view(MetaFecharView(0))  # 🔥 IMPORTANTE
 
     # 🔴 INICIA VERIFICAÇÃO TWITCH
     if not verificar_lives_twitch.is_running():
@@ -854,6 +852,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
