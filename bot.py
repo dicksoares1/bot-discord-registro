@@ -141,7 +141,11 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="Organização")
     qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$50)")
     qtd_sub = discord.ui.TextInput(label="Quantidade SUB (R$90)")
-    observacoes = discord.ui.TextInput(label="Observações", style=discord.TextStyle.paragraph, required=False)
+    observacoes = discord.ui.TextInput(
+        label="Observações",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -162,7 +166,11 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
 
         embed = discord.Embed(title="📦 NOVA ENCOMENDA", color=config["cor"])
         embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
-        embed.add_field(name="🏷 Organização", value=f"**{config['emoji']} {org_nome}**", inline=False)
+        embed.add_field(
+            name="🏷 Organização",
+            value=f"**{config['emoji']} {org_nome}**",
+            inline=False
+        )
         embed.add_field(name="🔫 PT", value=f"{pt} munições\n📦 {pacotes_pt} pacotes", inline=True)
         embed.add_field(name="🔫 SUB", value=f"{sub} munições\n📦 {pacotes_sub} pacotes", inline=True)
         embed.add_field(name="💰 Total", value=f"**R$ {valor_formatado}**", inline=False)
@@ -649,6 +657,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
