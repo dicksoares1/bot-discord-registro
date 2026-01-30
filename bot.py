@@ -5,6 +5,7 @@ import aiohttp
 import discord
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta
+from discord.utils import escape_markdown
 
 # ================= CONFIG =================
 
@@ -434,6 +435,8 @@ def salvar_lives(dados):
     with open(ARQUIVO_LIVES, "w") as f:
         json.dump(dados, f, indent=4)
 
+# ================= DIVULGAÇÃO =================
+
 async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
     try:
         canal = await bot.fetch_channel(CANAL_DIVULGACAO_LIVE_ID)
@@ -443,11 +446,14 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
 
     user = await bot.fetch_user(int(user_id))
 
+    # 🔒 Escapa markdown para não quebrar _
+    link_formatado = escape_markdown(link)
+
     descricao = (
         f"👤 Streamer: {user.mention}\n"
         f"🎮 Jogo: **{jogo or 'Não informado'}**\n"
         f"📝 Título: **{titulo or 'Sem título'}**\n\n"
-        f"🔗 {link}\n\n"
+        f"🔗 {link_formatado}\n\n"
         f"🚨 Está AO VIVO agora! Corre lá!"
     )
 
@@ -506,6 +512,8 @@ async def verificar_lives_twitch():
     if alterado:
         salvar_lives(lives)
 
+# ================= CADASTRO =================
+
 class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
     link = discord.ui.TextInput(
         label="Cole o link da sua live",
@@ -541,7 +549,7 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
             if canal_existente == novo_canal:
                 await interaction.response.send_message(
                     f"❌ Esse canal da Twitch já está cadastrado por outro usuário.\n"
-                    f"Canal: **{novo_canal}**",
+                    f"Canal: **{escape_markdown(novo_canal)}**",
                     ephemeral=True
                 )
                 return
@@ -554,17 +562,22 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
 
         salvar_lives(lives)
 
+        # 🔒 Escapa markdown no embed
+        link_formatado = escape_markdown(novo_link)
+
         embed = discord.Embed(
             title="✅ Live cadastrada!",
             description=(
                 f"{interaction.user.mention}\n"
-                f"{novo_link}\n\n"
+                f"{link_formatado}\n\n"
                 f"📡 A live será divulgada automaticamente quando você entrar AO VIVO."
             ),
             color=0x2ecc71
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ================= VIEW + PAINEL =================
 
 class CadastrarLiveView(discord.ui.View):
     def __init__(self):
@@ -590,6 +603,7 @@ async def enviar_painel_lives():
     )
 
     await canal.send(embed=embed, view=CadastrarLiveView())
+
 # =========================================================
 # ================= METAS ================================
 # =========================================================
@@ -840,6 +854,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
