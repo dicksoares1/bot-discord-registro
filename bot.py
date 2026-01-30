@@ -207,47 +207,41 @@ def salvar_producoes(dados):
 
 def barra(pct, size=20):
     cheio = int(pct * size)
-    return "▓" * cheio + "░" * (size - cheio)
+
+    # CORES POR PROGRESSO
+    if pct <= 0.35:
+        cor = "🟢"
+    elif pct <= 0.70:
+        cor = "🟡"
+    elif pct < 1:
+        cor = "🔴"
+    else:
+        cor = "🔵"
+
+    return cor + " " + ("▓" * cheio) + ("░" * (size - cheio))
 
 class SegundaTaskView(discord.ui.View):
     def __init__(self, pid):
         super().__init__(timeout=None)
         self.pid = pid
 
-    @discord.ui.button(label="✅ 2º Task Feita", style=discord.ButtonStyle.success, custom_id="segunda_task_feita")
+    @discord.ui.button(label="✅ Confirmar 2ª Task", style=discord.ButtonStyle.success, custom_id="segunda_task_feita")
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
         producoes = carregar_producoes()
+
         if self.pid not in producoes:
             await interaction.response.defer()
             return
 
-        prod = producoes[self.pid]
-
-        # Marca como confirmada
-        prod["segunda_task_confirmada"] = {
+        producoes[self.pid]["segunda_task_confirmada"] = {
             "user": interaction.user.id,
             "time": datetime.utcnow().isoformat()
         }
 
-        producoes[self.pid] = prod
         salvar_producoes(producoes)
 
-        # Atualiza a mensagem removendo botão e mostrando quem confirmou
-        canal = interaction.guild.get_channel(prod["canal_id"])
-        try:
-            msg = await canal.fetch_message(prod["msg_id"])
-            embed = msg.embeds[0]
-
-            embed.description += (
-                f"\n\n🟢 **2ª Task OK**\n"
-                f"👤 Confirmado por: {interaction.user.mention}"
-            )
-
-            # Remove o botão
-            await msg.edit(embed=embed, view=None)
-        except:
-            pass
-
+        # REMOVE BOTÃO APÓS CONFIRMAR
+        await interaction.message.edit(view=None)
         await interaction.response.defer()
 
 class FabricacaoView(discord.ui.View):
@@ -322,19 +316,31 @@ async def acompanhar_producao(pid):
 
         view = None
 
-        if not prod["segunda_task"] and (total - restante) >= prod["segunda_task_em"]:
+        # 🟡 LIBERA 2ª TASK QUANDO FALTAR 15 MINUTOS
+        if not prod["segunda_task"] and mins <= 15:
             prod["segunda_task"] = True
             salvar_producoes(producoes)
-            desc += "\n\n🟡 **2ª Task Liberada**"
+
+            desc += "\n\n🟡 **2ª Task Disponível**"
             view = SegundaTaskView(pid)
 
+        # ✅ MOSTRA QUEM CONFIRMOU A 2ª TASK
+        if "segunda_task_confirmada" in prod:
+            uid = prod["segunda_task_confirmada"]["user"]
+            desc += f"\n\n✅ **2ª Task OK por:** <@{uid}>"
+
+        # 🟢 FINALIZA PRODUÇÃO
         if restante <= 0:
-            desc += "\n\n🟢 **Produção Finalizada**"
+            desc += "\n\n🔵 **Produção Finalizada**"
             del producoes[pid]
             salvar_producoes(producoes)
 
         await msg.edit(
-            embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e),
+            embed=discord.Embed(
+                title="🏭 Produção",
+                description=desc,
+                color=0x34495e
+            ),
             view=view
         )
 
@@ -657,6 +663,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
