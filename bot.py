@@ -3,7 +3,7 @@ import json
 import asyncio
 import aiohttp
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from datetime import datetime, timedelta
 
 # ================= CONFIG =================
@@ -34,6 +34,48 @@ ARQUIVO_LIVES = "lives.json"
 
 TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
+
+# ================= TWITCH API =================
+
+twitch_access_token = None
+
+async def obter_token_twitch():
+    global twitch_access_token
+
+    url = "https://id.twitch.tv/oauth2/token"
+    params = {
+        "client_id": TWITCH_CLIENT_ID,
+        "client_secret": TWITCH_CLIENT_SECRET,
+        "grant_type": "client_credentials"
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, params=params) as resp:
+            data = await resp.json()
+            twitch_access_token = data.get("access_token")
+            print("🎮 Token Twitch obtido com sucesso!")
+
+async def checar_se_esta_ao_vivo(canal_twitch):
+    global twitch_access_token
+
+    if not twitch_access_token:
+        await obter_token_twitch()
+
+    headers = {
+        "Client-ID": TWITCH_CLIENT_ID,
+        "Authorization": f"Bearer {twitch_access_token}"
+    }
+
+    url = f"https://api.twitch.tv/helix/streams?user_login={canal_twitch}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 200:
+                print("❌ Erro Twitch API:", resp.status)
+                return False
+
+            data = await resp.json()
+            return len(data.get("data", [])) > 0
 
 GUILD_ID = 1229526644193099880
 GUILD = discord.Object(id=GUILD_ID)
@@ -399,6 +441,37 @@ async def divulgar_live(user_id, link):
     # @everyone
     await canal.send(content="@everyone", embed=embed)
 
+# ================= LOOP TWITCH =================
+
+@tasks.loop(minutes=2)
+async def verificar_lives_twitch():
+    print("🔄 Verificando lives na Twitch...")
+
+    lives = carregar_lives()
+
+    for user_id, data in lives.items():
+        if data.get("divulgado"):
+            continue
+
+        link = data.get("link", "")
+        canal_twitch = (
+            link.replace("https://twitch.tv/", "")
+                .replace("https://www.twitch.tv/", "")
+                .strip()
+        )
+
+        if not canal_twitch:
+            continue
+
+        ao_vivo = await checar_se_esta_ao_vivo(canal_twitch)
+
+        print(f"🎮 {canal_twitch} ao vivo? {ao_vivo}")
+
+        if ao_vivo:
+            await divulgar_live(user_id, link)
+            lives[user_id]["divulgado"] = True
+            salvar_lives(lives)
+
 class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
     link = discord.ui.TextInput(
         label="Cole o link da sua live",
@@ -681,6 +754,10 @@ async def on_ready():
     bot.add_view(CadastrarLiveView())
     bot.add_view(MetaView())
 
+    # 🔴 INICIA VERIFICAÇÃO TWITCH
+    if not verificar_lives_twitch.is_running():
+        verificar_lives_twitch.start()
+
     # Restaura produções ativas
     for pid in carregar_producoes():
         bot.loop.create_task(acompanhar_producao(pid))
@@ -692,12 +769,12 @@ async def on_ready():
 
     print("✅ Bot online com Registro + Vendas + Produção + Lives + Metas")
 
-
 # =========================================================
 # ================= START BOT =============================
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
