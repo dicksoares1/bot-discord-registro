@@ -728,8 +728,12 @@ async def fechar_dia_polvoras():
 ARQUIVO_LAVAGENS = "lavagens.json"
 
 CANAL_INICIAR_LAVAGEM_ID = 1467152989499293768
-CANAL_LAVAGEM_MEMBROS_ID = 1230482658539343945
+CANAL_LAVAGEM_MEMBROS_ID = 1467159346923311216
 CANAL_RELATORIO_LAVAGEM_ID = 1467150805273546878
+
+
+def formatar_real(valor: int) -> str:
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 # ================= ARQUIVO =================
@@ -763,7 +767,7 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
         valor_retorno = int(valor_sujo * 0.8)
 
         await interaction.response.send_message(
-            "Envie agora o PRINT da tela AQUI neste canal.",
+            "Envie o PRINT da tela aqui neste canal em até 2 minutos.",
             ephemeral=True
         )
 
@@ -774,11 +778,14 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
                 and m.attachments
             )
 
-        msg = await bot.wait_for("message", check=check)
+        try:
+            msg = await bot.wait_for("message", timeout=120, check=check)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("Tempo esgotado. Inicie novamente.", ephemeral=True)
+            return
 
         imagem = msg.attachments[0].url
 
-        # APAGA O PRINT DO CANAL
         try:
             await msg.delete()
         except:
@@ -794,16 +801,30 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
         salvar_lavagens(dados)
 
         canal = interaction.guild.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+        if not canal:
+            return
 
         embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
         embed.add_field(name="Membro", value=interaction.user.mention, inline=False)
-        embed.add_field(name="Valor sujo", value=f"R$ {valor_sujo:,}".replace(",", "."), inline=True)
-        embed.add_field(name="Valor a repassar (80%)", value=f"R$ {valor_retorno:,}".replace(",", "."), inline=True)
+        embed.add_field(name="Valor sujo", value=formatar_real(valor_sujo), inline=True)
+        embed.add_field(name="Valor a repassar (80%)", value=formatar_real(valor_retorno), inline=True)
         embed.set_image(url=imagem)
 
         await canal.send(embed=embed)
 
         await interaction.followup.send("Lavagem registrada!", ephemeral=True)
+
+
+# ================= PERMISSÃO =================
+
+def pode_gerenciar_lavagem(member: discord.Member):
+    cargos_permitidos = [
+        CARGO_GERENTE_ID,
+        CARGO_01_ID,
+        CARGO_02_ID,
+        CARGO_GERENTE_GERAL_ID
+    ]
+    return any(role.id in cargos_permitidos for role in member.roles)
 
 
 # ================= VIEW =================
@@ -818,8 +839,11 @@ class LavagemView(discord.ui.View):
 
     @discord.ui.button(label="🧹 Limpar Sala", style=discord.ButtonStyle.danger, custom_id="lavagem_limpar")
     async def limpar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        canal = interaction.guild.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+        if not pode_gerenciar_lavagem(interaction.user):
+            await interaction.response.send_message("Você não tem permissão.", ephemeral=True)
+            return
 
+        canal = interaction.guild.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
         async for msg in canal.history(limit=None):
             try:
                 await msg.delete()
@@ -827,21 +851,53 @@ class LavagemView(discord.ui.View):
                 pass
 
         salvar_lavagens([])
-        await interaction.response.send_message("Sala Lavagem Membros limpa!", ephemeral=True)
+        await interaction.response.send_message("Sala limpa!", ephemeral=True)
 
     @discord.ui.button(label="📊 Gerar Relatório", style=discord.ButtonStyle.success, custom_id="lavagem_relatorio")
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not pode_gerenciar_lavagem(interaction.user):
+            await interaction.response.send_message("Você não tem permissão.", ephemeral=True)
+            return
+
         dados = carregar_lavagens()
         canal = interaction.guild.get_channel(CANAL_RELATORIO_LAVAGEM_ID)
 
         for item in dados:
             user = await bot.fetch_user(item["user"])
             await canal.send(
-                f"{user.mention} - Valor lavado: R$ {item['retorno']:,}".replace(",", ".")
-                + f" - Valor informado: R$ {item['sujo']:,}".replace(",", ".")
+                f"{user.mention} - Valor lavado: {formatar_real(item['retorno'])} "
+                f"- Valor informado: {formatar_real(item['sujo'])}"
             )
 
         await interaction.response.send_message("Relatório enviado!", ephemeral=True)
+
+    @discord.ui.button(label="📩 Avisar TODOS no DM", style=discord.ButtonStyle.primary, custom_id="lavagem_dm_todos")
+    async def avisar_todos(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not pode_gerenciar_lavagem(interaction.user):
+            await interaction.response.send_message("Você não tem permissão.", ephemeral=True)
+            return
+
+        dados = carregar_lavagens()
+
+        enviados = 0
+        falhas = 0
+
+        for item in dados:
+            try:
+                user = await bot.fetch_user(item["user"])
+                await user.send(
+                    f"🧼 **Seu dinheiro foi lavado com sucesso!**\n\n"
+                    f"💵 Dinheiro informado: {formatar_real(item['sujo'])}\n"
+                    f"💰 Valor repassado: {formatar_real(item['retorno'])}"
+                )
+                enviados += 1
+            except:
+                falhas += 1
+
+        await interaction.response.send_message(
+            f"DM enviada para {enviados} membros.\nFalhas: {falhas}",
+            ephemeral=True
+        )
 
 
 # ================= PAINEL =================
@@ -1063,6 +1119,9 @@ CATEGORIA_META_MEMBRO_ID = 1461335697209163900
 CATEGORIA_META_AGREGADO_ID = 1461335748870541323
 
 # CARGOS
+CARGO_01_ID = 1258753233355014144
+CARGO_02_ID = 1258753479082512394
+CARGO_GERENTE_GERAL_ID = 1462804425163935796
 CARGO_GERENTE_ID = 1324499473296134154
 CARGO_RESP_METAS_ID = 1337407399656423485
 CARGO_RESP_ACAO_ID = 1337379517274259509
@@ -1301,5 +1360,6 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
