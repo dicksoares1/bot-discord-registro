@@ -368,7 +368,6 @@ def salvar_producoes(dados):
 def barra(pct, size=20):
     cheio = int(pct * size)
 
-    # CORES POR PROGRESSO
     if pct <= 0.35:
         cor = "🟢"
     elif pct <= 0.70:
@@ -380,12 +379,15 @@ def barra(pct, size=20):
 
     return cor + " " + ("▓" * cheio) + ("░" * (size - cheio))
 
+
+# ================= 2ª TASK =================
+
 class SegundaTaskView(discord.ui.View):
     def __init__(self, pid):
         super().__init__(timeout=None)
         self.pid = pid
 
-    @discord.ui.button(label="✅ Confirmar 2ª Task", style=discord.ButtonStyle.success, custom_id="segunda_task_feita")
+    @discord.ui.button(label="✅ Confirmar 2ª Task", style=discord.ButtonStyle.success)
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
         producoes = carregar_producoes()
 
@@ -400,15 +402,17 @@ class SegundaTaskView(discord.ui.View):
 
         salvar_producoes(producoes)
 
-        # REMOVE BOTÃO APÓS CONFIRMAR
         await interaction.message.edit(view=None)
         await interaction.response.defer()
+
+
+# ================= VIEW FABRICAÇÃO =================
 
 class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    async def iniciar(self, interaction, galpao, total_min, segunda_task_faltando_min):
+    async def iniciar(self, interaction, galpao, total_min):
         producoes = carregar_producoes()
         pid = f"{galpao}_{interaction.id}"
         inicio = datetime.utcnow()
@@ -417,7 +421,12 @@ class FabricacaoView(discord.ui.View):
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
 
         msg = await canal.send(
-            embed=discord.Embed(title="🏭 Produção", description="Iniciando...", color=0x3498db)
+            embed=discord.Embed(
+                title="🏭 Produção",
+                description="Iniciando...",
+                color=0x3498db
+            ),
+            view=SegundaTaskView(pid)
         )
 
         producoes[pid] = {
@@ -425,8 +434,6 @@ class FabricacaoView(discord.ui.View):
             "autor": interaction.user.id,
             "inicio": inicio.isoformat(),
             "fim": fim.isoformat(),
-            "segunda_task_em": (total_min - segunda_task_faltando_min) * 60,
-            "segunda_task": False,
             "msg_id": msg.id,
             "canal_id": CANAL_REGISTRO_GALPAO_ID
         }
@@ -435,13 +442,37 @@ class FabricacaoView(discord.ui.View):
         bot.loop.create_task(acompanhar_producao(pid))
         await interaction.response.defer()
 
-    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.primary, custom_id="fabricacao_sul")
-    async def sul(self, interaction, button):
-        await self.iniciar(interaction, "Sul", 130, 80)
+    # BOTÕES
+    @discord.ui.button(label="GN1", style=discord.ButtonStyle.primary)
+    async def gn1(self, interaction, button):
+        await self.iniciar(interaction, "GN1", 65)
 
-    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.secondary, custom_id="fabricacao_norte")
-    async def norte(self, interaction, button):
-        await self.iniciar(interaction, "Norte", 65, 40)
+    @discord.ui.button(label="GN2", style=discord.ButtonStyle.primary)
+    async def gn2(self, interaction, button):
+        await self.iniciar(interaction, "GN2", 65)
+
+    @discord.ui.button(label="GN3", style=discord.ButtonStyle.primary)
+    async def gn3(self, interaction, button):
+        await self.iniciar(interaction, "GN3", 65)
+
+    @discord.ui.button(label="GS1", style=discord.ButtonStyle.secondary)
+    async def gs1(self, interaction, button):
+        await self.iniciar(interaction, "GS1", 130)
+
+    @discord.ui.button(label="GS2", style=discord.ButtonStyle.secondary)
+    async def gs2(self, interaction, button):
+        await self.iniciar(interaction, "GS2", 130)
+
+    @discord.ui.button(label="GS3", style=discord.ButtonStyle.secondary)
+    async def gs3(self, interaction, button):
+        await self.iniciar(interaction, "GS3", 130)
+
+    @discord.ui.button(label="🧪 TESTE", style=discord.ButtonStyle.success)
+    async def teste(self, interaction, button):
+        await self.iniciar(interaction, "TESTE", 5)
+
+
+# ================= LOOP DE ACOMPANHAMENTO =================
 
 async def acompanhar_producao(pid):
     while True:
@@ -474,22 +505,10 @@ async def acompanhar_producao(pid):
             f"{barra(pct)}"
         )
 
-        view = None
-
-        # 🟡 LIBERA 2ª TASK QUANDO FALTAR 15 MINUTOS
-        if not prod["segunda_task"] and mins <= 15:
-            prod["segunda_task"] = True
-            salvar_producoes(producoes)
-
-            desc += "\n\n🟡 **2ª Task Disponível**"
-            view = SegundaTaskView(pid)
-
-        # ✅ MOSTRA QUEM CONFIRMOU A 2ª TASK
         if "segunda_task_confirmada" in prod:
             uid = prod["segunda_task_confirmada"]["user"]
-            desc += f"\n\n✅ **2ª Task OK por:** <@{uid}>"
+            desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
-        # 🟢 FINALIZA PRODUÇÃO
         if restante <= 0:
             desc += "\n\n🔵 **Produção Finalizada**"
             del producoes[pid]
@@ -500,14 +519,16 @@ async def acompanhar_producao(pid):
                 title="🏭 Produção",
                 description=desc,
                 color=0x34495e
-            ),
-            view=view
+            )
         )
 
         if restante <= 0:
             return
 
         await asyncio.sleep(60)
+
+
+# ================= PAINEL =================
 
 async def enviar_painel_fabricacao():
     canal = bot.get_channel(CANAL_FABRICACAO_ID)
@@ -516,9 +537,14 @@ async def enviar_painel_fabricacao():
             return
 
     await canal.send(
-        embed=discord.Embed(title="🏭 Fabricação", description="Selecione o galpão.", color=0x2c3e50),
+        embed=discord.Embed(
+            title="🏭 Fabricação",
+            description="Selecione o galpão.",
+            color=0x2c3e50
+        ),
         view=FabricacaoView()
     )
+
 
 # =========================================================
 # ================= LIVES ================================
@@ -954,6 +980,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
