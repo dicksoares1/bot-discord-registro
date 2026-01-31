@@ -651,6 +651,7 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
         )
 
         await canal.send(embed=embed)
+        await interaction.response.send_message("Registro feito com sucesso!", ephemeral=True)
         
 # ================= VIEW =================
 
@@ -1158,6 +1159,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
