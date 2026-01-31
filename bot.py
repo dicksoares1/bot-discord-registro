@@ -387,7 +387,12 @@ class SegundaTaskView(discord.ui.View):
         super().__init__(timeout=None)
         self.pid = pid
 
-    @discord.ui.button(label="✅ Confirmar 2ª Task", style=discord.ButtonStyle.success, custom_id="segunda_task_btn")
+    @discord.ui.button(
+    label="✅ Confirmar 2ª Task",
+    style=discord.ButtonStyle.success,
+    custom_id="segunda_task_btn"
+)
+
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
         producoes = carregar_producoes()
 
@@ -410,7 +415,7 @@ class SegundaTaskView(discord.ui.View):
 
 class FabricacaoView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # obrigatório
 
     async def iniciar(self, interaction, galpao, total_min):
         producoes = carregar_producoes()
@@ -955,7 +960,6 @@ async def on_ready():
     bot.add_view(RegistroView())
     bot.add_view(CalculadoraView())
     bot.add_view(StatusView())
-    bot.add_view(FabricacaoView())
     bot.add_view(CadastrarLiveView())
     bot.add_view(MetaView())
     bot.add_view(MetaFecharView(0))  # 🔥 IMPORTANTE
@@ -980,6 +984,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
