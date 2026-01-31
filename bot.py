@@ -387,7 +387,7 @@ class SegundaTaskView(discord.ui.View):
         super().__init__(timeout=None)
         self.pid = pid
 
-    @discord.ui.button(label="✅ Confirmar 2ª Task", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ Confirmar 2ª Task", style=discord.ButtonStyle.success, custom_id="segunda_task_btn")
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
         producoes = carregar_producoes()
 
@@ -443,31 +443,31 @@ class FabricacaoView(discord.ui.View):
         await interaction.response.defer()
 
     # BOTÕES
-    @discord.ui.button(label="GN1", style=discord.ButtonStyle.primary)
+        @discord.ui.button(label="GN1", style=discord.ButtonStyle.primary, custom_id="fab_gn1")
     async def gn1(self, interaction, button):
         await self.iniciar(interaction, "GN1", 65)
 
-    @discord.ui.button(label="GN2", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="GN2", style=discord.ButtonStyle.primary, custom_id="fab_gn2")
     async def gn2(self, interaction, button):
         await self.iniciar(interaction, "GN2", 65)
 
-    @discord.ui.button(label="GN3", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="GN3", style=discord.ButtonStyle.primary, custom_id="fab_gn3")
     async def gn3(self, interaction, button):
         await self.iniciar(interaction, "GN3", 65)
 
-    @discord.ui.button(label="GS1", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="GS1", style=discord.ButtonStyle.secondary, custom_id="fab_gs1")
     async def gs1(self, interaction, button):
         await self.iniciar(interaction, "GS1", 130)
 
-    @discord.ui.button(label="GS2", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="GS2", style=discord.ButtonStyle.secondary, custom_id="fab_gs2")
     async def gs2(self, interaction, button):
         await self.iniciar(interaction, "GS2", 130)
 
-    @discord.ui.button(label="GS3", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="GS3", style=discord.ButtonStyle.secondary, custom_id="fab_gs3")
     async def gs3(self, interaction, button):
         await self.iniciar(interaction, "GS3", 130)
 
-    @discord.ui.button(label="🧪 TESTE", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="🧪 TESTE", style=discord.ButtonStyle.success, custom_id="fab_teste")
     async def teste(self, interaction, button):
         await self.iniciar(interaction, "TESTE", 5)
 
@@ -980,6 +980,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
