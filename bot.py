@@ -163,44 +163,44 @@ class StatusView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    def get_status_index(self, embed):
+    def get_status(self, embed):
         for i, field in enumerate(embed.fields):
             if field.name == "📌 Status":
                 return i, field.value.split("\n")
         return None, []
 
-    def set_status(self, embed, index, linhas):
+    def set_status(self, embed, idx, linhas):
         if not linhas:
             linhas = ["⏳ Pagamento pendente"]
 
         embed.set_field_at(
-            index,
+            idx,
             name="📌 Status",
             value="\n".join(linhas),
             inline=False
         )
         return embed
 
-    def toggle(self, linhas, prefixo, nova_linha):
+    def toggle_linha(self, linhas, prefixo, nova_linha):
         for l in linhas:
             if l.startswith(prefixo):
                 linhas.remove(l)
-                return linhas, False
+                return linhas
         linhas.append(nova_linha)
-        return linhas, True
+        return linhas
 
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status_index(embed)
+        idx, linhas = self.get_status(embed)
 
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        # REMOVE pagamento pendente quando paga
+        # Remove pagamento pendente quando paga
         linhas = [l for l in linhas if not l.startswith("⏳")]
 
-        linhas, _ = self.toggle(linhas, "💰", f"💰Pago! Recebido por {user} • {agora}")
+        linhas = self.toggle_linha(linhas, "💰", f"💰 Recebido por {user} • {agora}")
 
         embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed)
@@ -209,15 +209,15 @@ class StatusView(discord.ui.View):
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
     async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status_index(embed)
+        idx, linhas = self.get_status(embed)
 
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        # Remove "A entregar"
+        # Remove "A entregar" quando entrega
         linhas = [l for l in linhas if not l.startswith("📦")]
 
-        linhas, _ = self.toggle(linhas, "✅", f"✅ Entregue por {user} • {agora}")
+        linhas = self.toggle_linha(linhas, "✅", f"✅ Entregue por {user} • {agora}")
 
         embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed)
@@ -226,43 +226,11 @@ class StatusView(discord.ui.View):
     @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
     async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status_index(embed)
+        idx, linhas = self.get_status(embed)
 
-        linhas, _ = self.toggle(linhas, "⏳", "⏳ Pagamento pendente")
+        linhas = self.toggle_linha(linhas, "⏳", "⏳ Pagamento pendente")
 
         embed = self.set_status(embed, idx, linhas)
-        await interaction.message.edit(embed=embed)
-        await interaction.response.defer()
-
-
-    @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
-    async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = interaction.message.embeds[0]
-        agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
-        user = interaction.user.mention
-
-        nova = f"✅ Entregue por {user} • {agora}"
-
-        # Remove apenas "📦 A entregar" quando marcar entregue
-        embed = self.atualizar_status(embed, "✅", nova, remover_prefixos=["📦"])
-
-        await interaction.message.edit(embed=embed)
-        await interaction.response.defer()
-
-    @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
-    async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = interaction.message.embeds[0]
-
-        embed = self.atualizar_status(embed, "⏳", "⏳ Pagamento pendente")
-
-        await interaction.message.edit(embed=embed)
-        await interaction.response.defer()
-  
-    @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
-    async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = interaction.message.embeds[0]
-        embed = self.atualizar_status(embed, "⏳ Pagamento pendente", "⏳")
-
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
 
@@ -959,6 +927,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
