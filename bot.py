@@ -163,48 +163,77 @@ class StatusView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    def toggle_linha(self, linhas, prefixo, nova_linha):
-        # Se já existe do mesmo tipo → remove (toggle off)
+    def get_status_index(self, embed):
+        for i, field in enumerate(embed.fields):
+            if field.name == "📌 Status":
+                return i, field.value.split("\n")
+        return None, []
+
+    def set_status(self, embed, index, linhas):
+        if not linhas:
+            linhas = ["⏳ Pagamento pendente"]
+
+        embed.set_field_at(
+            index,
+            name="📌 Status",
+            value="\n".join(linhas),
+            inline=False
+        )
+        return embed
+
+    def toggle(self, linhas, prefixo, nova_linha):
         for l in linhas:
             if l.startswith(prefixo):
                 linhas.remove(l)
                 return linhas, False
-
-        # Se não existe → adiciona (toggle on)
         linhas.append(nova_linha)
         return linhas, True
-
-    def atualizar_status(self, embed, prefixo, nova_linha, remover_prefixos=None):
-        for i, field in enumerate(embed.fields):
-            if field.name == "📌 Status":
-                linhas = field.value.split("\n")
-                break
-        else:
-            return embed
-
-        # Remove prefixos específicos (regra do Entregue)
-        if remover_prefixos:
-            linhas = [l for l in linhas if not any(l.startswith(p) for p in remover_prefixos)]
-
-        linhas, _ = self.toggle_linha(linhas, prefixo, nova_linha)
-
-        if not linhas:
-            linhas = ["⏳ Pagamento pendente"]
-
-        embed.set_field_at(i, name="📌 Status", value="\n".join(linhas), inline=False)
-        return embed
 
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
+        idx, linhas = self.get_status_index(embed)
+
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        nova = f"💰Pago! Recebido por {user} • {agora}"
-        embed = self.atualizar_status(embed, "💰", nova)
+        # REMOVE pagamento pendente quando paga
+        linhas = [l for l in linhas if not l.startswith("⏳")]
 
+        linhas, _ = self.toggle(linhas, "💰", f"💰Pago! Recebido por {user} • {agora}")
+
+        embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
+
+    @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
+    async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = interaction.message.embeds[0]
+        idx, linhas = self.get_status_index(embed)
+
+        agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
+        user = interaction.user.mention
+
+        # Remove "A entregar"
+        linhas = [l for l in linhas if not l.startswith("📦")]
+
+        linhas, _ = self.toggle(linhas, "✅", f"✅ Entregue por {user} • {agora}")
+
+        embed = self.set_status(embed, idx, linhas)
+        await interaction.message.edit(embed=embed)
+        await interaction.response.defer()
+
+    @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
+    async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = interaction.message.embeds[0]
+        idx, linhas = self.get_status_index(embed)
+
+        linhas, _ = self.toggle(linhas, "⏳", "⏳ Pagamento pendente")
+
+        embed = self.set_status(embed, idx, linhas)
+        await interaction.message.edit(embed=embed)
+        await interaction.response.defer()
+
 
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
     async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -930,6 +959,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
