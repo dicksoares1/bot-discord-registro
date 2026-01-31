@@ -760,6 +760,8 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
     valor = discord.ui.TextInput(label="Valor do dinheiro sujo")
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
         try:
             valor_sujo = int(self.valor.value.replace(".", "").replace(",", ""))
         except:
@@ -1381,6 +1383,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
