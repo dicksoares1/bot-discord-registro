@@ -203,13 +203,13 @@ class StatusView(discord.ui.View):
         return embed
 
     def toggle_linha(self, linhas, prefixo, nova_linha):
-    for l in linhas:
-        if l.startswith(prefixo):
-            linhas.remove(l)
-            return linhas  # toggle OFF
-
-    linhas.append(nova_linha)  # toggle ON
-    return linhas
+        for l in linhas:
+            if l.startswith(prefixo):
+                linhas.remove(l)
+                return linhas  # toggle OFF
+                
+        linhas.append(nova_linha)  # toggle ON
+        return linhas
 
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -954,6 +954,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
