@@ -261,17 +261,36 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             value=f"**{config['emoji']} {org_nome}**",
             inline=False
         )
-        embed.add_field(name="🔫 PT", value=f"{pt} munições\n📦 {pacotes_pt} pacotes", inline=True)
-        embed.add_field(name="🔫 SUB", value=f"{sub} munições\n📦 {pacotes_sub} pacotes", inline=True)
-        embed.add_field(name="💰 Total", value=f"**R$ {valor_formatado}**", inline=False)
-        embed.add_field(name="📌 Status", value="📦 A entregar", inline=False)
+        embed.add_field(
+            name="🔫 PT",
+            value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
+            inline=True
+        )
+        embed.add_field(
+            name="🔫 SUB",
+            value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
+            inline=True
+        )
+        embed.add_field(
+            name="💰 Total",
+            value=f"**R$ {valor_formatado}**",
+            inline=False
+        )
 
-if self.observacoes.value:
-    embed.add_field(
-        name="📝 Observações",
-        value=self.observacoes.value,
-        inline=False
-    )
+        # STATUS INICIAL
+        embed.add_field(
+            name="📌 Status",
+            value="📦 A entregar",
+            inline=False
+        )
+
+        # OBSERVAÇÕES (AGORA NÃO SOMEM MAIS)
+        if self.observacoes.value:
+            embed.add_field(
+                name="📝 Observações",
+                value=self.observacoes.value,
+                inline=False
+            )
 
         embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
 
@@ -898,6 +917,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
