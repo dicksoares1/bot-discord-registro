@@ -29,6 +29,7 @@ CANAL_ENCOMENDAS_ID = 1460980984811098294
 CANAL_FABRICACAO_ID = 1466421612566810634
 CANAL_REGISTRO_GALPAO_ID = 1356174712337862819
 ARQUIVO_PRODUCOES = "producoes.json"
+ARQUIVO_PEDIDOS = "pedidos.json"
 
 # LIVES
 CANAL_CADASTRO_LIVE_ID = 1466464557215256790
@@ -156,6 +157,26 @@ ORGANIZACOES_CONFIG = {
     "CIVIL": {"emoji": "👤", "cor": 0x95a5a6},
 }
 
+# ================= CONTROLE DE PEDIDOS =================
+
+def carregar_pedidos():
+    if not os.path.exists(ARQUIVO_PEDIDOS):
+        return {"ultimo": 0}
+    try:
+        with open(ARQUIVO_PEDIDOS, "r") as f:
+            return json.load(f)
+    except:
+        return {"ultimo": 0}
+
+
+def proximo_pedido():
+    dados = carregar_pedidos()
+    dados["ultimo"] += 1
+
+    with open(ARQUIVO_PEDIDOS, "w") as f:
+        json.dump(dados, f, indent=4)
+
+    return dados["ultimo"]
 
 # ================= STATUS DOS BOTÕES =================
 
@@ -182,12 +203,13 @@ class StatusView(discord.ui.View):
         return embed
 
     def toggle_linha(self, linhas, prefixo, nova_linha):
-        for l in linhas:
-            if l.startswith(prefixo):
-                linhas.remove(l)
-                return linhas
-        linhas.append(nova_linha)
-        return linhas
+    for l in linhas:
+        if l.startswith(prefixo):
+            linhas.remove(l)
+            return linhas  # toggle OFF
+
+    linhas.append(nova_linha)  # toggle ON
+    return linhas
 
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -200,7 +222,7 @@ class StatusView(discord.ui.View):
         # Remove pagamento pendente quando paga
         linhas = [l for l in linhas if not l.startswith("⏳")]
 
-        linhas = self.toggle_linha(linhas, "💰", f"💰 Recebido por {user} • {agora}")
+        linhas = self.toggle_linha(linhas, "💰", f"💰 Pago • Recebido por {user} • {agora}")
 
         embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed)
@@ -254,6 +276,8 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         except ValueError:
             await interaction.response.defer()
             return
+        
+        numero_pedido = proximo_pedido()
 
         pacotes_pt = pt // 50
         pacotes_sub = sub // 50
@@ -264,7 +288,10 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         org_nome = self.organizacao.value.strip().upper()
         config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
 
-        embed = discord.Embed(title="📦 NOVA ENCOMENDA", color=config["cor"])
+        embed = discord.Embed(
+    title=f"📦 NOVA ENCOMENDA • Pedido #{numero_pedido:04d}",
+    color=config["cor"]
+)
         embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
         embed.add_field(
             name="🏷 Organização",
@@ -927,6 +954,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
