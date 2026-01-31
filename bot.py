@@ -731,6 +731,8 @@ CANAL_INICIAR_LAVAGEM_ID = 1467152989499293768
 CANAL_LAVAGEM_MEMBROS_ID = 1467159346923311216
 CANAL_RELATORIO_LAVAGEM_ID = 1467150805273546878
 
+lavagens_pendentes = {}
+
 
 def formatar_real(valor: int) -> str:
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -766,56 +768,63 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
 
         valor_retorno = int(valor_sujo * 0.8)
 
-        # FALA NO CANAL (NÃO ephemeral)
+        lavagens_pendentes[interaction.user.id] = {
+            "sujo": valor_sujo,
+            "retorno": valor_retorno
+        }
+
         await interaction.response.send_message(
-            "Envie o PRINT da tela aqui neste canal em até 2 minutos."
+            "Agora envie o PRINT aqui neste canal.",
+            ephemeral=True
         )
 
-        canal_origem = interaction.channel
 
-        # ✅ CHECK FICA DENTRO DO on_submit
-        def check(m: discord.Message):
-            return (
-                m.author == interaction.user
-                and m.channel == canal_origem
-                and m.attachments
-            )
+# ================= CAPTURA AUTOMÁTICA DO PRINT =================
 
-        try:
-            msg = await bot.wait_for("message", timeout=120, check=check)
-        except asyncio.TimeoutError:
-            await interaction.followup.send("Tempo esgotado. Inicie novamente.", ephemeral=True)
-            return
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
 
-        imagem = msg.attachments[0].url
+    if message.channel.id != CANAL_INICIAR_LAVAGEM_ID:
+        return
 
-        try:
-            await msg.delete()
-        except:
-            pass
+    if not message.attachments:
+        return
 
-        dados = carregar_lavagens()
-        dados.append({
-            "user": interaction.user.id,
-            "sujo": valor_sujo,
-            "retorno": valor_retorno,
-            "imagem": imagem
-        })
-        salvar_lavagens(dados)
+    if message.author.id not in lavagens_pendentes:
+        return
 
-        canal = interaction.guild.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
-        if not canal:
-            return
+    dados_temp = lavagens_pendentes.pop(message.author.id)
 
-        embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
-        embed.add_field(name="Membro", value=interaction.user.mention, inline=False)
-        embed.add_field(name="Valor sujo", value=formatar_real(valor_sujo), inline=True)
-        embed.add_field(name="Valor a repassar (80%)", value=formatar_real(valor_retorno), inline=True)
-        embed.set_image(url=imagem)
+    valor_sujo = dados_temp["sujo"]
+    valor_retorno = dados_temp["retorno"]
+    imagem = message.attachments[0].url
 
-        await canal.send(embed=embed)
+    try:
+        await message.delete()
+    except:
+        pass
 
-        await interaction.followup.send("Lavagem registrada!", ephemeral=True)
+    dados = carregar_lavagens()
+    dados.append({
+        "user": message.author.id,
+        "sujo": valor_sujo,
+        "retorno": valor_retorno,
+        "imagem": imagem
+    })
+    salvar_lavagens(dados)
+
+    canal = bot.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+
+    embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
+    embed.add_field(name="Membro", value=message.author.mention, inline=False)
+    embed.add_field(name="Valor sujo", value=formatar_real(valor_sujo), inline=True)
+    embed.add_field(name="Valor a repassar (80%)", value=formatar_real(valor_retorno), inline=True)
+    embed.set_image(url=imagem)
+
+    await canal.send(embed=embed)
+
 
 # ================= PERMISSÃO =================
 
@@ -1362,6 +1371,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
