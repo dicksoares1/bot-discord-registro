@@ -31,6 +31,12 @@ CANAL_REGISTRO_GALPAO_ID = 1356174712337862819
 ARQUIVO_PRODUCOES = "producoes.json"
 ARQUIVO_PEDIDOS = "pedidos.json"
 
+#POLVORAS
+ARQUIVO_POLVORAS = "polvoras.json"
+
+CANAL_CALCULO_POLVORA_ID = 1462834441968943157
+CANAL_REGISTRO_POLVORA_ID = 1448570795101261846
+
 # LIVES
 CANAL_CADASTRO_LIVE_ID = 1466464557215256790
 CANAL_DIVULGACAO_LIVE_ID = 1243325102917943335
@@ -550,6 +556,81 @@ async def enviar_painel_fabricacao():
         view=FabricacaoView()
     )
 
+# =========================================================
+# ================= POLVORAS ===============================
+# =========================================================
+
+
+# ================= ARQUIVO =================
+
+def carregar_polvoras():
+    if not os.path.exists(ARQUIVO_POLVORAS):
+        return []
+    try:
+        with open(ARQUIVO_POLVORAS, "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def salvar_polvoras(dados):
+    with open(ARQUIVO_POLVORAS, "w") as f:
+        json.dump(dados, f, indent=4)
+
+
+# ================= MODAL =================
+
+class PolvoraModal(discord.ui.Modal, title="Compra de Pólvora"):
+    quantidade = discord.ui.TextInput(label="Quantidade de pólvora")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qtd = int(self.quantidade.value)
+        except:
+            await interaction.response.send_message("Quantidade inválida.", ephemeral=True)
+            return
+
+        valor = qtd * 80
+        agora = datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat()
+
+        dados = carregar_polvoras()
+        dados.append({
+            "user": interaction.user.id,
+            "quantidade": qtd,
+            "valor": valor,
+            "data": agora
+        })
+        salvar_polvoras(dados)
+
+        canal = interaction.guild.get_channel(CANAL_REGISTRO_POLVORA_ID)
+
+        embed = discord.Embed(title="🧨 Compra de Pólvora", color=0xe67e22)
+        embed.add_field(name="Vendedor", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Quantidade", value=str(qtd), inline=True)
+        embed.add_field(name="Valor", value=f"R$ {valor}", inline=True)
+
+        await canal.send(embed=embed)
+        await interaction.response.send_message("Registrado!", ephemeral=True)
+
+
+# ================= VIEW =================
+
+class PolvoraView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Registrar Compra de Pólvora", style=discord.ButtonStyle.primary, custom_id="polvora_btn")
+    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(PolvoraModal())
+
+
+# ================= PAINEL =================
+
+async def enviar_painel_polvoras():
+    canal = bot.get_channel(CANAL_CALCULO_POLVORA_ID)
+
+    async for m in canal.history(limit=10):
+        if m.author == bot.user:
+
 
 # =========================================================
 # ================= LIVES ================================
@@ -977,6 +1058,14 @@ async def on_ready():
     await enviar_painel_lives()
     await enviar_painel_metas()
 
+    bot.add_view(PolvoraView())
+
+    if not fechar_dia_polvoras.is_running():
+    fechar_dia_polvoras.start()
+
+    await enviar_painel_polvoras()
+
+
     print("✅ Bot online com Registro + Vendas + Produção + Lives + Metas")
 
 # =========================================================
@@ -984,6 +1073,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
