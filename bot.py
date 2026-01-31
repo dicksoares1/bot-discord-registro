@@ -228,16 +228,7 @@ class StatusView(discord.ui.View):
 
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
-
-
-    @discord.ui.button(label="📦 A entregar", style=discord.ButtonStyle.secondary, custom_id="status_a_entregar")
-    async def a_entregar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = interaction.message.embeds[0]
-        embed = self.atualizar_status(embed, "📦 A entregar", "📦")
-
-        await interaction.message.edit(embed=embed)
-        await interaction.response.defer()
-
+  
     @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
     async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
@@ -939,6 +930,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
