@@ -163,34 +163,45 @@ class StatusView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    def atualizar_status(self, embed, novo_texto, prefixo):
-        # Encontra o campo "📌 Status"
+    def toggle_linha(self, linhas, prefixo, nova_linha):
+        # Se já existe do mesmo tipo → remove (toggle off)
+        for l in linhas:
+            if l.startswith(prefixo):
+                linhas.remove(l)
+                return linhas, False
+
+        # Se não existe → adiciona (toggle on)
+        linhas.append(nova_linha)
+        return linhas, True
+
+    def atualizar_status(self, embed, prefixo, nova_linha, remover_prefixos=None):
         for i, field in enumerate(embed.fields):
             if field.name == "📌 Status":
-                status_linhas = field.value.split("\n")
+                linhas = field.value.split("\n")
                 break
         else:
-            return embed  # segurança
+            return embed
 
-        # Remove qualquer status anterior do mesmo tipo
-        status_linhas = [s for s in status_linhas if not s.startswith(prefixo)]
+        # Remove prefixos específicos (regra do Entregue)
+        if remover_prefixos:
+            linhas = [l for l in linhas if not any(l.startswith(p) for p in remover_prefixos)]
 
-        # Se já existia, remove (toggle)
-        if novo_texto not in status_linhas:
-            status_linhas.append(novo_texto)
+        linhas, _ = self.toggle_linha(linhas, prefixo, nova_linha)
 
-        embed.set_field_at(i, name="📌 Status", value="\n".join(status_linhas), inline=False)
+        if not linhas:
+            linhas = ["⏳ Pagamento pendente"]
+
+        embed.set_field_at(i, name="📌 Status", value="\n".join(linhas), inline=False)
         return embed
 
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
-
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        texto = f"💰Pago! Recebido por {user} • {agora}"
-        embed = self.atualizar_status(embed, texto, "💰")
+        nova = f"💰Pago! Recebido por {user} • {agora}"
+        embed = self.atualizar_status(embed, "💰", nova)
 
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
@@ -198,15 +209,26 @@ class StatusView(discord.ui.View):
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
     async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
-
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        texto = f"✅ Entregue por {user} • {agora}"
-        embed = self.atualizar_status(embed, texto, "✅")
+        nova = f"✅ Entregue por {user} • {agora}"
+
+        # Remove apenas "📦 A entregar" quando marcar entregue
+        embed = self.atualizar_status(embed, "✅", nova, remover_prefixos=["📦"])
 
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
+
+    @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
+    async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = interaction.message.embeds[0]
+
+        embed = self.atualizar_status(embed, "⏳", "⏳ Pagamento pendente")
+
+        await interaction.message.edit(embed=embed)
+        await interaction.response.defer()
+
 
     @discord.ui.button(label="📦 A entregar", style=discord.ButtonStyle.secondary, custom_id="status_a_entregar")
     async def a_entregar(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -917,6 +939,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
