@@ -721,6 +721,128 @@ async def fechar_dia_polvoras():
             view=ConfirmarPagamentoView()
         )
 
+# =========================================================
+# ================= LAVAGEM ===============================
+# =========================================================
+
+ARQUIVO_LAVAGENS = "lavagens.json"
+
+CANAL_INICIAR_LAVAGEM_ID = 1467152989499293768
+CANAL_LAVAGEM_MEMBROS_ID = 1230482658539343945
+CANAL_RELATORIO_LAVAGEM_ID = 1467150805273546878
+
+
+# ================= ARQUIVO =================
+
+def carregar_lavagens():
+    if not os.path.exists(ARQUIVO_LAVAGENS):
+        return []
+    try:
+        with open(ARQUIVO_LAVAGENS, "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def salvar_lavagens(dados):
+    with open(ARQUIVO_LAVAGENS, "w") as f:
+        json.dump(dados, f, indent=4)
+
+
+# ================= MODAL =================
+
+class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
+    valor = discord.ui.TextInput(label="Valor do dinheiro sujo")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            valor_sujo = float(self.valor.value.replace(",", "").replace(".", ""))
+        except:
+            await interaction.response.send_message("Valor inválido.", ephemeral=True)
+            return
+
+        valor_retorno = int(valor_sujo * 0.8)
+
+        await interaction.response.send_message(
+            "Agora envie o PRINT da tela nesta conversa.",
+            ephemeral=True
+        )
+
+        def check(m):
+            return m.author == interaction.user and m.attachments
+
+        msg = await bot.wait_for("message", check=check)
+
+        imagem = msg.attachments[0].url
+
+        dados = carregar_lavagens()
+        dados.append({
+            "user": interaction.user.id,
+            "sujo": valor_sujo,
+            "retorno": valor_retorno,
+            "imagem": imagem
+        })
+        salvar_lavagens(dados)
+
+        canal = interaction.guild.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+
+        embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
+        embed.add_field(name="Membro", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Valor sujo", value=f"R$ {int(valor_sujo)}", inline=True)
+        embed.add_field(name="Valor a repassar (80%)", value=f"R$ {valor_retorno}", inline=True)
+        embed.set_image(url=imagem)
+
+        await canal.send(embed=embed)
+
+        await interaction.followup.send("Lavagem registrada!", ephemeral=True)
+
+
+# ================= VIEW =================
+
+class LavagemView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Iniciar Lavagem", style=discord.ButtonStyle.primary, custom_id="lavagem_btn")
+    async def iniciar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(LavagemModal())
+
+    @discord.ui.button(label="🧹 Limpar Sala", style=discord.ButtonStyle.danger, custom_id="lavagem_limpar")
+    async def limpar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        salvar_lavagens([])
+        await interaction.response.send_message("Sala limpa para novas lavagens.", ephemeral=True)
+
+    @discord.ui.button(label="📊 Gerar Relatório", style=discord.ButtonStyle.success, custom_id="lavagem_relatorio")
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        dados = carregar_lavagens()
+        canal = interaction.guild.get_channel(CANAL_RELATORIO_LAVAGEM_ID)
+
+        for item in dados:
+            user = await bot.fetch_user(item["user"])
+            await canal.send(
+                f"{user.mention} - Valor a transferir: R$ {item['retorno']} "
+                f"- Valor depositado: R$ {int(item['sujo'])}"
+            )
+
+        await interaction.response.send_message("Relatório enviado!", ephemeral=True)
+
+
+# ================= PAINEL =================
+
+async def enviar_painel_lavagem():
+    canal = bot.get_channel(CANAL_INICIAR_LAVAGEM_ID)
+
+    async for m in canal.history(limit=10):
+        if m.author == bot.user:
+            return
+
+    embed = discord.Embed(
+        title="🧼 Sistema de Lavagem",
+        description="Use os botões abaixo para registrar a lavagem.",
+        color=0x1abc9c
+    )
+
+    await canal.send(embed=embed, view=LavagemView())
+
 
 # =========================================================
 # ================= LIVES ================================
@@ -1132,6 +1254,7 @@ async def on_ready():
     bot.add_view(MetaView())
     bot.add_view(MetaFecharView(0))
     bot.add_view(PolvoraView())
+    bot.add_view(LavagemView())
 
     # Loop pólvoras meia noite
     if not fechar_dia_polvoras.is_running():
@@ -1150,6 +1273,7 @@ async def on_ready():
     await enviar_painel_lives()
     await enviar_painel_metas()
     await enviar_painel_polvoras()
+    await enviar_painel_lavagem()
 
     print("✅ Bot online com Registro + Vendas + Produção + Lives + Metas + Pólvoras")
 
@@ -1159,35 +1283,4 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
