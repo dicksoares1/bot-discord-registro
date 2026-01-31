@@ -865,8 +865,8 @@ class LavagemView(discord.ui.View):
         for item in dados:
             user = await bot.fetch_user(item["user"])
             await canal.send(
-                f"{user.mention} - Valor lavado: {formatar_real(item['retorno'])} "
-                f"- Valor informado: {formatar_real(item['sujo'])}"
+                f"{user.mention} - Valor a repassar: {formatar_real(item['retorno'])} "
+                f"- Valor sujo: {formatar_real(item['sujo'])}"
             )
 
         await interaction.response.send_message("Relatório enviado!", ephemeral=True)
@@ -1360,6 +1360,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
