@@ -144,6 +144,21 @@ class RegistroView(discord.ui.View):
     async def registro(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistroModal())
 
+# =========================================================
+# ================= VENDAS ================================
+# =========================================================
+
+ORGANIZACOES_CONFIG = {
+    "VDR": {"emoji": "🔥", "cor": 0xe74c3c},
+    "POLICIA": {"emoji": "🚓", "cor": 0x3498db},
+    "EXERCITO": {"emoji": "🪖", "cor": 0x2ecc71},
+    "MAFIA": {"emoji": "💀", "cor": 0x8e44ad},
+    "CIVIL": {"emoji": "👤", "cor": 0x95a5a6},
+}
+
+
+# ================= STATUS DOS BOTÕES =================
+
 class StatusView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -155,12 +170,10 @@ class StatusView(discord.ui.View):
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        novo_status = f"✅ Entregue por {user}\n🕒 {agora}"
-
         embed.set_field_at(
             -1,
             name="📌 Status",
-            value=novo_status,
+            value=f"✅ Entregue por {user}\n🕒 {agora}",
             inline=False
         )
 
@@ -174,12 +187,10 @@ class StatusView(discord.ui.View):
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        novo_status = f"💰Pago: Recebido por {user}\n🕒 {agora}"
-
         embed.set_field_at(
             -1,
             name="📌 Status",
-            value=novo_status,
+            value=f"💰Pago! Recebido por {user}\n🕒 {agora}",
             inline=False
         )
 
@@ -213,6 +224,66 @@ class StatusView(discord.ui.View):
 
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
+
+
+# ================= MODAL DE VENDA =================
+
+class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
+    organizacao = discord.ui.TextInput(label="Organização")
+    qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$50)")
+    qtd_sub = discord.ui.TextInput(label="Quantidade SUB (R$90)")
+    observacoes = discord.ui.TextInput(
+        label="Observações",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            pt = int(self.qtd_pt.value.strip())
+            sub = int(self.qtd_sub.value.strip())
+        except ValueError:
+            await interaction.response.defer()
+            return
+
+        pacotes_pt = pt // 50
+        pacotes_sub = sub // 50
+        total = (pt * 50) + (sub * 90)
+
+        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+        org_nome = self.organizacao.value.strip().upper()
+        config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
+
+        embed = discord.Embed(title="📦 NOVA ENCOMENDA", color=config["cor"])
+        embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
+        embed.add_field(
+            name="🏷 Organização",
+            value=f"**{config['emoji']} {org_nome}**",
+            inline=False
+        )
+        embed.add_field(name="🔫 PT", value=f"{pt} munições\n📦 {pacotes_pt} pacotes", inline=True)
+        embed.add_field(name="🔫 SUB", value=f"{sub} munições\n📦 {pacotes_sub} pacotes", inline=True)
+        embed.add_field(name="💰 Total", value=f"**R$ {valor_formatado}**", inline=False)
+        embed.add_field(name="📌 Status", value="📦 A entregar", inline=False)
+        embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
+
+        canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
+        await canal.send(embed=embed, view=StatusView())
+        await interaction.response.defer()
+
+
+# ================= BOTÃO PARA ABRIR MODAL =================
+
+class CalculadoraView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🧮 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calculadora_registrar")
+    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VendaModal())
+
+
 
 # =========================================================
 # ================= PRODUÇÃO ===============================
@@ -820,6 +891,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
