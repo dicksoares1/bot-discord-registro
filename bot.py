@@ -755,7 +755,7 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            valor_sujo = float(self.valor.value.replace(",", "").replace(".", ""))
+            valor_sujo = int(self.valor.value.replace(".", "").replace(",", ""))
         except:
             await interaction.response.send_message("Valor inválido.", ephemeral=True)
             return
@@ -763,16 +763,26 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
         valor_retorno = int(valor_sujo * 0.8)
 
         await interaction.response.send_message(
-            "Agora envie o PRINT da tela nesta conversa.",
+            "Envie agora o PRINT da tela AQUI neste canal.",
             ephemeral=True
         )
 
-        def check(m):
-            return m.author == interaction.user and m.attachments
+        def check(m: discord.Message):
+            return (
+                m.author == interaction.user
+                and m.channel.id == CANAL_INICIAR_LAVAGEM_ID
+                and m.attachments
+            )
 
         msg = await bot.wait_for("message", check=check)
 
         imagem = msg.attachments[0].url
+
+        # APAGA O PRINT DO CANAL
+        try:
+            await msg.delete()
+        except:
+            pass
 
         dados = carregar_lavagens()
         dados.append({
@@ -787,8 +797,8 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
 
         embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
         embed.add_field(name="Membro", value=interaction.user.mention, inline=False)
-        embed.add_field(name="Valor sujo", value=f"R$ {int(valor_sujo)}", inline=True)
-        embed.add_field(name="Valor a repassar (80%)", value=f"R$ {valor_retorno}", inline=True)
+        embed.add_field(name="Valor sujo", value=f"R$ {valor_sujo:,}".replace(",", "."), inline=True)
+        embed.add_field(name="Valor a repassar (80%)", value=f"R$ {valor_retorno:,}".replace(",", "."), inline=True)
         embed.set_image(url=imagem)
 
         await canal.send(embed=embed)
@@ -808,8 +818,16 @@ class LavagemView(discord.ui.View):
 
     @discord.ui.button(label="🧹 Limpar Sala", style=discord.ButtonStyle.danger, custom_id="lavagem_limpar")
     async def limpar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        canal = interaction.guild.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+
+        async for msg in canal.history(limit=None):
+            try:
+                await msg.delete()
+            except:
+                pass
+
         salvar_lavagens([])
-        await interaction.response.send_message("Sala limpa para novas lavagens.", ephemeral=True)
+        await interaction.response.send_message("Sala Lavagem Membros limpa!", ephemeral=True)
 
     @discord.ui.button(label="📊 Gerar Relatório", style=discord.ButtonStyle.success, custom_id="lavagem_relatorio")
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -819,8 +837,8 @@ class LavagemView(discord.ui.View):
         for item in dados:
             user = await bot.fetch_user(item["user"])
             await canal.send(
-                f"{user.mention} - Valor a transferir: R$ {item['retorno']} "
-                f"- Valor depositado: R$ {int(item['sujo'])}"
+                f"{user.mention} - Valor lavado: R$ {item['retorno']:,}".replace(",", ".")
+                + f" - Valor informado: R$ {item['sujo']:,}".replace(",", ".")
             )
 
         await interaction.response.send_message("Relatório enviado!", ephemeral=True)
@@ -1283,4 +1301,5 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
