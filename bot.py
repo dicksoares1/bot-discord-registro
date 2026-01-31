@@ -560,6 +560,11 @@ async def enviar_painel_fabricacao():
 # ================= POLVORAS ===============================
 # =========================================================
 
+ARQUIVO_POLVORAS = "polvoras.json"
+
+CANAL_CALCULO_POLVORA_ID = 1462834441968943157
+CANAL_REGISTRO_POLVORA_ID = 1448570795101261846
+
 
 # ================= ARQUIVO =================
 
@@ -630,6 +635,55 @@ async def enviar_painel_polvoras():
 
     async for m in canal.history(limit=10):
         if m.author == bot.user:
+            return
+
+    embed = discord.Embed(
+        title="🧨 Calculadora de Pólvora",
+        description="Clique para registrar a compra.",
+        color=0xe67e22
+    )
+
+    await canal.send(embed=embed, view=PolvoraView())
+
+
+# ================= RELATÓRIO MEIA NOITE =================
+
+class ConfirmarPagamentoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Confirmar pagamento", style=discord.ButtonStyle.success, custom_id="confirmar_pagamento")
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.message.edit(content=interaction.message.content + "\n\n✅ **PAGO**", view=None)
+        await interaction.response.defer()
+
+
+@tasks.loop(minutes=1)
+async def fechar_dia_polvoras():
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    if agora.hour != 0 or agora.minute != 0:
+        return
+
+    dados = carregar_polvoras()
+    hoje = agora.date()
+
+    resumo = {}
+
+    for item in dados:
+        data_item = datetime.fromisoformat(item["data"]).date()
+        if data_item == hoje:
+            resumo.setdefault(item["user"], 0)
+            resumo[item["user"]] += item["valor"]
+
+    canal = bot.get_channel(CANAL_REGISTRO_POLVORA_ID)
+
+    for user_id, total in resumo.items():
+        user = await bot.fetch_user(user_id)
+        await canal.send(
+            content=f"🧨 Pólvoras compradas no dia por {user.mention}\n💰 Valor a ressarcir: R$ {total}",
+            view=ConfirmarPagamentoView()
+        )
 
 
 # =========================================================
@@ -648,6 +702,7 @@ def carregar_lives():
 def salvar_lives(dados):
     with open(ARQUIVO_LIVES, "w") as f:
         json.dump(dados, f, indent=4)
+
 
 # ================= DIVULGAÇÃO =================
 
@@ -1073,6 +1128,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
