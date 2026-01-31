@@ -584,8 +584,16 @@ def salvar_polvoras(dados):
 
 # ================= MODAL =================
 
-class PolvoraModal(discord.ui.Modal, title="Compra de Pólvora"):
-    quantidade = discord.ui.TextInput(label="Quantidade de pólvora")
+class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
+    vendedor = discord.ui.TextInput(
+        label="Vendedor (preencha o nome)",
+        placeholder="Digite o nome do vendedor"
+    )
+
+    quantidade = discord.ui.TextInput(
+        label="Quantidade",
+        placeholder="Ex: 100"
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -595,11 +603,16 @@ class PolvoraModal(discord.ui.Modal, title="Compra de Pólvora"):
             return
 
         valor = qtd * 80
+
+        # FORMATAÇÃO R$ 8.000,00
+        valor_formatado = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat()
 
         dados = carregar_polvoras()
         dados.append({
             "user": interaction.user.id,
+            "vendedor": self.vendedor.value,
             "quantidade": qtd,
             "valor": valor,
             "data": agora
@@ -608,15 +621,37 @@ class PolvoraModal(discord.ui.Modal, title="Compra de Pólvora"):
 
         canal = interaction.guild.get_channel(CANAL_REGISTRO_POLVORA_ID)
 
-        embed = discord.Embed(title="🧨 Compra de Pólvora", color=0xe67e22)
-        embed.add_field(name="Vendedor", value=interaction.user.mention, inline=False)
-        embed.add_field(name="Quantidade", value=str(qtd), inline=True)
-        embed.add_field(name="Valor", value=f"R$ {valor}", inline=True)
+        embed = discord.Embed(
+            title="🧨 Registro de Pólvora",
+            color=0xe67e22
+        )
+
+        embed.add_field(
+            name="Vendedor",
+            value=self.vendedor.value,
+            inline=False
+        )
+
+        embed.add_field(
+            name="Comprado por",
+            value=interaction.user.mention,
+            inline=False
+        )
+
+        embed.add_field(
+            name="Quantidade",
+            value=str(qtd),
+            inline=True
+        )
+
+        embed.add_field(
+            name="Valor",
+            value=f"**R$ {valor_formatado}**",
+            inline=True
+        )
 
         await canal.send(embed=embed)
-        await interaction.response.send_message("Registrado!", ephemeral=True)
-
-
+        
 # ================= VIEW =================
 
 class PolvoraView(discord.ui.View):
@@ -1123,6 +1158,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
