@@ -768,15 +768,16 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
 
         valor_retorno = int(valor_sujo * 0.8)
 
+        # Mensagem no canal (não ephemeral)
+        msg_info = await interaction.channel.send(
+            f"{interaction.user.mention} envie agora o PRINT da tela."
+        )
+
         lavagens_pendentes[interaction.user.id] = {
             "sujo": valor_sujo,
-            "retorno": valor_retorno
+            "retorno": valor_retorno,
+            "msg_info": msg_info
         }
-
-        await interaction.response.send_message(
-            "Agora envie o PRINT aqui neste canal.",
-            ephemeral=True
-        )
 
 
 # ================= CAPTURA AUTOMÁTICA DO PRINT =================
@@ -799,31 +800,40 @@ async def on_message(message: discord.Message):
 
     valor_sujo = dados_temp["sujo"]
     valor_retorno = dados_temp["retorno"]
-    imagem = message.attachments[0].url
 
+    canal_destino = bot.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+
+    # BAIXA O ARQUIVO ANTES DE APAGAR
+    arquivo = await message.attachments[0].to_file()
+
+    # APAGA PRINT
     try:
         await message.delete()
     except:
         pass
 
+    # APAGA MENSAGEM "ENVIE O PRINT"
+    try:
+        await dados_temp["msg_info"].delete()
+    except:
+        pass
+
+    # SALVA NO ARQUIVO
     dados = carregar_lavagens()
     dados.append({
         "user": message.author.id,
         "sujo": valor_sujo,
-        "retorno": valor_retorno,
-        "imagem": imagem
+        "retorno": valor_retorno
     })
     salvar_lavagens(dados)
-
-    canal = bot.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
 
     embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
     embed.add_field(name="Membro", value=message.author.mention, inline=False)
     embed.add_field(name="Valor sujo", value=formatar_real(valor_sujo), inline=True)
     embed.add_field(name="Valor a repassar (80%)", value=formatar_real(valor_retorno), inline=True)
-    embed.set_image(url=imagem)
+    embed.set_image(url=f"attachment://{arquivo.filename}")
 
-    await canal.send(embed=embed)
+    await canal_destino.send(embed=embed, file=arquivo)
 
 
 # ================= PERMISSÃO =================
@@ -1371,6 +1381,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
