@@ -766,15 +766,18 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
 
         valor_retorno = int(valor_sujo * 0.8)
 
+        # FALA NO CANAL (NÃO ephemeral)
         await interaction.response.send_message(
-            "Envie o PRINT da tela aqui neste canal em até 2 minutos.",
-            ephemeral=True
+            "Envie o PRINT da tela aqui neste canal em até 2 minutos."
         )
 
+        canal_origem = interaction.channel
+
+        # ✅ CHECK FICA DENTRO DO on_submit
         def check(m: discord.Message):
             return (
                 m.author == interaction.user
-                and m.channel.id == CANAL_INICIAR_LAVAGEM_ID
+                and m.channel == canal_origem
                 and m.attachments
             )
 
@@ -813,7 +816,6 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
         await canal.send(embed=embed)
 
         await interaction.followup.send("Lavagem registrada!", ephemeral=True)
-
 
 # ================= PERMISSÃO =================
 
@@ -1360,6 +1362,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
