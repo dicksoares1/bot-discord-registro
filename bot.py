@@ -1115,10 +1115,11 @@ async def on_ready():
 
     bot.add_view(PolvoraView())
 
-    if not fechar_dia_polvoras.is_running():
+if not fechar_dia_polvoras.is_running():
     fechar_dia_polvoras.start()
 
-    await enviar_painel_polvoras()
+await enviar_painel_polvoras()
+
 
 
     print("✅ Bot online com Registro + Vendas + Produção + Lives + Metas")
@@ -1128,6 +1129,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
