@@ -1086,10 +1086,6 @@ async def enviar_painel_metas():
 
     await canal.send(embed=embed, view=MetaView())
 
-# =========================================================
-# ================= EVENTS (FINAL) ========================
-# =========================================================
-
 @bot.event
 async def on_ready():
     # Views persistentes
@@ -1098,37 +1094,36 @@ async def on_ready():
     bot.add_view(StatusView())
     bot.add_view(CadastrarLiveView())
     bot.add_view(MetaView())
-    bot.add_view(MetaFecharView(0))  # 🔥 IMPORTANTE
+    bot.add_view(MetaFecharView(0))
+    bot.add_view(PolvoraView())
 
-    # 🔴 INICIA VERIFICAÇÃO TWITCH
+    # Loop pólvoras meia noite
+    if not fechar_dia_polvoras.is_running():
+        fechar_dia_polvoras.start()
+
+    # Loop twitch
     if not verificar_lives_twitch.is_running():
         verificar_lives_twitch.start()
 
-    # Restaura produções ativas
+    # Restaurar produções ativas
     for pid in carregar_producoes():
         bot.loop.create_task(acompanhar_producao(pid))
 
-    # Envia painéis automáticos
+    # Enviar painéis automáticos
     await enviar_painel_fabricacao()
     await enviar_painel_lives()
     await enviar_painel_metas()
+    await enviar_painel_polvoras()
 
-    bot.add_view(PolvoraView())
+    print("✅ Bot online com Registro + Vendas + Produção + Lives + Metas + Pólvoras")
 
-if not fechar_dia_polvoras.is_running():
-    fechar_dia_polvoras.start()
-
-await enviar_painel_polvoras()
-
-
-
-    print("✅ Bot online com Registro + Vendas + Produção + Lives + Metas")
 
 # =========================================================
 # ================= START BOT =============================
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
