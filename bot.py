@@ -560,6 +560,12 @@ async def enviar_painel_fabricacao():
 # ================= POLVORAS ===============================
 # =========================================================
 
+import os
+import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import discord
+
 ARQUIVO_POLVORAS = "polvoras.json"
 
 CANAL_CALCULO_POLVORA_ID = 1462834441968943157
@@ -603,8 +609,6 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
             return
 
         valor = qtd * 80
-
-        # FORMATAÇÃO R$ 8.000,00
         valor_formatado = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat()
@@ -626,63 +630,16 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
             color=0xe67e22
         )
 
-        embed.add_field(
-            name="Vendedor",
-            value=self.vendedor.value,
-            inline=False
-        )
-
-        embed.add_field(
-            name="Comprado por",
-            value=interaction.user.mention,
-            inline=False
-        )
-
-        embed.add_field(
-            name="Quantidade",
-            value=str(qtd),
-            inline=True
-        )
-
-        embed.add_field(
-            name="Valor",
-            value=f"**R$ {valor_formatado}**",
-            inline=True
-        )
+        embed.add_field(name="Vendedor", value=self.vendedor.value, inline=False)
+        embed.add_field(name="Comprado por", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Quantidade", value=str(qtd), inline=True)
+        embed.add_field(name="Valor", value=f"**R$ {valor_formatado}**", inline=True)
 
         await canal.send(embed=embed)
         await interaction.response.send_message("Registro feito com sucesso!", ephemeral=True)
-        
-# ================= VIEW =================
-
-class PolvoraView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Registrar Compra de Pólvora", style=discord.ButtonStyle.primary, custom_id="polvora_btn")
-    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PolvoraModal())
 
 
-# ================= PAINEL =================
-
-async def enviar_painel_polvoras():
-    canal = bot.get_channel(CANAL_CALCULO_POLVORA_ID)
-
-    async for m in canal.history(limit=10):
-        if m.author == bot.user:
-            return
-
-    embed = discord.Embed(
-        title="🧨 Calculadora de Pólvora",
-        description="Clique para registrar a compra.",
-        color=0xe67e22
-    )
-
-    await canal.send(embed=embed, view=PolvoraView())
-
-
-# ================= RELATÓRIO MEIA NOITE =================
+# ================= CONFIRMAR PAGAMENTO =================
 
 class ConfirmarPagamentoView(discord.ui.View):
     def __init__(self):
@@ -694,32 +651,80 @@ class ConfirmarPagamentoView(discord.ui.View):
         await interaction.response.defer()
 
 
-@tasks.loop(minutes=1)
-async def fechar_dia_polvoras():
-    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+# ================= RELATÓRIO =================
 
-    if agora.hour != 0 or agora.minute != 0:
-        return
+class RelatorioPolvoraView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    dados = carregar_polvoras()
-    hoje = agora.date()
+    @discord.ui.button(label="📋 Gerar Relatório do Dia", style=discord.ButtonStyle.success, custom_id="relatorio_polvora_btn")
+    async def gerar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
 
-    resumo = {}
+        dados = carregar_polvoras()
+        hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
 
-    for item in dados:
-        data_item = datetime.fromisoformat(item["data"]).date()
-        if data_item == hoje:
-            resumo.setdefault(item["user"], 0)
-            resumo[item["user"]] += item["valor"]
+        resumo = {}
 
-    canal = bot.get_channel(CANAL_REGISTRO_POLVORA_ID)
+        for item in dados:
+            data_item = datetime.fromisoformat(item["data"]).date()
+            if data_item == hoje:
+                resumo.setdefault(item["user"], 0)
+                resumo[item["user"]] += item["valor"]
 
-    for user_id, total in resumo.items():
-        user = await bot.fetch_user(user_id)
-        await canal.send(
-            content=f"🧨 Pólvoras compradas no dia por {user.mention}\n💰 Valor a ressarcir: R$ {total}",
-            view=ConfirmarPagamentoView()
-        )
+        if not resumo:
+            await interaction.followup.send("Nenhuma compra registrada hoje.", ephemeral=True)
+            return
+
+        canal = interaction.guild.get_channel(1448570795101261846)
+
+        for user_id, total in resumo.items():
+            user = await interaction.client.fetch_user(user_id)
+            valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+            await canal.send(
+                content=(
+                    f"🧨 **Relatório de Pólvora do Dia**\n\n"
+                    f"👤 Comprado por: {user.mention}\n"
+                    f"💰 Valor a ressarcir: **R$ {valor_formatado}**"
+                ),
+                view=ConfirmarPagamentoView()
+            )
+
+        await interaction.followup.send("Relatório gerado com sucesso!", ephemeral=True)
+
+
+# ================= VIEW PRINCIPAL =================
+
+class PolvoraView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Registrar Compra de Pólvora", style=discord.ButtonStyle.primary, custom_id="polvora_btn")
+    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(PolvoraModal())
+
+    @discord.ui.button(label="📋 Gerar Relatório do Dia", style=discord.ButtonStyle.success, custom_id="relatorio_btn")
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await RelatorioPolvoraView().gerar(interaction, button)
+
+
+# ================= PAINEL =================
+
+async def enviar_painel_polvoras(bot):
+    canal = bot.get_channel(CANAL_CALCULO_POLVORA_ID)
+
+    async for m in canal.history(limit=10):
+        if m.author == bot.user:
+            return
+
+    embed = discord.Embed(
+        title="🧨 Calculadora de Pólvora",
+        description="Use os botões abaixo.",
+        color=0xe67e22
+    )
+
+    await canal.send(embed=embed, view=PolvoraView())
 
 # =========================================================
 # ================= LAVAGEM ===============================
@@ -1346,7 +1351,12 @@ async def enviar_painel_metas():
 
 @bot.event
 async def on_ready():
-    # Views persistentes
+
+    print("🔄 Iniciando configuração do bot...")
+
+    # =====================================================
+    # 🔁 VIEWS PERSISTENTES (botões que sobrevivem ao restart)
+    # =====================================================
     bot.add_view(RegistroView())
     bot.add_view(CalculadoraView())
     bot.add_view(StatusView())
@@ -1354,35 +1364,45 @@ async def on_ready():
     bot.add_view(MetaView())
     bot.add_view(MetaFecharView(0))
     bot.add_view(PolvoraView())
+    bot.add_view(RelatorioPolvoraView())
+    bot.add_view(ConfirmarPagamentoView())
     bot.add_view(LavagemView())
 
-    # Loop pólvoras meia noite
-    if not fechar_dia_polvoras.is_running():
-        fechar_dia_polvoras.start()
+    # =====================================================
+    # ⏱ LOOPS ATIVOS
+    # =====================================================
 
-    # Loop twitch
+    # Twitch
     if not verificar_lives_twitch.is_running():
         verificar_lives_twitch.start()
 
-    # Restaurar produções ativas
+    # =====================================================
+    # 🏭 RESTAURAR PRODUÇÕES EM ANDAMENTO
+    # =====================================================
     for pid in carregar_producoes():
         bot.loop.create_task(acompanhar_producao(pid))
 
-    # Enviar painéis automáticos
+    # =====================================================
+    # 📌 ENVIAR PAINÉIS AUTOMÁTICOS
+    # =====================================================
     await enviar_painel_fabricacao()
     await enviar_painel_lives()
     await enviar_painel_metas()
-    await enviar_painel_polvoras()
+    await enviar_painel_polvoras(bot)
     await enviar_painel_lavagem()
 
-    print("✅ Bot online com Registro + Vendas + Produção + Lives + Metas + Pólvoras")
-
+    # =====================================================
+    # ✅ STATUS FINAL
+    # =====================================================
+    print("✅ Bot online")
+  
 
 # =========================================================
 # ================= START BOT =============================
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
