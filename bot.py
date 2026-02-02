@@ -651,7 +651,7 @@ class ConfirmarPagamentoView(discord.ui.View):
         await interaction.response.defer()
 
 
-# ================= RELATÓRIO =================
+# ================= VIEW PRINCIPAL (REGISTRO + RELATÓRIO) =================
 
 class PolvoraView(discord.ui.View):
     def __init__(self):
@@ -681,11 +681,10 @@ class PolvoraView(discord.ui.View):
             await interaction.followup.send("Nenhuma compra registrada hoje.", ephemeral=True)
             return
 
-        canal = interaction.guild.get_channel(1448570795101261846)
+        canal = interaction.guild.get_channel(CANAL_REGISTRO_POLVORA_ID)
 
         for user_id, total in resumo.items():
             user = await interaction.client.fetch_user(user_id)
-
             valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
             await canal.send(
@@ -698,21 +697,6 @@ class PolvoraView(discord.ui.View):
             )
 
         await interaction.followup.send("Relatório gerado com sucesso!", ephemeral=True)
-
-
-# ================= VIEW PRINCIPAL =================
-
-class PolvoraView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Registrar Compra de Pólvora", style=discord.ButtonStyle.primary, custom_id="polvora_btn")
-    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PolvoraModal())
-
-    @discord.ui.button(label="📋 Gerar Relatório do Dia", style=discord.ButtonStyle.success, custom_id="relatorio_btn")
-    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await RelatorioPolvoraView().gerar(interaction, button)
 
 
 # ================= PAINEL =================
@@ -731,6 +715,7 @@ async def enviar_painel_polvoras(bot):
     )
 
     await canal.send(embed=embed, view=PolvoraView())
+
 
 # =========================================================
 # ================= LAVAGEM ===============================
@@ -1407,6 +1392,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
