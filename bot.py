@@ -653,12 +653,17 @@ class ConfirmarPagamentoView(discord.ui.View):
 
 # ================= RELATÓRIO =================
 
-class RelatorioPolvoraView(discord.ui.View):
+class PolvoraView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📋 Gerar Relatório do Dia", style=discord.ButtonStyle.success, custom_id="relatorio_polvora_btn")
-    async def gerar(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Registrar Compra de Pólvora", style=discord.ButtonStyle.primary, custom_id="polvora_btn")
+    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(PolvoraModal())
+
+    @discord.ui.button(label="📋 Gerar Relatório do Dia", style=discord.ButtonStyle.success, custom_id="relatorio_btn")
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         await interaction.response.defer(ephemeral=True)
 
         dados = carregar_polvoras()
@@ -680,6 +685,7 @@ class RelatorioPolvoraView(discord.ui.View):
 
         for user_id, total in resumo.items():
             user = await interaction.client.fetch_user(user_id)
+
             valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
             await canal.send(
@@ -1364,7 +1370,6 @@ async def on_ready():
     bot.add_view(MetaView())
     bot.add_view(MetaFecharView(0))
     bot.add_view(PolvoraView())
-    bot.add_view(RelatorioPolvoraView())
     bot.add_view(ConfirmarPagamentoView())
     bot.add_view(LavagemView())
 
@@ -1402,6 +1407,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
