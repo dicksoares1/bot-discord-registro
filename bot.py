@@ -562,9 +562,10 @@ async def enviar_painel_fabricacao():
 
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import discord
+from discord.ext import tasks
 
 ARQUIVO_POLVORAS = "polvoras.json"
 
@@ -651,7 +652,7 @@ class ConfirmarPagamentoView(discord.ui.View):
         await interaction.response.defer()
 
 
-# ================= VIEW PRINCIPAL (REGISTRO + RELATÓRIO) =================
+# ================= VIEW (APENAS REGISTRO) =================
 
 class PolvoraView(discord.ui.View):
     def __init__(self):
@@ -661,42 +662,52 @@ class PolvoraView(discord.ui.View):
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(PolvoraModal())
 
-    @discord.ui.button(label="📋 Gerar Relatório do Dia", style=discord.ButtonStyle.success, custom_id="relatorio_btn")
-    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        await interaction.response.defer(ephemeral=True)
+# ================= RELATÓRIO SEMANAL AUTOMÁTICO =================
 
-        dados = carregar_polvoras()
-        hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+@tasks.loop(minutes=1)
+async def relatorio_semanal_polvoras():
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
 
-        resumo = {}
+    # Domingo 23:59
+    if agora.weekday() != 6 or agora.hour != 23 or agora.minute != 59:
+        return
 
-        for item in dados:
-            data_item = datetime.fromisoformat(item["data"]).date()
-            if data_item == hoje:
-                resumo.setdefault(item["user"], 0)
-                resumo[item["user"]] += item["valor"]
+    dados = carregar_polvoras()
 
-        if not resumo:
-            await interaction.followup.send("Nenhuma compra registrada hoje.", ephemeral=True)
-            return
+    inicio_semana = agora - timedelta(days=6)
+    inicio_semana = inicio_semana.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        canal = interaction.guild.get_channel(CANAL_REGISTRO_POLVORA_ID)
+    fim_semana = agora.replace(hour=23, minute=59, second=59)
 
-        for user_id, total in resumo.items():
-            user = await interaction.client.fetch_user(user_id)
-            valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    resumo = {}
 
-            await canal.send(
-                content=(
-                    f"🧨 **Relatório de Pólvora do Dia**\n\n"
-                    f"👤 Comprado por: {user.mention}\n"
-                    f"💰 Valor a ressarcir: **R$ {valor_formatado}**"
-                ),
-                view=ConfirmarPagamentoView()
-            )
+    for item in dados:
+        data_item = datetime.fromisoformat(item["data"])
 
-        await interaction.followup.send("Relatório gerado com sucesso!", ephemeral=True)
+        if inicio_semana <= data_item <= fim_semana:
+            resumo.setdefault(item["user"], 0)
+            resumo[item["user"]] += item["valor"]
+
+    if not resumo:
+        return
+
+    canal = bot.get_channel(CANAL_REGISTRO_POLVORA_ID)
+
+    for user_id, total in resumo.items():
+        user = await bot.fetch_user(user_id)
+
+        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+        await canal.send(
+            content=(
+                f"🧨 **RELATÓRIO SEMANAL DE PÓLVORA**\n"
+                f"📅 Período: {inicio_semana.strftime('%d/%m')} até {fim_semana.strftime('%d/%m')}\n\n"
+                f"👤 Comprado por: {user.mention}\n"
+                f"💰 Valor a ressarcir: **R$ {valor_formatado}**"
+            ),
+            view=ConfirmarPagamentoView()
+        )
 
 
 # ================= PAINEL =================
@@ -710,11 +721,12 @@ async def enviar_painel_polvoras(bot):
 
     embed = discord.Embed(
         title="🧨 Calculadora de Pólvora",
-        description="Use os botões abaixo.",
+        description="Use o botão abaixo para registrar a compra.",
         color=0xe67e22
     )
 
     await canal.send(embed=embed, view=PolvoraView())
+
 
 
 # =========================================================
@@ -1550,6 +1562,10 @@ async def on_ready():
     if not verificar_lives_twitch.is_running():
         verificar_lives_twitch.start()
 
+    # Relatório semanal automático das pólvoras
+    if not relatorio_semanal_polvoras.is_running():
+        relatorio_semanal_polvoras.start()
+
     # =====================================================
     # 🏭 RESTAURAR PRODUÇÕES EM ANDAMENTO
     # =====================================================
@@ -1569,14 +1585,15 @@ async def on_ready():
     # =====================================================
     # ✅ STATUS FINAL
     # =====================================================
-    print("✅ Bot online")
-  
+    print("✅ Bot online com todos os sistemas ativos ")
 
+  
 # =========================================================
 # ================= START BOT =============================
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
