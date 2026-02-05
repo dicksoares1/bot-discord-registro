@@ -1125,6 +1125,149 @@ async def enviar_painel_lives():
     await canal.send(embed=embed, view=CadastrarLiveView())
 
 # =========================================================
+# ================= PONTO ELETRÔNICO ======================
+# =========================================================
+
+CANAL_PONTO_ID = 1468941297162391715  # coloque o ID do canal do ponto
+CARGO_GERENTE_ID = 1324499473296134154
+
+ARQUIVO_PONTO = "ponto.json"
+
+
+def carregar_ponto():
+    if not os.path.exists(ARQUIVO_PONTO):
+        return {}
+    try:
+        with open(ARQUIVO_PONTO, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+
+def salvar_ponto(dados):
+    with open(ARQUIVO_PONTO, "w") as f:
+        json.dump(dados, f, indent=4)
+
+
+def calcular_seg_sex(registros):
+    totais = {}
+
+    for user_id, pontos in registros.items():
+        total_segundos = 0
+
+        for p in pontos:
+            inicio = datetime.fromisoformat(p["inicio"])
+            fim = datetime.fromisoformat(p["fim"])
+
+            # somente segunda a sexta
+            if inicio.weekday() < 5:
+                total_segundos += (fim - inicio).total_seconds()
+
+        horas = total_segundos / 3600
+        totais[user_id] = horas
+
+    return totais
+
+
+async def atualizar_painel_ponto(msg):
+    dados = carregar_ponto()
+
+    em_servico = []
+    for uid, pontos in dados.items():
+        if pontos and "fim" not in pontos[-1]:
+            em_servico.append(f"<@{uid}>")
+
+    desc = "**🟢 Em serviço agora:**\n"
+    desc += "\n".join(em_servico) if em_servico else "Ninguém em serviço."
+
+    embed = discord.Embed(
+        title="🛠️ Ponto Eletrônico • Mecânica",
+        description=desc,
+        color=0x2ecc71
+    )
+
+    await msg.edit(embed=embed, view=PontoView())
+
+
+class PontoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🟢 Abrir Ponto", style=discord.ButtonStyle.success, custom_id="abrir_ponto")
+    async def abrir(self, interaction: discord.Interaction, button: discord.ui.Button):
+        dados = carregar_ponto()
+        uid = str(interaction.user.id)
+
+        if uid not in dados:
+            dados[uid] = []
+
+        # já está em serviço?
+        if dados[uid] and "fim" not in dados[uid][-1]:
+            await interaction.response.defer()
+            return
+
+        dados[uid].append({
+            "inicio": datetime.utcnow().isoformat()
+        })
+
+        salvar_ponto(dados)
+        await atualizar_painel_ponto(interaction.message)
+        await interaction.response.defer()
+
+    @discord.ui.button(label="🔴 Fechar Ponto", style=discord.ButtonStyle.danger, custom_id="fechar_ponto")
+    async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        dados = carregar_ponto()
+        uid = str(interaction.user.id)
+
+        if uid not in dados or not dados[uid] or "fim" in dados[uid][-1]:
+            await interaction.response.defer()
+            return
+
+        dados[uid][-1]["fim"] = datetime.utcnow().isoformat()
+
+        salvar_ponto(dados)
+        await atualizar_painel_ponto(interaction.message)
+        await interaction.response.defer()
+
+    @discord.ui.button(label="📊 Relatório Semanal", style=discord.ButtonStyle.primary, custom_id="relatorio_ponto")
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
+            await interaction.response.send_message("Apenas gerentes.", ephemeral=True)
+            return
+
+        dados = carregar_ponto()
+        totais = calcular_seg_sex(dados)
+
+        desc = ""
+        for uid, horas in totais.items():
+            desc += f"<@{uid}> — **{horas:.2f} horas**\n"
+
+        embed = discord.Embed(
+            title="📊 Relatório Semanal (Seg–Sex)",
+            description=desc or "Sem registros.",
+            color=0x3498db
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+async def enviar_painel_ponto():
+    canal = bot.get_channel(CANAL_PONTO_ID)
+
+    async for m in canal.history(limit=10):
+        if m.author == bot.user and m.embeds and m.embeds[0].title.startswith("🛠️ Ponto Eletrônico"):
+            return
+
+    embed = discord.Embed(
+        title="🛠️ Ponto Eletrônico • Mecânica",
+        description="Ninguém em serviço.",
+        color=0x2ecc71
+    )
+
+    msg = await canal.send(embed=embed, view=PontoView())
+
+
+# =========================================================
 # ================= METAS ================================
 # =========================================================
 
@@ -1357,6 +1500,7 @@ async def on_ready():
     bot.add_view(PolvoraView())
     bot.add_view(ConfirmarPagamentoView())
     bot.add_view(LavagemView())
+    bot.add_view(PontoView())
 
     # =====================================================
     # ⏱ LOOPS ATIVOS
@@ -1380,6 +1524,7 @@ async def on_ready():
     await enviar_painel_metas()
     await enviar_painel_polvoras(bot)
     await enviar_painel_lavagem()
+    await enviar_painel_ponto()
 
     # =====================================================
     # ✅ STATUS FINAL
@@ -1392,6 +1537,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
