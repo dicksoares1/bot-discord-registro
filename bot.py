@@ -1128,12 +1128,12 @@ async def enviar_painel_lives():
 # ================= PONTO ELETRÔNICO ======================
 # =========================================================
 
-CANAL_PONTO_ID = 1468941297162391715  # ID do canal do ponto
+CANAL_PONTO_ID = 1468941297162391715
 ARQUIVO_PONTO = "ponto.json"
-CARGO_GERENTE_ID = 1324499473296134154  # ID do cargo gerente
+CARGO_GERENTE_ID = 1324499473296134154
 
 
-# ================= UTIL PONTO =================
+# ================= UTIL =================
 
 def carregar_ponto():
     if not os.path.exists(ARQUIVO_PONTO):
@@ -1154,6 +1154,7 @@ def hoje_str():
 def hora_str():
     return datetime.now().strftime("%H:%M")
 
+
 # ================= VIEW =================
 
 class PontoView(discord.ui.View):
@@ -1163,39 +1164,32 @@ class PontoView(discord.ui.View):
     @discord.ui.button(label="🟢 Abrir Ponto", style=discord.ButtonStyle.success, custom_id="abrir_ponto")
     async def abrir(self, interaction: discord.Interaction, button: discord.ui.Button):
         ponto = carregar_ponto()
-        user_id = str(interaction.user.id)
+        uid = str(interaction.user.id)
         hoje = hoje_str()
 
-        if user_id not in ponto:
-            ponto[user_id] = {}
+        ponto.setdefault(uid, {}).setdefault(hoje, [])
 
-        if hoje not in ponto[user_id]:
-            ponto[user_id][hoje] = []
-
-        # Se já tem ponto aberto
-        for registro in ponto[user_id][hoje]:
-            if "saida" not in registro:
+        for r in ponto[uid][hoje]:
+            if "saida" not in r:
                 await interaction.response.defer()
                 return
 
-        ponto[user_id][hoje].append({
-            "entrada": hora_str()
-        })
-
+        ponto[uid][hoje].append({"entrada": hora_str()})
         salvar_ponto(ponto)
+
         await atualizar_painel_ponto(interaction.guild)
         await interaction.response.defer()
 
     @discord.ui.button(label="🔴 Fechar Ponto", style=discord.ButtonStyle.danger, custom_id="fechar_ponto")
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
         ponto = carregar_ponto()
-        user_id = str(interaction.user.id)
+        uid = str(interaction.user.id)
         hoje = hoje_str()
 
-        if user_id in ponto and hoje in ponto[user_id]:
-            for registro in reversed(ponto[user_id][hoje]):
-                if "saida" not in registro:
-                    registro["saida"] = hora_str()
+        if uid in ponto and hoje in ponto[uid]:
+            for r in reversed(ponto[uid][hoje]):
+                if "saida" not in r:
+                    r["saida"] = hora_str()
                     break
 
         salvar_ponto(ponto)
@@ -1229,14 +1223,21 @@ class PontoView(discord.ui.View):
                         sai = datetime.strptime(r["saida"], "%H:%M")
                         total_min += int((sai - ent).total_seconds() / 60)
 
-            horas = total_min // 60
-            minutos = total_min % 60
-            desc += f"**{membro.display_name}** — {horas}h {minutos}min\n"
+            if total_min > 0:
+                horas = total_min // 60
+                minutos = total_min % 60
+                desc += f"👤 **{membro.display_name}** — {horas}h {minutos}min\n"
 
-        embed = discord.Embed(title="📊 Relatório Semanal", description=desc or "Sem dados.", color=0x3498db)
+        embed = discord.Embed(
+            title="📊 Relatório Semanal de Horas",
+            description=desc or "Sem dados.",
+            color=0x3498db
+        )
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ================= ATUALIZA PAINEL =================
+
+# ================= PAINEL BONITO =================
 
 async def atualizar_painel_ponto(guild):
     canal = guild.get_channel(CANAL_PONTO_ID)
@@ -1247,7 +1248,8 @@ async def atualizar_painel_ponto(guild):
     hoje = hoje_str()
 
     em_servico = ""
-    registros_hoje = ""
+    registros = ""
+    total_servico = 0
 
     for uid, dias in ponto.items():
         membro = guild.get_member(int(uid))
@@ -1257,20 +1259,46 @@ async def atualizar_painel_ponto(guild):
         if hoje in dias:
             for r in dias[hoje]:
                 if "saida" not in r:
-                    em_servico += f"🟢 {membro.mention} — entrou às {r['entrada']}\n"
+                    total_servico += 1
+                    em_servico += (
+                        f"🟢 **{membro.display_name}**\n"
+                        f"└ ⏰ Entrou às **{r['entrada']}**\n\n"
+                    )
                 else:
-                    registros_hoje += f"{membro.display_name} — {r['entrada']} às {r['saida']}\n"
+                    registros += (
+                        f"👤 **{membro.display_name}**\n"
+                        f"└ 🕓 {r['entrada']} ➜ {r['saida']}\n\n"
+                    )
 
-    embed = discord.Embed(title="🛠️ Ponto Mecânica", color=0x2ecc71)
-    embed.add_field(name="👷 Em Serviço", value=em_servico or "Ninguém em serviço.", inline=False)
-    embed.add_field(name="📋 Registros de Hoje", value=registros_hoje or "Nenhum registro.", inline=False)
+    if not em_servico:
+        em_servico = "🛑 Ninguém em serviço."
+    if not registros:
+        registros = "📭 Nenhum registro finalizado hoje."
+
+    # 🎨 COR DINÂMICA
+    if total_servico == 0:
+        cor = 0xe74c3c
+    elif total_servico <= 2:
+        cor = 0xf1c40f
+    else:
+        cor = 0x2ecc71
+
+    embed = discord.Embed(
+        title="🛠️ PAINEL DE PONTO — MECÂNICA",
+        description=f"📅 {hoje}\n━━━━━━━━━━━━━━━━━━━━━━",
+        color=cor
+    )
+
+    embed.add_field(name="👷 EM SERVIÇO AGORA", value=em_servico, inline=False)
+    embed.add_field(name="📋 REGISTROS FINALIZADOS HOJE", value=registros, inline=False)
 
     async for m in canal.history(limit=10):
-        if m.author == guild.me and m.embeds and m.embeds[0].title == "🛠️ Ponto Mecânica":
+        if m.author == guild.me and m.embeds and "PAINEL DE PONTO" in m.embeds[0].title:
             await m.edit(embed=embed, view=PontoView())
             return
 
     await canal.send(embed=embed, view=PontoView())
+
 
 # ================= PAINEL INICIAL =================
 
@@ -1549,6 +1577,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
