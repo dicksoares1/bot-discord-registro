@@ -446,73 +446,72 @@ class SegundaTaskView(discord.ui.View):
         await interaction.response.defer()
 
 
-# ================= VIEW FABRICAÇÃO =================
+# ================= MODAL OBSERVAÇÃO =================
 
-class FabricacaoView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
+class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
+    obs = discord.ui.TextInput(
+        label="Observação inicial",
+        placeholder="Ex: Galpões todos produzindo / 1 e 2 ativos / 3 com HC",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
 
-    async def iniciar(self, interaction, galpao, total_min):
+    def __init__(self, galpao, tempo):
+        super().__init__()
+        self.galpao = galpao
+        self.tempo = tempo
+
+    async def on_submit(self, interaction: discord.Interaction):
         producoes = carregar_producoes()
-        pid = f"{galpao}_{interaction.id}"
+        pid = f"{self.galpao}_{interaction.id}"
 
-        # 🔥 HORÁRIO BRASÍLIA
         inicio = agora()
-        fim = inicio + timedelta(minutes=total_min)
+        fim = inicio + timedelta(minutes=self.tempo)
 
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
 
         msg = await canal.send(
             embed=discord.Embed(
                 title="🏭 Produção",
-                description="Iniciando...",
+                description=f"Iniciando produção em **{self.galpao}**...",
                 color=0x3498db
             ),
             view=SegundaTaskView(pid)
         )
 
         producoes[pid] = {
-            "galpao": galpao,
+            "galpao": self.galpao,
             "autor": interaction.user.id,
             "inicio": inicio.isoformat(),
             "fim": fim.isoformat(),
+            "obs": self.obs.value,
             "msg_id": msg.id,
             "canal_id": CANAL_REGISTRO_GALPAO_ID
         }
 
         salvar_producoes(producoes)
         bot.loop.create_task(acompanhar_producao(pid))
+
         await interaction.response.defer()
 
-    # ================= BOTÕES =================
 
-    @discord.ui.button(label="GN1", style=discord.ButtonStyle.primary, custom_id="fab_gn1")
-    async def gn1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.iniciar(interaction, "GN1", 65)
+# ================= VIEW FABRICAÇÃO =================
 
-    @discord.ui.button(label="GN2", style=discord.ButtonStyle.primary, custom_id="fab_gn2")
-    async def gn2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.iniciar(interaction, "GN2", 65)
+class FabricacaoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    @discord.ui.button(label="GN3", style=discord.ButtonStyle.primary, custom_id="fab_gn3")
-    async def gn3(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.iniciar(interaction, "GN3", 65)
+    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary, custom_id="fab_norte")
+    async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            ObservacaoProducaoModal("GALPÕES NORTE", 65)
+        )
 
-    @discord.ui.button(label="GS1", style=discord.ButtonStyle.secondary, custom_id="fab_gs1")
-    async def gs1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.iniciar(interaction, "GS1", 130)
-
-    @discord.ui.button(label="GS2", style=discord.ButtonStyle.secondary, custom_id="fab_gs2")
-    async def gs2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.iniciar(interaction, "GS2", 130)
-
-    @discord.ui.button(label="GS3", style=discord.ButtonStyle.secondary, custom_id="fab_gs3")
-    async def gs3(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.iniciar(interaction, "GS3", 130)
-
-    @discord.ui.button(label="🧪 TESTE", style=discord.ButtonStyle.success, custom_id="fab_teste")
-    async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.iniciar(interaction, "TESTE", 5)
+    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.secondary, custom_id="fab_sul")
+    async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            ObservacaoProducaoModal("GALPÕES SUL", 130)
+        )
 
 
 # ================= LOOP DE ACOMPANHAMENTO =================
@@ -535,16 +534,19 @@ async def acompanhar_producao(pid):
         fim = datetime.fromisoformat(prod["fim"])
 
         total = (fim - inicio).total_seconds()
-
-        # 🔥 HORÁRIO BRASÍLIA
         restante = max(0, (fim - agora()).total_seconds())
-
         pct = max(0, min(1, 1 - (restante / total)))
         mins = int(restante // 60)
 
         desc = (
             f"**Galpão:** {prod['galpao']}\n"
             f"**Iniciado por:** <@{prod['autor']}>\n"
+        )
+
+        if prod.get("obs"):
+            desc += f"📝 **Obs:** {prod['obs']}\n"
+
+        desc += (
             f"Início: <t:{int(inicio.timestamp())}:t>\n"
             f"Término: <t:{int(fim.timestamp())}:t>\n\n"
             f"⏳ **Restante:** {mins} min\n"
@@ -585,11 +587,12 @@ async def enviar_painel_fabricacao():
     await canal.send(
         embed=discord.Embed(
             title="🏭 Fabricação",
-            description="Selecione o galpão.",
+            description="Selecione Norte ou Sul para iniciar a produção.",
             color=0x2c3e50
         ),
         view=FabricacaoView()
     )
+
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
@@ -1321,6 +1324,180 @@ async def enviar_painel_ponto():
     canal = bot.get_channel(CANAL_PONTO_ID)
     if canal:
         await atualizar_painel_ponto(canal.guild)
+
+# =========================================================
+# =============== CALCULADORA MECÂNICA PRO ================
+# =========================================================
+
+CANAL_CALCULADORA_MEC_ID = 1448564716598202408
+
+ITENS = {
+    "kit_reparo": ("🧰 Kit Reparo", 600, "serv"),
+    "pneu_serv": ("🛞 Pneu Serviço", 275, "serv"),
+    "vidro": ("🔨 Repor Vidro", 600, "serv"),
+    "kit_serv": ("👨‍🔧 Kit Reposição", 600, "serv"),
+    "porta": ("🚪 Porta/Capô", 200, "serv"),
+
+    "chamado": ("📞 Chamado Externo", 1500, "ext"),
+    "explodido": ("💥 Veículo Explodido", 1500, "ext"),
+
+    "pneu_venda": ("🛞 Pneu Venda", 400, "vend"),
+    "kit_venda": ("🧰 Kit Venda", 700, "vend"),
+    "pe": ("🔧 Pé de Cabra", 1000, "vend"),
+    "chave": ("🔩 Chave Inglesa", 1000, "vend"),
+    "elevador": ("📐 Elevador", 1000, "vend"),
+    "guincho": ("🚗 Guincho", 8000, "vend"),
+    "bolsa": ("🎒 Bolsa Mecânica", 18000, "vend"),
+}
+
+cont = {k: 0 for k in ITENS}
+
+
+def br(valor):
+    return f"R$ {valor:,.0f}".replace(",", ".")
+
+
+def embed_calc():
+    total_serv = 0
+    total_ext = 0
+    total_vend = 0
+
+    linhas = []
+
+    for k, (nome, valor, tipo) in ITENS.items():
+        qtd = cont[k]
+        if qtd > 0:
+            subtotal = qtd * valor
+            linhas.append(f"{nome} x{qtd} = {br(subtotal)}")
+
+            if tipo == "serv":
+                total_serv += subtotal
+            elif tipo == "ext":
+                total_ext += subtotal
+            else:
+                total_vend += subtotal
+
+    total = total_serv + total_ext + total_vend
+
+    embed = discord.Embed(
+        title="🔧 CALCULADORA MECÂNICA",
+        description="\n".join(linhas) if linhas else "Nenhum item adicionado.",
+        color=0xff9900
+    )
+
+    embed.add_field(name="Serviços", value=br(total_serv))
+    embed.add_field(name="Externo", value=br(total_ext))
+    embed.add_field(name="Vendas", value=br(total_vend))
+    embed.add_field(name="TOTAL", value=br(total), inline=False)
+
+    return embed
+
+
+class CalcView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def refresh(self, interaction):
+        await interaction.message.edit(embed=embed_calc(), view=self)
+
+    # ========= + =========
+
+    @discord.ui.button(label="+ Kit Reparo", style=discord.ButtonStyle.primary)
+    async def a1(self, i, b):
+        cont["kit_reparo"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Pneu Serv", style=discord.ButtonStyle.primary)
+    async def a2(self, i, b):
+        cont["pneu_serv"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Vidro", style=discord.ButtonStyle.primary)
+    async def a3(self, i, b):
+        cont["vidro"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Kit Serv", style=discord.ButtonStyle.primary)
+    async def a4(self, i, b):
+        cont["kit_serv"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Porta", style=discord.ButtonStyle.primary)
+    async def a5(self, i, b):
+        cont["porta"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Chamado", style=discord.ButtonStyle.success)
+    async def a6(self, i, b):
+        cont["chamado"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Explodido", style=discord.ButtonStyle.success)
+    async def a7(self, i, b):
+        cont["explodido"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Pneu Venda", style=discord.ButtonStyle.secondary)
+    async def a8(self, i, b):
+        cont["pneu_venda"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Kit Venda", style=discord.ButtonStyle.secondary)
+    async def a9(self, i, b):
+        cont["kit_venda"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Pé de Cabra", style=discord.ButtonStyle.secondary)
+    async def a10(self, i, b):
+        cont["pe"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Chave", style=discord.ButtonStyle.secondary)
+    async def a11(self, i, b):
+        cont["chave"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Elevador", style=discord.ButtonStyle.secondary)
+    async def a12(self, i, b):
+        cont["elevador"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Guincho", style=discord.ButtonStyle.secondary)
+    async def a13(self, i, b):
+        cont["guincho"] += 1
+        await self.refresh(i)
+
+    @discord.ui.button(label="+ Bolsa", style=discord.ButtonStyle.secondary)
+    async def a14(self, i, b):
+        cont["bolsa"] += 1
+        await self.refresh(i)
+
+    # ========= - =========
+
+    @discord.ui.button(label="-1 Geral", style=discord.ButtonStyle.danger, row=4)
+    async def menos(self, i, b):
+        for k in cont:
+            if cont[k] > 0:
+                cont[k] -= 1
+                break
+        await self.refresh(i)
+
+    @discord.ui.button(label="🧹 Limpar", style=discord.ButtonStyle.danger, row=4)
+    async def limpar(self, i, b):
+        for k in cont:
+            cont[k] = 0
+        await self.refresh(i)
+
+
+async def painel_calc():
+    canal = bot.get_channel(CANAL_CALCULADORA_MEC_ID)
+
+    async for m in canal.history(limit=10):
+        if m.author == bot.user:
+            return
+
+    await canal.send(embed=embed_calc(), view=CalcView())
+
 # =========================================================
 # ========================== METAS =========================
 # =========================================================
@@ -1657,6 +1834,7 @@ async def on_ready():
     bot.add_view(ConfirmarPagamentoView())
     bot.add_view(LavagemView())
     bot.add_view(PontoView())
+    bot.add_view(CalcView())
 
     # ================= LOOPS =================
     if not verificar_lives_twitch.is_running():
@@ -1676,6 +1854,7 @@ async def on_ready():
     await enviar_painel_polvoras(bot)
     await enviar_painel_lavagem()
     await enviar_painel_ponto()
+    await painel_calc()
 
     # ================= VERIFICAÇÕES AUTOMÁTICAS =================
     await verificar_metas_automaticas()
@@ -1691,4 +1870,5 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
