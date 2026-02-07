@@ -1654,18 +1654,28 @@ async def criar_sala_meta(member: discord.Member):
         metas = carregar_metas()
         guild = member.guild
 
-        nome_base = member.display_name.lower().replace(" ", "-")
-        nome_canal = f"📁・{nome_base}"
+        # pegar o PASSAPORTE (primeiro número do nick)
+        nick = member.display_name.lower()
+        passaporte = nick.split("-")[0].strip()
 
-        # 🔎 PROCURAR SALA EM TODO O SERVIDOR
+        # procurar qualquer canal que comece com esse número
+        canal_existente = None
+
         for categoria in guild.categories:
             for canal in categoria.channels:
-                if canal.name == nome_canal:
-                    metas[str(member.id)] = {"canal_id": canal.id}
-                    salvar_metas(metas)
-                    return
+                if canal.name.startswith(passaporte):
+                    canal_existente = canal
+                    break
+            if canal_existente:
+                break
 
-        # DESCOBRIR CATEGORIA
+        # SE EXISTE → NÃO CRIA
+        if canal_existente:
+            metas[str(member.id)] = {"canal_id": canal_existente.id}
+            salvar_metas(metas)
+            return
+
+        # CRIAR NOVA SALA
         categoria_id = obter_categoria_meta(member)
         if not categoria_id:
             return
@@ -1677,6 +1687,8 @@ async def criar_sala_meta(member: discord.Member):
         if len(categoria.channels) >= 50:
             print(f"⚠️ Categoria cheia: {categoria.name}")
             return
+
+        nome_canal = nick.replace(" ", "-")
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -2062,6 +2074,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
