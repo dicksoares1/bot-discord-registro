@@ -16,6 +16,17 @@ from zoneinfo import ZoneInfo
 
 
 # =========================================================
+# ===================== RELÓGIO GLOBAL ====================
+# =========================================================
+# 🔥 TODAS AS HORAS DO BOT AGORA USAM BRASÍLIA
+
+BRASIL = ZoneInfo("America/Sao_Paulo")
+
+def agora():
+    return datetime.now(BRASIL)
+
+
+# =========================================================
 # ======================== CONFIG ==========================
 # =========================================================
 
@@ -124,66 +135,6 @@ intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-# =========================================================
-# ====================== TWITCH API ========================
-# =========================================================
-
-twitch_access_token = None
-
-async def obter_token_twitch():
-    global twitch_access_token
-
-    url = "https://id.twitch.tv/oauth2/token"
-    params = {
-        "client_id": TWITCH_CLIENT_ID,
-        "client_secret": TWITCH_CLIENT_SECRET,
-        "grant_type": "client_credentials"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, params=params) as resp:
-            data = await resp.json()
-            twitch_access_token = data.get("access_token")
-            print("🎮 Token Twitch obtido com sucesso!")
-
-async def checar_se_esta_ao_vivo(canal_twitch):
-    global twitch_access_token
-
-    if not twitch_access_token:
-        await obter_token_twitch()
-
-    headers = {
-        "Client-ID": TWITCH_CLIENT_ID,
-        "Authorization": f"Bearer {twitch_access_token}"
-    }
-
-    url = f"https://api.twitch.tv/helix/streams?user_login={canal_twitch}"
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as resp:
-            if resp.status != 200:
-                print("❌ Erro Twitch API:", resp.status)
-                return False, None, None, None
-
-            data = await resp.json()
-            streams = data.get("data", [])
-
-            if not streams:
-                return False, None, None, None
-
-            stream = streams[0]
-
-            titulo = stream.get("title")
-            jogo = stream.get("game_name")
-
-            thumbnail = stream.get("thumbnail_url")
-            if thumbnail:
-                thumbnail = thumbnail.replace("{width}", "640").replace("{height}", "360")
-
-            return True, titulo, jogo, thumbnail
-
 # =========================================================
 # ======================= REGISTRO =========================
 # =========================================================
@@ -206,8 +157,8 @@ class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
         if agregado:
             await membro.add_roles(agregado)
 
-            # 🔥 CRIA SALA DE META AUTOMATICAMENTE
-            await criar_sala_meta(after)
+            # 🔥 CRIA SALA DE META AUTOMATICAMENTE (CORRIGIDO)
+            await criar_sala_meta(membro)
 
         if convidado:
             await membro.remove_roles(convidado)
@@ -229,10 +180,13 @@ class RegistroView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📋 Fazer Registro", style=discord.ButtonStyle.success, custom_id="registro_fazer")
+    @discord.ui.button(
+        label="📋 Fazer Registro",
+        style=discord.ButtonStyle.success,
+        custom_id="registro_fazer"
+    )
     async def registro(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistroModal())
-
 # =========================================================
 # ======================== VENDAS ==========================
 # =========================================================
@@ -303,11 +257,11 @@ class StatusView(discord.ui.View):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
-        agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
+        agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
         linhas = [l for l in linhas if not l.startswith("⏳")]
-        linhas = self.toggle_linha(linhas, "💰", f"💰 Pago • Recebido por {user} • {agora}")
+        linhas = self.toggle_linha(linhas, "💰", f"💰 Pago • Recebido por {user} • {agora_str}")
 
         embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed)
@@ -318,11 +272,11 @@ class StatusView(discord.ui.View):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
-        agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
+        agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
         linhas = [l for l in linhas if not l.startswith("📦")]
-        linhas = self.toggle_linha(linhas, "✅", f"✅ Entregue por {user} • {agora}")
+        linhas = self.toggle_linha(linhas, "✅", f"✅ Entregue por {user} • {agora_str}")
 
         embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed)
@@ -423,7 +377,11 @@ class CalculadoraView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🧮 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calculadora_registrar")
+    @discord.ui.button(
+        label="🧮 Registrar Venda",
+        style=discord.ButtonStyle.primary,
+        custom_id="calculadora_registrar"
+    )
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VendaModal())
 # =========================================================
@@ -479,7 +437,7 @@ class SegundaTaskView(discord.ui.View):
 
         producoes[self.pid]["segunda_task_confirmada"] = {
             "user": interaction.user.id,
-            "time": datetime.utcnow().isoformat()
+            "time": agora().isoformat()
         }
 
         salvar_producoes(producoes)
@@ -497,7 +455,9 @@ class FabricacaoView(discord.ui.View):
     async def iniciar(self, interaction, galpao, total_min):
         producoes = carregar_producoes()
         pid = f"{galpao}_{interaction.id}"
-        inicio = datetime.utcnow()
+
+        # 🔥 HORÁRIO BRASÍLIA
+        inicio = agora()
         fim = inicio + timedelta(minutes=total_min)
 
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
@@ -575,7 +535,10 @@ async def acompanhar_producao(pid):
         fim = datetime.fromisoformat(prod["fim"])
 
         total = (fim - inicio).total_seconds()
-        restante = max(0, (fim - datetime.utcnow()).total_seconds())
+
+        # 🔥 HORÁRIO BRASÍLIA
+        restante = max(0, (fim - agora()).total_seconds())
+
         pct = max(0, min(1, 1 - (restante / total)))
         mins = int(restante // 60)
 
@@ -670,7 +633,8 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
         valor = qtd * 80
         valor_formatado = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        agora = datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat()
+        # 🔥 HORÁRIO BRASÍLIA
+        agora_br = agora().isoformat()
 
         dados = carregar_polvoras()
         dados.append({
@@ -678,7 +642,7 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
             "vendedor": self.vendedor.value,
             "quantidade": qtd,
             "valor": valor,
-            "data": agora
+            "data": agora_br
         })
         salvar_polvoras(dados)
 
@@ -728,18 +692,20 @@ class PolvoraView(discord.ui.View):
 
 @tasks.loop(minutes=1)
 async def relatorio_semanal_polvoras():
-    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    # 🔥 HORÁRIO BRASÍLIA
+    agora_br = agora()
 
     # Domingo 23:59
-    if agora.weekday() != 6 or agora.hour != 23 or agora.minute != 59:
+    if agora_br.weekday() != 6 or agora_br.hour != 23 or agora_br.minute != 59:
         return
 
     dados = carregar_polvoras()
 
-    inicio_semana = agora - timedelta(days=6)
+    inicio_semana = agora_br - timedelta(days=6)
     inicio_semana = inicio_semana.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    fim_semana = agora.replace(hour=23, minute=59, second=59)
+    fim_semana = agora_br.replace(hour=23, minute=59, second=59)
 
     resumo = {}
 
@@ -841,7 +807,9 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
         }
 
 
-# ================= CAPTURA AUTOMÁTICA DO PRINT =================
+# =========================================================
+# =========== CAPTURA AUTOMÁTICA DO PRINT =================
+# =========================================================
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -922,6 +890,7 @@ class LavagemView(discord.ui.View):
             return
 
         canal = interaction.guild.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+
         async for msg in canal.history(limit=None):
             try:
                 await msg.delete()
@@ -1115,6 +1084,7 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
             )
             return
 
+        # EVITA DUPLICAR CANAL
         for uid, data in lives.items():
             canal_existente = self.extrair_canal_twitch(data.get("link", ""))
 
@@ -1195,10 +1165,10 @@ def salvar_ponto(dados):
         json.dump(dados, f, indent=4)
 
 def hoje_str():
-    return datetime.now().strftime("%d/%m/%Y")
+    return agora().strftime("%d/%m/%Y")
 
 def hora_str():
-    return datetime.now().strftime("%H:%M")
+    return agora().strftime("%H:%M")
 
 
 # ================= VIEW =================
@@ -1396,7 +1366,6 @@ def tem_meta(member_id):
 async def criar_sala_meta(member: discord.Member):
     metas = carregar_metas()
 
-    # NÃO DUPLICAR
     if str(member.id) in metas:
         return
 
@@ -1433,9 +1402,9 @@ async def criar_sala_meta(member: discord.Member):
 
     aviso = await canal.send(
         f"📢 **ALGUNS AVISOS IMPORTANTES SOBRE ESSA SALA** 📢\n\n"
-        f"📌 Apenas você {member.mention} e a Gerência tem acesso a essa sala.\n"
-        f"📌 Aqui explica tudo como funciona a meta da Fac ⁠📢・faq-meta\n"
-        f"📌 Responsável por cuidar de metas: {cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}",
+        f"📌 Apenas você {member.mention} e a Gerência tem acesso.\n"
+        f"📌 Leia o canal ⁠📢・faq-meta\n"
+        f"📌 Responsável por metas: {cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}",
         view=MetaFecharView(member.id)
     )
     await aviso.pin()
@@ -1467,7 +1436,7 @@ class MetaFecharView(discord.ui.View):
     @discord.ui.button(label="🧹 Fechar Sala", style=discord.ButtonStyle.danger, custom_id="meta_fechar")
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            await interaction.response.send_message("❌ Apenas Gerentes podem fechar esta sala.", ephemeral=True)
+            await interaction.response.send_message("❌ Apenas Gerentes podem fechar.", ephemeral=True)
             return
 
         metas = carregar_metas()
@@ -1484,7 +1453,7 @@ class MetaFecharView(discord.ui.View):
         del metas[str(self.member_id)]
         salvar_metas(metas)
 
-        await interaction.response.send_message("🧹 Sala de meta fechada com sucesso.", ephemeral=True)
+        await interaction.response.send_message("🧹 Sala fechada.", ephemeral=True)
 
 
 # =========================================================
@@ -1512,10 +1481,9 @@ async def on_member_remove(member):
 
 
 # =========================================================
-# ========== GANHOU CARGO AGREGADO = CRIA META ============
+# ========= GANHOU/MUDOU CARGO = CRIA/MOVE META ===========
 # =========================================================
 
-@bot.event
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
     if before.roles == after.roles:
@@ -1526,10 +1494,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     before_roles = {r.id for r in before.roles}
     after_roles = {r.id for r in after.roles}
 
-    # =====================================================
-    # 🟢 GANHOU AGREGADO → CRIA META
-    # =====================================================
-
+    # GANHOU AGREGADO
     virou_agregado = (
         AGREGADO_ROLE_ID in after_roles and
         AGREGADO_ROLE_ID not in before_roles
@@ -1539,11 +1504,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         await criar_sala_meta(after)
         return
 
-    # =====================================================
-    # 🔄 MOVE SALA SE TROCAR CARGO
-    # (Soldado, Membro, Responsável, Gerente, etc)
-    # =====================================================
-
+    # MOVE DE CATEGORIA
     data = metas.get(str(after.id))
     if not data:
         return
@@ -1556,7 +1517,6 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     if not nova_categoria_id:
         return
 
-    # já está na categoria certa
     if canal.category_id == nova_categoria_id:
         return
 
@@ -1567,20 +1527,18 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     try:
         await canal.edit(category=nova_categoria)
         await canal.send(
-            f"🔁 Sala movida automaticamente para **{nova_categoria.name}** "
-            f"devido à atualização de cargo."
+            f"🔁 Sala movida automaticamente para **{nova_categoria.name}** devido à atualização de cargo."
         )
     except Exception as e:
-        print(f"❌ Erro ao mover sala de meta: {e}")
-
+        print(f"Erro ao mover meta: {e}")
 
 
 # =========================================================
-# ========= VERIFICAÇÃO AUTOMÁTICA AO INICIAR BOT =========
+# ========= VERIFICAÇÃO AUTOMÁTICA AO INICIAR =============
 # =========================================================
 
 async def verificar_metas_automaticas():
-    print("🔎 Verificando metas automáticas...")
+    print("🔎 Verificando metas...")
 
     guild = bot.get_guild(GUILD_ID)
     if not guild:
@@ -1604,7 +1562,6 @@ async def verificar_metas_automaticas():
                 continue
 
         await criar_sala_meta(member)
-        print(f"📁 Meta criada automaticamente para {member.display_name}")
 
 
 # =========================================================
@@ -1622,13 +1579,11 @@ async def enviar_painel_metas():
 
     embed = discord.Embed(
         title="📁 Solicitação de Sala de Meta",
-        description="Clique no botão abaixo para criar sua sala de meta.",
+        description="Clique no botão abaixo para criar sua sala.",
         color=0xf1c40f
     )
 
     await canal.send(embed=embed, view=MetaView())
-
-
 # =========================================================
 # ========================= ON READY ======================
 # =========================================================
@@ -1638,7 +1593,10 @@ async def on_ready():
 
     print("🔄 Iniciando configuração do bot...")
 
-    # VIEWS PERSISTENTES
+    # ================= RELÓGIO GLOBAL =================
+    print(f"🕒 Horário atual (Brasília): {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+
+    # ================= VIEWS PERSISTENTES =================
     bot.add_view(RegistroView())
     bot.add_view(CalculadoraView())
     bot.add_view(StatusView())
@@ -1650,27 +1608,30 @@ async def on_ready():
     bot.add_view(LavagemView())
     bot.add_view(PontoView())
 
-    # LOOPS
+    # ================= LOOPS =================
     if not verificar_lives_twitch.is_running():
         verificar_lives_twitch.start()
 
     if not relatorio_semanal_polvoras.is_running():
         relatorio_semanal_polvoras.start()
 
-    # RESTAURAR PRODUÇÕES
+    # ================= RESTAURAR PRODUÇÕES =================
     for pid in carregar_producoes():
         bot.loop.create_task(acompanhar_producao(pid))
 
-    # ENVIAR PAINÉIS
+    # ================= ENVIAR PAINÉIS =================
     await enviar_painel_fabricacao()
     await enviar_painel_lives()
     await enviar_painel_metas()
     await enviar_painel_polvoras(bot)
     await enviar_painel_lavagem()
     await enviar_painel_ponto()
+
+    # ================= VERIFICAÇÕES AUTOMÁTICAS =================
     await verificar_metas_automaticas()
 
     print("✅ Bot online com todos os sistemas ativos")
+    print("🕒 Todos os horários agora estão em Brasília")
 
 
 # =========================================================
@@ -1678,5 +1639,3 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
-
-
