@@ -1836,16 +1836,49 @@ async def on_member_update(before, after):
 # =========================================================
 
 async def verificar_metas_automaticas():
+    print("🔎 Verificação ULTRA de metas iniciada...")
+
     guild = bot.get_guild(GUILD_ID)
     if not guild:
         return
+
+    metas = carregar_metas()
 
     for member in guild.members:
         if member.bot:
             continue
 
-        if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
-            await criar_sala_meta(member)
+        # só quem tem agregado
+        if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
+            continue
+
+        nome_base = member.display_name.lower().replace(" ", "-")
+        nome_canal = f"📁・{nome_base}"
+
+        canal_existente = None
+
+        # 🔍 PROCURA EM TODAS CATEGORIAS
+        for categoria in guild.categories:
+            for canal in categoria.channels:
+                if canal.name == nome_canal:
+                    canal_existente = canal
+                    break
+            if canal_existente:
+                break
+
+        # ===============================
+        # SE JÁ EXISTE → NÃO CRIA
+        # ===============================
+        if canal_existente:
+            metas[str(member.id)] = {"canal_id": canal_existente.id}
+            salvar_metas(metas)
+            continue
+
+        # ===============================
+        # SE NÃO EXISTE → CRIA
+        # ===============================
+        await criar_sala_meta(member)
+
 
 # =========================================================
 # ========================= ON READY ======================
@@ -1908,6 +1941,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
