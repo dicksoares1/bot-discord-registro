@@ -207,7 +207,7 @@ class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
             await membro.add_roles(agregado)
 
             # 🔥 CRIA SALA DE META AUTOMATICAMENTE
-            await criar_sala_meta(membro)
+            await criar_sala_meta(after)
 
         if convidado:
             await membro.remove_roles(convidado)
@@ -1379,7 +1379,7 @@ def obter_categoria_meta(member: discord.Member):
         return CATEGORIA_META_SOLDADO_ID
     if CARGO_MEMBRO_ID in roles:
         return CATEGORIA_META_MEMBRO_ID
-    if CARGO_AGREGADO_ID in roles:
+    if AGREGADO_ROLE_ID in roles:
         return CATEGORIA_META_AGREGADO_ID
 
     return None
@@ -1516,6 +1516,7 @@ async def on_member_remove(member):
 # =========================================================
 
 @bot.event
+@bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
     if before.roles == after.roles:
         return
@@ -1525,6 +1526,10 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     before_roles = {r.id for r in before.roles}
     after_roles = {r.id for r in after.roles}
 
+    # =====================================================
+    # 🟢 GANHOU AGREGADO → CRIA META
+    # =====================================================
+
     virou_agregado = (
         AGREGADO_ROLE_ID in after_roles and
         AGREGADO_ROLE_ID not in before_roles
@@ -1532,6 +1537,96 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
     if virou_agregado and str(after.id) not in metas:
         await criar_sala_meta(after)
+        return
+
+    # =====================================================
+    # 🔄 MOVE SALA SE TROCAR CARGO
+    # (Soldado, Membro, Responsável, Gerente, etc)
+    # =====================================================
+
+    data = metas.get(str(after.id))
+    if not data:
+        return
+
+    canal = after.guild.get_channel(data["canal_id"])
+    if not canal:
+        return
+
+    nova_categoria_id = obter_categoria_meta(after)
+    if not nova_categoria_id:
+        return
+
+    # já está na categoria certa
+    if canal.category_id == nova_categoria_id:
+        return
+
+    nova_categoria = after.guild.get_channel(nova_categoria_id)
+    if not nova_categoria:
+        return
+
+    try:
+        await canal.edit(category=nova_categoria)
+        await canal.send(
+            f"🔁 Sala movida automaticamente para **{nova_categoria.name}** "
+            f"devido à atualização de cargo."
+        )
+    except Exception as e:
+        print(f"❌ Erro ao mover sala de meta: {e}")
+
+
+
+# =========================================================
+# ========= VERIFICAÇÃO AUTOMÁTICA AO INICIAR BOT =========
+# =========================================================
+
+async def verificar_metas_automaticas():
+    print("🔎 Verificando metas automáticas...")
+
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+
+    metas = carregar_metas()
+
+    for member in guild.members:
+        if member.bot:
+            continue
+
+        tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in member.roles)
+
+        if not tem_agregado:
+            continue
+
+        if str(member.id) in metas:
+            canal_id = metas[str(member.id)]["canal_id"]
+            canal = guild.get_channel(canal_id)
+            if canal:
+                continue
+
+        await criar_sala_meta(member)
+        print(f"📁 Meta criada automaticamente para {member.display_name}")
+
+
+# =========================================================
+# ================= PAINEL METAS ==========================
+# =========================================================
+
+async def enviar_painel_metas():
+    canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
+    if not canal:
+        return
+
+    async for m in canal.history(limit=10):
+        if m.author == bot.user and m.embeds and m.embeds[0].title == "📁 Solicitação de Sala de Meta":
+            return
+
+    embed = discord.Embed(
+        title="📁 Solicitação de Sala de Meta",
+        description="Clique no botão abaixo para criar sua sala de meta.",
+        color=0xf1c40f
+    )
+
+    await canal.send(embed=embed, view=MetaView())
 
 
 # =========================================================
@@ -1573,6 +1668,7 @@ async def on_ready():
     await enviar_painel_polvoras(bot)
     await enviar_painel_lavagem()
     await enviar_painel_ponto()
+    await verificar_metas_automaticas()
 
     print("✅ Bot online com todos os sistemas ativos")
 
@@ -1582,4 +1678,5 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
