@@ -1410,79 +1410,79 @@ class CalcView(discord.ui.View):
 
     # ========= + =========
 
-    @discord.ui.button(label="+ Kit Reparo", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="+ Kit Reparo", style=discord.ButtonStyle.primary, custom_id="calc_1")
     async def a1(self, i, b):
         cont["kit_reparo"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Pneu Serv", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="+ Pneu Serv", style=discord.ButtonStyle.primary, custom_id="calc_2")
     async def a2(self, i, b):
         cont["pneu_serv"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Vidro", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="+ Vidro", style=discord.ButtonStyle.primary, custom_id="calc_3")
     async def a3(self, i, b):
         cont["vidro"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Kit Serv", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="+ Kit Serv", style=discord.ButtonStyle.primary, custom_id="calc_4")
     async def a4(self, i, b):
         cont["kit_serv"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Porta", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="+ Porta", style=discord.ButtonStyle.primary, custom_id="calc_5")
     async def a5(self, i, b):
         cont["porta"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Chamado", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="+ Chamado", style=discord.ButtonStyle.success, custom_id="calc_6")
     async def a6(self, i, b):
         cont["chamado"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Explodido", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="+ Explodido", style=discord.ButtonStyle.success, custom_id="calc_7")
     async def a7(self, i, b):
         cont["explodido"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Pneu Venda", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="+ Pneu Venda", style=discord.ButtonStyle.secondary, custom_id="calc_8")
     async def a8(self, i, b):
         cont["pneu_venda"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Kit Venda", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="+ Kit Venda", style=discord.ButtonStyle.secondary, custom_id="calc_9")
     async def a9(self, i, b):
         cont["kit_venda"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Pé de Cabra", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="+ Pé de Cabra", style=discord.ButtonStyle.secondary, custom_id="calc_10")
     async def a10(self, i, b):
         cont["pe"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Chave", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="+ Chave", style=discord.ButtonStyle.secondary, custom_id="calc_11")
     async def a11(self, i, b):
         cont["chave"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Elevador", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="+ Elevador", style=discord.ButtonStyle.secondary, custom_id="calc_12")
     async def a12(self, i, b):
         cont["elevador"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Guincho", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="+ Guincho", style=discord.ButtonStyle.secondary, custom_id="calc_13")
     async def a13(self, i, b):
         cont["guincho"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Bolsa", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="+ Bolsa", style=discord.ButtonStyle.secondary, custom_id="calc_14")
     async def a14(self, i, b):
         cont["bolsa"] += 1
         await self.refresh(i)
 
     # ========= - =========
 
-    @discord.ui.button(label="-1 Geral", style=discord.ButtonStyle.danger, row=4)
+    @discord.ui.button(label="-1 Geral", style=discord.ButtonStyle.danger, row=4, custom_id="calc_menos")
     async def menos(self, i, b):
         for k in cont:
             if cont[k] > 0:
@@ -1490,7 +1490,7 @@ class CalcView(discord.ui.View):
                 break
         await self.refresh(i)
 
-    @discord.ui.button(label="🧹 Limpar", style=discord.ButtonStyle.danger, row=4)
+    @discord.ui.button(label="🧹 Limpar", style=discord.ButtonStyle.danger, row=4, custom_id="calc_limpar")
     async def limpar(self, i, b):
         for k in cont:
             cont[k] = 0
@@ -1881,6 +1881,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
