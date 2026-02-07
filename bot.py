@@ -521,6 +521,16 @@ class FabricacaoView(discord.ui.View):
             ObservacaoProducaoModal("GALPÕES SUL", 130)
         )
 
+    @discord.ui.button(
+        label="🧪 TESTE 3 MIN",
+        style=discord.ButtonStyle.success,
+        custom_id="fab_teste_btn"
+    )
+    async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            ObservacaoProducaoModal("TESTE", 3)
+        )
+
 
 # ================= LOOP DE ACOMPANHAMENTO =================
 
@@ -1541,7 +1551,7 @@ def obter_categoria_meta(member: discord.Member):
 
 
 # =========================================================
-# ================= PROCURAR SALA EXISTENTE ===============
+# ============ PROCURAR SALA EXISTENTE (ANTI DUPLO) =======
 # =========================================================
 
 async def encontrar_sala_existente(member: discord.Member):
@@ -1565,24 +1575,32 @@ async def encontrar_sala_existente(member: discord.Member):
             if nome_base in canal.name:
                 canais_encontrados.append(canal)
 
-    if not canais_encontrados:
-        return None
+    # Se só tem uma, mantém
+    if len(canais_encontrados) <= 1:
+        return canais_encontrados[0] if canais_encontrados else None
 
-    # Mantém a que tem mensagens
-    principal = None
+    # Se tem duplicadas
+    canal_correto = None
 
     for canal in canais_encontrados:
-        msgs = [m async for m in canal.history(limit=1)]
+        tem_msg_do_membro = False
 
-        if msgs and not principal:
-            principal = canal
-        elif not msgs:
+        async for msg in canal.history(limit=50):
+            if msg.author.id == member.id:
+                tem_msg_do_membro = True
+                break
+
+        if tem_msg_do_membro and not canal_correto:
+            canal_correto = canal
+        elif not tem_msg_do_membro:
+            # Apaga duplicada sem mensagem do dono
             try:
                 await canal.delete()
+                print(f"🧹 Meta duplicada removida: {canal.name}")
             except:
                 pass
 
-    return principal or canais_encontrados[0]
+    return canal_correto or canais_encontrados[0]
 
 
 # =========================================================
@@ -1593,7 +1611,7 @@ async def criar_sala_meta(member: discord.Member):
     metas = carregar_metas()
     guild = member.guild
 
-    # 🔎 VER SE JÁ EXISTE UMA SALA
+    # 🔎 Procura sala existente antes
     existente = await encontrar_sala_existente(member)
 
     if existente:
@@ -1606,6 +1624,12 @@ async def criar_sala_meta(member: discord.Member):
         return
 
     categoria = guild.get_channel(categoria_id)
+
+    # 🚨 Proteção categoria cheia
+    if len(categoria.channels) >= 50:
+        print(f"⚠️ Categoria cheia: {categoria.name}")
+        return
+
     nome_canal = f"📁・{member.display_name}".lower().replace(" ", "-")
 
     overwrites = {
@@ -1619,11 +1643,15 @@ async def criar_sala_meta(member: discord.Member):
             view_channel=True, send_messages=True, manage_channels=True
         )
 
-    canal = await guild.create_text_channel(
-        name=nome_canal,
-        category=categoria,
-        overwrites=overwrites
-    )
+    try:
+        canal = await guild.create_text_channel(
+            name=nome_canal,
+            category=categoria,
+            overwrites=overwrites
+        )
+    except discord.HTTPException:
+        print(f"❌ Falha ao criar meta para {member.display_name}")
+        return
 
     metas[str(member.id)] = {"canal_id": canal.id}
     salvar_metas(metas)
@@ -1717,7 +1745,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
     after_roles = {r.id for r in after.roles}
 
-    # GANHOU AGREGADO
+    # Ganhou agregado
     if AGREGADO_ROLE_ID in after_roles:
         await criar_sala_meta(after)
 
@@ -1851,6 +1879,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
