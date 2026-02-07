@@ -501,13 +501,21 @@ class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary, custom_id="fab_norte")
+    @discord.ui.button(
+        label="🏭 Galpões Norte",
+        style=discord.ButtonStyle.primary,
+        custom_id="fab_norte_btn"
+    )
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(
             ObservacaoProducaoModal("GALPÕES NORTE", 65)
         )
 
-    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.secondary, custom_id="fab_sul")
+    @discord.ui.button(
+        label="🏭 Galpões Sul",
+        style=discord.ButtonStyle.secondary,
+        custom_id="fab_sul_btn"
+    )
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(
             ObservacaoProducaoModal("GALPÕES SUL", 130)
@@ -1818,6 +1826,10 @@ async def enviar_painel_metas():
 @bot.event
 async def on_ready():
 
+    if hasattr(bot, "ready_once"):
+        return
+    bot.ready_once = True
+
     print("🔄 Iniciando configuração do bot...")
 
     # ================= RELÓGIO GLOBAL =================
@@ -1835,6 +1847,7 @@ async def on_ready():
     bot.add_view(LavagemView())
     bot.add_view(PontoView())
     bot.add_view(CalcView())
+    bot.add_view(FabricacaoView())
 
     # ================= LOOPS =================
     if not verificar_lives_twitch.is_running():
@@ -1860,15 +1873,14 @@ async def on_ready():
     await verificar_metas_automaticas()
     await reconstruir_metas()
 
-
     print("✅ Bot online com todos os sistemas ativos")
     print("🕒 Todos os horários agora estão em Brasília")
-
 
 # =========================================================
 # ========================= START BOT =====================
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
