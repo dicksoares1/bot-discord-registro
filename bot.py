@@ -1736,6 +1736,30 @@ class MetaFecharView(discord.ui.View):
 
         await interaction.response.send_message("Sala removida.", ephemeral=True)
 
+# =========================================================
+# ================= PAINEL METAS ==========================
+# =========================================================
+
+async def enviar_painel_metas():
+    canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
+    if not canal:
+        return
+
+    async for m in canal.history(limit=10):
+        if (
+            m.author == bot.user
+            and m.embeds
+            and m.embeds[0].title == "📁 Solicitação de Sala de Meta"
+        ):
+            return
+
+    embed = discord.Embed(
+        title="📁 Solicitação de Sala de Meta",
+        description="Clique no botão abaixo para verificar/criar sua sala automaticamente.",
+        color=0xf1c40f
+    )
+
+    await canal.send(embed=embed, view=MetaView())
 
 # =========================================================
 # ================= EVENTOS AUTOMÁTICOS ===================
@@ -1844,6 +1868,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
