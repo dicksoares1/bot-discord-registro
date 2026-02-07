@@ -1538,7 +1538,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 # =========================================================
 
 async def verificar_metas_automaticas():
-    print("🔎 Verificando metas...")
+    print("🔎 Verificando metas automáticas...")
 
     guild = bot.get_guild(GUILD_ID)
     if not guild:
@@ -1550,18 +1550,68 @@ async def verificar_metas_automaticas():
         if member.bot:
             continue
 
+        # Só quem tem agregado
         tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in member.roles)
-
         if not tem_agregado:
             continue
 
+        # Já tem registro no JSON?
         if str(member.id) in metas:
             canal_id = metas[str(member.id)]["canal_id"]
             canal = guild.get_channel(canal_id)
+
+            # Canal ainda existe = NÃO recria
             if canal:
                 continue
 
+            # Canal foi apagado manualmente
+            print(f"⚠️ Canal de meta sumiu para {member.display_name}, recriando...")
+
+        # Não tem meta registrada → cria
         await criar_sala_meta(member)
+
+# =========================================================
+# ================= LIMPEZA AUTOMÁTICA METAS ==============
+# =========================================================
+
+async def reconstruir_metas():
+    print("🧹 Reconstruindo metas.json baseado nos canais reais...")
+
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+
+    categorias_ids = [
+        CATEGORIA_META_GERENTE_ID,
+        CATEGORIA_META_RESPONSAVEIS_ID,
+        CATEGORIA_META_SOLDADO_ID,
+        CATEGORIA_META_MEMBRO_ID,
+        CATEGORIA_META_AGREGADO_ID
+    ]
+
+    novo_metas = {}
+
+    for cat_id in categorias_ids:
+        categoria = guild.get_channel(cat_id)
+        if not categoria:
+            continue
+
+        for canal in categoria.channels:
+            nome = canal.name.replace("📁・", "").replace("-", " ").strip()
+
+            for membro in guild.members:
+                if membro.bot:
+                    continue
+
+                nome_membro = membro.display_name.lower().strip()
+
+                if nome_membro in nome:
+                    novo_metas[str(membro.id)] = {
+                        "canal_id": canal.id
+                    }
+
+    salvar_metas(novo_metas)
+    print(f"✅ metas.json reconstruído com {len(novo_metas)} registros.")
 
 
 # =========================================================
@@ -1629,6 +1679,8 @@ async def on_ready():
 
     # ================= VERIFICAÇÕES AUTOMÁTICAS =================
     await verificar_metas_automaticas()
+    await reconstruir_metas()
+
 
     print("✅ Bot online com todos os sistemas ativos")
     print("🕒 Todos os horários agora estão em Brasília")
@@ -1639,3 +1691,4 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
