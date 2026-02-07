@@ -1585,7 +1585,7 @@ def obter_categoria_meta(member: discord.Member):
 
 
 # =========================================================
-# ============ FUNÇÃO ULTRA FINAL (ANTI DUPLICAÇÃO) =======
+# ================= CRIAR SALA (ANTI DUPLICADA) ===========
 # =========================================================
 
 async def criar_sala_meta(member: discord.Member):
@@ -1599,32 +1599,24 @@ async def criar_sala_meta(member: discord.Member):
         guild = member.guild
 
         nick = member.display_name.lower()
-
-        # PASSAPORTE = PRIMEIRO NÚMERO DO NICK
         passaporte = nick.split("-")[0].strip()
 
         canais_encontrados = []
 
-        # 🔎 PROCURA EM TODAS AS CATEGORIAS
         for categoria in guild.categories:
             for canal in categoria.channels:
                 if canal.name.startswith(f"📁・{passaporte}"):
                     canais_encontrados.append(canal)
 
-        # =====================================================
-        # SE JÁ EXISTE SALA(S)
-        # =====================================================
+        # Se já existe
         if canais_encontrados:
-
-            # MANTER A MAIS ANTIGA
             canais_encontrados.sort(key=lambda c: c.created_at)
             principal = canais_encontrados[0]
 
-            # APAGAR DUPLICADAS
+            # apagar duplicadas
             for duplicada in canais_encontrados[1:]:
                 try:
                     await duplicada.delete()
-                    print(f"🧹 Duplicada removida: {duplicada.name}")
                 except:
                     pass
 
@@ -1632,9 +1624,6 @@ async def criar_sala_meta(member: discord.Member):
             salvar_metas(metas)
             return
 
-        # =====================================================
-        # NÃO EXISTE → CRIAR
-        # =====================================================
         categoria_id = obter_categoria_meta(member)
         if not categoria_id:
             return
@@ -1651,19 +1640,13 @@ async def criar_sala_meta(member: discord.Member):
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            member: discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True
-            ),
+            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
         }
 
         gerente_role = guild.get_role(CARGO_GERENTE_ID)
         if gerente_role:
             overwrites[gerente_role] = discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                manage_channels=True
+                view_channel=True, send_messages=True, manage_channels=True
             )
 
         canal = await guild.create_text_channel(
@@ -1686,7 +1669,7 @@ async def criar_sala_meta(member: discord.Member):
 
 
 # =========================================================
-# ================= BOTÕES ================================
+# ================= BOTÃO MANUAL ==========================
 # =========================================================
 
 class MetaView(discord.ui.View):
@@ -1726,8 +1709,9 @@ class MetaFecharView(discord.ui.View):
 
         await interaction.response.send_message("🧹 Sala fechada.", ephemeral=True)
 
+
 # =========================================================
-# ========= CRIAR PARA QUEM JÁ TEM AGREGADO ===============
+# ================= PAINEL ================================
 # =========================================================
 
 async def enviar_painel_metas():
@@ -1746,6 +1730,45 @@ async def enviar_painel_metas():
     )
 
     await canal.send(embed=embed, view=MetaView())
+
+
+# =========================================================
+# ============ CRIAR PRA QUEM JÁ TEM AGREGADO ============
+# =========================================================
+
+async def criar_metas_para_agregados_sem_sala():
+    print("🔎 Verificando agregados sem sala...")
+
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+
+    for member in guild.members:
+        if member.bot:
+            continue
+
+        if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
+            continue
+
+        await criar_sala_meta(member)
+
+
+# =========================================================
+# ========= GANHOU AGREGADO = CRIA META AUTOMÁTICA ========
+# =========================================================
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    before_roles = {r.id for r in before.roles}
+    after_roles = {r.id for r in after.roles}
+
+    ganhou_agregado = (
+        AGREGADO_ROLE_ID in after_roles and
+        AGREGADO_ROLE_ID not in before_roles
+    )
+
+    if ganhou_agregado:
+        await criar_sala_meta(after)
 
 # =========================================================
 # ========================= ON READY ======================
@@ -1846,6 +1869,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
