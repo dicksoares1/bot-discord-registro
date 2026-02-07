@@ -1,51 +1,134 @@
+# =========================================================
+# ======================== IMPORTS =========================
+# =========================================================
+
 import os
 import json
 import asyncio
 import aiohttp
 import discord
+
 from discord.ext import commands, tasks
-from datetime import datetime, timedelta
 from discord.utils import escape_markdown
-from datetime import datetime
+
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-# ================= CONFIG =================
+
+# =========================================================
+# ======================== CONFIG ==========================
+# =========================================================
 
 TOKEN = os.environ.get("TOKEN")
 
-intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True
+TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID")
+TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
 
-AGREGADO_ROLE_ID = 1422847202937536532
-CONVIDADO_ROLE_ID = 1337382961456353342
 
+# =========================================================
+# ======================== ARQUIVOS ========================
+# =========================================================
+
+ARQUIVO_PRODUCOES = "producoes.json"
+ARQUIVO_PEDIDOS = "pedidos.json"
+ARQUIVO_POLVORAS = "polvoras.json"
+ARQUIVO_LIVES = "lives.json"
+ARQUIVO_LAVAGENS = "lavagens.json"
+ARQUIVO_PONTO = "ponto.json"
+ARQUIVO_METAS = "metas.json"
+
+
+# =========================================================
+# ======================== GUILD ===========================
+# =========================================================
+
+GUILD_ID = 1229526644193099880
+GUILD = discord.Object(id=GUILD_ID)
+
+
+# =========================================================
+# ======================== CANAIS ==========================
+# =========================================================
+
+# REGISTRO
 CANAL_REGISTRO_ID = 1229556030397218878
 CANAL_LOG_REGISTRO_ID = 1462457604939841851
+
+# VENDAS
 CANAL_CALCULADORA_ID = 1460984821458272347
 CANAL_ENCOMENDAS_ID = 1460980984811098294
 
 # PRODUÇÃO
 CANAL_FABRICACAO_ID = 1466421612566810634
 CANAL_REGISTRO_GALPAO_ID = 1356174712337862819
-ARQUIVO_PRODUCOES = "producoes.json"
-ARQUIVO_PEDIDOS = "pedidos.json"
 
-#POLVORAS
-ARQUIVO_POLVORAS = "polvoras.json"
-
+# POLVORA
 CANAL_CALCULO_POLVORA_ID = 1462834441968943157
 CANAL_REGISTRO_POLVORA_ID = 1448570795101261846
 
 # LIVES
 CANAL_CADASTRO_LIVE_ID = 1466464557215256790
 CANAL_DIVULGACAO_LIVE_ID = 1243325102917943335
-ARQUIVO_LIVES = "lives.json"
 
-TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID")
-TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
+# LAVAGEM
+CANAL_INICIAR_LAVAGEM_ID = 1467152989499293768
+CANAL_LAVAGEM_MEMBROS_ID = 1467159346923311216
+CANAL_RELATORIO_LAVAGEM_ID = 1467150805273546878
 
-# ================= TWITCH API =================
+# PONTO
+CANAL_PONTO_ID = 1468941297162391715
+
+# METAS
+CANAL_SOLICITAR_SALA_ID = 1337374500366450741
+
+
+# =========================================================
+# ======================== CARGOS ==========================
+# =========================================================
+
+# REGISTRO
+AGREGADO_ROLE_ID = 1422847202937536532
+CONVIDADO_ROLE_ID = 1337382961456353342
+
+# METAS / LAVAGEM / PONTO
+CARGO_01_ID = 1258753233355014144
+CARGO_02_ID = 1258753479082512394
+CARGO_GERENTE_ID = 1324499473296134154
+CARGO_GERENTE_GERAL_ID = 1462804425163935796
+CARGO_RESP_METAS_ID = 1337407399656423485
+CARGO_RESP_ACAO_ID = 1337379517274259509
+CARGO_RESP_VENDAS_ID = 1337379530586980352
+CARGO_RESP_PRODUCAO_ID = 1337379524949573662
+CARGO_SOLDADO_ID = 1422845498863259700
+CARGO_MEMBRO_ID = 1422847198789369926
+CARGO_AGREGADO_ID = 1422847202937536532
+
+
+# =========================================================
+# ===================== CATEGORIAS =========================
+# =========================================================
+
+CATEGORIA_META_GERENTE_ID = 1337374002422743122
+CATEGORIA_META_RESPONSAVEIS_ID = 1462810826992783422
+CATEGORIA_META_SOLDADO_ID = 1461335635519475894
+CATEGORIA_META_MEMBRO_ID = 1461335697209163900
+CATEGORIA_META_AGREGADO_ID = 1461335748870541323
+
+
+# =========================================================
+# ======================== BOT SETUP =======================
+# =========================================================
+
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# =========================================================
+# ====================== TWITCH API ========================
+# =========================================================
 
 twitch_access_token = None
 
@@ -95,20 +178,14 @@ async def checar_se_esta_ao_vivo(canal_twitch):
             titulo = stream.get("title")
             jogo = stream.get("game_name")
 
-            # Thumbnail (trocar {width} e {height})
             thumbnail = stream.get("thumbnail_url")
             if thumbnail:
                 thumbnail = thumbnail.replace("{width}", "640").replace("{height}", "360")
 
             return True, titulo, jogo, thumbnail
 
-GUILD_ID = 1229526644193099880
-GUILD = discord.Object(id=GUILD_ID)
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-
 # =========================================================
-# ================= REGISTRO ===============================
+# ======================= REGISTRO =========================
 # =========================================================
 
 class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
@@ -128,6 +205,10 @@ class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
 
         if agregado:
             await membro.add_roles(agregado)
+
+            # 🔥 CRIA SALA DE META AUTOMATICAMENTE
+            await criar_sala_meta(membro)
+
         if convidado:
             await membro.remove_roles(convidado)
 
@@ -143,6 +224,7 @@ class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
 
         await interaction.response.defer()
 
+
 class RegistroView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -152,7 +234,7 @@ class RegistroView(discord.ui.View):
         await interaction.response.send_modal(RegistroModal())
 
 # =========================================================
-# ================= VENDAS ================================
+# ======================== VENDAS ==========================
 # =========================================================
 
 ORGANIZACOES_CONFIG = {
@@ -174,7 +256,6 @@ def carregar_pedidos():
     except:
         return {"ultimo": 0}
 
-
 def proximo_pedido():
     dados = carregar_pedidos()
     dados["ultimo"] += 1
@@ -183,6 +264,7 @@ def proximo_pedido():
         json.dump(dados, f, indent=4)
 
     return dados["ultimo"]
+
 
 # ================= STATUS DOS BOTÕES =================
 
@@ -212,9 +294,8 @@ class StatusView(discord.ui.View):
         for l in linhas:
             if l.startswith(prefixo):
                 linhas.remove(l)
-                return linhas  # toggle OFF
-                
-        linhas.append(nova_linha)  # toggle ON
+                return linhas
+        linhas.append(nova_linha)
         return linhas
 
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
@@ -225,9 +306,7 @@ class StatusView(discord.ui.View):
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        # Remove pagamento pendente quando paga
         linhas = [l for l in linhas if not l.startswith("⏳")]
-
         linhas = self.toggle_linha(linhas, "💰", f"💰 Pago • Recebido por {user} • {agora}")
 
         embed = self.set_status(embed, idx, linhas)
@@ -242,9 +321,7 @@ class StatusView(discord.ui.View):
         agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        # Remove "A entregar" quando entrega
         linhas = [l for l in linhas if not l.startswith("📦")]
-
         linhas = self.toggle_linha(linhas, "✅", f"✅ Entregue por {user} • {agora}")
 
         embed = self.set_status(embed, idx, linhas)
@@ -295,9 +372,9 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
 
         embed = discord.Embed(
-    title=f"📦 NOVA ENCOMENDA • Pedido #{numero_pedido:04d}",
-    color=config["cor"]
-)
+            title=f"📦 NOVA ENCOMENDA • Pedido #{numero_pedido:04d}",
+            color=config["cor"]
+        )
         embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
         embed.add_field(
             name="🏷 Organização",
@@ -320,14 +397,12 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             inline=False
         )
 
-        # STATUS INICIAL
         embed.add_field(
             name="📌 Status",
             value="📦 A entregar",
             inline=False
         )
 
-        # OBSERVAÇÕES (AGORA NÃO SOMEM MAIS)
         if self.observacoes.value:
             embed.add_field(
                 name="📝 Observações",
@@ -351,11 +426,8 @@ class CalculadoraView(discord.ui.View):
     @discord.ui.button(label="🧮 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calculadora_registrar")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VendaModal())
-
-
-
 # =========================================================
-# ================= PRODUÇÃO ===============================
+# ======================== PRODUÇÃO ========================
 # =========================================================
 
 def carregar_producoes():
@@ -394,11 +466,10 @@ class SegundaTaskView(discord.ui.View):
         self.pid = pid
 
     @discord.ui.button(
-    label="✅ Confirmar 2ª Task",
-    style=discord.ButtonStyle.success,
-    custom_id="segunda_task_btn"
-)
-
+        label="✅ Confirmar 2ª Task",
+        style=discord.ButtonStyle.success,
+        custom_id="segunda_task_btn"
+    )
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
         producoes = carregar_producoes()
 
@@ -483,6 +554,7 @@ class FabricacaoView(discord.ui.View):
     async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.iniciar(interaction, "TESTE", 5)
 
+
 # ================= LOOP DE ACOMPANHAMENTO =================
 
 async def acompanhar_producao(pid):
@@ -555,23 +627,9 @@ async def enviar_painel_fabricacao():
         ),
         view=FabricacaoView()
     )
-
 # =========================================================
-# ================= POLVORAS ===============================
+# ======================== POLVORAS ========================
 # =========================================================
-
-import os
-import json
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-import discord
-from discord.ext import tasks
-
-ARQUIVO_POLVORAS = "polvoras.json"
-
-CANAL_CALCULO_POLVORA_ID = 1462834441968943157
-CANAL_REGISTRO_POLVORA_ID = 1448570795101261846
-
 
 # ================= ARQUIVO =================
 
@@ -648,11 +706,14 @@ class ConfirmarPagamentoView(discord.ui.View):
 
     @discord.ui.button(label="Confirmar pagamento", style=discord.ButtonStyle.success, custom_id="confirmar_pagamento")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.message.edit(content=interaction.message.content + "\n\n✅ **PAGO**", view=None)
+        await interaction.message.edit(
+            content=interaction.message.content + "\n\n✅ **PAGO**",
+            view=None
+        )
         await interaction.response.defer()
 
 
-# ================= VIEW (APENAS REGISTRO) =================
+# ================= VIEW =================
 
 class PolvoraView(discord.ui.View):
     def __init__(self):
@@ -726,18 +787,9 @@ async def enviar_painel_polvoras(bot):
     )
 
     await canal.send(embed=embed, view=PolvoraView())
-
-
-
 # =========================================================
-# ================= LAVAGEM ===============================
+# ======================== LAVAGEM =========================
 # =========================================================
-
-ARQUIVO_LAVAGENS = "lavagens.json"
-
-CANAL_INICIAR_LAVAGEM_ID = 1467152989499293768
-CANAL_LAVAGEM_MEMBROS_ID = 1467159346923311216
-CANAL_RELATORIO_LAVAGEM_ID = 1467150805273546878
 
 lavagens_pendentes = {}
 
@@ -778,7 +830,6 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
 
         valor_retorno = int(valor_sujo * 0.8)
 
-        # Mensagem no canal (não ephemeral)
         msg_info = await interaction.channel.send(
             f"{interaction.user.mention} envie agora o PRINT da tela."
         )
@@ -813,22 +864,18 @@ async def on_message(message: discord.Message):
 
     canal_destino = bot.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
 
-    # BAIXA O ARQUIVO ANTES DE APAGAR
     arquivo = await message.attachments[0].to_file()
 
-    # APAGA PRINT
     try:
         await message.delete()
     except:
         pass
 
-    # APAGA MENSAGEM "ENVIE O PRINT"
     try:
         await dados_temp["msg_info"].delete()
     except:
         pass
 
-    # SALVA NO ARQUIVO
     dados = carregar_lavagens()
     dados.append({
         "user": message.author.id,
@@ -947,10 +994,8 @@ async def enviar_painel_lavagem():
     )
 
     await canal.send(embed=embed, view=LavagemView())
-
-
 # =========================================================
-# ================= LIVES ================================
+# ========================= LIVES ==========================
 # =========================================================
 
 def carregar_lives():
@@ -977,8 +1022,6 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
         return
 
     user = await bot.fetch_user(int(user_id))
-
-    # 🔒 Escapa markdown para não quebrar _
     link_formatado = escape_markdown(link)
 
     descricao = (
@@ -995,11 +1038,11 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
         color=0x9146FF
     )
 
-    # 🖼️ THUMBNAIL DA LIVE
     if thumbnail:
         embed.set_image(url=thumbnail)
 
     await canal.send(content="@everyone", embed=embed)
+
 
 # ================= LOOP TWITCH =================
 
@@ -1014,7 +1057,6 @@ async def verificar_lives_twitch():
         link = data.get("link", "")
         divulgado = data.get("divulgado", False)
 
-        # 🔧 LIMPA LINK DA TWITCH (À PROVA DE ERRO)
         canal_twitch = link.lower().strip()
         canal_twitch = canal_twitch.replace("https://", "")
         canal_twitch = canal_twitch.replace("http://", "")
@@ -1029,13 +1071,11 @@ async def verificar_lives_twitch():
 
         print(f"🎮 {canal_twitch} ao vivo? {ao_vivo}")
 
-        # 🔴 FICOU OFFLINE → RESETAR
         if not ao_vivo and divulgado:
             print(f"🔁 {canal_twitch} ficou OFFLINE. Resetando divulgado.")
             lives[user_id]["divulgado"] = False
             alterado = True
 
-        # 🟢 FICOU AO VIVO → DIVULGAR
         if ao_vivo and not divulgado:
             await divulgar_live(user_id, link, titulo, jogo, thumbnail)
             lives[user_id]["divulgado"] = True
@@ -1043,6 +1083,7 @@ async def verificar_lives_twitch():
 
     if alterado:
         salvar_lives(lives)
+
 
 # ================= CADASTRO =================
 
@@ -1074,7 +1115,6 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
             )
             return
 
-        # 🚫 BLOQUEAR CANAL JÁ CADASTRADO
         for uid, data in lives.items():
             canal_existente = self.extrair_canal_twitch(data.get("link", ""))
 
@@ -1086,7 +1126,6 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
                 )
                 return
 
-        # ✅ CADASTRAR NORMALMENTE
         lives[str(interaction.user.id)] = {
             "link": novo_link,
             "divulgado": False
@@ -1094,7 +1133,6 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
 
         salvar_lives(lives)
 
-        # 🔒 Escapa markdown no embed
         link_formatado = escape_markdown(novo_link)
 
         embed = discord.Embed(
@@ -1109,6 +1147,7 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
 # ================= VIEW + PAINEL =================
 
 class CadastrarLiveView(discord.ui.View):
@@ -1118,6 +1157,7 @@ class CadastrarLiveView(discord.ui.View):
     @discord.ui.button(label="🎥 Cadastrar minha Live", style=discord.ButtonStyle.primary, custom_id="cadastrar_live_btn")
     async def cadastrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(CadastrarLiveModal())
+
 
 async def enviar_painel_lives():
     canal = bot.get_channel(CANAL_CADASTRO_LIVE_ID)
@@ -1135,15 +1175,9 @@ async def enviar_painel_lives():
     )
 
     await canal.send(embed=embed, view=CadastrarLiveView())
-
 # =========================================================
-# ================= PONTO ELETRÔNICO ======================
+# ====================== PONTO ELETRÔNICO =================
 # =========================================================
-
-CANAL_PONTO_ID = 1468941297162391715
-ARQUIVO_PONTO = "ponto.json"
-CARGO_GERENTE_ID = 1324499473296134154
-
 
 # ================= UTIL =================
 
@@ -1287,7 +1321,6 @@ async def atualizar_painel_ponto(guild):
     if not registros:
         registros = "📭 Nenhum registro finalizado hoje."
 
-    # 🎨 COR DINÂMICA
     if total_servico == 0:
         cor = 0xe74c3c
     elif total_servico <= 2:
@@ -1318,36 +1351,9 @@ async def enviar_painel_ponto():
     canal = bot.get_channel(CANAL_PONTO_ID)
     if canal:
         await atualizar_painel_ponto(canal.guild)
-
 # =========================================================
-# ================= METAS ================================
+# ========================== METAS =========================
 # =========================================================
-
-# CANAIS / CATEGORIAS
-CANAL_SOLICITAR_SALA_ID = 1337374500366450741
-
-CATEGORIA_META_GERENTE_ID = 1337374002422743122
-CATEGORIA_META_RESPONSAVEIS_ID = 1462810826992783422
-CATEGORIA_META_SOLDADO_ID = 1461335635519475894
-CATEGORIA_META_MEMBRO_ID = 1461335697209163900
-CATEGORIA_META_AGREGADO_ID = 1461335748870541323
-
-# CARGOS
-CARGO_01_ID = 1258753233355014144
-CARGO_02_ID = 1258753479082512394
-CARGO_GERENTE_GERAL_ID = 1462804425163935796
-CARGO_GERENTE_ID = 1324499473296134154
-CARGO_RESP_METAS_ID = 1337407399656423485
-CARGO_RESP_ACAO_ID = 1337379517274259509
-CARGO_RESP_VENDAS_ID = 1337379530586980352
-CARGO_RESP_PRODUCAO_ID = 1337379524949573662
-CARGO_SOLDADO_ID = 1422845498863259700
-CARGO_MEMBRO_ID = 1422847198789369926
-CARGO_AGREGADO_ID = 1422847202937536532
-
-ARQUIVO_METAS = "metas.json"
-
-# ================= UTIL METAS =================
 
 def carregar_metas():
     if not os.path.exists(ARQUIVO_METAS):
@@ -1365,7 +1371,6 @@ def salvar_metas(dados):
 def obter_categoria_meta(member: discord.Member):
     roles = [r.id for r in member.roles]
 
-    # PRIORIDADE (MAIS ALTO PRIMEIRO)
     if CARGO_GERENTE_ID in roles:
         return CATEGORIA_META_GERENTE_ID
     if any(r in roles for r in [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]):
@@ -1383,7 +1388,62 @@ def tem_meta(member_id):
     metas = carregar_metas()
     return str(member_id) in metas
 
-# ================= BOTÕES =================
+
+# =========================================================
+# ============ FUNÇÃO CENTRAL (CRIA META) =================
+# =========================================================
+
+async def criar_sala_meta(member: discord.Member):
+    metas = carregar_metas()
+
+    # NÃO DUPLICAR
+    if str(member.id) in metas:
+        return
+
+    categoria_id = obter_categoria_meta(member)
+    if not categoria_id:
+        return
+
+    guild = member.guild
+    categoria = guild.get_channel(categoria_id)
+
+    nome_canal = f"📁・{member.display_name}".lower().replace(" ", "-")
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+    }
+
+    gerente_role = guild.get_role(CARGO_GERENTE_ID)
+    if gerente_role:
+        overwrites[gerente_role] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, manage_channels=True
+        )
+
+    canal = await guild.create_text_channel(
+        name=nome_canal,
+        category=categoria,
+        overwrites=overwrites
+    )
+
+    metas[str(member.id)] = {"canal_id": canal.id}
+    salvar_metas(metas)
+
+    cargo_resp_metas = guild.get_role(CARGO_RESP_METAS_ID)
+
+    aviso = await canal.send(
+        f"📢 **ALGUNS AVISOS IMPORTANTES SOBRE ESSA SALA** 📢\n\n"
+        f"📌 Apenas você {member.mention} e a Gerência tem acesso a essa sala.\n"
+        f"📌 Aqui explica tudo como funciona a meta da Fac ⁠📢・faq-meta\n"
+        f"📌 Responsável por cuidar de metas: {cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}",
+        view=MetaFecharView(member.id)
+    )
+    await aviso.pin()
+
+
+# =========================================================
+# ================= BOTÕES ================================
+# =========================================================
 
 class MetaView(discord.ui.View):
     def __init__(self):
@@ -1391,57 +1451,13 @@ class MetaView(discord.ui.View):
 
     @discord.ui.button(label="📁 Solicitar Sala de Meta", style=discord.ButtonStyle.primary, custom_id="meta_criar")
     async def criar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        member = interaction.user
-        guild = interaction.guild
-
-        if tem_meta(member.id):
+        if tem_meta(interaction.user.id):
             await interaction.response.send_message("❌ Você já possui uma sala de meta.", ephemeral=True)
             return
 
-        categoria_id = obter_categoria_meta(member)
-        if not categoria_id:
-            await interaction.response.send_message("❌ Você não possui cargo autorizado para metas.", ephemeral=True)
-            return
-
-        categoria = guild.get_channel(categoria_id)
-
-        nome_canal = f"📁・{member.display_name}".lower().replace(" ", "-")
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-        }
-
-        gerente_role = guild.get_role(CARGO_GERENTE_ID)
-        if gerente_role:
-            overwrites[gerente_role] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, manage_channels=True
-            )
-
-        canal = await guild.create_text_channel(
-            name=nome_canal,
-            category=categoria,
-            overwrites=overwrites
-        )
-
-        metas = carregar_metas()
-        metas[str(member.id)] = {
-            "canal_id": canal.id
-        }
-        salvar_metas(metas)
-
-        cargo_resp_metas = guild.get_role(CARGO_RESP_METAS_ID)
-
-        aviso = await canal.send(
-            f"📢 **ALGUNS AVISOS IMPORTANTES SOBRE ESSA SALA** 📢\n\n"
-            f"📌 Apenas você {member.mention} e a Gerência tem acesso a essa sala.\n"
-            f"📌 Aqui explica tudo como funciona a meta da Fac ⁠📢・faq-meta\n"
-            f"📌 Responsável por cuidar de metas: {cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}",
-            view=MetaFecharView(member.id)
-        )
-        await aviso.pin()
-
+        await criar_sala_meta(interaction.user)
         await interaction.response.send_message("✅ Sua sala de meta foi criada!", ephemeral=True)
+
 
 class MetaFecharView(discord.ui.View):
     def __init__(self, member_id):
@@ -1470,22 +1486,34 @@ class MetaFecharView(discord.ui.View):
 
         await interaction.response.send_message("🧹 Sala de meta fechada com sucesso.", ephemeral=True)
 
-# ================= EVENTOS METAS =================
+
+# =========================================================
+# ============= SAIU DO DISCORD = FECHA META ==============
+# =========================================================
 
 @bot.event
 async def on_member_remove(member):
     metas = carregar_metas()
     data = metas.get(str(member.id))
 
-    if data:
-        canal = member.guild.get_channel(data["canal_id"])
-        if canal:
-            try:
-                await canal.send("⚠️ Usuário saiu do servidor. Sala aguardando exclusão por um Gerente.")
-            except:
-                pass
+    if not data:
+        return
 
-# ================= ATUALIZA META AO TROCAR CARGO =================
+    canal = member.guild.get_channel(data["canal_id"])
+
+    if canal:
+        try:
+            await canal.delete()
+        except:
+            pass
+
+    del metas[str(member.id)]
+    salvar_metas(metas)
+
+
+# =========================================================
+# ========== GANHOU CARGO AGREGADO = CRIA META ============
+# =========================================================
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
@@ -1493,56 +1521,29 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         return
 
     metas = carregar_metas()
-    data = metas.get(str(after.id))
-    if not data:
-        return
 
-    nova_categoria_id = obter_categoria_meta(after)
-    if not nova_categoria_id:
-        return
+    before_roles = {r.id for r in before.roles}
+    after_roles = {r.id for r in after.roles}
 
-    canal = after.guild.get_channel(data["canal_id"])
-    nova_categoria = after.guild.get_channel(nova_categoria_id)
-
-    if not canal or not nova_categoria:
-        return
-
-    if canal.category_id == nova_categoria_id:
-        return
-
-    try:
-        await canal.edit(category=nova_categoria)
-        await canal.send("🔁 Sala movida automaticamente para a categoria correta devido à mudança de cargo.")
-    except Exception as e:
-        print(f"❌ Erro ao mover sala de meta: {e}")
-
-# ================= PAINEL METAS =================
-
-async def enviar_painel_metas():
-    canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
-    if not canal:
-        return
-
-    async for m in canal.history(limit=10):
-        if m.author == bot.user and m.embeds and m.embeds[0].title == "📁 Solicitação de Sala de Meta":
-            return
-
-    embed = discord.Embed(
-        title="📁 Solicitação de Sala de Meta",
-        description="Clique no botão abaixo para criar sua sala de meta.",
-        color=0xf1c40f
+    virou_agregado = (
+        AGREGADO_ROLE_ID in after_roles and
+        AGREGADO_ROLE_ID not in before_roles
     )
 
-    await canal.send(embed=embed, view=MetaView())
+    if virou_agregado and str(after.id) not in metas:
+        await criar_sala_meta(after)
+
+
+# =========================================================
+# ========================= ON READY ======================
+# =========================================================
 
 @bot.event
 async def on_ready():
 
     print("🔄 Iniciando configuração do bot...")
 
-    # =====================================================
-    # 🔁 VIEWS PERSISTENTES (botões que sobrevivem ao restart)
-    # =====================================================
+    # VIEWS PERSISTENTES
     bot.add_view(RegistroView())
     bot.add_view(CalculadoraView())
     bot.add_view(StatusView())
@@ -1554,27 +1555,18 @@ async def on_ready():
     bot.add_view(LavagemView())
     bot.add_view(PontoView())
 
-    # =====================================================
-    # ⏱ LOOPS ATIVOS
-    # =====================================================
-
-    # Twitch
+    # LOOPS
     if not verificar_lives_twitch.is_running():
         verificar_lives_twitch.start()
 
-    # Relatório semanal automático das pólvoras
     if not relatorio_semanal_polvoras.is_running():
         relatorio_semanal_polvoras.start()
 
-    # =====================================================
-    # 🏭 RESTAURAR PRODUÇÕES EM ANDAMENTO
-    # =====================================================
+    # RESTAURAR PRODUÇÕES
     for pid in carregar_producoes():
         bot.loop.create_task(acompanhar_producao(pid))
 
-    # =====================================================
-    # 📌 ENVIAR PAINÉIS AUTOMÁTICOS
-    # =====================================================
+    # ENVIAR PAINÉIS
     await enviar_painel_fabricacao()
     await enviar_painel_lives()
     await enviar_painel_metas()
@@ -1582,29 +1574,12 @@ async def on_ready():
     await enviar_painel_lavagem()
     await enviar_painel_ponto()
 
-    # =====================================================
-    # ✅ STATUS FINAL
-    # =====================================================
-    print("✅ Bot online com todos os sistemas ativos ")
+    print("✅ Bot online com todos os sistemas ativos")
 
-  
+
 # =========================================================
-# ================= START BOT =============================
+# ========================= START BOT =====================
 # =========================================================
 
 bot.run(TOKEN)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
