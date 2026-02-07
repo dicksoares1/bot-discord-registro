@@ -1645,36 +1645,75 @@ async def limpar_duplicadas(member):
 
 async def criar_sala_meta(member: discord.Member):
     metas = carregar_metas()
-
-    # 1️⃣ Se já tem sala no servidor → usa ela
-    sala_existente = await limpar_duplicadas(member)
-    if sala_existente:
-        metas[str(member.id)] = {"canal_id": sala_existente.id}
-        salvar_metas(metas)
-        return
+    guild = member.guild
 
     categoria_id = obter_categoria_meta(member)
     if not categoria_id:
         return
 
-    guild = member.guild
     categoria = guild.get_channel(categoria_id)
+    if not categoria:
+        return
 
-    # 🛑 PROTEÇÃO: categoria cheia
+    nome_base = member.display_name.lower().replace(" ", "-")
+    nome_canal = f"📁・{nome_base}"
+
+    # =====================================================
+    # 1️⃣ PROCURAR SALAS EXISTENTES PELO NOME
+    # =====================================================
+
+    salas_encontradas = []
+
+    for cat in guild.categories:
+        for canal in cat.channels:
+            if canal.name == nome_canal:
+                salas_encontradas.append(canal)
+
+    # =====================================================
+    # 2️⃣ SE EXISTE PELO MENOS UMA → USAR E NÃO CRIAR
+    # =====================================================
+
+    if salas_encontradas:
+        canal_principal = salas_encontradas[0]
+
+        # salvar no metas.json caso não esteja
+        metas[str(member.id)] = {"canal_id": canal_principal.id}
+        salvar_metas(metas)
+
+        # apagar duplicadas
+        for duplicada in salas_encontradas[1:]:
+            try:
+                await duplicada.delete()
+                print(f"🧹 Duplicada removida: {duplicada.name}")
+            except:
+                pass
+
+        return
+
+    # =====================================================
+    # 3️⃣ SE NÃO EXISTE → CRIA
+    # =====================================================
+
     if len(categoria.channels) >= 50:
         print(f"⚠️ Categoria cheia: {categoria.name}")
         return
 
-    nome_canal = f"📁・{member.display_name}".lower().replace(" ", "-")
-
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        member: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True
+        ),
     }
 
     gerente_role = guild.get_role(CARGO_GERENTE_ID)
     if gerente_role:
-        overwrites[gerente_role] = discord.PermissionOverwrite(view_channel=True)
+        overwrites[gerente_role] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            manage_channels=True
+        )
 
     canal = await guild.create_text_channel(
         name=nome_canal,
@@ -1688,13 +1727,14 @@ async def criar_sala_meta(member: discord.Member):
     cargo_resp_metas = guild.get_role(CARGO_RESP_METAS_ID)
 
     aviso = await canal.send(
-        f"📢 **Sala de metas criada!**\n\n"
+        f"📢 **SALA DE META CRIADA**\n\n"
         f"{member.mention}\n"
-        f"Responsável: {cargo_resp_metas.mention if cargo_resp_metas else 'Gestão'}",
+        f"Apenas você e a gerência têm acesso.\n"
+        f"Responsável: {cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}",
         view=MetaFecharView(member.id)
     )
-    await aviso.pin()
 
+    await aviso.pin()
 
 # =========================================================
 # ================= BOTÃO SOLICITAR =======================
@@ -1868,6 +1908,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
