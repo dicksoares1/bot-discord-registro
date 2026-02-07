@@ -1816,16 +1816,82 @@ async def verificar_metas_automaticas():
     if not guild:
         return
 
+    metas = carregar_metas()
+
     for member in guild.members:
         if member.bot:
             continue
 
-        tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in member.roles)
-        if not tem_agregado:
+        # Só quem tem agregado
+        if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
             continue
 
+        nome_base = f"📁・{member.display_name}".lower().replace(" ", "-")
+
+        salas_encontradas = []
+
+        # Procurar em todas categorias de metas
+        for cat_id in [
+            CATEGORIA_META_GERENTE_ID,
+            CATEGORIA_META_RESPONSAVEIS_ID,
+            CATEGORIA_META_SOLDADO_ID,
+            CATEGORIA_META_MEMBRO_ID,
+            CATEGORIA_META_AGREGADO_ID
+        ]:
+            categoria = guild.get_channel(cat_id)
+            if not categoria:
+                continue
+
+            for canal in categoria.channels:
+                if nome_base in canal.name:
+                    salas_encontradas.append(canal)
+
+        # =====================================================
+        # SE EXISTEM SALAS → LIMPA DUPLICADAS
+        # =====================================================
+        if salas_encontradas:
+
+            sala_correta = None
+
+            # 1️⃣ Preferir a que tem mensagem do membro
+            for canal in salas_encontradas:
+                tem_msg_do_dono = False
+
+                async for msg in canal.history(limit=50):
+                    if msg.author.id == member.id:
+                        tem_msg_do_dono = True
+                        break
+
+                if tem_msg_do_dono:
+                    sala_correta = canal
+                    break
+
+            # 2️⃣ Se nenhuma tem msg → usa a primeira
+            if not sala_correta:
+                sala_correta = salas_encontradas[0]
+
+            # 3️⃣ Apaga as duplicadas
+            for canal in salas_encontradas:
+                if canal.id != sala_correta.id:
+                    try:
+                        await canal.delete()
+                        print(f"🧹 Meta duplicada removida: {canal.name}")
+                    except:
+                        pass
+
+            # 4️⃣ Garante que está no metas.json
+            metas[str(member.id)] = {
+                "canal_id": sala_correta.id
+            }
+
+            continue
+
+        # =====================================================
+        # SE NÃO EXISTE SALA → CRIA
+        # =====================================================
         await criar_sala_meta(member)
 
+    salvar_metas(metas)
 
 # =========================================================
 # ================= PAINEL METAS ==========================
@@ -1909,6 +1975,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
