@@ -1581,14 +1581,14 @@ def obter_categoria_meta(member: discord.Member):
 
 
 # =========================================================
-# ============ PROCURAR SALA EXISTENTE (ANTI DUPLO) =======
+# ============ ENCONTRAR E LIMPAR DUPLICADAS ==============
 # =========================================================
 
-async def encontrar_sala_existente(member: discord.Member):
+async def encontrar_salas_do_membro(member: discord.Member):
     guild = member.guild
-    nome_base = f"📁・{member.display_name}".lower().replace(" ", "-")
+    nome_base = member.display_name.lower()
 
-    canais_encontrados = []
+    salas = []
 
     for cat_id in [
         CATEGORIA_META_GERENTE_ID,
@@ -1597,55 +1597,59 @@ async def encontrar_sala_existente(member: discord.Member):
         CATEGORIA_META_MEMBRO_ID,
         CATEGORIA_META_AGREGADO_ID
     ]:
-        cat = guild.get_channel(cat_id)
-        if not cat:
+        categoria = guild.get_channel(cat_id)
+        if not categoria:
             continue
 
-        for canal in cat.channels:
-            if nome_base in canal.name:
-                canais_encontrados.append(canal)
+        for canal in categoria.channels:
+            if nome_base in canal.name.lower():
+                salas.append(canal)
 
-    # Se só tem uma, mantém
-    if len(canais_encontrados) <= 1:
-        return canais_encontrados[0] if canais_encontrados else None
+    return salas
 
-    # Se tem duplicadas
-    canal_correto = None
 
-    for canal in canais_encontrados:
-        tem_msg_do_membro = False
-
+async def escolher_sala_correta(member, salas):
+    # 1️⃣ Preferir a que o membro já falou
+    for canal in salas:
         async for msg in canal.history(limit=50):
             if msg.author.id == member.id:
-                tem_msg_do_membro = True
-                break
+                return canal
 
-        if tem_msg_do_membro and not canal_correto:
-            canal_correto = canal
-        elif not tem_msg_do_membro:
-            # Apaga duplicada sem mensagem do dono
+    # 2️⃣ Se nenhuma tiver mensagem → manter a MAIS ANTIGA
+    salas.sort(key=lambda c: c.created_at)
+    return salas[0]
+
+
+async def limpar_duplicadas(member):
+    salas = await encontrar_salas_do_membro(member)
+
+    if not salas:
+        return None
+
+    sala_correta = await escolher_sala_correta(member, salas)
+
+    for canal in salas:
+        if canal.id != sala_correta.id:
             try:
                 await canal.delete()
                 print(f"🧹 Meta duplicada removida: {canal.name}")
             except:
                 pass
 
-    return canal_correto or canais_encontrados[0]
+    return sala_correta
 
 
 # =========================================================
-# ================= CRIAR SALA META =======================
+# ================= CRIAR SALA SEGURA =====================
 # =========================================================
 
 async def criar_sala_meta(member: discord.Member):
     metas = carregar_metas()
-    guild = member.guild
 
-    # 🔎 Procura sala existente antes
-    existente = await encontrar_sala_existente(member)
-
-    if existente:
-        metas[str(member.id)] = {"canal_id": existente.id}
+    # 1️⃣ Se já tem sala no servidor → usa ela
+    sala_existente = await limpar_duplicadas(member)
+    if sala_existente:
+        metas[str(member.id)] = {"canal_id": sala_existente.id}
         salvar_metas(metas)
         return
 
@@ -1653,9 +1657,10 @@ async def criar_sala_meta(member: discord.Member):
     if not categoria_id:
         return
 
+    guild = member.guild
     categoria = guild.get_channel(categoria_id)
 
-    # 🚨 Proteção categoria cheia
+    # 🛑 PROTEÇÃO: categoria cheia
     if len(categoria.channels) >= 50:
         print(f"⚠️ Categoria cheia: {categoria.name}")
         return
@@ -1664,24 +1669,18 @@ async def criar_sala_meta(member: discord.Member):
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
 
     gerente_role = guild.get_role(CARGO_GERENTE_ID)
     if gerente_role:
-        overwrites[gerente_role] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, manage_channels=True
-        )
+        overwrites[gerente_role] = discord.PermissionOverwrite(view_channel=True)
 
-    try:
-        canal = await guild.create_text_channel(
-            name=nome_canal,
-            category=categoria,
-            overwrites=overwrites
-        )
-    except discord.HTTPException:
-        print(f"❌ Falha ao criar meta para {member.display_name}")
-        return
+    canal = await guild.create_text_channel(
+        name=nome_canal,
+        category=categoria,
+        overwrites=overwrites
+    )
 
     metas[str(member.id)] = {"canal_id": canal.id}
     salvar_metas(metas)
@@ -1689,17 +1688,16 @@ async def criar_sala_meta(member: discord.Member):
     cargo_resp_metas = guild.get_role(CARGO_RESP_METAS_ID)
 
     aviso = await canal.send(
-        f"📢 **ALGUNS AVISOS IMPORTANTES SOBRE ESSA SALA** 📢\n\n"
-        f"📌 Apenas você {member.mention} e a Gerência tem acesso.\n"
-        f"📌 Leia o canal ⁠📢・faq-meta\n"
-        f"📌 Responsável por metas: {cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}",
+        f"📢 **Sala de metas criada!**\n\n"
+        f"{member.mention}\n"
+        f"Responsável: {cargo_resp_metas.mention if cargo_resp_metas else 'Gestão'}",
         view=MetaFecharView(member.id)
     )
     await aviso.pin()
 
 
 # =========================================================
-# ================= BOTÕES ================================
+# ================= BOTÃO SOLICITAR =======================
 # =========================================================
 
 class MetaView(discord.ui.View):
@@ -1709,7 +1707,7 @@ class MetaView(discord.ui.View):
     @discord.ui.button(label="📁 Solicitar Sala de Meta", style=discord.ButtonStyle.primary, custom_id="meta_criar")
     async def criar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         await criar_sala_meta(interaction.user)
-        await interaction.response.send_message("✅ Verificação concluída!", ephemeral=True)
+        await interaction.response.send_message("Verificação concluída.", ephemeral=True)
 
 
 class MetaFecharView(discord.ui.View):
@@ -1720,14 +1718,13 @@ class MetaFecharView(discord.ui.View):
     @discord.ui.button(label="🧹 Fechar Sala", style=discord.ButtonStyle.danger, custom_id="meta_fechar")
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            await interaction.response.send_message("❌ Apenas Gerentes podem fechar.", ephemeral=True)
+            await interaction.response.send_message("Apenas gerentes.", ephemeral=True)
             return
 
         metas = carregar_metas()
         data = metas.get(str(self.member_id))
 
         if not data:
-            await interaction.response.defer()
             return
 
         canal = interaction.guild.get_channel(data["canal_id"])
@@ -1737,11 +1734,11 @@ class MetaFecharView(discord.ui.View):
         del metas[str(self.member_id)]
         salvar_metas(metas)
 
-        await interaction.response.send_message("🧹 Sala fechada.", ephemeral=True)
+        await interaction.response.send_message("Sala removida.", ephemeral=True)
 
 
 # =========================================================
-# ============= SAIU DO DISCORD = FECHA META ==============
+# ================= EVENTOS AUTOMÁTICOS ===================
 # =========================================================
 
 @bot.event
@@ -1749,170 +1746,42 @@ async def on_member_remove(member):
     metas = carregar_metas()
     data = metas.get(str(member.id))
 
-    if not data:
-        return
+    if data:
+        canal = member.guild.get_channel(data["canal_id"])
+        if canal:
+            try:
+                await canal.delete()
+            except:
+                pass
 
-    canal = member.guild.get_channel(data["canal_id"])
+        del metas[str(member.id)]
+        salvar_metas(metas)
 
-    if canal:
-        try:
-            await canal.delete()
-        except:
-            pass
-
-    del metas[str(member.id)]
-    salvar_metas(metas)
-
-
-# =========================================================
-# ========= GANHOU/MUDOU CARGO = CRIA/MOVE META ===========
-# =========================================================
 
 @bot.event
-async def on_member_update(before: discord.Member, after: discord.Member):
+async def on_member_update(before, after):
     if before.roles == after.roles:
         return
 
-    after_roles = {r.id for r in after.roles}
-
-    # Ganhou agregado
-    if AGREGADO_ROLE_ID in after_roles:
+    if any(r.id == AGREGADO_ROLE_ID for r in after.roles):
         await criar_sala_meta(after)
-
-    metas = carregar_metas()
-    data = metas.get(str(after.id))
-    if not data:
-        return
-
-    canal = after.guild.get_channel(data["canal_id"])
-    if not canal:
-        return
-
-    nova_categoria_id = obter_categoria_meta(after)
-    if not nova_categoria_id:
-        return
-
-    if canal.category_id == nova_categoria_id:
-        return
-
-    nova_categoria = after.guild.get_channel(nova_categoria_id)
-    if not nova_categoria:
-        return
-
-    try:
-        await canal.edit(category=nova_categoria)
-    except Exception as e:
-        print(f"Erro ao mover meta: {e}")
 
 
 # =========================================================
-# ========= VERIFICAÇÃO AUTOMÁTICA AO INICIAR =============
+# ================= VERIFICAÇÃO AO INICIAR =================
 # =========================================================
 
 async def verificar_metas_automaticas():
-    print("🔎 Verificando metas automáticas...")
-
     guild = bot.get_guild(GUILD_ID)
     if not guild:
         return
-
-    metas = carregar_metas()
 
     for member in guild.members:
         if member.bot:
             continue
 
-        # Só quem tem agregado
-        if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
-            continue
-
-        nome_base = f"📁・{member.display_name}".lower().replace(" ", "-")
-
-        salas_encontradas = []
-
-        # Procurar em todas categorias de metas
-        for cat_id in [
-            CATEGORIA_META_GERENTE_ID,
-            CATEGORIA_META_RESPONSAVEIS_ID,
-            CATEGORIA_META_SOLDADO_ID,
-            CATEGORIA_META_MEMBRO_ID,
-            CATEGORIA_META_AGREGADO_ID
-        ]:
-            categoria = guild.get_channel(cat_id)
-            if not categoria:
-                continue
-
-            for canal in categoria.channels:
-                if nome_base in canal.name:
-                    salas_encontradas.append(canal)
-
-        # =====================================================
-        # SE EXISTEM SALAS → LIMPA DUPLICADAS
-        # =====================================================
-        if salas_encontradas:
-
-            sala_correta = None
-
-            # 1️⃣ Preferir a que tem mensagem do membro
-            for canal in salas_encontradas:
-                tem_msg_do_dono = False
-
-                async for msg in canal.history(limit=50):
-                    if msg.author.id == member.id:
-                        tem_msg_do_dono = True
-                        break
-
-                if tem_msg_do_dono:
-                    sala_correta = canal
-                    break
-
-            # 2️⃣ Se nenhuma tem msg → usa a primeira
-            if not sala_correta:
-                sala_correta = salas_encontradas[0]
-
-            # 3️⃣ Apaga as duplicadas
-            for canal in salas_encontradas:
-                if canal.id != sala_correta.id:
-                    try:
-                        await canal.delete()
-                        print(f"🧹 Meta duplicada removida: {canal.name}")
-                    except:
-                        pass
-
-            # 4️⃣ Garante que está no metas.json
-            metas[str(member.id)] = {
-                "canal_id": sala_correta.id
-            }
-
-            continue
-
-        # =====================================================
-        # SE NÃO EXISTE SALA → CRIA
-        # =====================================================
-        await criar_sala_meta(member)
-
-    salvar_metas(metas)
-
-# =========================================================
-# ================= PAINEL METAS ==========================
-# =========================================================
-
-async def enviar_painel_metas():
-    canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
-    if not canal:
-        return
-
-    async for m in canal.history(limit=10):
-        if m.author == bot.user and m.embeds and m.embeds[0].title == "📁 Solicitação de Sala de Meta":
-            return
-
-    embed = discord.Embed(
-        title="📁 Solicitação de Sala de Meta",
-        description="Clique no botão abaixo para criar sua sala.",
-        color=0xf1c40f
-    )
-
-    await canal.send(embed=embed, view=MetaView())
+        if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
+            await criar_sala_meta(member)
 
 # =========================================================
 # ========================= ON READY ======================
@@ -1975,6 +1844,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
