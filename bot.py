@@ -1539,28 +1539,73 @@ def obter_categoria_meta(member: discord.Member):
 
     return None
 
-def tem_meta(member_id):
-    metas = carregar_metas()
-    return str(member_id) in metas
+
+# =========================================================
+# ================= PROCURAR SALA EXISTENTE ===============
+# =========================================================
+
+async def encontrar_sala_existente(member: discord.Member):
+    guild = member.guild
+    nome_base = f"📁・{member.display_name}".lower().replace(" ", "-")
+
+    canais_encontrados = []
+
+    for cat_id in [
+        CATEGORIA_META_GERENTE_ID,
+        CATEGORIA_META_RESPONSAVEIS_ID,
+        CATEGORIA_META_SOLDADO_ID,
+        CATEGORIA_META_MEMBRO_ID,
+        CATEGORIA_META_AGREGADO_ID
+    ]:
+        cat = guild.get_channel(cat_id)
+        if not cat:
+            continue
+
+        for canal in cat.channels:
+            if nome_base in canal.name:
+                canais_encontrados.append(canal)
+
+    if not canais_encontrados:
+        return None
+
+    # Mantém a que tem mensagens
+    principal = None
+
+    for canal in canais_encontrados:
+        msgs = [m async for m in canal.history(limit=1)]
+
+        if msgs and not principal:
+            principal = canal
+        elif not msgs:
+            try:
+                await canal.delete()
+            except:
+                pass
+
+    return principal or canais_encontrados[0]
 
 
 # =========================================================
-# ============ FUNÇÃO CENTRAL (CRIA META) =================
+# ================= CRIAR SALA META =======================
 # =========================================================
 
 async def criar_sala_meta(member: discord.Member):
     metas = carregar_metas()
+    guild = member.guild
 
-    if str(member.id) in metas:
+    # 🔎 VER SE JÁ EXISTE UMA SALA
+    existente = await encontrar_sala_existente(member)
+
+    if existente:
+        metas[str(member.id)] = {"canal_id": existente.id}
+        salvar_metas(metas)
         return
 
     categoria_id = obter_categoria_meta(member)
     if not categoria_id:
         return
 
-    guild = member.guild
     categoria = guild.get_channel(categoria_id)
-
     nome_canal = f"📁・{member.display_name}".lower().replace(" ", "-")
 
     overwrites = {
@@ -1605,12 +1650,8 @@ class MetaView(discord.ui.View):
 
     @discord.ui.button(label="📁 Solicitar Sala de Meta", style=discord.ButtonStyle.primary, custom_id="meta_criar")
     async def criar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if tem_meta(interaction.user.id):
-            await interaction.response.send_message("❌ Você já possui uma sala de meta.", ephemeral=True)
-            return
-
         await criar_sala_meta(interaction.user)
-        await interaction.response.send_message("✅ Sua sala de meta foi criada!", ephemeral=True)
+        await interaction.response.send_message("✅ Verificação concluída!", ephemeral=True)
 
 
 class MetaFecharView(discord.ui.View):
@@ -1674,22 +1715,13 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     if before.roles == after.roles:
         return
 
-    metas = carregar_metas()
-
-    before_roles = {r.id for r in before.roles}
     after_roles = {r.id for r in after.roles}
 
     # GANHOU AGREGADO
-    virou_agregado = (
-        AGREGADO_ROLE_ID in after_roles and
-        AGREGADO_ROLE_ID not in before_roles
-    )
-
-    if virou_agregado and str(after.id) not in metas:
+    if AGREGADO_ROLE_ID in after_roles:
         await criar_sala_meta(after)
-        return
 
-    # MOVE DE CATEGORIA
+    metas = carregar_metas()
     data = metas.get(str(after.id))
     if not data:
         return
@@ -1711,9 +1743,6 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
     try:
         await canal.edit(category=nova_categoria)
-        await canal.send(
-            f"🔁 Sala movida automaticamente para **{nova_categoria.name}** devido à atualização de cargo."
-        )
     except Exception as e:
         print(f"Erro ao mover meta: {e}")
 
@@ -1729,74 +1758,15 @@ async def verificar_metas_automaticas():
     if not guild:
         return
 
-    metas = carregar_metas()
-
     for member in guild.members:
         if member.bot:
             continue
 
-        # Só quem tem agregado
         tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in member.roles)
         if not tem_agregado:
             continue
 
-        # Já tem registro no JSON?
-        if str(member.id) in metas:
-            canal_id = metas[str(member.id)]["canal_id"]
-            canal = guild.get_channel(canal_id)
-
-            # Canal ainda existe = NÃO recria
-            if canal:
-                continue
-
-            # Canal foi apagado manualmente
-            print(f"⚠️ Canal de meta sumiu para {member.display_name}, recriando...")
-
-        # Não tem meta registrada → cria
         await criar_sala_meta(member)
-
-# =========================================================
-# ================= LIMPEZA AUTOMÁTICA METAS ==============
-# =========================================================
-
-async def reconstruir_metas():
-    print("🧹 Reconstruindo metas.json baseado nos canais reais...")
-
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        return
-
-    categorias_ids = [
-        CATEGORIA_META_GERENTE_ID,
-        CATEGORIA_META_RESPONSAVEIS_ID,
-        CATEGORIA_META_SOLDADO_ID,
-        CATEGORIA_META_MEMBRO_ID,
-        CATEGORIA_META_AGREGADO_ID
-    ]
-
-    novo_metas = {}
-
-    for cat_id in categorias_ids:
-        categoria = guild.get_channel(cat_id)
-        if not categoria:
-            continue
-
-        for canal in categoria.channels:
-            nome = canal.name.replace("📁・", "").replace("-", " ").strip()
-
-            for membro in guild.members:
-                if membro.bot:
-                    continue
-
-                nome_membro = membro.display_name.lower().strip()
-
-                if nome_membro in nome:
-                    novo_metas[str(membro.id)] = {
-                        "canal_id": canal.id
-                    }
-
-    salvar_metas(novo_metas)
-    print(f"✅ metas.json reconstruído com {len(novo_metas)} registros.")
 
 
 # =========================================================
@@ -1819,6 +1789,7 @@ async def enviar_painel_metas():
     )
 
     await canal.send(embed=embed, view=MetaView())
+
 # =========================================================
 # ========================= ON READY ======================
 # =========================================================
@@ -1871,8 +1842,7 @@ async def on_ready():
 
     # ================= VERIFICAÇÕES AUTOMÁTICAS =================
     await verificar_metas_automaticas()
-    await reconstruir_metas()
-
+    
     print("✅ Bot online com todos os sistemas ativos")
     print("🕒 Todos os horários agora estão em Brasília")
 
@@ -1881,6 +1851,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
