@@ -7,6 +7,7 @@ import json
 import asyncio
 import aiohttp
 import discord
+criando_meta = set()
 
 from discord.ext import commands, tasks
 from discord.utils import escape_markdown
@@ -158,7 +159,7 @@ class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
             await membro.add_roles(agregado)
 
             # 🔥 CRIA SALA DE META AUTOMATICAMENTE (CORRIGIDO)
-            await criar_sala_meta(membro)
+            # sala será criada automaticamente quando o cargo for aplicado
 
         if convidado:
             await membro.remove_roles(convidado)
@@ -1644,19 +1645,73 @@ async def limpar_duplicadas(member):
 # =========================================================
 
 async def criar_sala_meta(member: discord.Member):
-    metas = carregar_metas()
-    guild = member.guild
-
-    categoria_id = obter_categoria_meta(member)
-    if not categoria_id:
+    if member.id in criando_meta:
         return
 
-    categoria = guild.get_channel(categoria_id)
-    if not categoria:
-        return
+    criando_meta.add(member.id)
 
-    nome_base = member.display_name.lower().replace(" ", "-")
-    nome_canal = f"📁・{nome_base}"
+    try:
+        metas = carregar_metas()
+        guild = member.guild
+
+        nome_base = member.display_name.lower().replace(" ", "-")
+        nome_canal = f"📁・{nome_base}"
+
+        # 🔎 PROCURAR SALA EM TODO O SERVIDOR
+        for categoria in guild.categories:
+            for canal in categoria.channels:
+                if canal.name == nome_canal:
+                    metas[str(member.id)] = {"canal_id": canal.id}
+                    salvar_metas(metas)
+                    return
+
+        # DESCOBRIR CATEGORIA
+        categoria_id = obter_categoria_meta(member)
+        if not categoria_id:
+            return
+
+        categoria = guild.get_channel(categoria_id)
+        if not categoria:
+            return
+
+        if len(categoria.channels) >= 50:
+            print(f"⚠️ Categoria cheia: {categoria.name}")
+            return
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True
+            ),
+        }
+
+        gerente_role = guild.get_role(CARGO_GERENTE_ID)
+        if gerente_role:
+            overwrites[gerente_role] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                manage_channels=True
+            )
+
+        canal = await guild.create_text_channel(
+            name=nome_canal,
+            category=categoria,
+            overwrites=overwrites
+        )
+
+        metas[str(member.id)] = {"canal_id": canal.id}
+        salvar_metas(metas)
+
+        aviso = await canal.send(
+            f"{member.mention}\nSala criada automaticamente.",
+            view=MetaFecharView(member.id)
+        )
+        await aviso.pin()
+
+    finally:
+        criando_meta.discard(member.id)
 
     # =====================================================
     # 1️⃣ PROCURAR SALAS EXISTENTES PELO NOME
@@ -1823,13 +1878,47 @@ async def on_member_remove(member):
 
 
 @bot.event
-async def on_member_update(before, after):
+async def on_member_update(before: discord.Member, after: discord.Member):
     if before.roles == after.roles:
         return
 
-    if any(r.id == AGREGADO_ROLE_ID for r in after.roles):
-        await criar_sala_meta(after)
+    before_roles = {r.id for r in before.roles}
+    after_roles = {r.id for r in after.roles}
 
+    virou_agregado = (
+        AGREGADO_ROLE_ID in after_roles and
+        AGREGADO_ROLE_ID not in before_roles
+    )
+
+    if virou_agregado:
+        await criar_sala_meta(after)
+        return
+
+    # MOVE DE CATEGORIA SE TROCAR CARGO
+    metas = carregar_metas()
+    data = metas.get(str(after.id))
+    if not data:
+        return
+
+    canal = after.guild.get_channel(data["canal_id"])
+    if not canal:
+        return
+
+    nova_categoria_id = obter_categoria_meta(after)
+    if not nova_categoria_id:
+        return
+
+    if canal.category_id == nova_categoria_id:
+        return
+
+    nova_categoria = after.guild.get_channel(nova_categoria_id)
+    if not nova_categoria:
+        return
+
+    try:
+        await canal.edit(category=nova_categoria)
+    except:
+        pass
 
 # =========================================================
 # ================= VERIFICAÇÃO AO INICIAR =================
@@ -1931,8 +2020,7 @@ async def on_ready():
     await painel_calc()
 
     # ================= VERIFICAÇÕES AUTOMÁTICAS =================
-    await verificar_metas_automaticas()
-    
+       
     print("✅ Bot online com todos os sistemas ativos")
     print("🕒 Todos os horários agora estão em Brasília")
 
@@ -1941,6 +2029,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
