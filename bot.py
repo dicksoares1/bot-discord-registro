@@ -1747,20 +1747,22 @@ async def enviar_painel_metas():
 # ========= CRIAR PARA QUEM JÁ TEM AGREGADO ===============
 # =========================================================
 
-async def criar_metas_para_agregados_sem_sala():
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
+async def enviar_painel_metas():
+    canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
+    if not canal:
         return
 
-    for member in guild.members:
-        if member.bot:
-            continue
+    async for m in canal.history(limit=10):
+        if m.author == bot.user:
+            return
 
-        if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
-            continue
+    embed = discord.Embed(
+        title="📁 Solicitação de Sala de Meta",
+        description="Clique no botão para verificar/criar sua sala.",
+        color=0xf1c40f
+    )
 
-        await criar_sala_meta(member)
-
+    await canal.send(embed=embed, view=MetaView())
 
 # =========================================================
 # ========================= ON READY ======================
@@ -1800,28 +1802,67 @@ async def on_ready():
         relatorio_semanal_polvoras.start()
 
     # ================= RESTAURAR PRODUÇÕES =================
-    for pid in carregar_producoes():
-        bot.loop.create_task(acompanhar_producao(pid))
+    try:
+        for pid in carregar_producoes():
+            bot.loop.create_task(acompanhar_producao(pid))
+    except Exception as e:
+        print(f"Erro ao restaurar produções: {e}")
 
     # ================= ENVIAR PAINÉIS =================
-    await enviar_painel_fabricacao()
-    await enviar_painel_lives()
-    await enviar_painel_metas()
-    await enviar_painel_polvoras(bot)
-    await enviar_painel_lavagem()
-    await enviar_painel_ponto()
-    await painel_calc()
-    await criar_metas_para_agregados_sem_sala()
+    try:
+        await enviar_painel_fabricacao()
+    except Exception as e:
+        print(f"Erro painel fabricação: {e}")
 
-    # ================= VERIFICAÇÕES AUTOMÁTICAS =================
-       
+    try:
+        await enviar_painel_lives()
+    except Exception as e:
+        print(f"Erro painel lives: {e}")
+
+    # Painel metas (se existir a função)
+    if "enviar_painel_metas" in globals():
+        try:
+            await enviar_painel_metas()
+        except Exception as e:
+            print(f"Erro painel metas: {e}")
+    else:
+        print("⚠️ Painel de metas não encontrado (ignorando)")
+
+    try:
+        await enviar_painel_polvoras(bot)
+    except Exception as e:
+        print(f"Erro painel pólvoras: {e}")
+
+    try:
+        await enviar_painel_lavagem()
+    except Exception as e:
+        print(f"Erro painel lavagem: {e}")
+
+    try:
+        await enviar_painel_ponto()
+    except Exception as e:
+        print(f"Erro painel ponto: {e}")
+
+    try:
+        await painel_calc()
+    except Exception as e:
+        print(f"Erro painel calculadora mec: {e}")
+
+    # ================= METAS AUTOMÁTICAS =================
+    try:
+        await criar_metas_para_agregados_sem_sala()
+    except Exception as e:
+        print(f"Erro ao criar metas automáticas: {e}")
+
     print("✅ Bot online com todos os sistemas ativos")
     print("🕒 Todos os horários agora estão em Brasília")
+
 
 # =========================================================
 # ========================= START BOT =====================
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
