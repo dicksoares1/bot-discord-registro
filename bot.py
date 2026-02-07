@@ -1376,37 +1376,62 @@ def br(valor):
 
 
 def embed_calc():
+    serv = []
+    ext = []
+    vend = []
+
     total_serv = 0
     total_ext = 0
     total_vend = 0
 
-    linhas = []
-
     for k, (nome, valor, tipo) in ITENS.items():
         qtd = cont[k]
-        if qtd > 0:
-            subtotal = qtd * valor
-            linhas.append(f"{nome} x{qtd} = {br(subtotal)}")
+        if qtd == 0:
+            continue
 
-            if tipo == "serv":
-                total_serv += subtotal
-            elif tipo == "ext":
-                total_ext += subtotal
-            else:
-                total_vend += subtotal
+        subtotal = qtd * valor
+        linha = f"{nome} x{qtd} • {br(subtotal)}"
+
+        if tipo == "serv":
+            serv.append(linha)
+            total_serv += subtotal
+        elif tipo == "ext":
+            ext.append(linha)
+            total_ext += subtotal
+        else:
+            vend.append(linha)
+            total_vend += subtotal
 
     total = total_serv + total_ext + total_vend
 
     embed = discord.Embed(
-        title="🔧 CALCULADORA MECÂNICA",
-        description="\n".join(linhas) if linhas else "Nenhum item adicionado.",
-        color=0xff9900
+        title="🔧 Calculadora Mecânica",
+        description="Sistema automático de serviços",
+        color=0xf39c12
     )
 
-    embed.add_field(name="Serviços", value=br(total_serv))
-    embed.add_field(name="Externo", value=br(total_ext))
-    embed.add_field(name="Vendas", value=br(total_vend))
-    embed.add_field(name="TOTAL", value=br(total), inline=False)
+    embed.add_field(
+        name="🛠️ Serviços",
+        value="\n".join(serv) if serv else "—",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🚗 Externos",
+        value="\n".join(ext) if ext else "—",
+        inline=False
+    )
+
+    embed.add_field(
+        name="📦 Vendas",
+        value="\n".join(vend) if vend else "—",
+        inline=False
+    )
+
+    embed.add_field(name="💰 Serviços", value=br(total_serv))
+    embed.add_field(name="🚗 Externo", value=br(total_ext))
+    embed.add_field(name="📦 Vendas", value=br(total_vend))
+    embed.add_field(name="🏆 TOTAL GERAL", value=br(total), inline=False)
 
     return embed
 
@@ -1416,91 +1441,87 @@ class CalcView(discord.ui.View):
         super().__init__(timeout=None)
 
     async def refresh(self, interaction):
-        await interaction.message.edit(embed=embed_calc(), view=self)
+        await interaction.response.edit_message(embed=embed_calc(), view=self)
 
-    # ========= + =========
+    # ================= SERVIÇOS =================
 
-    @discord.ui.button(label="+ Kit Reparo", style=discord.ButtonStyle.primary, custom_id="calc_1")
+    @discord.ui.button(label="Kit Reparo", style=discord.ButtonStyle.primary, custom_id="calc_kit_reparo")
     async def a1(self, i, b):
         cont["kit_reparo"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Pneu Serv", style=discord.ButtonStyle.primary, custom_id="calc_2")
+    @discord.ui.button(label="Pneu Serv", style=discord.ButtonStyle.primary, custom_id="calc_pneu_serv")
     async def a2(self, i, b):
         cont["pneu_serv"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Vidro", style=discord.ButtonStyle.primary, custom_id="calc_3")
+    @discord.ui.button(label="Vidro", style=discord.ButtonStyle.primary, custom_id="calc_vidro")
     async def a3(self, i, b):
         cont["vidro"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Kit Serv", style=discord.ButtonStyle.primary, custom_id="calc_4")
+    @discord.ui.button(label="Kit Serv", style=discord.ButtonStyle.primary, custom_id="calc_kit_serv")
     async def a4(self, i, b):
         cont["kit_serv"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Porta", style=discord.ButtonStyle.primary, custom_id="calc_5")
+    @discord.ui.button(label="Porta", style=discord.ButtonStyle.primary, custom_id="calc_porta")
     async def a5(self, i, b):
         cont["porta"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Chamado", style=discord.ButtonStyle.success, custom_id="calc_6")
+    # ================= EXTERNOS =================
+
+    @discord.ui.button(label="Chamado", style=discord.ButtonStyle.success, custom_id="calc_chamado")
     async def a6(self, i, b):
         cont["chamado"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Explodido", style=discord.ButtonStyle.success, custom_id="calc_7")
+    @discord.ui.button(label="Explodido", style=discord.ButtonStyle.success, custom_id="calc_explodido")
     async def a7(self, i, b):
         cont["explodido"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Pneu Venda", style=discord.ButtonStyle.secondary, custom_id="calc_8")
+    # ================= VENDAS =================
+
+    @discord.ui.button(label="Pneu Venda", style=discord.ButtonStyle.secondary, custom_id="calc_pneu_venda")
     async def a8(self, i, b):
         cont["pneu_venda"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Kit Venda", style=discord.ButtonStyle.secondary, custom_id="calc_9")
+    @discord.ui.button(label="Kit Venda", style=discord.ButtonStyle.secondary, custom_id="calc_kit_venda")
     async def a9(self, i, b):
         cont["kit_venda"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Pé de Cabra", style=discord.ButtonStyle.secondary, custom_id="calc_10")
+    @discord.ui.button(label="Pé de Cabra", style=discord.ButtonStyle.secondary, custom_id="calc_pe")
     async def a10(self, i, b):
         cont["pe"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Chave", style=discord.ButtonStyle.secondary, custom_id="calc_11")
+    @discord.ui.button(label="Chave", style=discord.ButtonStyle.secondary, custom_id="calc_chave")
     async def a11(self, i, b):
         cont["chave"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Elevador", style=discord.ButtonStyle.secondary, custom_id="calc_12")
+    @discord.ui.button(label="Elevador", style=discord.ButtonStyle.secondary, custom_id="calc_elevador")
     async def a12(self, i, b):
         cont["elevador"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Guincho", style=discord.ButtonStyle.secondary, custom_id="calc_13")
+    @discord.ui.button(label="Guincho", style=discord.ButtonStyle.secondary, custom_id="calc_guincho")
     async def a13(self, i, b):
         cont["guincho"] += 1
         await self.refresh(i)
 
-    @discord.ui.button(label="+ Bolsa", style=discord.ButtonStyle.secondary, custom_id="calc_14")
+    @discord.ui.button(label="Bolsa", style=discord.ButtonStyle.secondary, custom_id="calc_bolsa")
     async def a14(self, i, b):
         cont["bolsa"] += 1
         await self.refresh(i)
 
-    # ========= - =========
+    # ================= CONTROLES =================
 
-    @discord.ui.button(label="-1 Geral", style=discord.ButtonStyle.danger, row=4, custom_id="calc_menos")
-    async def menos(self, i, b):
-        for k in cont:
-            if cont[k] > 0:
-                cont[k] -= 1
-                break
-        await self.refresh(i)
-
-    @discord.ui.button(label="🧹 Limpar", style=discord.ButtonStyle.danger, row=4, custom_id="calc_limpar")
+    @discord.ui.button(label="🧹 Limpar Tudo", style=discord.ButtonStyle.danger, custom_id="calc_limpar", row=4)
     async def limpar(self, i, b):
         for k in cont:
             cont[k] = 0
@@ -1515,6 +1536,7 @@ async def painel_calc():
             return
 
     await canal.send(embed=embed_calc(), view=CalcView())
+
 
 # =========================================================
 # ========================== METAS =========================
@@ -1879,6 +1901,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
