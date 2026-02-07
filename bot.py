@@ -1856,6 +1856,38 @@ async def enviar_painel_metas():
 
     await canal.send(embed=embed, view=MetaView())
 
+async def criar_metas_para_agregados_sem_sala():
+    print("🔎 Criando metas para agregados antigos sem sala...")
+
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+
+    for member in guild.members:
+        if member.bot:
+            continue
+
+        # só quem tem agregado
+        if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
+            continue
+
+        nome_base = member.display_name.lower().replace(" ", "-")
+        nome_canal = f"📁・{nome_base}"
+
+        existe = False
+
+        for categoria in guild.categories:
+            for canal in categoria.channels:
+                if canal.name == nome_canal:
+                    existe = True
+                    break
+            if existe:
+                break
+
+        if not existe:
+            await criar_sala_meta(member)
+
+
 # =========================================================
 # ================= EVENTOS AUTOMÁTICOS ===================
 # =========================================================
@@ -2018,6 +2050,7 @@ async def on_ready():
     await enviar_painel_lavagem()
     await enviar_painel_ponto()
     await painel_calc()
+    await criar_metas_para_agregados_sem_sala()
 
     # ================= VERIFICAÇÕES AUTOMÁTICAS =================
        
@@ -2029,6 +2062,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
