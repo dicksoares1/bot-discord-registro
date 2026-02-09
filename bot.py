@@ -1658,11 +1658,65 @@ async def criar_sala_meta(member: discord.Member):
         metas[str(member.id)] = {"canal_id": canal.id}
         salvar_metas(metas)
 
-        aviso = await canal.send(
-            f"{member.mention}\nSala criada automaticamente.",
-            view=MetaFecharView(member.id)
-        )
-        await aviso.pin()
+        cargo_resp_metas = guild.get_role(CARGO_RESP_METAS_ID)
+
+# descobrir cargo principal do membro
+cargo_nome = "Agregado"
+for role in member.roles[::-1]:
+    if role.name != "@everyone":
+        cargo_nome = role.name
+        break
+
+embed = discord.Embed(
+    title="📊 PAINEL DE META INDIVIDUAL",
+    color=0x2ecc71
+)
+
+embed.add_field(
+    name="👤 Dono da Sala",
+    value=member.mention,
+    inline=False
+)
+
+embed.add_field(
+    name="🏆 Cargo Atual",
+    value=f"**{cargo_nome}**",
+    inline=True
+)
+
+embed.add_field(
+    name="📅 Criada em",
+    value=agora().strftime("%d/%m/%Y %H:%M"),
+    inline=True
+)
+
+embed.add_field(
+    name="📊 Progresso da Meta",
+    value="**R$ 0 / R$ 250.000**",
+    inline=False
+)
+
+embed.add_field(
+    name="📢 Avisos Importantes",
+    value=(
+        f"📌 Apenas você e a **Gerência** têm acesso.\n"
+        f"📌 Leia o canal ⁠📢・faq-meta\n"
+        f"📌 Responsável por metas: "
+        f"{cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}"
+    ),
+    inline=False
+)
+
+embed.set_footer(text="Sistema de Metas • Painel Automático")
+
+msg = await canal.send(
+    content=f"👋 {member.mention} | Sua sala de meta foi criada com sucesso!",
+    embed=embed,
+    view=MetaFecharView(member.id)
+)
+
+await msg.pin()
+
 
     finally:
         criando_meta.discard(member.id)
@@ -1869,6 +1923,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
