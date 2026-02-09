@@ -385,202 +385,231 @@ class CalculadoraView(discord.ui.View):
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VendaModal())
 # =========================================================
-# ======================== VENDAS ==========================
+# ======================== PRODUÇÃO ========================
 # =========================================================
 
-ORGANIZACOES_CONFIG = {
-    "VDR": {"emoji": "🔥", "cor": 0xe74c3c},
-    "POLICIA": {"emoji": "🚓", "cor": 0x3498db},
-    "EXERCITO": {"emoji": "🪖", "cor": 0x2ecc71},
-    "MAFIA": {"emoji": "💀", "cor": 0x8e44ad},
-    "CIVIL": {"emoji": "👤", "cor": 0x95a5a6},
-}
-
-# ================= CONTROLE DE PEDIDOS =================
-
-def carregar_pedidos():
-    if not os.path.exists(ARQUIVO_PEDIDOS):
-        return {"ultimo": 0}
+def carregar_producoes():
+    if not os.path.exists(ARQUIVO_PRODUCOES):
+        return {}
     try:
-        with open(ARQUIVO_PEDIDOS, "r") as f:
+        with open(ARQUIVO_PRODUCOES, "r") as f:
             return json.load(f)
     except:
-        return {"ultimo": 0}
+        return {}
 
-def proximo_pedido():
-    dados = carregar_pedidos()
-    dados["ultimo"] += 1
-
-    with open(ARQUIVO_PEDIDOS, "w") as f:
+def salvar_producoes(dados):
+    with open(ARQUIVO_PRODUCOES, "w") as f:
         json.dump(dados, f, indent=4)
 
-    return dados["ultimo"]
+def barra(pct, size=20):
+    cheio = int(pct * size)
+
+    if pct <= 0.35:
+        cor = "🟢"
+    elif pct <= 0.70:
+        cor = "🟡"
+    elif pct < 1:
+        cor = "🔴"
+    else:
+        cor = "🔵"
+
+    return cor + " " + ("▓" * cheio) + ("░" * (size - cheio))
 
 
-# ================= STATUS DOS BOTÕES =================
+# ================= 2ª TASK =================
 
-class StatusView(discord.ui.View):
-    def __init__(self):
+class SegundaTaskView(discord.ui.View):
+    def __init__(self, pid):
         super().__init__(timeout=None)
+        self.pid = pid
 
-    def get_status(self, embed):
-        for i, field in enumerate(embed.fields):
-            if field.name == "📌 Status":
-                return i, field.value.split("\n")
-        return None, []
+    @discord.ui.button(
+        label="✅ Confirmar 2ª Task",
+        style=discord.ButtonStyle.success,
+        custom_id="segunda_task_btn"
+    )
+    async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
+        producoes = carregar_producoes()
 
-    def set_status(self, embed, idx, linhas):
-        if not linhas:
-            linhas = ["⏳ Pagamento pendente"]
+        if self.pid not in producoes:
+            await interaction.response.defer()
+            return
 
-        embed.set_field_at(
-            idx,
-            name="📌 Status",
-            value="\n".join(linhas),
-            inline=False
-        )
-        return embed
+        producoes[self.pid]["segunda_task_confirmada"] = {
+            "user": interaction.user.id,
+            "time": agora().isoformat()
+        }
 
-    def toggle_linha(self, linhas, prefixo, nova_linha):
-        for l in linhas:
-            if l.startswith(prefixo):
-                linhas.remove(l)
-                return linhas
-        linhas.append(nova_linha)
-        return linhas
+        salvar_producoes(producoes)
 
-    @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
-    async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status(embed)
-
-        agora_str = agora().strftime("%d/%m/%Y %H:%M")
-        user = interaction.user.mention
-
-        linhas = [l for l in linhas if not l.startswith("⏳")]
-        linhas = self.toggle_linha(linhas, "💰", f"💰 Pago • Recebido por {user} • {agora_str}")
-
-        embed = self.set_status(embed, idx, linhas)
-        await interaction.message.edit(embed=embed)
-        await interaction.response.defer()
-
-    @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
-    async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status(embed)
-
-        agora_str = agora().strftime("%d/%m/%Y %H:%M")
-        user = interaction.user.mention
-
-        linhas = [l for l in linhas if not l.startswith("📦")]
-        linhas = self.toggle_linha(linhas, "✅", f"✅ Entregue por {user} • {agora_str}")
-
-        embed = self.set_status(embed, idx, linhas)
-        await interaction.message.edit(embed=embed)
-        await interaction.response.defer()
-
-    @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
-    async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status(embed)
-
-        linhas = self.toggle_linha(linhas, "⏳", "⏳ Pagamento pendente")
-
-        embed = self.set_status(embed, idx, linhas)
-        await interaction.message.edit(embed=embed)
+        await interaction.message.edit(view=None)
         await interaction.response.defer()
 
 
-# ================= MODAL DE VENDA =================
+# ================= MODAL OBSERVAÇÃO =================
 
-class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
-    organizacao = discord.ui.TextInput(label="Organização")
-    qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$50)")
-    qtd_sub = discord.ui.TextInput(label="Quantidade SUB (R$90)")
-    observacoes = discord.ui.TextInput(
-        label="Observações",
+class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
+    obs = discord.ui.TextInput(
+        label="Observação inicial",
+        placeholder="Ex: Galpões todos produzindo / 1 e 2 ativos / 3 com HC",
         style=discord.TextStyle.paragraph,
         required=False
     )
 
+    def __init__(self, galpao, tempo):
+        super().__init__()
+        self.galpao = galpao
+        self.tempo = tempo
+
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            pt = int(self.qtd_pt.value.strip())
-            sub = int(self.qtd_sub.value.strip())
-        except ValueError:
-            await interaction.response.defer()
-            return
-        
-        numero_pedido = proximo_pedido()
+        producoes = carregar_producoes()
+        pid = f"{self.galpao}_{interaction.id}"
 
-        pacotes_pt = pt // 50
-        pacotes_sub = sub // 50
-        total = (pt * 50) + (sub * 90)
+        inicio = agora()
+        fim = inicio + timedelta(minutes=self.tempo)
 
-        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
 
-        org_nome = self.organizacao.value.strip().upper()
-        config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
-
-        embed = discord.Embed(
-            title=f"📦 NOVA ENCOMENDA • Pedido #{numero_pedido:04d}",
-            color=config["cor"]
-        )
-        embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
-        embed.add_field(
-            name="🏷 Organização",
-            value=f"**{config['emoji']} {org_nome}**",
-            inline=False
-        )
-        embed.add_field(
-            name="🔫 PT",
-            value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
-            inline=True
-        )
-        embed.add_field(
-            name="🔫 SUB",
-            value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
-            inline=True
-        )
-        embed.add_field(
-            name="💰 Total",
-            value=f"**R$ {valor_formatado}**",
-            inline=False
+        msg = await canal.send(
+            embed=discord.Embed(
+                title="🏭 Produção",
+                description=f"Iniciando produção em **{self.galpao}**...",
+                color=0x3498db
+            ),
+            view=SegundaTaskView(pid)
         )
 
-        embed.add_field(
-            name="📌 Status",
-            value="📦 A entregar",
-            inline=False
-        )
+        producoes[pid] = {
+            "galpao": self.galpao,
+            "autor": interaction.user.id,
+            "inicio": inicio.isoformat(),
+            "fim": fim.isoformat(),
+            "obs": self.obs.value,
+            "msg_id": msg.id,
+            "canal_id": CANAL_REGISTRO_GALPAO_ID
+        }
 
-        if self.observacoes.value:
-            embed.add_field(
-                name="📝 Observações",
-                value=self.observacoes.value,
-                inline=False
-            )
+        salvar_producoes(producoes)
+        bot.loop.create_task(acompanhar_producao(pid))
 
-        embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
-
-        canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
-        await canal.send(embed=embed, view=StatusView())
         await interaction.response.defer()
 
 
-# ================= BOTÃO PARA ABRIR MODAL =================
+# ================= VIEW FABRICAÇÃO =================
 
-class CalculadoraView(discord.ui.View):
+class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="🧮 Registrar Venda",
+        label="🏭 Galpões Norte",
         style=discord.ButtonStyle.primary,
-        custom_id="calculadora_registrar"
+        custom_id="fab_norte_btn"
     )
-    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VendaModal())
+    async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            ObservacaoProducaoModal("GALPÕES NORTE", 65)
+        )
+
+    @discord.ui.button(
+        label="🏭 Galpões Sul",
+        style=discord.ButtonStyle.secondary,
+        custom_id="fab_sul_btn"
+    )
+    async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            ObservacaoProducaoModal("GALPÕES SUL", 130)
+        )
+
+    @discord.ui.button(
+        label="🧪 TESTE 3 MIN",
+        style=discord.ButtonStyle.success,
+        custom_id="fab_teste_btn"
+    )
+    async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            ObservacaoProducaoModal("TESTE", 3)
+        )
+
+
+# ================= LOOP DE ACOMPANHAMENTO =================
+
+async def acompanhar_producao(pid):
+    while True:
+        producoes = carregar_producoes()
+        if pid not in producoes:
+            return
+
+        prod = producoes[pid]
+        canal = bot.get_channel(prod["canal_id"])
+
+        try:
+            msg = await canal.fetch_message(prod["msg_id"])
+        except:
+            return
+
+        inicio = datetime.fromisoformat(prod["inicio"])
+        fim = datetime.fromisoformat(prod["fim"])
+
+        total = (fim - inicio).total_seconds()
+        restante = max(0, (fim - agora()).total_seconds())
+        pct = max(0, min(1, 1 - (restante / total)))
+        mins = int(restante // 60)
+
+        desc = (
+            f"**Galpão:** {prod['galpao']}\n"
+            f"**Iniciado por:** <@{prod['autor']}>\n"
+        )
+
+        if prod.get("obs"):
+            desc += f"📝 **Obs:** {prod['obs']}\n"
+
+        desc += (
+            f"Início: <t:{int(inicio.timestamp())}:t>\n"
+            f"Término: <t:{int(fim.timestamp())}:t>\n\n"
+            f"⏳ **Restante:** {mins} min\n"
+            f"{barra(pct)}"
+        )
+
+        if "segunda_task_confirmada" in prod:
+            uid = prod["segunda_task_confirmada"]["user"]
+            desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
+
+        if restante <= 0:
+            desc += "\n\n🔵 **Produção Finalizada**"
+            del producoes[pid]
+            salvar_producoes(producoes)
+
+        await msg.edit(
+            embed=discord.Embed(
+                title="🏭 Produção",
+                description=desc,
+                color=0x34495e
+            )
+        )
+
+        if restante <= 0:
+            return
+
+        await asyncio.sleep(60)
+
+
+# ================= PAINEL =================
+
+async def enviar_painel_fabricacao():
+    canal = bot.get_channel(CANAL_FABRICACAO_ID)
+    async for m in canal.history(limit=10):
+        if m.author == bot.user and m.embeds and m.embeds[0].title == "🏭 Fabricação":
+            return
+
+    await canal.send(
+        embed=discord.Embed(
+            title="🏭 Fabricação",
+            description="Selecione Norte ou Sul para iniciar a produção.",
+            color=0x2c3e50
+        ),
+        view=FabricacaoView()
+    )
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
@@ -1807,77 +1836,42 @@ async def on_ready():
     print("🔄 Iniciando configuração do bot...")
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
 
-    # ================= VIEWS PERSISTENTES =================
-    views = [
-        RegistroView,
-        CalculadoraView,
-        StatusView,
-        CadastrarLiveView,
-        MetaView,
-        MetaFecharView,
-        PolvoraView,
-        ConfirmarPagamentoView,
-        LavagemView,
-        PontoView,
-        CalcView,
-        FabricacaoView
-    ]
+    # VIEWS
+    bot.add_view(RegistroView())
+    bot.add_view(CalculadoraView())
+    bot.add_view(StatusView())
+    bot.add_view(CadastrarLiveView())
+    bot.add_view(MetaView())
+    bot.add_view(MetaFecharView(0))
+    bot.add_view(PolvoraView())
+    bot.add_view(ConfirmarPagamentoView())
+    bot.add_view(LavagemView())
+    bot.add_view(PontoView())
+    bot.add_view(CalcView())
+    bot.add_view(FabricacaoView())
 
-    for view in views:
-        try:
-            if view == MetaFecharView:
-                bot.add_view(view(0))
-            else:
-                bot.add_view(view())
-        except NameError:
-            print(f"⚠️ View não encontrada: {view.__name__}")
-        except Exception as e:
-            print(f"⚠️ Erro ao carregar view {view.__name__}: {e}")
+    # LOOPS
+    if not verificar_lives_twitch.is_running():
+        verificar_lives_twitch.start()
 
-    # ================= LOOPS =================
-    try:
-        if not verificar_lives_twitch.is_running():
-            verificar_lives_twitch.start()
-    except:
-        pass
+    if not relatorio_semanal_polvoras.is_running():
+        relatorio_semanal_polvoras.start()
 
-    try:
-        if not relatorio_semanal_polvoras.is_running():
-            relatorio_semanal_polvoras.start()
-    except:
-        pass
+    # RESTAURAR PRODUÇÕES
+    for pid in carregar_producoes():
+        bot.loop.create_task(acompanhar_producao(pid))
 
-    # ================= RESTAURAR PRODUÇÕES =================
-    try:
-        for pid in carregar_producoes():
-            bot.loop.create_task(acompanhar_producao(pid))
-    except Exception as e:
-        print(f"Erro restaurando produções: {e}")
+    # PAINÉIS
+    await enviar_painel_fabricacao()
+    await enviar_painel_lives()
+    await enviar_painel_metas()
+    await enviar_painel_polvoras(bot)
+    await enviar_painel_lavagem()
+    await enviar_painel_ponto()
+    await painel_calc()
 
-    # ================= PAINÉIS =================
-    async def seguro(func, nome):
-        try:
-            await func()
-        except NameError:
-            print(f"⚠️ Função não encontrada: {nome}")
-        except Exception as e:
-            print(f"⚠️ Erro em {nome}: {e}")
-
-    await seguro(enviar_painel_fabricacao, "painel fabricação")
-    await seguro(enviar_painel_lives, "painel lives")
-    await seguro(enviar_painel_metas, "painel metas")
-    await seguro(lambda: enviar_painel_polvoras(bot), "painel pólvora")
-    await seguro(enviar_painel_lavagem, "painel lavagem")
-    await seguro(enviar_painel_ponto, "painel ponto")
-    await seguro(painel_calc, "painel calculadora")
-
-    # ================= METAS AUTOMÁTICAS =================
-    try:
-        await criar_metas_para_agregados_sem_sala()
-    except NameError:
-        print("⚠️ criar_metas_para_agregados_sem_sala não encontrada")
-    except Exception as e:
-        print(f"Erro metas automáticas: {e}")
+    # METAS AUTOMÁTICAS
+    await criar_metas_para_agregados_sem_sala()
 
     print("✅ BOT ONLINE 100%")
 
@@ -1887,4 +1881,3 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
-
