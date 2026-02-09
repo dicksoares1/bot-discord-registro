@@ -1599,21 +1599,32 @@ async def criar_sala_meta(member: discord.Member):
         guild = member.guild
 
         nick = member.display_name.lower()
-        passaporte = nick.split("-")[0].strip()
+
+        # 🔒 PROTEÇÃO: caso não tenha "-"
+        if "-" in nick:
+            passaporte = nick.split("-")[0].strip()
+        else:
+            passaporte = nick.strip()
 
         canais_encontrados = []
 
+        # 🔎 BUSCAR SALAS EXISTENTES EM TODAS CATEGORIAS
         for categoria in guild.categories:
-            for canal in categoria.channels:
-                if canal.name.startswith(f"📁・{passaporte}"):
-                    canais_encontrados.append(canal)
+            try:
+                for canal in categoria.channels:
+                    if canal.name.startswith(f"📁・{passaporte}"):
+                        canais_encontrados.append(canal)
+            except:
+                continue
 
-        # Se já existe
+        # ===============================
+        # SE JÁ EXISTE SALA
+        # ===============================
         if canais_encontrados:
             canais_encontrados.sort(key=lambda c: c.created_at)
             principal = canais_encontrados[0]
 
-            # apagar duplicadas
+            # 🧹 apagar duplicadas
             for duplicada in canais_encontrados[1:]:
                 try:
                     await duplicada.delete()
@@ -1624,6 +1635,9 @@ async def criar_sala_meta(member: discord.Member):
             salvar_metas(metas)
             return
 
+        # ===============================
+        # CRIAR NOVA SALA
+        # ===============================
         categoria_id = obter_categoria_meta(member)
         if not categoria_id:
             return
@@ -1726,6 +1740,7 @@ async def criar_sala_meta(member: discord.Member):
     finally:
         criando_meta.discard(member.id)
 
+
 # =========================================================
 # ========================= ON READY ======================
 # =========================================================
@@ -1825,6 +1840,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
