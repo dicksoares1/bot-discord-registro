@@ -1807,42 +1807,77 @@ async def on_ready():
     print("🔄 Iniciando configuração do bot...")
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
 
-    # VIEWS
-    bot.add_view(RegistroView())
-    bot.add_view(CalculadoraView())
-    bot.add_view(StatusView())
-    bot.add_view(CadastrarLiveView())
-    bot.add_view(MetaView())
-    bot.add_view(MetaFecharView(0))
-    bot.add_view(PolvoraView())
-    bot.add_view(ConfirmarPagamentoView())
-    bot.add_view(LavagemView())
-    bot.add_view(PontoView())
-    bot.add_view(CalcView())
-    bot.add_view(FabricacaoView())
+    # ================= VIEWS PERSISTENTES =================
+    views = [
+        RegistroView,
+        CalculadoraView,
+        StatusView,
+        CadastrarLiveView,
+        MetaView,
+        MetaFecharView,
+        PolvoraView,
+        ConfirmarPagamentoView,
+        LavagemView,
+        PontoView,
+        CalcView,
+        FabricacaoView
+    ]
 
-    # LOOPS
-    if not verificar_lives_twitch.is_running():
-        verificar_lives_twitch.start()
+    for view in views:
+        try:
+            if view == MetaFecharView:
+                bot.add_view(view(0))
+            else:
+                bot.add_view(view())
+        except NameError:
+            print(f"⚠️ View não encontrada: {view.__name__}")
+        except Exception as e:
+            print(f"⚠️ Erro ao carregar view {view.__name__}: {e}")
 
-    if not relatorio_semanal_polvoras.is_running():
-        relatorio_semanal_polvoras.start()
+    # ================= LOOPS =================
+    try:
+        if not verificar_lives_twitch.is_running():
+            verificar_lives_twitch.start()
+    except:
+        pass
 
-    # RESTAURAR PRODUÇÕES
-    for pid in carregar_producoes():
-        bot.loop.create_task(acompanhar_producao(pid))
+    try:
+        if not relatorio_semanal_polvoras.is_running():
+            relatorio_semanal_polvoras.start()
+    except:
+        pass
 
-    # PAINÉIS
-    await enviar_painel_fabricacao()
-    await enviar_painel_lives()
-    await enviar_painel_metas()
-    await enviar_painel_polvoras(bot)
-    await enviar_painel_lavagem()
-    await enviar_painel_ponto()
-    await painel_calc()
+    # ================= RESTAURAR PRODUÇÕES =================
+    try:
+        for pid in carregar_producoes():
+            bot.loop.create_task(acompanhar_producao(pid))
+    except Exception as e:
+        print(f"Erro restaurando produções: {e}")
 
-    # METAS AUTOMÁTICAS
-    await criar_metas_para_agregados_sem_sala()
+    # ================= PAINÉIS =================
+    async def seguro(func, nome):
+        try:
+            await func()
+        except NameError:
+            print(f"⚠️ Função não encontrada: {nome}")
+        except Exception as e:
+            print(f"⚠️ Erro em {nome}: {e}")
+
+    await seguro(enviar_painel_fabricacao, "painel fabricação")
+    await seguro(enviar_painel_lives, "painel lives")
+    await seguro(enviar_painel_metas, "painel metas")
+    await seguro(lambda: enviar_painel_polvoras(bot), "painel pólvora")
+    await seguro(enviar_painel_lavagem, "painel lavagem")
+    await seguro(enviar_painel_ponto, "painel ponto")
+    await seguro(painel_calc, "painel calculadora")
+
+    # ================= METAS AUTOMÁTICAS =================
+    try:
+        await criar_metas_para_agregados_sem_sala()
+    except NameError:
+        print("⚠️ criar_metas_para_agregados_sem_sala não encontrada")
+    except Exception as e:
+        print(f"Erro metas automáticas: {e}")
 
     print("✅ BOT ONLINE 100%")
 
@@ -1852,3 +1887,4 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
