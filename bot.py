@@ -1640,13 +1640,19 @@ async def criar_sala_meta(member: discord.Member):
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            member: discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True
+            ),
         }
 
         gerente_role = guild.get_role(CARGO_GERENTE_ID)
         if gerente_role:
             overwrites[gerente_role] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, manage_channels=True
+                view_channel=True,
+                send_messages=True,
+                manage_channels=True
             )
 
         canal = await guild.create_text_channel(
@@ -1660,169 +1666,65 @@ async def criar_sala_meta(member: discord.Member):
 
         cargo_resp_metas = guild.get_role(CARGO_RESP_METAS_ID)
 
-# descobrir cargo principal do membro
-cargo_nome = "Agregado"
-for role in member.roles[::-1]:
-    if role.name != "@everyone":
-        cargo_nome = role.name
-        break
+        # descobrir cargo principal do membro
+        cargo_nome = "Agregado"
+        for role in member.roles[::-1]:
+            if role.name != "@everyone":
+                cargo_nome = role.name
+                break
 
-embed = discord.Embed(
-    title="📊 PAINEL DE META INDIVIDUAL",
-    color=0x2ecc71
-)
+        embed = discord.Embed(
+            title="📊 PAINEL DE META INDIVIDUAL",
+            color=0x2ecc71
+        )
 
-embed.add_field(
-    name="👤 Dono da Sala",
-    value=member.mention,
-    inline=False
-)
+        embed.add_field(
+            name="👤 Dono da Sala",
+            value=member.mention,
+            inline=False
+        )
 
-embed.add_field(
-    name="🏆 Cargo Atual",
-    value=f"**{cargo_nome}**",
-    inline=True
-)
+        embed.add_field(
+            name="🏆 Cargo Atual",
+            value=f"**{cargo_nome}**",
+            inline=True
+        )
 
-embed.add_field(
-    name="📅 Criada em",
-    value=agora().strftime("%d/%m/%Y %H:%M"),
-    inline=True
-)
+        embed.add_field(
+            name="📅 Criada em",
+            value=agora().strftime("%d/%m/%Y %H:%M"),
+            inline=True
+        )
 
-embed.add_field(
-    name="📊 Progresso da Meta",
-    value="**R$ 0 / R$ 250.000**",
-    inline=False
-)
+        embed.add_field(
+            name="📊 Progresso da Meta",
+            value="**R$ 0 / R$ 250.000**",
+            inline=False
+        )
 
-embed.add_field(
-    name="📢 Avisos Importantes",
-    value=(
-        f"📌 Apenas você e a **Gerência** têm acesso.\n"
-        f"📌 Leia o canal ⁠📢・faq-meta\n"
-        f"📌 Responsável por metas: "
-        f"{cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}"
-    ),
-    inline=False
-)
+        embed.add_field(
+            name="📢 Avisos Importantes",
+            value=(
+                "📌 Apenas você e a **Gerência** têm acesso.\n"
+                "📌 Leia o canal ⁠📢・faq-meta\n"
+                f"📌 Responsável por metas: "
+                f"{cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}"
+            ),
+            inline=False
+        )
 
-embed.set_footer(text="Sistema de Metas • Painel Automático")
+        embed.set_footer(text="Sistema de Metas • Painel Automático")
 
-msg = await canal.send(
-    content=f"👋 {member.mention} | Sua sala de meta foi criada com sucesso!",
-    embed=embed,
-    view=MetaFecharView(member.id)
-)
+        msg = await canal.send(
+            content=f"👋 {member.mention} | Sua sala de meta foi criada com sucesso!",
+            embed=embed,
+            view=MetaFecharView(member.id)
+        )
 
-await msg.pin()
-
+        await msg.pin()
 
     finally:
         criando_meta.discard(member.id)
-
-
-# =========================================================
-# ================= BOTÃO MANUAL ==========================
-# =========================================================
-
-class MetaView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📁 Solicitar Sala de Meta", style=discord.ButtonStyle.primary, custom_id="meta_criar")
-    async def criar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await criar_sala_meta(interaction.user)
-        await interaction.response.send_message("Verificando sua sala...", ephemeral=True)
-
-
-class MetaFecharView(discord.ui.View):
-    def __init__(self, member_id):
-        super().__init__(timeout=None)
-        self.member_id = member_id
-
-    @discord.ui.button(label="🧹 Fechar Sala", style=discord.ButtonStyle.danger, custom_id="meta_fechar")
-    async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            await interaction.response.send_message("❌ Apenas Gerentes podem fechar.", ephemeral=True)
-            return
-
-        metas = carregar_metas()
-        data = metas.get(str(self.member_id))
-
-        if not data:
-            await interaction.response.defer()
-            return
-
-        canal = interaction.guild.get_channel(data["canal_id"])
-        if canal:
-            await canal.delete()
-
-        del metas[str(self.member_id)]
-        salvar_metas(metas)
-
-        await interaction.response.send_message("🧹 Sala fechada.", ephemeral=True)
-
-
-# =========================================================
-# ================= PAINEL ================================
-# =========================================================
-
-async def enviar_painel_metas():
-    canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
-    if not canal:
-        return
-
-    async for m in canal.history(limit=10):
-        if m.author == bot.user:
-            return
-
-    embed = discord.Embed(
-        title="📁 Solicitação de Sala de Meta",
-        description="Clique no botão abaixo para verificar/criar sua sala.",
-        color=0xf1c40f
-    )
-
-    await canal.send(embed=embed, view=MetaView())
-
-
-# =========================================================
-# ============ CRIAR PRA QUEM JÁ TEM AGREGADO ============
-# =========================================================
-
-async def criar_metas_para_agregados_sem_sala():
-    print("🔎 Verificando agregados sem sala...")
-
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        return
-
-    for member in guild.members:
-        if member.bot:
-            continue
-
-        if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
-            continue
-
-        await criar_sala_meta(member)
-
-
-# =========================================================
-# ========= GANHOU AGREGADO = CRIA META AUTOMÁTICA ========
-# =========================================================
-
-@bot.event
-async def on_member_update(before: discord.Member, after: discord.Member):
-    before_roles = {r.id for r in before.roles}
-    after_roles = {r.id for r in after.roles}
-
-    ganhou_agregado = (
-        AGREGADO_ROLE_ID in after_roles and
-        AGREGADO_ROLE_ID not in before_roles
-    )
-
-    if ganhou_agregado:
-        await criar_sala_meta(after)
 
 # =========================================================
 # ========================= ON READY ======================
@@ -1923,6 +1825,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
