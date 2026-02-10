@@ -112,7 +112,7 @@ CARGO_RESP_PRODUCAO_ID = 1337379524949573662
 CARGO_SOLDADO_ID = 1422845498863259700
 CARGO_MEMBRO_ID = 1422847198789369926
 CARGO_AGREGADO_ID = 1422847202937536532
-
+CARGO_MECANICO_ID = 1448526080645398641
 
 # =========================================================
 # ===================== CATEGORIAS =========================
@@ -1740,12 +1740,11 @@ def obter_categoria_meta(member: discord.Member):
 def obter_meta_dinheiro(member: discord.Member) -> int:
     roles = [r.id for r in member.roles]
 
-    # Mecânico → 100k (prioridade)
-    if 'CARGO_MECANICO_ID' in globals():
-        if CARGO_MECANICO_ID in roles:
-            return 100_000
+    # MECÂNICO TEM PRIORIDADE TOTAL
+    if CARGO_MECANICO_ID in roles:
+        return 100_000
 
-    # Responsáveis → 150k
+    # RESPONSÁVEIS
     if any(r in roles for r in [
         CARGO_RESP_METAS_ID,
         CARGO_RESP_ACAO_ID,
@@ -1754,11 +1753,11 @@ def obter_meta_dinheiro(member: discord.Member) -> int:
     ]):
         return 150_000
 
-    # Membro/Soldado → 250k
+    # MEMBRO / SOLDADO
     if CARGO_MEMBRO_ID in roles or CARGO_SOLDADO_ID in roles:
         return 250_000
 
-    # Agregado → sem meta de dinheiro (usa pólvora)
+    # AGREGADO
     return 0
 
 # =========================================================
@@ -1987,20 +1986,19 @@ async def atualizar_categoria_meta(member):
 async def on_member_update(before, after):
     metas = carregar_metas()
 
-    # ganhou agregado agora → cria sala
     tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
     tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
 
+    # ganhou agregado
     if not tinha_agregado and tem_agregado:
         await asyncio.sleep(2)
         await criar_sala_meta(after)
         return
 
-    # se já tem sala registrada → atualizar SEMPRE que trocar cargo
+    # qualquer troca de cargo → recalcular categoria + meta + botões
     if str(after.id) in metas:
         await atualizar_categoria_meta(after)
         await atualizar_painel_meta(after)
-
 
     if tem_agregado:
         await atualizar_categoria_meta(after)
@@ -2213,6 +2211,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
