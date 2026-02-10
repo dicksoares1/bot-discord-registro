@@ -1646,6 +1646,30 @@ from zoneinfo import ZoneInfo
 RESULTADOS_METAS_ID = 1341403574483288125
 
 # =========================================================
+# ================= ARQUIVO DE METAS (JSON) ===============
+# =========================================================
+
+ARQUIVO_METAS = "metas.json"
+
+def carregar_metas():
+    import os, json
+
+    if not os.path.exists(ARQUIVO_METAS):
+        return {}
+
+    try:
+        with open(ARQUIVO_METAS, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def salvar_metas(dados):
+    import json
+    with open(ARQUIVO_METAS, "w") as f:
+        json.dump(dados, f, indent=4)
+
+
+# =========================================================
 # ESCOLHER CATEGORIA PELO CARGO
 # (ajuste conforme seus cargos/categorias)
 # =========================================================
@@ -2037,6 +2061,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
