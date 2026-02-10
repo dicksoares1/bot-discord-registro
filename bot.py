@@ -1653,10 +1653,8 @@ ARQUIVO_METAS = "metas.json"
 
 def carregar_metas():
     import os, json
-
     if not os.path.exists(ARQUIVO_METAS):
         return {}
-
     try:
         with open(ARQUIVO_METAS, "r") as f:
             return json.load(f)
@@ -1701,7 +1699,7 @@ def obter_categoria_meta(member: discord.Member):
 
 
 # =========================================================
-# VIEWS / MODAL DE REGISTRO
+# VIEWS / BOTÕES / MODAL
 # =========================================================
 
 class MetaFecharView(discord.ui.View):
@@ -1713,24 +1711,6 @@ class MetaFecharView(discord.ui.View):
         if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
             return await interaction.response.send_message("Apenas a gerência pode fechar salas.", ephemeral=True)
         await interaction.channel.delete()
-
-
-class MetaRegistroView(discord.ui.View):
-    def __init__(self, member: discord.Member):
-        super().__init__(timeout=None)
-        self.member_id = member.id
-        roles = [r.id for r in member.roles]
-
-        # Agregado -> só pólvora
-        if AGREGADO_ROLE_ID in roles:
-            self.add_item(MetaPolvoraBtn(member.id))
-        else:
-            # Membro+ -> dinheiro + ação
-            self.add_item(MetaDinheiroBtn(member.id))
-            self.add_item(MetaAcaoBtn(member.id))
-
-        # Botão fechar (gerência)
-        self.add_item(MetaFecharView().children[0])
 
 
 class MetaDinheiroBtn(discord.ui.Button):
@@ -1766,6 +1746,24 @@ class MetaPolvoraBtn(discord.ui.Button):
         await interaction.response.send_modal(MetaValorModal("polvora", self.member_id))
 
 
+class MetaRegistroView(discord.ui.View):
+    def __init__(self, member: discord.Member):
+        super().__init__(timeout=None)
+        self.member_id = member.id
+        roles = [r.id for r in member.roles]
+
+        # Agregado -> só pólvora
+        if AGREGADO_ROLE_ID in roles:
+            self.add_item(MetaPolvoraBtn(member.id))
+        else:
+            # Membro+ -> dinheiro + ação
+            self.add_item(MetaDinheiroBtn(member.id))
+            self.add_item(MetaAcaoBtn(member.id))
+
+        # Botão fechar (gerência)
+        self.add_item(MetaFecharView().children[0])
+
+
 class MetaValorModal(discord.ui.Modal):
     def __init__(self, tipo: str, member_id: int):
         super().__init__(title=f"Registrar {tipo}")
@@ -1789,33 +1787,16 @@ class MetaValorModal(discord.ui.Modal):
         dados[self.tipo] = dados.get(self.tipo, 0) + valor
         salvar_metas(metas)
 
-        # Atualizar painel (se possível)
-        canal = interaction.channel
-        try:
-            # Atualiza a primeira mensagem do bot (painel)
-            async for m in canal.history(limit=20):
-                if m.author == interaction.client.user and m.embeds:
-                    embed = m.embeds[0]
-                    dinheiro = dados.get("dinheiro", 0)
-                    polvora = dados.get("polvora", 0)
-                    acao = dados.get("acao", 0)
-
-                    new_embed = discord.Embed(title="📊 PAINEL DE META INDIVIDUAL", color=0x2ecc71)
-                    new_embed.add_field(name="💰 Dinheiro", value=f"R$ {dinheiro:,}".replace(",", "."), inline=True)
-                    new_embed.add_field(name="💣 Pólvora", value=str(polvora), inline=True)
-                    new_embed.add_field(name="🎯 Ação", value=f"R$ {acao:,}".replace(",", "."), inline=True)
-                    new_embed.add_field(name="📈 Progresso", value=f"R$ {dinheiro:,} / 250.000".replace(",", "."), inline=False)
-
-                    await m.edit(embed=new_embed)
-                    break
-        except:
-            pass
+        # Atualizar painel após registrar
+        member = interaction.guild.get_member(self.member_id)
+        if member:
+            await atualizar_painel_meta(member)
 
         await interaction.response.send_message("Registrado com sucesso.", ephemeral=True)
 
 
 # =========================================================
-# CRIAR SALA DE META
+# CRIAR SALA DE META (VERSÃO PRO - POR ID, SEM DUPLICAR)
 # =========================================================
 
 criando_meta = set()
@@ -1830,11 +1811,30 @@ async def criar_sala_meta(member: discord.Member):
         metas = carregar_metas()
         guild = member.guild
 
-        # Já tem registro e canal existe
+        # 1) Se já tem canal salvo e existe -> não cria
         if str(member.id) in metas:
             canal_id = metas[str(member.id)].get("canal_id")
-            if guild.get_channel(canal_id):
+            canal_existente = guild.get_channel(canal_id)
+            if canal_existente:
                 return
+
+        # 2) Procurar canal existente por ID no nome
+        # padrão: 📁・id-<member.id>
+        nome_id = f"id-{member.id}"
+        canal_encontrado = None
+        for categoria in guild.categories:
+            for canal in categoria.channels:
+                if canal.name.endswith(nome_id):
+                    canal_encontrado = canal
+                    break
+            if canal_encontrado:
+                break
+
+        if canal_encontrado:
+            metas[str(member.id)] = metas.get(str(member.id), {})
+            metas[str(member.id)]["canal_id"] = canal_encontrado.id
+            salvar_metas(metas)
+            return
 
         categoria_id = obter_categoria_meta(member)
         if not categoria_id:
@@ -1844,8 +1844,9 @@ async def criar_sala_meta(member: discord.Member):
         if not categoria:
             return
 
+        # Nome baseado no nick + ID fixo (evita duplicar se mudar nick)
         nick = member.display_name.lower().replace(" ", "-")
-        nome_canal = f"📁・{nick}"
+        nome_canal = f"📁・{nick}-id-{member.id}"
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -1870,6 +1871,7 @@ async def criar_sala_meta(member: discord.Member):
         }
         salvar_metas(metas)
 
+        # Painel inicial
         embed = discord.Embed(title="📊 PAINEL DE META INDIVIDUAL", color=0x2ecc71)
         embed.add_field(name="💰 Dinheiro", value="R$ 0", inline=True)
         embed.add_field(name="💣 Pólvora", value="0", inline=True)
@@ -1882,6 +1884,38 @@ async def criar_sala_meta(member: discord.Member):
 
     finally:
         criando_meta.discard(member.id)
+
+
+# =========================================================
+# ATUALIZAR PAINEL (BOTÕES + PROGRESSO AO TROCAR CARGO)
+# =========================================================
+
+async def atualizar_painel_meta(member: discord.Member):
+    metas = carregar_metas()
+    dados = metas.get(str(member.id))
+    if not dados:
+        return
+
+    canal = member.guild.get_channel(dados.get("canal_id"))
+    if not canal:
+        return
+
+    dinheiro = dados.get("dinheiro", 0)
+    polvora = dados.get("polvora", 0)
+    acao = dados.get("acao", 0)
+
+    embed = discord.Embed(title="📊 PAINEL DE META INDIVIDUAL", color=0x2ecc71)
+    embed.add_field(name="💰 Dinheiro", value=f"R$ {dinheiro:,}".replace(",", "."), inline=True)
+    embed.add_field(name="💣 Pólvora", value=str(polvora), inline=True)
+    embed.add_field(name="🎯 Ação", value=f"R$ {acao:,}".replace(",", "."), inline=True)
+    embed.add_field(name="📈 Progresso", value=f"R$ {dinheiro:,} / 250.000".replace(",", "."), inline=False)
+
+    view = MetaRegistroView(member)
+
+    async for m in canal.history(limit=10):
+        if m.author == member.guild.me and m.embeds:
+            await m.edit(embed=embed, view=view)
+            break
 
 
 # =========================================================
@@ -1909,7 +1943,7 @@ async def atualizar_categoria_meta(member: discord.Member):
 
 
 # =========================================================
-# RECEBEU AGREGADO → CRIA SALA
+# EVENTOS AUTOMÁTICOS
 # =========================================================
 
 @bot.event
@@ -1922,11 +1956,8 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
     if tem_agregado:
         await atualizar_categoria_meta(after)
+        await atualizar_painel_meta(after)
 
-
-# =========================================================
-# ENTROU JÁ COM AGREGADO (autorole)
-# =========================================================
 
 @bot.event
 async def on_member_join(member):
@@ -1935,7 +1966,7 @@ async def on_member_join(member):
 
 
 # =========================================================
-# VARREDURA AUTOMÁTICA (EXTRA)
+# VARREDURA AUTOMÁTICA (PRO - SINCRONIZA SEM DUPLICAR)
 # =========================================================
 
 @tasks.loop(minutes=10)
@@ -1950,17 +1981,33 @@ async def varrer_agregados_sem_sala():
         if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
             continue
 
-        if str(member.id) not in metas:
-            await criar_sala_meta(member)
+        # Se já tem canal salvo e existe -> ok
+        if str(member.id) in metas:
+            canal_id = metas[str(member.id)].get("canal_id")
+            if guild.get_channel(canal_id):
+                await atualizar_categoria_meta(member)
+                continue
+
+        # Procurar por canal com id-<member.id>
+        nome_id = f"id-{member.id}"
+        canal_encontrado = None
+        for categoria in guild.categories:
+            for canal in categoria.channels:
+                if canal.name.endswith(nome_id):
+                    canal_encontrado = canal
+                    break
+            if canal_encontrado:
+                break
+
+        if canal_encontrado:
+            metas[str(member.id)] = metas.get(str(member.id), {})
+            metas[str(member.id)]["canal_id"] = canal_encontrado.id
+            salvar_metas(metas)
+            await atualizar_categoria_meta(member)
             continue
 
-        canal_id = metas[str(member.id)].get("canal_id")
-        canal = guild.get_channel(canal_id)
-        if not canal:
-            await criar_sala_meta(member)
-            continue
-
-        await atualizar_categoria_meta(member)
+        # Se não existe -> criar
+        await criar_sala_meta(member)
 
 
 # =========================================================
@@ -2056,8 +2103,6 @@ async def reset_metas_task():
             metas[user_id]["acao"] = 0
         salvar_metas(metas)
         print("🔄 Metas resetadas automaticamente (Domingo)")
-
-
 
 # =========================================================
 # ========================= ON READY ======================
@@ -2169,6 +2214,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
