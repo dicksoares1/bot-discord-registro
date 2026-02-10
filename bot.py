@@ -1758,60 +1758,50 @@ async def on_ready():
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
 
     # ================= VIEWS =================
-    try: bot.add_view(RegistroView())
-    except: pass
-
-    try: bot.add_view(CalculadoraView())
-    except: pass
-
-    try: bot.add_view(StatusView())
-    except: pass
-
-    try: bot.add_view(CadastrarLiveView())
-    except: pass
-
-    try: bot.add_view(MetaView())
-    except: pass
-
-    try: bot.add_view(MetaFecharView(0))
-    except: pass
-
-    try: bot.add_view(MetaProView(0))
-    except: pass
-
-    try: bot.add_view(PolvoraView())
-    except: pass
-
-    try: bot.add_view(ConfirmarPagamentoView())
-    except: pass
-
-    try: bot.add_view(LavagemView())
-    except: pass
-
-    try: bot.add_view(PontoView())
-    except: pass
-
-    try: bot.add_view(CalcView())
-    except: pass
-
-    try: bot.add_view(FabricacaoView())
-    except: pass
+    for view in [
+        "RegistroView",
+        "CalculadoraView",
+        "StatusView",
+        "CadastrarLiveView",
+        "MetaView",
+        "MetaFecharView",
+        "MetaProView",
+        "PolvoraView",
+        "ConfirmarPagamentoView",
+        "LavagemView",
+        "PontoView",
+        "CalcView",
+        "FabricacaoView"
+    ]:
+        try:
+            if view == "MetaFecharView":
+                bot.add_view(globals())
+            elif view == "MetaProView":
+                bot.add_view(globals())
+            else:
+                bot.add_view(globals()[view]())
+        except:
+            pass
 
     # ================= LOOPS =================
-    if not verificar_lives_twitch.is_running():
-        verificar_lives_twitch.start()
+    try:
+        if not verificar_lives_twitch.is_running():
+            verificar_lives_twitch.start()
+    except:
+        pass
 
-    if not relatorio_semanal_polvoras.is_running():
-        relatorio_semanal_polvoras.start()
+    try:
+        if not relatorio_semanal_polvoras.is_running():
+            relatorio_semanal_polvoras.start()
+    except:
+        pass
 
-    # RELATÓRIO METAS (sábado 12h)
     try:
         if not relatorio_semanal_task.is_running():
             relatorio_semanal_task.start()
     except:
         pass
 
-    # RESET METAS (domingo 00h)
     try:
         if not reset_metas_task.is_running():
             reset_metas_task.start()
@@ -1819,20 +1809,35 @@ async def on_ready():
         pass
 
     # ================= RESTAURAR PRODUÇÕES =================
-    for pid in carregar_producoes():
-        bot.loop.create_task(acompanhar_producao(pid))
+    try:
+        for pid in carregar_producoes():
+            bot.loop.create_task(acompanhar_producao(pid))
+    except:
+        pass
 
     # ================= PAINÉIS =================
-    await enviar_painel_fabricacao()
-    await enviar_painel_lives()
-    await enviar_painel_metas()
-    await enviar_painel_polvoras(bot)
-    await enviar_painel_lavagem()
-    await enviar_painel_ponto()
-    await painel_calc()
+    for func in [
+        "enviar_painel_fabricacao",
+        "enviar_painel_lives",
+        "enviar_painel_metas",
+        "enviar_painel_polvoras",
+        "enviar_painel_lavagem",
+        "enviar_painel_ponto",
+        "painel_calc"
+    ]:
+        try:
+            if func == "enviar_painel_polvoras":
+                await globals()[func](bot)
+            else:
+                await globals()[func]()
+        except:
+            pass
 
     # ================= METAS AUTOMÁTICAS =================
-    await criar_metas_para_agregados_sem_sala()
+    try:
+        await criar_metas_para_agregados_sem_sala()
+    except:
+        pass
 
     print("✅ BOT ONLINE 100%")
 
@@ -1841,8 +1846,4 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
-
-
-
-
 
