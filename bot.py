@@ -1740,7 +1740,7 @@ def obter_categoria_meta(member: discord.Member):
 def obter_meta_dinheiro(member: discord.Member) -> int:
     roles = [r.id for r in member.roles]
 
-    # MECÂNICO TEM PRIORIDADE TOTAL
+    # MECÂNICO TEM PRIORIDADE MÁXIMA
     if CARGO_MECANICO_ID in roles:
         return 100_000
 
@@ -1986,18 +1986,23 @@ async def atualizar_categoria_meta(member):
 async def on_member_update(before, after):
     metas = carregar_metas()
 
+    # Se recebeu agregado e ainda não tem sala
     tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
     tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
 
-    # ganhou agregado
     if not tinha_agregado and tem_agregado:
         await asyncio.sleep(2)
         await criar_sala_meta(after)
         return
 
-    # qualquer troca de cargo → recalcular categoria + meta + botões
+    # SE JÁ TEM SALA → QUALQUER mudança de cargo atualiza tudo
     if str(after.id) in metas:
+        await asyncio.sleep(1)
+
+        # mover categoria
         await atualizar_categoria_meta(after)
+
+        # recalcular meta (100k mecânico / 150k resp / 250k membro)
         await atualizar_painel_meta(after)
 
     if tem_agregado:
@@ -2211,6 +2216,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
