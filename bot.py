@@ -1641,23 +1641,44 @@ async def painel_calc():
     await canal.send(embed=embed_calc(), view=CalcView())
 
 # =========================================================
-# ===================== METAS AUTOMÁTICAS =================
+# =========================== METAS ========================
 # =========================================================
+
+# REQUISITOS:
+# - intents.members = True
+# - SERVER MEMBERS INTENT ligado no Developer Portal
+# - IDs já definidos no topo do bot:
+#   AGREGADO_ROLE_ID
+#   CARGO_MEMBRO_ID
+#   CARGO_SOLDADO_ID
+#   CARGO_RESP_METAS_ID
+#   CARGO_RESP_ACAO_ID
+#   CARGO_RESP_VENDAS_ID
+#   CARGO_RESP_PRODUCAO_ID
+#   CARGO_GERENTE_ID
+#   CATEGORIA_META_AGREGADO_ID
+#   CATEGORIA_META_MEMBRO_ID
+#   CATEGORIA_META_SOLDADO_ID
+#   CATEGORIA_META_RESPONSAVEIS_ID
+#   CATEGORIA_META_GERENTE_ID
+#   GUILD_ID
 
 from discord.ext import tasks
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
+import discord
+import asyncio
+import os
+import json
 
 RESULTADOS_METAS_ID = 1341403574483288125
-
-# =========================================================
-# ================= ARQUIVO DE METAS (JSON) ===============
-# =========================================================
-
 ARQUIVO_METAS = "metas.json"
 
+# =========================================================
+# JSON
+# =========================================================
+
 def carregar_metas():
-    import os, json
     if not os.path.exists(ARQUIVO_METAS):
         return {}
     try:
@@ -1667,144 +1688,129 @@ def carregar_metas():
         return {}
 
 def salvar_metas(dados):
-    import json
     with open(ARQUIVO_METAS, "w") as f:
         json.dump(dados, f, indent=4)
 
+criando_meta = set()
 
 # =========================================================
-# ESCOLHER CATEGORIA PELO CARGO
+# CATEGORIA POR CARGO
 # =========================================================
 
 def obter_categoria_meta(member: discord.Member):
     roles = [r.id for r in member.roles]
 
-    if 'CARGO_GERENTE_ID' in globals() and CARGO_GERENTE_ID in roles:
-        return globals().get("CATEGORIA_META_GERENTE_ID")
+    if CARGO_GERENTE_ID in roles:
+        return CATEGORIA_META_GERENTE_ID
 
-    if 'CARGO_RESP_METAS_ID' in globals():
-        if any(r in roles for r in [
-            globals().get("CARGO_RESP_METAS_ID", 0),
-            globals().get("CARGO_RESP_ACAO_ID", 0),
-            globals().get("CARGO_RESP_VENDAS_ID", 0),
-            globals().get("CARGO_RESP_PRODUCAO_ID", 0),
-        ]):
-            return globals().get("CATEGORIA_META_RESPONSAVEIS_ID")
+    if any(r in roles for r in [
+        CARGO_RESP_METAS_ID,
+        CARGO_RESP_ACAO_ID,
+        CARGO_RESP_VENDAS_ID,
+        CARGO_RESP_PRODUCAO_ID
+    ]):
+        return CATEGORIA_META_RESPONSAVEIS_ID
 
-    if 'CARGO_SOLDADO_ID' in globals() and CARGO_SOLDADO_ID in roles:
-        return globals().get("CATEGORIA_META_SOLDADO_ID")
+    if CARGO_SOLDADO_ID in roles:
+        return CATEGORIA_META_SOLDADO_ID
 
-    if 'CARGO_MEMBRO_ID' in globals() and CARGO_MEMBRO_ID in roles:
-        return globals().get("CATEGORIA_META_MEMBRO_ID")
+    if CARGO_MEMBRO_ID in roles:
+        return CATEGORIA_META_MEMBRO_ID
 
     if AGREGADO_ROLE_ID in roles:
-        return globals().get("CATEGORIA_META_AGREGADO_ID")
+        return CATEGORIA_META_AGREGADO_ID
 
     return None
 
-
 # =========================================================
-# VIEWS / BOTÕES / MODAL
+# BOTÕES
 # =========================================================
 
-class MetaFecharView(discord.ui.View):
+class FecharSalaView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔒 Fechar Sala", style=discord.ButtonStyle.danger, custom_id="meta_fechar_btn")
+    @discord.ui.button(label="🔒 Fechar Sala", style=discord.ButtonStyle.danger, custom_id="meta_fechar")
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            return await interaction.response.send_message("Apenas a gerência pode fechar salas.", ephemeral=True)
+            return await interaction.response.send_message("Apenas Gerentes podem fechar.", ephemeral=True)
         await interaction.channel.delete()
 
-
-class MetaDinheiroBtn(discord.ui.Button):
-    def __init__(self, member_id):
-        super().__init__(label="💰 Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_dinheiro_btn")
-        self.member_id = member_id
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member_id:
-            return await interaction.response.send_message("Apenas o dono da sala pode registrar.", ephemeral=True)
-        await interaction.response.send_modal(MetaValorModal("dinheiro", self.member_id))
-
-
-class MetaAcaoBtn(discord.ui.Button):
-    def __init__(self, member_id):
-        super().__init__(label="🎯 Ação", style=discord.ButtonStyle.secondary, custom_id="meta_acao_btn")
-        self.member_id = member_id
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member_id:
-            return await interaction.response.send_message("Apenas o dono da sala pode registrar.", ephemeral=True)
-        await interaction.response.send_modal(MetaValorModal("acao", self.member_id))
-
-
-class MetaPolvoraBtn(discord.ui.Button):
-    def __init__(self, member_id):
-        super().__init__(label="💣 Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_polvora_btn")
-        self.member_id = member_id
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member_id:
-            return await interaction.response.send_message("Apenas o dono da sala pode registrar.", ephemeral=True)
-        await interaction.response.send_modal(MetaValorModal("polvora", self.member_id))
-
-
-class MetaRegistroView(discord.ui.View):
-    def __init__(self, member: discord.Member):
-        super().__init__(timeout=None)
-        self.member_id = member.id
-        roles = [r.id for r in member.roles]
-
-        # Agregado -> só pólvora
-        if AGREGADO_ROLE_ID in roles:
-            self.add_item(MetaPolvoraBtn(member.id))
-        else:
-            # Membro+ -> dinheiro + ação
-            self.add_item(MetaDinheiroBtn(member.id))
-            self.add_item(MetaAcaoBtn(member.id))
-
-        # Botão fechar (gerência)
-        self.add_item(MetaFecharView().children[0])
-
-
-class MetaValorModal(discord.ui.Modal):
-    def __init__(self, tipo: str, member_id: int):
+class RegistrarValorModal(discord.ui.Modal):
+    def __init__(self, tipo, member_id):
         super().__init__(title=f"Registrar {tipo}")
         self.tipo = tipo
         self.member_id = member_id
 
-        self.valor = discord.ui.TextInput(label="Valor / Quantidade", placeholder="Ex: 50000", required=True)
+        self.valor = discord.ui.TextInput(label="Valor", placeholder="Ex: 50000")
         self.add_item(self.valor)
 
     async def on_submit(self, interaction: discord.Interaction):
         metas = carregar_metas()
         dados = metas.get(str(self.member_id))
         if not dados:
-            return await interaction.response.send_message("Erro ao localizar dados da meta.", ephemeral=True)
+            return
 
         try:
             valor = int(self.valor.value.replace(".", "").replace(",", ""))
         except:
             return await interaction.response.send_message("Valor inválido.", ephemeral=True)
 
-        dados[self.tipo] = dados.get(self.tipo, 0) + valor
+        dados[self.tipo] += valor
         salvar_metas(metas)
 
-        # Atualizar painel após registrar
-        member = interaction.guild.get_member(self.member_id)
-        if member:
-            await atualizar_painel_meta(member)
+        membro = interaction.guild.get_member(self.member_id)
+        if membro:
+            await atualizar_painel_meta(membro)
 
-        await interaction.response.send_message("Registrado com sucesso.", ephemeral=True)
+        await interaction.response.send_message("Registrado.", ephemeral=True)
 
+class MetaView(discord.ui.View):
+    def __init__(self, member: discord.Member):
+        super().__init__(timeout=None)
+        roles = [r.id for r in member.roles]
+
+        if AGREGADO_ROLE_ID in roles:
+            self.add_item(self.BotaoPolvora(member.id))
+        else:
+            self.add_item(self.BotaoDinheiro(member.id))
+            self.add_item(self.BotaoAcao(member.id))
+
+        self.add_item(FecharSalaView().children[0])
+
+    class BotaoDinheiro(discord.ui.Button):
+        def __init__(self, member_id):
+            super().__init__(label="💰 Dinheiro", style=discord.ButtonStyle.success)
+            self.member_id = member_id
+
+        async def callback(self, interaction: discord.Interaction):
+            if interaction.user.id != self.member_id:
+                return
+            await interaction.response.send_modal(RegistrarValorModal("dinheiro", self.member_id))
+
+    class BotaoAcao(discord.ui.Button):
+        def __init__(self, member_id):
+            super().__init__(label="🎯 Ação", style=discord.ButtonStyle.secondary)
+            self.member_id = member_id
+
+        async def callback(self, interaction: discord.Interaction):
+            if interaction.user.id != self.member_id:
+                return
+            await interaction.response.send_modal(RegistrarValorModal("acao", self.member_id))
+
+    class BotaoPolvora(discord.ui.Button):
+        def __init__(self, member_id):
+            super().__init__(label="💣 Pólvora", style=discord.ButtonStyle.primary)
+            self.member_id = member_id
+
+        async def callback(self, interaction: discord.Interaction):
+            if interaction.user.id != self.member_id:
+                return
+            await interaction.response.send_modal(RegistrarValorModal("polvora", self.member_id))
 
 # =========================================================
-# CRIAR SALA DE META (SEM ID NO NOME, SEM DUPLICAR)
+# CRIAR SALA
 # =========================================================
-
-criando_meta = set()
 
 async def criar_sala_meta(member: discord.Member):
     if member.id in criando_meta:
@@ -1816,31 +1822,30 @@ async def criar_sala_meta(member: discord.Member):
         metas = carregar_metas()
         guild = member.guild
 
-        # 1) Se já tem canal salvo e existe -> não cria
         if str(member.id) in metas:
-            canal_id = metas[str(member.id)].get("canal_id")
-            canal_existente = guild.get_channel(canal_id)
-            if canal_existente:
+            canal = guild.get_channel(metas[str(member.id)]["canal_id"])
+            if canal:
                 return
 
-        # 2) Tentar encontrar canal existente onde o membro tem acesso exclusivo
         canal_encontrado = None
-        for categoria in guild.categories:
-            for canal in categoria.channels:
-                perms = canal.overwrites_for(member)
-                if perms.view_channel:
-                    canal_encontrado = canal
+        for cat in guild.categories:
+            for c in cat.channels:
+                if c.overwrites_for(member).view_channel:
+                    canal_encontrado = c
                     break
             if canal_encontrado:
                 break
 
         if canal_encontrado:
-            metas[str(member.id)] = metas.get(str(member.id), {})
-            metas[str(member.id)]["canal_id"] = canal_encontrado.id
+            metas[str(member.id)] = {
+                "canal_id": canal_encontrado.id,
+                "dinheiro": 0,
+                "polvora": 0,
+                "acao": 0
+            }
             salvar_metas(metas)
             return
 
-        # 3) Criar nova sala
         categoria_id = obter_categoria_meta(member)
         if not categoria_id:
             return
@@ -1861,11 +1866,7 @@ async def criar_sala_meta(member: discord.Member):
         if gerente:
             overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
 
-        canal = await guild.create_text_channel(
-            name=nome_canal,
-            category=categoria,
-            overwrites=overwrites
-        )
+        canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
 
         metas[str(member.id)] = {
             "canal_id": canal.id,
@@ -1875,58 +1876,16 @@ async def criar_sala_meta(member: discord.Member):
         }
         salvar_metas(metas)
 
-        # Painel inicial
-        embed = discord.Embed(title="📊 PAINEL DE META INDIVIDUAL", color=0x2ecc71)
-        embed.add_field(name="💰 Dinheiro", value="R$ 0", inline=True)
-        embed.add_field(name="💣 Pólvora", value="0", inline=True)
-        embed.add_field(name="🎯 Ação", value="R$ 0", inline=True)
-        embed.add_field(name="📈 Progresso", value="R$ 0 / 250.000", inline=False)
-
-        view = MetaRegistroView(member)
-        msg = await canal.send(content=f"👋 {member.mention}", embed=embed, view=view)
-        await msg.pin()
+        await atualizar_painel_meta(member)
 
     finally:
         criando_meta.discard(member.id)
 
-
 # =========================================================
-# ATUALIZAR PAINEL (BOTÕES + PROGRESSO AO TROCAR CARGO)
+# ATUALIZAR PAINEL
 # =========================================================
 
 async def atualizar_painel_meta(member: discord.Member):
-    metas = carregar_metas()
-    dados = metas.get(str(member.id))
-    if not dados:
-        return
-
-    canal = member.guild.get_channel(dados.get("canal_id"))
-    if not canal:
-        return
-
-    dinheiro = dados.get("dinheiro", 0)
-    polvora = dados.get("polvora", 0)
-    acao = dados.get("acao", 0)
-
-    embed = discord.Embed(title="📊 PAINEL DE META INDIVIDUAL", color=0x2ecc71)
-    embed.add_field(name="💰 Dinheiro", value=f"R$ {dinheiro:,}".replace(",", "."), inline=True)
-    embed.add_field(name="💣 Pólvora", value=str(polvora), inline=True)
-    embed.add_field(name="🎯 Ação", value=f"R$ {acao:,}".replace(",", "."), inline=True)
-    embed.add_field(name="📈 Progresso", value=f"R$ {dinheiro:,} / 250.000".replace(",", "."), inline=False)
-
-    view = MetaRegistroView(member)
-
-    async for m in canal.history(limit=10):
-        if m.author == member.guild.me and m.embeds:
-            await m.edit(embed=embed, view=view)
-            break
-
-
-# =========================================================
-# MOVER CANAL SE MUDAR CARGO
-# =========================================================
-
-async def atualizar_categoria_meta(member: discord.Member):
     metas = carregar_metas()
     dados = metas.get(str(member.id))
     if not dados:
@@ -1936,36 +1895,59 @@ async def atualizar_categoria_meta(member: discord.Member):
     if not canal:
         return
 
-    nova_categoria_id = obter_categoria_meta(member)
-    if not nova_categoria_id:
-        return
+    dinheiro = dados["dinheiro"]
+    polvora = dados["polvora"]
+    acao = dados["acao"]
 
-    if canal.category_id != nova_categoria_id:
-        nova_categoria = member.guild.get_channel(nova_categoria_id)
-        if nova_categoria:
-            await canal.edit(category=nova_categoria)
+    embed = discord.Embed(title="📊 META INDIVIDUAL", color=0x2ecc71)
+    embed.add_field(name="💰 Dinheiro", value=f"R$ {dinheiro:,}".replace(",", "."), inline=True)
+    embed.add_field(name="💣 Pólvora", value=str(polvora), inline=True)
+    embed.add_field(name="🎯 Ação", value=f"R$ {acao:,}".replace(",", "."), inline=True)
+    embed.add_field(name="📈 Progresso", value=f"R$ {dinheiro:,} / 250.000".replace(",", "."), inline=False)
 
+    view = MetaView(member)
+
+    async for msg in canal.history(limit=10):
+        if msg.author == member.guild.me and msg.embeds:
+            await msg.edit(embed=embed, view=view)
+            return
+
+    msg = await canal.send(embed=embed, view=view)
+    await msg.pin()
 
 # =========================================================
-# EVENTOS AUTOMÁTICOS (CRIA SALA AO RECEBER AGREGADO)
+# MOVER CATEGORIA
+# =========================================================
+
+async def atualizar_categoria_meta(member):
+    metas = carregar_metas()
+    if str(member.id) not in metas:
+        return
+
+    canal = member.guild.get_channel(metas[str(member.id)]["canal_id"])
+    if not canal:
+        return
+
+    nova = obter_categoria_meta(member)
+    if nova and canal.category_id != nova:
+        await canal.edit(category=member.guild.get_channel(nova))
+
+# =========================================================
+# EVENTOS
 # =========================================================
 
 @bot.event
 async def on_member_update(before, after):
+    tinha = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
+    tem = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
 
-    tinha_agregado = any(r.id == 1422847202937536532 for r in before.roles)
-    tem_agregado = any(r.id == 1422847202937536532 for r in after.roles)
-
-    if not tinha_agregado and tem_agregado:
-        print("AGREGADO DETECTADO")
+    if not tinha and tem:
         await asyncio.sleep(2)
         await criar_sala_meta(after)
 
-
-    if tem_agregado:
+    if tem:
         await atualizar_categoria_meta(after)
         await atualizar_painel_meta(after)
-
 
 @bot.event
 async def on_member_join(member):
@@ -1973,9 +1955,8 @@ async def on_member_join(member):
     if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
         await criar_sala_meta(member)
 
-
 # =========================================================
-# VARREDURA AUTOMÁTICA (SINCRONIZA SEM DUPLICAR)
+# VARREDURA
 # =========================================================
 
 @tasks.loop(minutes=10)
@@ -1990,127 +1971,77 @@ async def varrer_agregados_sem_sala():
         if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
             continue
 
-        # Se já tem canal salvo e existe
-        if str(member.id) in metas:
-            canal_id = metas[str(member.id)].get("canal_id")
-            canal = guild.get_channel(canal_id)
-            if canal:
-                await atualizar_categoria_meta(member)
-                continue
-
-        # Procurar canal onde ele tem permissão
-        canal_encontrado = None
-        for categoria in guild.categories:
-            for canal in categoria.channels:
-                if canal.overwrites_for(member).view_channel:
-                    canal_encontrado = canal
-                    break
-            if canal_encontrado:
-                break
-
-        if canal_encontrado:
-            metas[str(member.id)] = metas.get(str(member.id), {})
-            metas[str(member.id)]["canal_id"] = canal_encontrado.id
-            salvar_metas(metas)
-            await atualizar_categoria_meta(member)
+        if str(member.id) not in metas:
+            await criar_sala_meta(member)
             continue
 
-        await criar_sala_meta(member)
+        canal = guild.get_channel(metas[str(member.id)]["canal_id"])
+        if not canal:
+            await criar_sala_meta(member)
+            continue
 
+        await atualizar_categoria_meta(member)
 
 # =========================================================
-# RELATÓRIO SEMANAL
+# RELATÓRIO + RESET AUTOMÁTICO
 # =========================================================
 
 async def enviar_relatorio_semanal():
     canal = bot.get_channel(RESULTADOS_METAS_ID)
-    if not canal:
-        return
-
-    metas = carregar_metas()
     guild = bot.get_guild(GUILD_ID)
-    if not metas or not guild:
-        return
+    metas = carregar_metas()
 
     linhas = []
-    total_geral = 0
+    total = 0
     zerados = 0
 
-    for user_id, dados in metas.items():
-        membro = guild.get_member(int(user_id))
-        if not membro:
+    for uid, dados in metas.items():
+        m = guild.get_member(int(uid))
+        if not m:
             continue
 
-        dinheiro = dados.get("dinheiro", 0)
-        polvora = dados.get("polvora", 0)
-        acao = dados.get("acao", 0)
+        dinheiro = dados["dinheiro"]
+        polvora = dados["polvora"]
+        acao = dados["acao"]
 
-        total_geral += dinheiro
+        total += dinheiro
 
         if dinheiro == 0 and polvora == 0 and acao == 0:
             zerados += 1
-            status = "❌ **ZERADO**"
+            status = "❌ ZERADO"
         else:
             status = "✅ Produziu"
 
         linhas.append(
-            f"**{membro.display_name}**\n"
-            f"{status}\n"
-            f"💰 R$ {dinheiro:,}\n"
-            f"💣 {polvora}\n"
-            f"🎯 R$ {acao:,}\n"
+            f"**{m.display_name}**\n{status}\n💰 {dinheiro}\n💣 {polvora}\n🎯 {acao}\n"
         )
 
-    if not linhas:
-        await canal.send("📊 Nenhum dado encontrado nas metas.")
-        return
-
     embed = discord.Embed(
-        title="📊 RELATÓRIO SEMANAL DE METAS",
+        title="📊 RELATÓRIO SEMANAL",
         description="\n".join(linhas[:25]),
         color=0x2ecc71
     )
 
-    embed.add_field(
-        name="💰 Total Produzido (Facção)",
-        value=f"R$ {total_geral:,}".replace(",", "."),
-        inline=False
-    )
+    embed.add_field(name="💰 Total Facção", value=f"R$ {total:,}".replace(",", "."), inline=False)
+    embed.add_field(name="📉 Zerados", value=str(zerados))
 
-    embed.add_field(
-        name="📉 Membros Zerados",
-        value=str(zerados),
-        inline=True
-    )
-
-    embed.set_footer(text="Relatório automático • Sábado 12:00")
     await canal.send(embed=embed)
-
-
-# =========================================================
-# TASK - SÁBADO 12:00
-# =========================================================
 
 @tasks.loop(time=time(hour=12, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
 async def relatorio_semanal_task():
-    if datetime.now(ZoneInfo("America/Sao_Paulo")).weekday() == 5:
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    if agora.weekday() == 5:  # sábado
         await enviar_relatorio_semanal()
 
-
-# =========================================================
-# RESET - DOMINGO 00:00
-# =========================================================
-
-@tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
-async def reset_metas_task():
-    if datetime.now(ZoneInfo("America/Sao_Paulo")).weekday() == 6:
+        # RESET AUTOMÁTICO APÓS RELATÓRIO
         metas = carregar_metas()
-        for user_id in metas:
-            metas[user_id]["dinheiro"] = 0
-            metas[user_id]["polvora"] = 0
-            metas[user_id]["acao"] = 0
+        for uid in metas:
+            metas[uid]["dinheiro"] = 0
+            metas[uid]["polvora"] = 0
+            metas[uid]["acao"] = 0
         salvar_metas(metas)
-        print("🔄 Metas resetadas automaticamente (Domingo)")
+        print("Metas resetadas após relatório semanal.")
+
 
 
 # =========================================================
@@ -2223,14 +2154,6 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
-
-
-
-
-
-
-
-
 
 
 
