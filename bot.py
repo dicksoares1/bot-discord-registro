@@ -1951,13 +1951,16 @@ async def atualizar_categoria_meta(member: discord.Member):
 # =========================================================
 
 @bot.event
-async def on_member_update(before: discord.Member, after: discord.Member):
-    tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
-    tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
+async def on_member_update(before, after):
+
+    tinha_agregado = any(r.id == 1422847202937536532 for r in before.roles)
+    tem_agregado = any(r.id == 1422847202937536532 for r in after.roles)
 
     if not tinha_agregado and tem_agregado:
+        print("AGREGADO DETECTADO")
         await asyncio.sleep(2)
         await criar_sala_meta(after)
+
 
     if tem_agregado:
         await atualizar_categoria_meta(after)
@@ -2220,6 +2223,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
