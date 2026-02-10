@@ -1985,12 +1985,22 @@ async def atualizar_categoria_meta(member):
 
 @bot.event
 async def on_member_update(before, after):
+    metas = carregar_metas()
+
+    # ganhou agregado agora → cria sala
     tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
     tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
 
     if not tinha_agregado and tem_agregado:
         await asyncio.sleep(2)
         await criar_sala_meta(after)
+        return
+
+    # se já tem sala registrada → atualizar SEMPRE que trocar cargo
+    if str(after.id) in metas:
+        await atualizar_categoria_meta(after)
+        await atualizar_painel_meta(after)
+
 
     if tem_agregado:
         await atualizar_categoria_meta(after)
@@ -2203,6 +2213,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
