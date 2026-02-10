@@ -133,10 +133,15 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
+# garante que o discord.py realmente faça cache dos membros
+intents.guilds = True
+intents.presences = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # trava anti-duplicação de criação de metas
 criando_meta = set()
+
 # =========================================================
 # ======================= REGISTRO =========================
 # =========================================================
@@ -2215,6 +2220,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
