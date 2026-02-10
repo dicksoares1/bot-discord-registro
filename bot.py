@@ -1796,7 +1796,7 @@ class MetaValorModal(discord.ui.Modal):
 
 
 # =========================================================
-# CRIAR SALA DE META (VERSÃO PRO - POR ID, SEM DUPLICAR)
+# CRIAR SALA DE META (SEM ID NO NOME, SEM DUPLICAR)
 # =========================================================
 
 criando_meta = set()
@@ -1811,21 +1811,19 @@ async def criar_sala_meta(member: discord.Member):
         metas = carregar_metas()
         guild = member.guild
 
-        # 1) Se já tem canal salvo e existe
+        # 1) Se já tem canal salvo e existe -> não cria
         if str(member.id) in metas:
             canal_id = metas[str(member.id)].get("canal_id")
-            canal = guild.get_channel(canal_id)
-            if canal:
+            canal_existente = guild.get_channel(canal_id)
+            if canal_existente:
                 return
 
-        # 2) Procurar canal onde o membro tem acesso exclusivo
+        # 2) Tentar encontrar canal existente onde o membro tem acesso exclusivo
         canal_encontrado = None
-
         for categoria in guild.categories:
             for canal in categoria.channels:
                 perms = canal.overwrites_for(member)
                 if perms.view_channel:
-                    # Provavelmente é a sala dele
                     canal_encontrado = canal
                     break
             if canal_encontrado:
@@ -1872,6 +1870,7 @@ async def criar_sala_meta(member: discord.Member):
         }
         salvar_metas(metas)
 
+        # Painel inicial
         embed = discord.Embed(title="📊 PAINEL DE META INDIVIDUAL", color=0x2ecc71)
         embed.add_field(name="💰 Dinheiro", value="R$ 0", inline=True)
         embed.add_field(name="💣 Pólvora", value="0", inline=True)
@@ -1884,6 +1883,7 @@ async def criar_sala_meta(member: discord.Member):
 
     finally:
         criando_meta.discard(member.id)
+
 
 # =========================================================
 # ATUALIZAR PAINEL (BOTÕES + PROGRESSO AO TROCAR CARGO)
@@ -1942,7 +1942,7 @@ async def atualizar_categoria_meta(member: discord.Member):
 
 
 # =========================================================
-# EVENTOS AUTOMÁTICOS
+# EVENTOS AUTOMÁTICOS (CRIA SALA AO RECEBER AGREGADO)
 # =========================================================
 
 @bot.event
@@ -1951,6 +1951,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
 
     if not tinha_agregado and tem_agregado:
+        await asyncio.sleep(2)
         await criar_sala_meta(after)
 
     if tem_agregado:
@@ -1960,12 +1961,13 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
 @bot.event
 async def on_member_join(member):
+    await asyncio.sleep(5)
     if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
         await criar_sala_meta(member)
 
 
 # =========================================================
-# VARREDURA AUTOMÁTICA (PRO - SINCRONIZA SEM DUPLICAR)
+# VARREDURA AUTOMÁTICA (SINCRONIZA SEM DUPLICAR)
 # =========================================================
 
 @tasks.loop(minutes=10)
@@ -2006,6 +2008,7 @@ async def varrer_agregados_sem_sala():
             continue
 
         await criar_sala_meta(member)
+
 
 # =========================================================
 # RELATÓRIO SEMANAL
@@ -2100,6 +2103,7 @@ async def reset_metas_task():
             metas[user_id]["acao"] = 0
         salvar_metas(metas)
         print("🔄 Metas resetadas automaticamente (Domingo)")
+
 
 # =========================================================
 # ========================= ON READY ======================
@@ -2211,6 +2215,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
