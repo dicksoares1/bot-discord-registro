@@ -1635,220 +1635,112 @@ async def painel_calc():
 
     await canal.send(embed=embed_calc(), view=CalcView())
 # =========================================================
-# ========================== METAS =========================
+# =============== RELATÓRIO + RESET SEMANAL ===============
 # =========================================================
 
-criando_meta = set()
+from discord.ext import tasks
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
-def carregar_metas():
-    if not os.path.exists(ARQUIVO_METAS):
-        return {}
-    try:
-        with open(ARQUIVO_METAS, "r") as f:
-            return json.load(f)
-    except:
-        return {}
+RESULTADOS_METAS_ID = 1341403574483288125
 
-def salvar_metas(dados):
-    with open(ARQUIVO_METAS, "w") as f:
-        json.dump(dados, f, indent=4)
+# ================= RELATÓRIO SEMANAL =================
 
-
-# ================= CATEGORIA POR CARGO =================
-
-def obter_categoria_meta(member: discord.Member):
-    roles = [r.id for r in member.roles]
-
-    if CARGO_GERENTE_ID in roles:
-        return CATEGORIA_META_GERENTE_ID
-
-    if any(r in roles for r in [
-        CARGO_RESP_METAS_ID,
-        CARGO_RESP_ACAO_ID,
-        CARGO_RESP_VENDAS_ID,
-        CARGO_RESP_PRODUCAO_ID
-    ]):
-        return CATEGORIA_META_RESPONSAVEIS_ID
-
-    if CARGO_SOLDADO_ID in roles:
-        return CATEGORIA_META_SOLDADO_ID
-
-    if CARGO_MEMBRO_ID in roles:
-        return CATEGORIA_META_MEMBRO_ID
-
-    if AGREGADO_ROLE_ID in roles:
-        return CATEGORIA_META_AGREGADO_ID
-
-    return None
-
-
-# ================= BOTÃO FECHAR SALA =================
-
-class MetaFecharView(discord.ui.View):
-    def __init__(self, member_id):
-        super().__init__(timeout=None)
-        self.member_id = member_id
-
-    @discord.ui.button(
-        label="🔒 Fechar Sala",
-        style=discord.ButtonStyle.danger,
-        custom_id="meta_fechar_btn"
-    )
-    async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.member_id and not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            await interaction.response.send_message("Sem permissão.", ephemeral=True)
-            return
-
-        await interaction.channel.delete()
-
-
-# ================= VIEW SOLICITAR SALA =================
-
-class MetaView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="📊 Criar minha sala de metas",
-        style=discord.ButtonStyle.success,
-        custom_id="meta_criar_btn"
-    )
-    async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await criar_sala_meta(interaction.user)
-        await interaction.response.defer()
-
-
-# ================= CRIAR SALA =================
-
-async def criar_sala_meta(member: discord.Member):
-    if member.id in criando_meta:
+async def enviar_relatorio_semanal():
+    canal = bot.get_channel(RESULTADOS_METAS_ID)
+    if not canal:
         return
 
-    criando_meta.add(member.id)
-
-    try:
-        metas = carregar_metas()
-        guild = member.guild
-
-        nick = member.display_name.lower()
-        passaporte = nick.split("-")[0].strip() if "-" in nick else nick.strip()
-
-        # BUSCAR SALAS EXISTENTES
-        canais_encontrados = []
-
-        for categoria in guild.categories:
-            for canal in categoria.channels:
-                if canal.name.startswith(f"📁・{passaporte}"):
-                    canais_encontrados.append(canal)
-
-        # SE JÁ EXISTE
-        if canais_encontrados:
-            canais_encontrados.sort(key=lambda c: c.created_at)
-            principal = canais_encontrados[0]
-
-            # apagar duplicadas
-            for duplicada in canais_encontrados[1:]:
-                try:
-                    await duplicada.delete()
-                except:
-                    pass
-
-            metas[str(member.id)] = {"canal_id": principal.id}
-            salvar_metas(metas)
-            return
-
-        categoria_id = obter_categoria_meta(member)
-        if not categoria_id:
-            return
-
-        categoria = guild.get_channel(categoria_id)
-        if not categoria:
-            return
-
-        if len(categoria.channels) >= 50:
-            print(f"⚠️ Categoria cheia: {categoria.name}")
-            return
-
-        nome_canal = f"📁・{nick.replace(' ', '-')}"
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-        }
-
-        gerente = guild.get_role(CARGO_GERENTE_ID)
-        if gerente:
-            overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
-
-        canal = await guild.create_text_channel(
-            name=nome_canal,
-            category=categoria,
-            overwrites=overwrites
-        )
-
-        metas[str(member.id)] = {"canal_id": canal.id}
-        salvar_metas(metas)
-
-        cargo_resp_metas = guild.get_role(CARGO_RESP_METAS_ID)
-
-        embed = discord.Embed(
-            title="📊 PAINEL DE META INDIVIDUAL",
-            color=0x2ecc71
-        )
-
-        embed.add_field(name="👤 Dono da Sala", value=member.mention, inline=False)
-        embed.add_field(name="📊 Progresso", value="**R$ 0 / R$ 250.000**", inline=False)
-
-        embed.add_field(
-            name="📢 AVISOS IMPORTANTES",
-            value=(
-                f"📌 Apenas você ({member.mention}) e a Gerência têm acesso\n"
-                f"📌 Leia o canal 📢・faq-meta\n"
-                f"📌 Responsável: {cargo_resp_metas.mention if cargo_resp_metas else '@RESP | Metas'}"
-            ),
-            inline=False
-        )
-
-        msg = await canal.send(
-            content=f"👋 {member.mention}",
-            embed=embed,
-            view=MetaFecharView(member.id)
-        )
-
-        await msg.pin()
-
-    finally:
-        criando_meta.discard(member.id)
-
-
-# ================= CRIAR METAS AUTOMÁTICAS =================
-
-async def criar_metas_para_agregados_sem_sala():
+    metas = carregar_metas()
     guild = bot.get_guild(GUILD_ID)
-    if not guild:
+
+    if not metas or not guild:
         return
 
-    for member in guild.members:
-        if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
-            await criar_sala_meta(member)
+    linhas = []
+    total_geral = 0
+    zerados = 0
 
+    for user_id, dados in metas.items():
+        membro = guild.get_member(int(user_id))
+        if not membro:
+            continue
 
-# ================= PAINEL =================
+        dinheiro = dados.get("dinheiro", 0)
+        polvora = dados.get("polvora", 0)
+        acao = dados.get("acao", 0)
 
-async def enviar_painel_metas():
-    canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
+        total_geral += dinheiro
 
-    async for m in canal.history(limit=10):
-        if m.author == bot.user:
-            return
+        if dinheiro == 0 and polvora == 0 and acao == 0:
+            zerados += 1
+            status = "❌ **ZERADO**"
+        else:
+            status = "✅ Produziu"
+
+        linhas.append(
+            f"**{membro.display_name}**\n"
+            f"{status}\n"
+            f"💰 R$ {dinheiro:,}\n"
+            f"💣 {polvora}\n"
+            f"🎯 R$ {acao:,}\n"
+        )
+
+    if not linhas:
+        await canal.send("📊 Nenhum dado encontrado nas metas.")
+        return
 
     embed = discord.Embed(
-        title="📊 Sistema de Metas",
-        description="Clique abaixo para criar sua sala.",
+        title="📊 RELATÓRIO SEMANAL DE METAS",
+        description="\n".join(linhas[:25]),
         color=0x2ecc71
     )
 
-    await canal.send(embed=embed, view=MetaView())
+    embed.add_field(
+        name="💰 Total Produzido (Facção)",
+        value=f"R$ {total_geral:,}".replace(",", "."),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📉 Membros Zerados",
+        value=str(zerados),
+        inline=True
+    )
+
+    embed.set_footer(text="Relatório automático • Sábado 12:00")
+
+    await canal.send(embed=embed)
+
+
+# ================= TASK - SÁBADO 12:00 =================
+
+@tasks.loop(time=time(hour=12, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
+async def relatorio_semanal_task():
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    # 5 = sábado
+    if agora.weekday() == 5:
+        await enviar_relatorio_semanal()
+
+
+# ================= RESET - DOMINGO 00:00 =================
+
+@tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
+async def reset_metas_task():
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    # 6 = domingo
+    if agora.weekday() == 6:
+        metas = carregar_metas()
+
+        for user_id in metas:
+            metas[user_id]["dinheiro"] = 0
+            metas[user_id]["polvora"] = 0
+            metas[user_id]["acao"] = 0
+
+        salvar_metas(metas)
+        print("🔄 Metas resetadas automaticamente (Domingo)")
 
 
 # =========================================================
@@ -1865,13 +1757,14 @@ async def on_ready():
     print("🔄 Iniciando configuração do bot...")
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
 
-    # VIEWS
+    # ================= VIEWS =================
     bot.add_view(RegistroView())
     bot.add_view(CalculadoraView())
     bot.add_view(StatusView())
     bot.add_view(CadastrarLiveView())
     bot.add_view(MetaView())
     bot.add_view(MetaFecharView(0))
+    bot.add_view(MetaProView(0))
     bot.add_view(PolvoraView())
     bot.add_view(ConfirmarPagamentoView())
     bot.add_view(LavagemView())
@@ -1879,18 +1772,26 @@ async def on_ready():
     bot.add_view(CalcView())
     bot.add_view(FabricacaoView())
 
-    # LOOPS
+    # ================= LOOPS =================
     if not verificar_lives_twitch.is_running():
         verificar_lives_twitch.start()
 
     if not relatorio_semanal_polvoras.is_running():
         relatorio_semanal_polvoras.start()
 
-    # RESTAURAR PRODUÇÕES
+    # 🔥 RELATÓRIO METAS (SÁBADO 12:00)
+    if not relatorio_semanal_task.is_running():
+        relatorio_semanal_task.start()
+
+    # 🔥 RESET METAS (DOMINGO 00:00)
+    if not reset_metas_task.is_running():
+        reset_metas_task.start()
+
+    # ================= RESTAURAR PRODUÇÕES =================
     for pid in carregar_producoes():
         bot.loop.create_task(acompanhar_producao(pid))
 
-    # PAINÉIS
+    # ================= PAINÉIS =================
     await enviar_painel_fabricacao()
     await enviar_painel_lives()
     await enviar_painel_metas()
@@ -1899,7 +1800,7 @@ async def on_ready():
     await enviar_painel_ponto()
     await painel_calc()
 
-    # METAS AUTOMÁTICAS
+    # ================= METAS AUTOMÁTICAS =================
     await criar_metas_para_agregados_sem_sala()
 
     print("✅ BOT ONLINE 100%")
@@ -1910,6 +1811,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
