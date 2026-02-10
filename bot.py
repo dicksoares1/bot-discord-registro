@@ -1647,9 +1647,12 @@ from zoneinfo import ZoneInfo
 # =========================================================
 
 async def atualizar_categoria_meta(member: discord.Member):
-    metas = carregar_metas()
-    dados = metas.get(str(member.id))
+    try:
+        metas = carregar_metas()
+    except:
+        return
 
+    dados = metas.get(str(member.id))
     if not dados:
         return
 
@@ -1668,20 +1671,20 @@ async def atualizar_categoria_meta(member: discord.Member):
 
 
 # =========================================================
-# RECEBEU AGREGADO → CRIA SALA
+# RECEBEU / PERDEU CARGO → ATUALIZA META
 # =========================================================
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
+
     tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
     tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
 
-    # Virou agregado agora
+    # 🔥 GANHOU AGREGADO → CRIAR SALA
     if not tinha_agregado and tem_agregado:
         await criar_sala_meta(after)
-        return
 
-    # Se já tem meta → atualizar categoria ao subir cargo
+    # 🔥 SE TEM AGREGADO → GARANTE CATEGORIA CORRETA
     if tem_agregado:
         await atualizar_categoria_meta(after)
 
@@ -1708,18 +1711,21 @@ async def varrer_agregados_sem_sala():
         return
 
     try:
-        metas = globals()["carregar_metas"]()
+        metas = carregar_metas()
     except:
         return
 
     for member in guild.members:
+
         if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
             continue
 
+        # Não tem registro
         if str(member.id) not in metas:
             await criar_sala_meta(member)
             continue
 
+        # Canal apagado
         canal_id = metas[str(member.id)].get("canal_id")
         canal = guild.get_channel(canal_id)
 
@@ -1727,6 +1733,7 @@ async def varrer_agregados_sem_sala():
             await criar_sala_meta(member)
             continue
 
+        # Garante categoria correta
         await atualizar_categoria_meta(member)
 
 
@@ -1943,6 +1950,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
