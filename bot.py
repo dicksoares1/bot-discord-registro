@@ -1758,19 +1758,44 @@ async def on_ready():
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
 
     # ================= VIEWS =================
-    bot.add_view(RegistroView())
-    bot.add_view(CalculadoraView())
-    bot.add_view(StatusView())
-    bot.add_view(CadastrarLiveView())
-    bot.add_view(MetaView())
-    bot.add_view(MetaFecharView(0))
-    bot.add_view(MetaProView(0))
-    bot.add_view(PolvoraView())
-    bot.add_view(ConfirmarPagamentoView())
-    bot.add_view(LavagemView())
-    bot.add_view(PontoView())
-    bot.add_view(CalcView())
-    bot.add_view(FabricacaoView())
+    try: bot.add_view(RegistroView())
+    except: pass
+
+    try: bot.add_view(CalculadoraView())
+    except: pass
+
+    try: bot.add_view(StatusView())
+    except: pass
+
+    try: bot.add_view(CadastrarLiveView())
+    except: pass
+
+    try: bot.add_view(MetaView())
+    except: pass
+
+    try: bot.add_view(MetaFecharView(0))
+    except: pass
+
+    try: bot.add_view(MetaProView(0))
+    except: pass
+
+    try: bot.add_view(PolvoraView())
+    except: pass
+
+    try: bot.add_view(ConfirmarPagamentoView())
+    except: pass
+
+    try: bot.add_view(LavagemView())
+    except: pass
+
+    try: bot.add_view(PontoView())
+    except: pass
+
+    try: bot.add_view(CalcView())
+    except: pass
+
+    try: bot.add_view(FabricacaoView())
+    except: pass
 
     # ================= LOOPS =================
     if not verificar_lives_twitch.is_running():
@@ -1779,13 +1804,19 @@ async def on_ready():
     if not relatorio_semanal_polvoras.is_running():
         relatorio_semanal_polvoras.start()
 
-    # 🔥 RELATÓRIO METAS (SÁBADO 12:00)
-    if not relatorio_semanal_task.is_running():
-        relatorio_semanal_task.start()
+    # RELATÓRIO METAS (sábado 12h)
+    try:
+        if not relatorio_semanal_task.is_running():
+            relatorio_semanal_task.start()
+    except:
+        pass
 
-    # 🔥 RESET METAS (DOMINGO 00:00)
-    if not reset_metas_task.is_running():
-        reset_metas_task.start()
+    # RESET METAS (domingo 00h)
+    try:
+        if not reset_metas_task.is_running():
+            reset_metas_task.start()
+    except:
+        pass
 
     # ================= RESTAURAR PRODUÇÕES =================
     for pid in carregar_producoes():
@@ -1805,12 +1836,12 @@ async def on_ready():
 
     print("✅ BOT ONLINE 100%")
 
-
 # =========================================================
 # ========================= START BOT =====================
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
