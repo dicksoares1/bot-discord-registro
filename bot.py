@@ -90,6 +90,7 @@ CANAL_PONTO_ID = 1468941297162391715
 
 # METAS
 CANAL_SOLICITAR_SALA_ID = 1337374500366450741
+RESULTADOS_METAS_ID = 1341403574483288125
 
 
 # =========================================================
@@ -1635,16 +1636,100 @@ async def painel_calc():
 
     await canal.send(embed=embed_calc(), view=CalcView())
 # =========================================================
-# =============== RELATÓRIO + RESET SEMANAL ===============
+# ===================== METAS AUTOMÁTICAS =================
 # =========================================================
 
-from discord.ext import tasks
-from datetime import datetime, time
-from zoneinfo import ZoneInfo
+# =========================================================
+# MOVER CANAL SE MUDAR CARGO
+# =========================================================
 
-RESULTADOS_METAS_ID = 1341403574483288125
+async def atualizar_categoria_meta(member: discord.Member):
+    metas = carregar_metas()
+    dados = metas.get(str(member.id))
 
-# ================= RELATÓRIO SEMANAL =================
+    if not dados:
+        return
+
+    canal = member.guild.get_channel(dados["canal_id"])
+    if not canal:
+        return
+
+    nova_categoria_id = obter_categoria_meta(member)
+    if not nova_categoria_id:
+        return
+
+    if canal.category_id != nova_categoria_id:
+        nova_categoria = member.guild.get_channel(nova_categoria_id)
+        if nova_categoria:
+            await canal.edit(category=nova_categoria)
+
+
+# =========================================================
+# RECEBEU AGREGADO → CRIA SALA
+# =========================================================
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
+    tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
+
+    # Virou agregado agora
+    if not tinha_agregado and tem_agregado:
+        await criar_sala_meta(after)
+        return
+
+    # Se já tem meta → atualizar categoria ao subir cargo
+    if tem_agregado:
+        await atualizar_categoria_meta(after)
+
+
+# =========================================================
+# ENTROU NO SERVIDOR JÁ COM AGREGADO
+# =========================================================
+
+@bot.event
+async def on_member_join(member):
+    if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
+        await criar_sala_meta(member)
+
+
+# =========================================================
+# VARREDURA AUTOMÁTICA (EXTRA)
+# GARANTE QUE NINGUÉM FIQUE SEM SALA
+# =========================================================
+
+@tasks.loop(minutes=10)
+async def varrer_agregados_sem_sala():
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+
+    metas = carregar_metas()
+
+    for member in guild.members:
+        if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
+            continue
+
+        # Não tem registro no JSON
+        if str(member.id) not in metas:
+            await criar_sala_meta(member)
+            continue
+
+        # Canal apagado
+        canal_id = metas[str(member.id)].get("canal_id")
+        canal = guild.get_channel(canal_id)
+
+        if not canal:
+            await criar_sala_meta(member)
+            continue
+
+        # Garantir categoria correta
+        await atualizar_categoria_meta(member)
+
+
+# =========================================================
+# RELATÓRIO SEMANAL
+# =========================================================
 
 async def enviar_relatorio_semanal():
     canal = bot.get_channel(RESULTADOS_METAS_ID)
@@ -1713,24 +1798,25 @@ async def enviar_relatorio_semanal():
     await canal.send(embed=embed)
 
 
-# ================= TASK - SÁBADO 12:00 =================
+# =========================================================
+# TASK - SÁBADO 12:00
+# =========================================================
 
 @tasks.loop(time=time(hour=12, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
 async def relatorio_semanal_task():
     agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
-
-    # 5 = sábado
     if agora.weekday() == 5:
         await enviar_relatorio_semanal()
 
 
-# ================= RESET - DOMINGO 00:00 =================
+# =========================================================
+# RESET - DOMINGO 00:00
+# =========================================================
 
 @tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
 async def reset_metas_task():
     agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
 
-    # 6 = domingo
     if agora.weekday() == 6:
         metas = carregar_metas()
 
@@ -1741,6 +1827,7 @@ async def reset_metas_task():
 
         salvar_metas(metas)
         print("🔄 Metas resetadas automaticamente (Domingo)")
+
 
 
 # =========================================================
@@ -1775,9 +1862,9 @@ async def on_ready():
     ]:
         try:
             if view == "MetaFecharView":
-                bot.add_view(globals())
+                bot.add_view(globals())   # CORRETO
             elif view == "MetaProView":
-                bot.add_view(globals())
+                bot.add_view(globals())   # CORRETO
             else:
                 bot.add_view(globals()[view]())
         except:
@@ -1805,6 +1892,12 @@ async def on_ready():
     try:
         if not reset_metas_task.is_running():
             reset_metas_task.start()
+    except:
+        pass
+
+    try:
+        if not varrer_agregados_sem_sala.is_running():
+            varrer_agregados_sem_sala.start()
     except:
         pass
 
@@ -1841,9 +1934,11 @@ async def on_ready():
 
     print("✅ BOT ONLINE 100%")
 
+
 # =========================================================
 # ========================= START BOT =====================
 # =========================================================
 
 bot.run(TOKEN)
+
 
