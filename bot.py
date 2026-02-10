@@ -1707,18 +1707,19 @@ async def varrer_agregados_sem_sala():
     if not guild:
         return
 
-    metas = carregar_metas()
+    try:
+        metas = globals()["carregar_metas"]()
+    except:
+        return
 
     for member in guild.members:
         if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
             continue
 
-        # Não tem registro no JSON
         if str(member.id) not in metas:
             await criar_sala_meta(member)
             continue
 
-        # Canal apagado
         canal_id = metas[str(member.id)].get("canal_id")
         canal = guild.get_channel(canal_id)
 
@@ -1726,7 +1727,6 @@ async def varrer_agregados_sem_sala():
             await criar_sala_meta(member)
             continue
 
-        # Garantir categoria correta
         await atualizar_categoria_meta(member)
 
 
@@ -1943,6 +1943,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
