@@ -1811,20 +1811,21 @@ async def criar_sala_meta(member: discord.Member):
         metas = carregar_metas()
         guild = member.guild
 
-        # 1) Se já tem canal salvo e existe -> não cria
+        # 1) Se já tem canal salvo e existe
         if str(member.id) in metas:
             canal_id = metas[str(member.id)].get("canal_id")
-            canal_existente = guild.get_channel(canal_id)
-            if canal_existente:
+            canal = guild.get_channel(canal_id)
+            if canal:
                 return
 
-        # 2) Procurar canal existente por ID no nome
-        # padrão: 📁・id-<member.id>
-        nome_id = f"id-{member.id}"
+        # 2) Procurar canal onde o membro tem acesso exclusivo
         canal_encontrado = None
+
         for categoria in guild.categories:
             for canal in categoria.channels:
-                if canal.name.endswith(nome_id):
+                perms = canal.overwrites_for(member)
+                if perms.view_channel:
+                    # Provavelmente é a sala dele
                     canal_encontrado = canal
                     break
             if canal_encontrado:
@@ -1836,6 +1837,7 @@ async def criar_sala_meta(member: discord.Member):
             salvar_metas(metas)
             return
 
+        # 3) Criar nova sala
         categoria_id = obter_categoria_meta(member)
         if not categoria_id:
             return
@@ -1844,9 +1846,8 @@ async def criar_sala_meta(member: discord.Member):
         if not categoria:
             return
 
-        # Nome baseado no nick + ID fixo (evita duplicar se mudar nick)
         nick = member.display_name.lower().replace(" ", "-")
-        nome_canal = f"📁・{nick}-id-{member.id}"
+        nome_canal = f"📁・{nick}"
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -1871,7 +1872,6 @@ async def criar_sala_meta(member: discord.Member):
         }
         salvar_metas(metas)
 
-        # Painel inicial
         embed = discord.Embed(title="📊 PAINEL DE META INDIVIDUAL", color=0x2ecc71)
         embed.add_field(name="💰 Dinheiro", value="R$ 0", inline=True)
         embed.add_field(name="💣 Pólvora", value="0", inline=True)
@@ -1884,7 +1884,6 @@ async def criar_sala_meta(member: discord.Member):
 
     finally:
         criando_meta.discard(member.id)
-
 
 # =========================================================
 # ATUALIZAR PAINEL (BOTÕES + PROGRESSO AO TROCAR CARGO)
@@ -1981,19 +1980,19 @@ async def varrer_agregados_sem_sala():
         if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
             continue
 
-        # Se já tem canal salvo e existe -> ok
+        # Se já tem canal salvo e existe
         if str(member.id) in metas:
             canal_id = metas[str(member.id)].get("canal_id")
-            if guild.get_channel(canal_id):
+            canal = guild.get_channel(canal_id)
+            if canal:
                 await atualizar_categoria_meta(member)
                 continue
 
-        # Procurar por canal com id-<member.id>
-        nome_id = f"id-{member.id}"
+        # Procurar canal onde ele tem permissão
         canal_encontrado = None
         for categoria in guild.categories:
             for canal in categoria.channels:
-                if canal.name.endswith(nome_id):
+                if canal.overwrites_for(member).view_channel:
                     canal_encontrado = canal
                     break
             if canal_encontrado:
@@ -2006,9 +2005,7 @@ async def varrer_agregados_sem_sala():
             await atualizar_categoria_meta(member)
             continue
 
-        # Se não existe -> criar
         await criar_sala_meta(member)
-
 
 # =========================================================
 # RELATÓRIO SEMANAL
@@ -2214,6 +2211,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
