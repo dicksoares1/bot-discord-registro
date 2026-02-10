@@ -1634,6 +1634,7 @@ async def painel_calc():
             return
 
     await canal.send(embed=embed_calc(), view=CalcView())
+
 # =========================================================
 # ===================== METAS AUTOMÁTICAS =================
 # =========================================================
@@ -1642,16 +1643,118 @@ from discord.ext import tasks
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
+RESULTADOS_METAS_ID = 1341403574483288125
+
+# =========================================================
+# ESCOLHER CATEGORIA PELO CARGO
+# (ajuste conforme seus cargos/categorias)
+# =========================================================
+
+def obter_categoria_meta(member: discord.Member):
+    roles = [r.id for r in member.roles]
+
+    # Prioridade por cargo (se tiver)
+    if 'CARGO_GERENTE_ID' in globals() and CARGO_GERENTE_ID in roles:
+        return globals().get("CATEGORIA_META_GERENTE_ID")
+
+    if 'CARGO_RESP_METAS_ID' in globals():
+        if any(r in roles for r in [
+            globals().get("CARGO_RESP_METAS_ID", 0),
+            globals().get("CARGO_RESP_ACAO_ID", 0),
+            globals().get("CARGO_RESP_VENDAS_ID", 0),
+            globals().get("CARGO_RESP_PRODUCAO_ID", 0),
+        ]):
+            return globals().get("CATEGORIA_META_RESPONSAVEIS_ID")
+
+    if 'CARGO_SOLDADO_ID' in globals() and CARGO_SOLDADO_ID in roles:
+        return globals().get("CATEGORIA_META_SOLDADO_ID")
+
+    if 'CARGO_MEMBRO_ID' in globals() and CARGO_MEMBRO_ID in roles:
+        return globals().get("CATEGORIA_META_MEMBRO_ID")
+
+    # Agregado (base)
+    if AGREGADO_ROLE_ID in roles:
+        return globals().get("CATEGORIA_META_AGREGADO_ID")
+
+    return None
+
+
+# =========================================================
+# CRIAR SALA DE META
+# =========================================================
+
+criando_meta = set()
+
+async def criar_sala_meta(member: discord.Member):
+    if member.id in criando_meta:
+        return
+
+    criando_meta.add(member.id)
+
+    try:
+        metas = carregar_metas()
+        guild = member.guild
+
+        # Se já tem registro e canal existe, não cria de novo
+        if str(member.id) in metas:
+            canal_id = metas[str(member.id)].get("canal_id")
+            if guild.get_channel(canal_id):
+                return
+
+        categoria_id = obter_categoria_meta(member)
+        if not categoria_id:
+            return
+
+        categoria = guild.get_channel(categoria_id)
+        if not categoria:
+            return
+
+        # Nome baseado no nick
+        nick = member.display_name.lower().replace(" ", "-")
+        nome_canal = f"📁・{nick}"
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        }
+
+        gerente = guild.get_role(CARGO_GERENTE_ID)
+        if gerente:
+            overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
+
+        canal = await guild.create_text_channel(
+            name=nome_canal,
+            category=categoria,
+            overwrites=overwrites
+        )
+
+        # Salvar no JSON
+        metas[str(member.id)] = {
+            "canal_id": canal.id,
+            "dinheiro": 0,
+            "polvora": 0,
+            "acao": 0
+        }
+        salvar_metas(metas)
+
+        embed = discord.Embed(
+            title="📊 PAINEL DE META INDIVIDUAL",
+            description=f"Bem-vindo {member.mention}\nUse os botões para registrar suas metas.",
+            color=0x2ecc71
+        )
+
+        await canal.send(embed=embed)
+
+    finally:
+        criando_meta.discard(member.id)
+
+
 # =========================================================
 # MOVER CANAL SE MUDAR CARGO
 # =========================================================
 
 async def atualizar_categoria_meta(member: discord.Member):
-    try:
-        metas = carregar_metas()
-    except:
-        return
-
+    metas = carregar_metas()
     dados = metas.get(str(member.id))
     if not dados:
         return
@@ -1671,26 +1774,25 @@ async def atualizar_categoria_meta(member: discord.Member):
 
 
 # =========================================================
-# RECEBEU / PERDEU CARGO → ATUALIZA META
+# RECEBEU AGREGADO → CRIA SALA
 # =========================================================
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-
     tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
     tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
 
-    # 🔥 GANHOU AGREGADO → CRIAR SALA
+    # Ganhou agregado agora
     if not tinha_agregado and tem_agregado:
         await criar_sala_meta(after)
 
-    # 🔥 SE TEM AGREGADO → GARANTE CATEGORIA CORRETA
+    # Se tem agregado → garantir categoria correta
     if tem_agregado:
         await atualizar_categoria_meta(after)
 
 
 # =========================================================
-# ENTROU NO SERVIDOR JÁ COM AGREGADO
+# ENTROU JÁ COM AGREGADO (autorole)
 # =========================================================
 
 @bot.event
@@ -1701,7 +1803,6 @@ async def on_member_join(member):
 
 # =========================================================
 # VARREDURA AUTOMÁTICA (EXTRA)
-# GARANTE QUE NINGUÉM FIQUE SEM SALA
 # =========================================================
 
 @tasks.loop(minutes=10)
@@ -1710,13 +1811,9 @@ async def varrer_agregados_sem_sala():
     if not guild:
         return
 
-    try:
-        metas = carregar_metas()
-    except:
-        return
+    metas = carregar_metas()
 
     for member in guild.members:
-
         if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
             continue
 
@@ -1725,15 +1822,13 @@ async def varrer_agregados_sem_sala():
             await criar_sala_meta(member)
             continue
 
-        # Canal apagado
+        # Canal foi apagado
         canal_id = metas[str(member.id)].get("canal_id")
         canal = guild.get_channel(canal_id)
-
         if not canal:
             await criar_sala_meta(member)
             continue
 
-        # Garante categoria correta
         await atualizar_categoria_meta(member)
 
 
@@ -1748,7 +1843,6 @@ async def enviar_relatorio_semanal():
 
     metas = carregar_metas()
     guild = bot.get_guild(GUILD_ID)
-
     if not metas or not guild:
         return
 
@@ -1804,7 +1898,6 @@ async def enviar_relatorio_semanal():
     )
 
     embed.set_footer(text="Relatório automático • Sábado 12:00")
-
     await canal.send(embed=embed)
 
 
@@ -1814,8 +1907,7 @@ async def enviar_relatorio_semanal():
 
 @tasks.loop(time=time(hour=12, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
 async def relatorio_semanal_task():
-    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
-    if agora.weekday() == 5:
+    if datetime.now(ZoneInfo("America/Sao_Paulo")).weekday() == 5:
         await enviar_relatorio_semanal()
 
 
@@ -1825,19 +1917,14 @@ async def relatorio_semanal_task():
 
 @tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
 async def reset_metas_task():
-    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
-
-    if agora.weekday() == 6:
+    if datetime.now(ZoneInfo("America/Sao_Paulo")).weekday() == 6:
         metas = carregar_metas()
-
         for user_id in metas:
             metas[user_id]["dinheiro"] = 0
             metas[user_id]["polvora"] = 0
             metas[user_id]["acao"] = 0
-
         salvar_metas(metas)
         print("🔄 Metas resetadas automaticamente (Domingo)")
-
 
 
 # =========================================================
@@ -1950,6 +2037,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
