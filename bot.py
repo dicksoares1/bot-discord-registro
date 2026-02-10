@@ -14,7 +14,6 @@ from discord.utils import escape_markdown
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-
 # =========================================================
 # ===================== RELÓGIO GLOBAL ====================
 # =========================================================
@@ -1639,6 +1638,10 @@ async def painel_calc():
 # ===================== METAS AUTOMÁTICAS =================
 # =========================================================
 
+from discord.ext import tasks
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
 # =========================================================
 # MOVER CANAL SE MUDAR CARGO
 # =========================================================
@@ -1940,5 +1943,6 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
