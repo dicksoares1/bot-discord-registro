@@ -268,7 +268,7 @@ class StatusView(discord.ui.View):
         await interaction.response.defer()
 
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
-    async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
+async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
     embed = interaction.message.embeds[0]
     idx, linhas = self.get_status(embed)
 
@@ -283,7 +283,6 @@ class StatusView(discord.ui.View):
 
     for field in embed.fields:
         if field.name == "🔫 PT":
-            # exemplo: "500 munições\n📦 10 pacotes"
             try:
                 linha_pacotes = field.value.split("\n")[1]
                 pacotes_pt = int(linha_pacotes.replace("📦", "").replace("pacotes", "").strip())
@@ -317,6 +316,7 @@ class StatusView(discord.ui.View):
         )
 
     await interaction.response.defer()
+
 
 
     @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
@@ -1918,4 +1918,5 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
