@@ -1644,25 +1644,6 @@ async def painel_calc():
 # =========================== METAS ========================
 # =========================================================
 
-# REQUISITOS:
-# - intents.members = True
-# - SERVER MEMBERS INTENT ligado no Developer Portal
-# - IDs já definidos no topo do bot:
-#   AGREGADO_ROLE_ID
-#   CARGO_MEMBRO_ID
-#   CARGO_SOLDADO_ID
-#   CARGO_RESP_METAS_ID
-#   CARGO_RESP_ACAO_ID
-#   CARGO_RESP_VENDAS_ID
-#   CARGO_RESP_PRODUCAO_ID
-#   CARGO_GERENTE_ID
-#   CATEGORIA_META_AGREGADO_ID
-#   CATEGORIA_META_MEMBRO_ID
-#   CATEGORIA_META_SOLDADO_ID
-#   CATEGORIA_META_RESPONSAVEIS_ID
-#   CATEGORIA_META_GERENTE_ID
-#   GUILD_ID
-
 from discord.ext import tasks
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -1770,9 +1751,11 @@ class MetaView(discord.ui.View):
         super().__init__(timeout=None)
         roles = [r.id for r in member.roles]
 
-        if AGREGADO_ROLE_ID in roles:
+        # Agregado → só pólvora
+        if AGREGADO_ROLE_ID in roles and CARGO_MEMBRO_ID not in roles:
             self.add_item(self.BotaoPolvora(member.id))
         else:
+            # Membro+ → dinheiro + ação
             self.add_item(self.BotaoDinheiro(member.id))
             self.add_item(self.BotaoAcao(member.id))
 
@@ -1822,11 +1805,14 @@ async def criar_sala_meta(member: discord.Member):
         metas = carregar_metas()
         guild = member.guild
 
+        # Já tem sala válida
         if str(member.id) in metas:
             canal = guild.get_channel(metas[str(member.id)]["canal_id"])
             if canal:
+                await atualizar_painel_meta(member)
                 return
 
+        # Procurar canal existente pelo overwrite do membro
         canal_encontrado = None
         for cat in guild.categories:
             for c in cat.channels:
@@ -1844,6 +1830,7 @@ async def criar_sala_meta(member: discord.Member):
                 "acao": 0
             }
             salvar_metas(metas)
+            await atualizar_painel_meta(member)
             return
 
         categoria_id = obter_categoria_meta(member)
@@ -1882,7 +1869,7 @@ async def criar_sala_meta(member: discord.Member):
         criando_meta.discard(member.id)
 
 # =========================================================
-# ATUALIZAR PAINEL
+# ATUALIZAR / RECRIAR PAINEL (SE APAGADO, VOLTA)
 # =========================================================
 
 async def atualizar_painel_meta(member: discord.Member):
@@ -1907,16 +1894,18 @@ async def atualizar_painel_meta(member: discord.Member):
 
     view = MetaView(member)
 
-    async for msg in canal.history(limit=10):
+    # Procurar mensagem do painel
+    async for msg in canal.history(limit=20):
         if msg.author == member.guild.me and msg.embeds:
             await msg.edit(embed=embed, view=view)
             return
 
+    # Se não encontrou (apagaram) → recriar
     msg = await canal.send(embed=embed, view=view)
     await msg.pin()
 
 # =========================================================
-# MOVER CATEGORIA
+# MOVER CATEGORIA AO SUBIR CARGO
 # =========================================================
 
 async def atualizar_categoria_meta(member):
@@ -1938,14 +1927,16 @@ async def atualizar_categoria_meta(member):
 
 @bot.event
 async def on_member_update(before, after):
-    tinha = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
-    tem = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
+    tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
+    tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
 
-    if not tinha and tem:
+    # Recebeu agregado
+    if not tinha_agregado and tem_agregado:
         await asyncio.sleep(2)
         await criar_sala_meta(after)
 
-    if tem:
+    # Se tem agregado, sempre atualizar categoria e painel (troca botões ao subir cargo)
+    if tem_agregado:
         await atualizar_categoria_meta(after)
         await atualizar_painel_meta(after)
 
@@ -1956,7 +1947,7 @@ async def on_member_join(member):
         await criar_sala_meta(member)
 
 # =========================================================
-# VARREDURA
+# VARREDURA (GARANTE SALA E PAINEL, SEM DUPLICAR)
 # =========================================================
 
 @tasks.loop(minutes=10)
@@ -1981,6 +1972,7 @@ async def varrer_agregados_sem_sala():
             continue
 
         await atualizar_categoria_meta(member)
+        await atualizar_painel_meta(member)
 
 # =========================================================
 # RELATÓRIO + RESET AUTOMÁTICO
@@ -2033,13 +2025,14 @@ async def relatorio_semanal_task():
     if agora.weekday() == 5:  # sábado
         await enviar_relatorio_semanal()
 
-        # RESET AUTOMÁTICO APÓS RELATÓRIO
+        # reset após relatório
         metas = carregar_metas()
         for uid in metas:
             metas[uid]["dinheiro"] = 0
             metas[uid]["polvora"] = 0
             metas[uid]["acao"] = 0
         salvar_metas(metas)
+
         print("Metas resetadas após relatório semanal.")
 
 
@@ -2154,6 +2147,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
