@@ -580,7 +580,8 @@ async def acompanhar_producao(pid):
         try:
             msg = await canal.fetch_message(prod["msg_id"])
         except:
-            return
+            await asyncio.sleep(10)
+            continue
 
         inicio = datetime.fromisoformat(prod["inicio"])
         fim = datetime.fromisoformat(prod["fim"])
@@ -2138,51 +2139,51 @@ async def on_ready():
     ]:
         try:
             if view == "MetaFecharView":
-                bot.add_view(globals())   # CORRETO
+                bot.add_view(globals())
             elif view == "MetaProView":
-                bot.add_view(globals())   # CORRETO
+                bot.add_view(globals())
             else:
                 bot.add_view(globals()[view]())
-        except:
-            pass
+        except Exception as e:
+            print(f"Erro ao registrar view {view}:", e)
 
     # ================= LOOPS =================
     try:
         if not verificar_lives_twitch.is_running():
             verificar_lives_twitch.start()
-    except:
-        pass
+    except Exception as e:
+        print("Erro loop twitch:", e)
 
     try:
         if not relatorio_semanal_polvoras.is_running():
             relatorio_semanal_polvoras.start()
-    except:
-        pass
+    except Exception as e:
+        print("Erro loop polvora:", e)
 
     try:
         if not relatorio_semanal_task.is_running():
             relatorio_semanal_task.start()
-    except:
-        pass
+    except Exception as e:
+        print("Erro loop relatorio metas:", e)
 
     try:
         if not reset_metas_task.is_running():
             reset_metas_task.start()
-    except:
-        pass
+    except Exception as e:
+        print("Erro reset metas:", e)
 
     try:
         if not varrer_agregados_sem_sala.is_running():
             varrer_agregados_sem_sala.start()
-    except:
-        pass
+    except Exception as e:
+        print("Erro varredura metas:", e)
 
     # ================= RESTAURAR PRODUÇÕES =================
     try:
         for pid in carregar_producoes():
             bot.loop.create_task(acompanhar_producao(pid))
-    except:
-        pass
+    except Exception as e:
+        print("Erro restaurar produções:", e)
 
     # ================= PAINÉIS =================
     for func in [
@@ -2199,16 +2200,17 @@ async def on_ready():
                 await globals()[func](bot)
             else:
                 await globals()[func]()
-        except:
-            pass
+        except Exception as e:
+            print(f"Erro ao enviar painel {func}:", e)
 
     # ================= METAS AUTOMÁTICAS =================
     try:
         await criar_metas_para_agregados_sem_sala()
-    except:
-        pass
+    except Exception as e:
+        print("Erro criar metas automáticas:", e)
 
     print("✅ BOT ONLINE 100%")
+
 
 
 # =========================================================
@@ -2216,6 +2218,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
