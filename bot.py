@@ -569,13 +569,20 @@ class FabricacaoView(discord.ui.View):
 # ================= LOOP DE ACOMPANHAMENTO =================
 
 async def acompanhar_producao(pid):
+    print(f"▶ Produção retomada: {pid}")
+
     while True:
         producoes = carregar_producoes()
+
         if pid not in producoes:
             return
 
         prod = producoes[pid]
+
         canal = bot.get_channel(prod["canal_id"])
+        if not canal:
+            await asyncio.sleep(10)
+            continue
 
         try:
             msg = await canal.fetch_message(prod["msg_id"])
@@ -610,11 +617,24 @@ async def acompanhar_producao(pid):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
+        # FINALIZAÇÃO
         if restante <= 0:
             desc += "\n\n🔵 **Produção Finalizada**"
-            del producoes[pid]
-            salvar_producoes(producoes)
 
+            await msg.edit(
+                embed=discord.Embed(
+                    title="🏭 Produção",
+                    description=desc,
+                    color=0x34495e
+                ),
+                view=None
+            )
+
+            producoes.pop(pid, None)
+            salvar_producoes(producoes)
+            return
+
+        # ATUALIZA NORMAL
         await msg.edit(
             embed=discord.Embed(
                 title="🏭 Produção",
@@ -622,9 +642,6 @@ async def acompanhar_producao(pid):
                 color=0x34495e
             )
         )
-
-        if restante <= 0:
-            return
 
         await asyncio.sleep(60)
 
@@ -2199,3 +2216,4 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
