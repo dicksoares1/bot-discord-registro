@@ -2127,9 +2127,6 @@ async def on_ready():
         "CalculadoraView",
         "StatusView",
         "CadastrarLiveView",
-        "MetaView",
-        "MetaFecharView",
-        "MetaProView",
         "PolvoraView",
         "ConfirmarPagamentoView",
         "LavagemView",
@@ -2138,14 +2135,12 @@ async def on_ready():
         "FabricacaoView"
     ]:
         try:
-            if view == "MetaFecharView":
-                bot.add_view(globals())
-            elif view == "MetaProView":
-                bot.add_view(globals())
-            else:
-                bot.add_view(globals()[view]())
+            bot.add_view(globals()[view]())
         except Exception as e:
             print(f"Erro ao registrar view {view}:", e)
+
+    # NÃO REGISTRAR VIEWS DE META AQUI
+    # Elas são criadas dinamicamente
 
     # ================= LOOPS =================
     try:
@@ -2164,13 +2159,7 @@ async def on_ready():
         if not relatorio_semanal_task.is_running():
             relatorio_semanal_task.start()
     except Exception as e:
-        print("Erro loop relatorio metas:", e)
-
-    try:
-        if not reset_metas_task.is_running():
-            reset_metas_task.start()
-    except Exception as e:
-        print("Erro reset metas:", e)
+        print("Erro loop metas:", e)
 
     try:
         if not varrer_agregados_sem_sala.is_running():
@@ -2189,7 +2178,6 @@ async def on_ready():
     for func in [
         "enviar_painel_fabricacao",
         "enviar_painel_lives",
-        "enviar_painel_metas",
         "enviar_painel_polvoras",
         "enviar_painel_lavagem",
         "enviar_painel_ponto",
@@ -2203,14 +2191,7 @@ async def on_ready():
         except Exception as e:
             print(f"Erro ao enviar painel {func}:", e)
 
-    # ================= METAS AUTOMÁTICAS =================
-    try:
-        await criar_metas_para_agregados_sem_sala()
-    except Exception as e:
-        print("Erro criar metas automáticas:", e)
-
     print("✅ BOT ONLINE 100%")
-
 
 
 # =========================================================
@@ -2218,14 +2199,3 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
-
-
-
-
-
-
-
-
-
-
-
