@@ -1322,7 +1322,11 @@ class CadastrarLiveView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🎥 Cadastrar minha Live", style=discord.ButtonStyle.primary)
+    @discord.ui.button(
+        label="🎥 Cadastrar minha Live",
+        style=discord.ButtonStyle.primary,
+        custom_id="cadastrar_live_btn"
+    )
     async def cadastrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(CadastrarLiveModal())
 
@@ -1376,7 +1380,11 @@ class GerenciarLivesView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📋 Ver Lives", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label="📋 Ver Lives",
+        style=discord.ButtonStyle.secondary,
+        custom_id="ver_lives_admin_btn"
+    )
     async def ver(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != ADM_ID:
             await interaction.response.send_message("❌ Apenas o ADM pode usar.", ephemeral=True)
@@ -1388,29 +1396,50 @@ class GerenciarLivesView(discord.ui.View):
         for uid, data in lives.items():
             texto += f"👤 <@{uid}>\n🔗 {data['link']}\n\n"
 
-        embed = discord.Embed(title="📡 Lives cadastradas", description=texto or "Nenhuma.", color=0x3498db)
+        embed = discord.Embed(
+            title="📡 Lives cadastradas",
+            description=texto or "Nenhuma.",
+            color=0x3498db
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="🗑️ Remover Live", style=discord.ButtonStyle.danger)
+    @discord.ui.button(
+        label="🗑️ Remover Live",
+        style=discord.ButtonStyle.danger,
+        custom_id="remover_live_admin_btn"
+    )
     async def remover(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != ADM_ID:
             await interaction.response.send_message("❌ Apenas o ADM pode usar.", ephemeral=True)
             return
 
-        await interaction.response.send_message("Escolha quem remover:", view=RemoverLiveView(), ephemeral=True)
+        await interaction.response.send_message(
+            "Escolha quem remover:",
+            view=RemoverLiveView(),
+            ephemeral=True
+        )
 
 
 class PainelLivesAdmin(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="⚙️ Gerenciar Lives (ADM)", style=discord.ButtonStyle.danger)
+    @discord.ui.button(
+        label="⚙️ Gerenciar Lives (ADM)",
+        style=discord.ButtonStyle.danger,
+        custom_id="abrir_painel_admin_lives_btn"
+    )
     async def abrir(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != ADM_ID:
             await interaction.response.send_message("❌ Apenas o ADM pode usar.", ephemeral=True)
             return
 
-        await interaction.response.send_message("Painel ADM:", view=GerenciarLivesView(), ephemeral=True)
+        await interaction.response.send_message(
+            "Painel ADM:",
+            view=GerenciarLivesView(),
+            ephemeral=True
+        )
+
 
 
 # ================= PAINÉIS =================
@@ -2317,6 +2346,8 @@ async def on_ready():
         "CalculadoraView",
         "StatusView",
         "CadastrarLiveView",
+        "PainelLivesAdmin",
+        "GerenciarLivesView",
         "PolvoraView",
         "ConfirmarPagamentoView",
         "LavagemView",
@@ -2392,6 +2423,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
