@@ -1137,7 +1137,7 @@ async def enviar_painel_lavagem():
 # ========================= LIVES ==========================
 # =========================================================
 
-ADM_ID = 1337383495743569941  # COLOQUE SEU ID AQUI
+ADM_ID = 467673818375389194  # COLOQUE SEU ID AQUI
 
 
 def carregar_lives():
@@ -2423,6 +2423,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
