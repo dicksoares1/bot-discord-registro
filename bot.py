@@ -2281,7 +2281,7 @@ async def on_ready():
         "enviar_painel_polvoras",
         "enviar_painel_lavagem",
         "enviar_painel_ponto",
-        "painel_calc"
+        "painel_calc",
         "enviar_painel_vendas"
     ]:
         try:
@@ -2300,6 +2300,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
