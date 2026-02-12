@@ -467,6 +467,7 @@ class RelatorioModal(discord.ui.Modal, title="📊 Gerar Relatório"):
 
 # ================= BOTÃO PARA ABRIR MODAL =================
 
+
 class CalculadoraView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -486,6 +487,17 @@ class CalculadoraView(discord.ui.View):
     )
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioModal())
+
+# ================= ENVIAR PAINEL DE VENDAS =================
+
+async def enviar_painel_vendas():
+    canal = bot.get_channel(1460984821458272347)
+
+    if canal:
+        await canal.send(
+            "💰 **Painel de Registro de Vendas**",
+            view=CalculadoraView()
+        )
 
 
 # =========================================================
@@ -2253,6 +2265,7 @@ async def on_ready():
             varrer_agregados_sem_sala.start()
     except Exception as e:
         print("Erro varredura metas:", e)
+        
 
     # ================= RESTAURAR PRODUÇÕES =================
     try:
@@ -2269,6 +2282,7 @@ async def on_ready():
         "enviar_painel_lavagem",
         "enviar_painel_ponto",
         "painel_calc"
+        "enviar_painel_vendas"
     ]:
         try:
             if func == "enviar_painel_polvoras":
@@ -2286,5 +2300,6 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
