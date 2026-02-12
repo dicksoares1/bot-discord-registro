@@ -491,14 +491,18 @@ class CalculadoraView(discord.ui.View):
 # ================= ENVIAR PAINEL DE VENDAS =================
 
 async def enviar_painel_vendas():
-    canal = bot.get_channel(1460984821458272347)
+    embed = discord.Embed(
+        title="🛒 Painel de Vendas",
+        description="Escolha uma opção abaixo.",
+        color=0x2ecc71
+    )
 
-    if canal:
-        await canal.send(
-            "💰 **Painel de Registro de Vendas**",
-            view=CalculadoraView()
-        )
-
+    await enviar_ou_atualizar_painel(
+        CANAL_VENDAS_ID,
+        "🛒 Painel de Vendas",
+        embed,
+        CalculadoraView()
+    )
 
 # =========================================================
 # ======================== PRODUÇÃO ========================
@@ -1133,6 +1137,26 @@ async def enviar_painel_lavagem():
     )
 
     await canal.send(embed=embed, view=LavagemView())
+
+async def enviar_ou_atualizar_painel(canal_id, titulo_embed, embed, view):
+    canal = bot.get_channel(canal_id)
+    if not canal:
+        return
+
+    async for msg in canal.history(limit=50):
+        if (
+            msg.author == bot.user
+            and msg.embeds
+            and msg.embeds[0].title == titulo_embed
+        ):
+            try:
+                await msg.edit(embed=embed, view=view)
+                return
+            except:
+                return
+
+    await canal.send(embed=embed, view=view)
+
 # =========================================================
 # ========================= LIVES ==========================
 # =========================================================
@@ -1444,32 +1468,34 @@ class PainelLivesAdmin(discord.ui.View):
 
 # ================= PAINÉIS =================
 
-async def enviar_painel_lives():
-    canal = bot.get_channel(CANAL_CADASTRO_LIVE_ID)
-    if not canal:
-        return
-
-    embed = discord.Embed(
-        title="🎥 Cadastro de Live",
-        description="Clique no botão para cadastrar sua live.",
-        color=0x9146FF
-    )
-
-    await canal.send(embed=embed, view=CadastrarLiveView())
-
-
 async def enviar_painel_admin_lives():
-    canal = bot.get_channel(CANAL_CADASTRO_LIVE_ID)
-    if not canal:
-        return
-
     embed = discord.Embed(
         title="⚙️ Painel ADM - Lives",
         description="Gerencie todas as lives cadastradas.",
         color=0xe74c3c
     )
 
-    await canal.send(embed=embed, view=PainelLivesAdmin())
+    await enviar_ou_atualizar_painel(
+        CANAL_CADASTRO_LIVE_ID,
+        "⚙️ Painel ADM - Lives",
+        embed,
+        PainelLivesAdmin()
+    )
+
+async def enviar_painel_admin_lives():
+    embed = discord.Embed(
+        title="⚙️ Painel ADM - Lives",
+        description="Gerencie todas as lives cadastradas.",
+        color=0xe74c3c
+    )
+
+    await enviar_ou_atualizar_painel(
+        CANAL_CADASTRO_LIVE_ID,
+        "⚙️ Painel ADM - Lives",
+        embed,
+        PainelLivesAdmin()
+    )
+
 
 
 # =========================================================
@@ -2423,6 +2449,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
