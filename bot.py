@@ -66,6 +66,7 @@ CANAL_LOG_REGISTRO_ID = 1462457604939841851
 # VENDAS
 CANAL_CALCULADORA_ID = 1460984821458272347
 CANAL_ENCOMENDAS_ID = 1460980984811098294
+CANAL_VENDAS_ID = CANAL_CALCULADORA_ID
 
 # PRODUÇÃO
 CANAL_FABRICACAO_ID = 1466421612566810634
@@ -1482,20 +1483,19 @@ async def enviar_painel_admin_lives():
         PainelLivesAdmin()
     )
 
-async def enviar_painel_admin_lives():
+async def enviar_painel_lives():
     embed = discord.Embed(
-        title="⚙️ Painel ADM - Lives",
-        description="Gerencie todas as lives cadastradas.",
-        color=0xe74c3c
+        title="🎥 Cadastro de Live",
+        description="Clique no botão para cadastrar sua live.",
+        color=0x9146FF
     )
 
     await enviar_ou_atualizar_painel(
         CANAL_CADASTRO_LIVE_ID,
-        "⚙️ Painel ADM - Lives",
+        "🎥 Cadastro de Live",
         embed,
-        PainelLivesAdmin()
+        CadastrarLiveView()
     )
-
 
 
 # =========================================================
@@ -2449,6 +2449,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
