@@ -1137,7 +1137,7 @@ async def enviar_painel_lavagem():
 # ========================= LIVES ==========================
 # =========================================================
 
-ADM_ID = 467673818375389194  # COLOQUE SEU ID AQUI
+ADM_ID = 1337383495743569941  # COLOQUE SEU ID AQUI
 
 
 def carregar_lives():
@@ -1248,7 +1248,6 @@ async def verificar_lives_twitch():
         print(f"🎮 {canal_twitch} ao vivo? {ao_vivo}")
 
         if not ao_vivo and divulgado:
-            print(f"🔁 {canal_twitch} ficou OFFLINE. Resetando divulgado.")
             lives[user_id]["divulgado"] = False
             alterado = True
 
@@ -1286,7 +1285,7 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
 
         if not novo_canal:
             await interaction.response.send_message(
-                "❌ Link da Twitch inválido. Envie no formato:\nhttps://twitch.tv/seucanal",
+                "❌ Link da Twitch inválido.",
                 ephemeral=True
             )
             return
@@ -1296,8 +1295,7 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
 
             if canal_existente == novo_canal:
                 await interaction.response.send_message(
-                    f"❌ Esse canal da Twitch já está cadastrado por outro usuário.\n"
-                    f"Canal: **{escape_markdown(novo_canal)}**",
+                    "❌ Esse canal já está cadastrado.",
                     ephemeral=True
                 )
                 return
@@ -1309,15 +1307,9 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
 
         salvar_lives(lives)
 
-        link_formatado = escape_markdown(novo_link)
-
         embed = discord.Embed(
             title="✅ Live cadastrada!",
-            description=(
-                f"{interaction.user.mention}\n"
-                f"{link_formatado}\n\n"
-                f"📡 A live será divulgada automaticamente quando você entrar AO VIVO."
-            ),
+            description=f"{interaction.user.mention}\n{novo_link}",
             color=0x2ecc71
         )
 
@@ -1330,40 +1322,55 @@ class CadastrarLiveView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(
-        label="🎥 Cadastrar minha Live",
-        style=discord.ButtonStyle.primary,
-        custom_id="cadastrar_live_btn"
-    )
+    @discord.ui.button(label="🎥 Cadastrar minha Live", style=discord.ButtonStyle.primary)
     async def cadastrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(CadastrarLiveModal())
 
 
-# ================= ADMIN =================
+# ================= SELECT REMOVER =================
 
-class RemoverLiveModal(discord.ui.Modal, title="Remover Live"):
-    user_id = discord.ui.TextInput(
-        label="ID do usuário",
-        placeholder="Cole o ID do usuário"
-    )
+class SelectRemoverLive(discord.ui.Select):
+    def __init__(self):
+        lives = carregar_lives()
+        options = []
 
-    async def on_submit(self, interaction: discord.Interaction):
+        for uid, data in lives.items():
+            options.append(
+                discord.SelectOption(
+                    label=f"{data['link'][:70]}",
+                    description=f"Usuário: {uid}",
+                    value=uid
+                )
+            )
+
+        if not options:
+            options.append(discord.SelectOption(label="Nenhuma live", value="none"))
+
+        super().__init__(placeholder="Selecione quem remover", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != ADM_ID:
             await interaction.response.send_message("❌ Apenas o ADM pode usar.", ephemeral=True)
             return
 
+        uid = self.values[0]
         lives = carregar_lives()
-        uid = self.user_id.value.strip()
 
-        if uid not in lives:
-            await interaction.response.send_message("❌ Usuário não encontrado.", ephemeral=True)
-            return
+        if uid in lives:
+            link = lives[uid]["link"]
+            del lives[uid]
+            salvar_lives(lives)
 
-        del lives[uid]
-        salvar_lives(lives)
+            await interaction.response.send_message(f"✅ Removido:\n{link}", ephemeral=True)
 
-        await interaction.response.send_message("✅ Live removida.", ephemeral=True)
 
+class RemoverLiveView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(SelectRemoverLive())
+
+
+# ================= ADMIN =================
 
 class GerenciarLivesView(discord.ui.View):
     def __init__(self):
@@ -1377,15 +1384,11 @@ class GerenciarLivesView(discord.ui.View):
 
         lives = carregar_lives()
 
-        if not lives:
-            await interaction.response.send_message("Nenhuma live cadastrada.", ephemeral=True)
-            return
-
         texto = ""
         for uid, data in lives.items():
             texto += f"👤 <@{uid}>\n🔗 {data['link']}\n\n"
 
-        embed = discord.Embed(title="📡 Lives cadastradas", description=texto, color=0x3498db)
+        embed = discord.Embed(title="📡 Lives cadastradas", description=texto or "Nenhuma.", color=0x3498db)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="🗑️ Remover Live", style=discord.ButtonStyle.danger)
@@ -1394,7 +1397,7 @@ class GerenciarLivesView(discord.ui.View):
             await interaction.response.send_message("❌ Apenas o ADM pode usar.", ephemeral=True)
             return
 
-        await interaction.response.send_modal(RemoverLiveModal())
+        await interaction.response.send_message("Escolha quem remover:", view=RemoverLiveView(), ephemeral=True)
 
 
 class PainelLivesAdmin(discord.ui.View):
@@ -1407,7 +1410,7 @@ class PainelLivesAdmin(discord.ui.View):
             await interaction.response.send_message("❌ Apenas o ADM pode usar.", ephemeral=True)
             return
 
-        await interaction.response.send_message("Painel de gerenciamento:", view=GerenciarLivesView(), ephemeral=True)
+        await interaction.response.send_message("Painel ADM:", view=GerenciarLivesView(), ephemeral=True)
 
 
 # ================= PAINÉIS =================
@@ -1416,10 +1419,6 @@ async def enviar_painel_lives():
     canal = bot.get_channel(CANAL_CADASTRO_LIVE_ID)
     if not canal:
         return
-
-    async for m in canal.history(limit=10):
-        if m.author == bot.user and m.embeds and m.embeds[0].title == "🎥 Cadastro de Live":
-            return
 
     embed = discord.Embed(
         title="🎥 Cadastro de Live",
@@ -1442,6 +1441,7 @@ async def enviar_painel_admin_lives():
     )
 
     await canal.send(embed=embed, view=PainelLivesAdmin())
+
 
 # =========================================================
 # ====================== PONTO ELETRÔNICO =================
@@ -2392,6 +2392,7 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
 
 
