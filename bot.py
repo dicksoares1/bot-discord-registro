@@ -225,6 +225,27 @@ def proximo_pedido():
     return dados["ultimo"]
 
 
+# ================= SALVAR VENDAS (RELATÓRIO) =================
+
+ARQUIVO_VENDAS = "vendas.json"
+
+def carregar_vendas():
+    if not os.path.exists(ARQUIVO_VENDAS):
+        return []
+    with open(ARQUIVO_VENDAS, "r") as f:
+        return json.load(f)
+
+def salvar_venda(vendedor, valor):
+    vendas = carregar_vendas()
+    vendas.append({
+        "vendedor": vendedor,
+        "valor": valor,
+        "data": agora().strftime("%d/%m/%Y")
+    })
+    with open(ARQUIVO_VENDAS, "w") as f:
+        json.dump(vendas, f, indent=4)
+
+
 # ================= STATUS DOS BOTÕES =================
 
 class StatusView(discord.ui.View):
@@ -280,7 +301,6 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        # ================= PEGAR PACOTES =================
         pacotes_pt = 0
         pacotes_sub = 0
 
@@ -299,14 +319,12 @@ class StatusView(discord.ui.View):
                 except:
                     pass
 
-        # ================= ATUALIZA STATUS =================
         linhas = [l for l in linhas if not l.startswith("📦")]
         linhas = self.toggle_linha(linhas, "✅", f"✅ Entregue por {user} • {agora_str}")
 
         embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed)
 
-        # ================= AVISO NO CANAL DO BAÚ =================
         canal_bau = interaction.guild.get_channel(1356174937764794521)
 
         if canal_bau:
@@ -353,6 +371,9 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         pacotes_pt = pt // 50
         pacotes_sub = sub // 50
         total = (pt * 50) + (sub * 90)
+
+        # SALVA PARA RELATÓRIO
+        salvar_venda(interaction.user.name, total)
 
         valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -404,6 +425,46 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         await interaction.response.defer()
 
 
+# ================= MODAL RELATÓRIO =================
+
+class RelatorioModal(discord.ui.Modal, title="📊 Gerar Relatório"):
+    data_inicio = discord.ui.TextInput(label="Data inicial (dd/mm/aaaa)")
+    data_fim = discord.ui.TextInput(label="Data final (dd/mm/aaaa)")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        from datetime import datetime
+
+        try:
+            d1 = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
+            d2 = datetime.strptime(self.data_fim.value, "%d/%m/%Y")
+        except:
+            await interaction.response.send_message("Data inválida.", ephemeral=True)
+            return
+
+        vendas = carregar_vendas()
+        totais = {}
+
+        for v in vendas:
+            data_venda = datetime.strptime(v["data"], "%d/%m/%Y")
+            if d1 <= data_venda <= d2:
+                totais[v["vendedor"]] = totais.get(v["vendedor"], 0) + v["valor"]
+
+        if not totais:
+            await interaction.response.send_message("Nenhuma venda no período.", ephemeral=True)
+            return
+
+        texto = "**📊 RELATÓRIO DE VENDAS**\n\n"
+
+        for vendedor, valor in totais.items():
+            valor_fmt = f"{valor:,.0f}".replace(",", ".")
+            texto += f"💰 **{vendedor}** recebeu **R$ {valor_fmt}**\n"
+
+        canal = interaction.guild.get_channel(1365372467723501723)
+        await canal.send(texto)
+
+        await interaction.response.send_message("Relatório enviado.", ephemeral=True)
+
+
 # ================= BOTÃO PARA ABRIR MODAL =================
 
 class CalculadoraView(discord.ui.View):
@@ -417,6 +478,15 @@ class CalculadoraView(discord.ui.View):
     )
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VendaModal())
+
+    @discord.ui.button(
+        label="📊 Relatório",
+        style=discord.ButtonStyle.success,
+        custom_id="calculadora_relatorio"
+    )
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RelatorioModal())
+
 
 # =========================================================
 # ======================== PRODUÇÃO ========================
@@ -2216,4 +2286,5 @@ async def on_ready():
 # =========================================================
 
 bot.run(TOKEN)
+
 
