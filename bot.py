@@ -7,6 +7,8 @@ import json
 import asyncio
 import aiohttp
 import discord
+import time
+import gc
 
 from discord.ext import commands, tasks
 from discord.utils import escape_markdown
@@ -28,7 +30,18 @@ def agora():
 # ======================== CONFIG ==========================
 # =========================================================
 
+
 TOKEN = os.environ.get("TOKEN")
+
+tentativas = 0
+
+while not TOKEN:
+    tentativas += 1
+    print(f"⚠️ TOKEN não carregado... tentativa {tentativas}")
+    time.sleep(2)
+    TOKEN = os.environ.get("TOKEN")
+
+print("🔐 TOKEN carregado com sucesso.")
 
 TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
@@ -658,9 +671,10 @@ class FabricacaoView(discord.ui.View):
 async def acompanhar_producao(pid):
     print(f"▶ Produção retomada: {pid}")
 
-    while True:
+    while not bot.is_closed():
+        await asyncio.sleep(5)
         producoes = carregar_producoes()
-
+        
         if pid not in producoes:
             return
 
@@ -1058,7 +1072,7 @@ class LavagemView(discord.ui.View):
 
         canal = interaction.guild.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
 
-        async for msg in canal.history(limit=None):
+        async for msg in canal.history(limit=200):
             try:
                 await msg.delete()
             except:
@@ -2274,6 +2288,9 @@ async def varrer_agregados_sem_sala():
     metas = carregar_metas()
 
     for member in guild.members:
+        if member.bot:
+            continue
+
         if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
             continue
 
@@ -2441,6 +2458,8 @@ async def on_ready():
         except Exception as e:
             print(f"Erro ao enviar painel {func}:", e)
 
+    gc.collect()
+    print("🧹 Limpeza de memória executada")
     print("✅ BOT ONLINE 100%")
 
 
@@ -2448,14 +2467,11 @@ async def on_ready():
 # ========================= START BOT =====================
 # =========================================================
 
-bot.run(TOKEN)
-
-
-
-
-
-
-
-
-
-
+while True:
+    try:
+        print("🚀 Iniciando bot...")
+        bot.run(TOKEN)
+    except Exception as e:
+        print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
+        print("Erro:", e)
+        time.sleep(10)
