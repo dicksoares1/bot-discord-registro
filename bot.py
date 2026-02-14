@@ -549,29 +549,31 @@ async def enviar_painel_vendas():
 # ======================== PRODUÇÃO ========================
 # =========================================================
 
-async def carregar_producoes():
-    rows = await db.fetch("SELECT * FROM producoes")
+async def carregar_producao(pid):
+    async with db.acquire() as conn:
+        r = await conn.fetchrow(
+            "SELECT * FROM producoes WHERE pid=$1",
+            pid
+        )
 
-    dados = {}
+    if not r:
+        return None
 
-    for r in rows:
-        pid = r["pid"]
+    dados = {
+        "galpao": r["galpao"],
+        "autor": int(r["autor"]),
+        "inicio": r["inicio"],
+        "fim": r["fim"],
+        "obs": r["obs"],
+        "msg_id": int(r["msg_id"]),
+        "canal_id": int(r["canal_id"])
+    }
 
-        dados[pid] = {
-            "galpao": r["galpao"],
-            "autor": int(r["autor"]),
-            "inicio": r["inicio"],
-            "fim": r["fim"],
-            "obs": r["obs"],
-            "msg_id": int(r["msg_id"]),
-            "canal_id": int(r["canal_id"])
+    if r["segunda_task_user"]:
+        dados["segunda_task_confirmada"] = {
+            "user": int(r["segunda_task_user"]),
+            "time": r["segunda_task_time"]
         }
-
-        if r["segunda_task_user"]:
-            dados[pid]["segunda_task_confirmada"] = {
-                "user": int(r["segunda_task_user"]),
-                "time": r["segunda_task_time"]
-            }
 
     return dados
 
@@ -584,41 +586,43 @@ async def salvar_producao(pid, dados):
         segunda_user = str(dados["segunda_task_confirmada"]["user"])
         segunda_time = dados["segunda_task_confirmada"]["time"]
 
-    await db.execute(
-        """
-        INSERT INTO producoes 
-        (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, segunda_task_user, segunda_task_time)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-        ON CONFLICT (pid)
-        DO UPDATE SET
-        galpao=$2,
-        autor=$3,
-        inicio=$4,
-        fim=$5,
-        obs=$6,
-        msg_id=$7,
-        canal_id=$8,
-        segunda_task_user=$9,
-        segunda_task_time=$10
-        """,
-        pid,
-        dados["galpao"],
-        str(dados["autor"]),
-        dados["inicio"],
-        dados["fim"],
-        dados["obs"],
-        str(dados["msg_id"]),
-        str(dados["canal_id"]),
-        segunda_user,
-        segunda_time
-    )
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO producoes 
+            (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, segunda_task_user, segunda_task_time)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            ON CONFLICT (pid)
+            DO UPDATE SET
+            galpao=$2,
+            autor=$3,
+            inicio=$4,
+            fim=$5,
+            obs=$6,
+            msg_id=$7,
+            canal_id=$8,
+            segunda_task_user=$9,
+            segunda_task_time=$10
+            """,
+            pid,
+            dados["galpao"],
+            str(dados["autor"]),
+            dados["inicio"],
+            dados["fim"],
+            dados["obs"],
+            str(dados["msg_id"]),
+            str(dados["canal_id"]),
+            segunda_user,
+            segunda_time
+        )
 
 
 async def deletar_producao(pid):
-    await db.execute(
-        "DELETE FROM producoes WHERE pid=$1",
-        pid
-    )
+    async with db.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM producoes WHERE pid=$1",
+            pid
+        )
 
 
 def barra(pct, size=20):
@@ -649,109 +653,21 @@ class SegundaTaskView(discord.ui.View):
         custom_id="segunda_task_btn"
     )
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
-        producoes = carregar_producoes()
 
-        if self.pid not in producoes:
+        prod = await carregar_producao(self.pid)
+        if not prod:
             await interaction.response.defer()
             return
 
-        producoes[self.pid]["segunda_task_confirmada"] = {
+        prod["segunda_task_confirmada"] = {
             "user": interaction.user.id,
             "time": agora().isoformat()
         }
 
-        salvar_producoes(producoes)
+        await salvar_producao(self.pid, prod)
 
         await interaction.message.edit(view=None)
         await interaction.response.defer()
-
-
-# ================= MODAL OBSERVAÇÃO =================
-
-class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
-    obs = discord.ui.TextInput(
-        label="Observação inicial",
-        placeholder="Ex: Galpões todos produzindo / 1 e 2 ativos / 3 com HC",
-        style=discord.TextStyle.paragraph,
-        required=False
-    )
-
-    def __init__(self, galpao, tempo):
-        super().__init__()
-        self.galpao = galpao
-        self.tempo = tempo
-
-    async def on_submit(self, interaction: discord.Interaction):
-        pid = f"{self.galpao}_{interaction.id}"
-
-        inicio = agora()
-        fim = inicio + timedelta(minutes=self.tempo)
-
-        canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
-
-        msg = await canal.send(
-            embed=discord.Embed(
-                title="🏭 Produção",
-                description=f"Iniciando produção em **{self.galpao}**...",
-                color=0x3498db
-            ),
-            view=SegundaTaskView(pid)
-        )
-
-        dados = {
-            "galpao": self.galpao,
-            "autor": interaction.user.id,
-            "inicio": inicio.isoformat(),
-            "fim": fim.isoformat(),
-            "obs": self.obs.value,
-            "msg_id": msg.id,
-            "canal_id": CANAL_REGISTRO_GALPAO_ID
-        }
-
-        # SALVA NO POSTGRES
-        await salvar_producao(pid, dados)
-
-        # INICIA O ACOMPANHAMENTO
-        bot.loop.create_task(acompanhar_producao(pid))
-
-        await interaction.response.defer()
-
-
-# ================= VIEW FABRICAÇÃO =================
-
-class FabricacaoView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="🏭 Galpões Norte",
-        style=discord.ButtonStyle.primary,
-        custom_id="fab_norte_btn"
-    )
-    async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(
-            ObservacaoProducaoModal("GALPÕES NORTE", 65)
-        )
-
-    @discord.ui.button(
-        label="🏭 Galpões Sul",
-        style=discord.ButtonStyle.secondary,
-        custom_id="fab_sul_btn"
-    )
-    async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(
-            ObservacaoProducaoModal("GALPÕES SUL", 130)
-        )
-
-    @discord.ui.button(
-        label="🧪 TESTE 3 MIN",
-        style=discord.ButtonStyle.success,
-        custom_id="fab_teste_btn"
-    )
-    async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(
-            ObservacaoProducaoModal("TESTE", 3)
-        )
 
 
 # ================= LOOP DE ACOMPANHAMENTO =================
@@ -762,7 +678,6 @@ async def acompanhar_producao(pid):
     while not bot.is_closed():
         await asyncio.sleep(5)
 
-        # BUSCA DO BANCO
         prod = await carregar_producao(pid)
         if not prod:
             return
@@ -805,7 +720,6 @@ async def acompanhar_producao(pid):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
-        # ================= FINALIZAÇÃO =================
         if restante <= 0:
             desc += "\n\n🔵 **Produção Finalizada**"
 
@@ -821,12 +735,10 @@ async def acompanhar_producao(pid):
             except:
                 pass
 
-            # REMOVE DO POSTGRES
             await deletar_producao(pid)
-            print(f"🗑️ Produção removida do banco: {pid}")
+            print(f"🗑️ Produção removida: {pid}")
             return
 
-        # ================= ATUALIZA NORMAL =================
         try:
             await msg.edit(
                 embed=discord.Embed(
@@ -840,23 +752,6 @@ async def acompanhar_producao(pid):
 
         await asyncio.sleep(60)
 
-
-# ================= PAINEL =================
-
-async def enviar_painel_fabricacao():
-    canal = bot.get_channel(CANAL_FABRICACAO_ID)
-    async for m in canal.history(limit=10):
-        if m.author == bot.user and m.embeds and m.embeds[0].title == "🏭 Fabricação":
-            return
-
-    await canal.send(
-        embed=discord.Embed(
-            title="🏭 Fabricação",
-            description="Selecione Norte ou Sul para iniciar a produção.",
-            color=0x2c3e50
-        ),
-        view=FabricacaoView()
-    )
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
@@ -2600,6 +2495,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
