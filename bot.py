@@ -47,7 +47,7 @@ print("🔐 TOKEN carregado com sucesso.")
 TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
 
-# ================= BANCO POSTGRES =================
+# ================= BANCO POSTGRES (POOL PROFISSIONAL) =================
 
 import asyncpg
 
@@ -62,8 +62,13 @@ async def conectar_db():
         return
 
     if not db:
-        db = await asyncpg.connect(DATABASE_URL)
-        print("🟢 Banco conectado!")
+        db = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=1,
+            max_size=10
+        )
+        print("🟢 Pool PostgreSQL conectado!")
+
 
 # =========================================================
 # ======================== VENDAS DB =======================
@@ -2489,20 +2494,14 @@ async def relatorio_semanal_task():
 
 
 
-# =========================================================
-# ========================= ON READY ======================
-# =========================================================
-
 @bot.event
 async def on_ready():
 
     global db
 
-    # CONECTA NO POSTGRES (Railway)
     if not db:
         await conectar_db()
 
-    # evita rodar duas vezes
     if hasattr(bot, "ready_once"):
         return
     bot.ready_once = True
@@ -2557,9 +2556,12 @@ async def on_ready():
 
     # ================= RESTAURAR PRODUÇÕES =================
     try:
-        rows = await db.fetch("SELECT pid FROM producoes")
+        async with db.acquire() as conn:
+            rows = await conn.fetch("SELECT pid FROM producoes")
+
         for r in rows:
             bot.loop.create_task(acompanhar_producao(r["pid"]))
+
     except Exception as e:
         print("Erro restaurar produções:", e)
 
@@ -2598,6 +2600,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
