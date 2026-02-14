@@ -384,9 +384,9 @@ class StatusView(discord.ui.View):
 # =========================================================
 
 async def enviar_painel_vendas():
-    try:
-        canal = await bot.fetch_channel(CANAL_VENDAS_ID)
-    except:
+    canal = bot.get_channel(CANAL_VENDAS_ID)
+
+    if not canal:
         print("❌ Canal de vendas não encontrado")
         return
 
@@ -396,16 +396,20 @@ async def enviar_painel_vendas():
         color=0x2ecc71
     )
 
+    # procura painel existente
     async for msg in canal.history(limit=20):
-        if msg.author == bot.user and msg.embeds:
-            if msg.embeds[0].title == "🛒 Painel de Vendas":
-                await msg.edit(embed=embed, view=CalculadoraView())
-                print("🔁 Painel de vendas atualizado")
-                return
+        if (
+            msg.author == bot.user
+            and msg.embeds
+            and msg.embeds[0].title == "🛒 Painel de Vendas"
+        ):
+            await msg.edit(embed=embed, view=CalculadoraView())
+            print("♻️ Painel de vendas atualizado")
+            return
 
+    # cria novo
     await canal.send(embed=embed, view=CalculadoraView())
     print("🛒 Painel de vendas criado")
-
 
 # =========================================================
 # ======================== PRODUÇÃO ========================
@@ -2463,6 +2467,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
