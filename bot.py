@@ -74,18 +74,6 @@ async def conectar_db():
 # ======================== VENDAS DB =======================
 # =========================================================
 
-async def salvar_venda_db(vendedor, valor):
-    if not db:
-        print("⚠️ Banco não conectado.")
-        return
-
-    await db.execute(
-        "INSERT INTO vendas (vendedor, valor, data) VALUES ($1,$2,$3)",
-        vendedor,
-        valor,
-        agora().strftime("%d/%m/%Y")
-    )
-
 async def carregar_vendas_db():
     if not db:
         return []
@@ -203,8 +191,6 @@ intents.guilds = True
 intents.presences = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-db = None
 
 # trava anti-duplicação de criação de metas
 criando_meta = set()
@@ -378,6 +364,110 @@ class StatusView(discord.ui.View):
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
 
+# =========================================================
+# ================= MODAL DE VENDA ========================
+# =========================================================
+
+class VendaModal(discord.ui.Modal, title="Registrar Venda"):
+    organizacao = discord.ui.TextInput(label="Organização")
+    qtd_pt = discord.ui.TextInput(label="Quantidade PT")
+    qtd_sub = discord.ui.TextInput(label="Quantidade SUB")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            pt = int(self.qtd_pt.value)
+            sub = int(self.qtd_sub.value)
+        except:
+            await interaction.response.send_message("Valores inválidos.", ephemeral=True)
+            return
+
+        total = (pt * 50) + (sub * 90)
+
+        # salva no banco
+        await salvar_venda_db(str(interaction.user.id), total)
+
+        valor_formatado = f"{total:,.0f}".replace(",", ".")
+
+        embed = discord.Embed(
+            title="📦 Nova Venda",
+            color=0x2ecc71
+        )
+        embed.add_field(name="Vendedor", value=interaction.user.mention)
+        embed.add_field(name="Organização", value=self.organizacao.value)
+        embed.add_field(name="PT", value=str(pt))
+        embed.add_field(name="SUB", value=str(sub))
+        embed.add_field(name="Total", value=f"R$ {valor_formatado}")
+
+        canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
+        await canal.send(embed=embed, view=StatusView())
+
+        await interaction.response.send_message("Venda registrada!", ephemeral=True)
+
+
+# =========================================================
+# ================= MODAL RELATÓRIO =======================
+# =========================================================
+
+class RelatorioModal(discord.ui.Modal, title="Gerar Relatório"):
+    data_inicio = discord.ui.TextInput(label="Data inicial (dd/mm/aaaa)")
+    data_fim = discord.ui.TextInput(label="Data final (dd/mm/aaaa)")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        from datetime import datetime
+
+        try:
+            d1 = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
+            d2 = datetime.strptime(self.data_fim.value, "%d/%m/%Y")
+        except:
+            await interaction.response.send_message("Data inválida.", ephemeral=True)
+            return
+
+        vendas = await carregar_vendas_db()
+        totais = {}
+
+        for v in vendas:
+            data_venda = datetime.strptime(v["data"], "%d/%m/%Y")
+            if d1 <= data_venda <= d2:
+                totais[v["user_id"]] = totais.get(v["user_id"], 0) + v["valor"]
+
+        if not totais:
+            await interaction.response.send_message("Nenhuma venda no período.", ephemeral=True)
+            return
+
+        texto = "**RELATÓRIO DE VENDAS**\n\n"
+
+        for vendedor, valor in totais.items():
+            membro = interaction.guild.get_member(int(vendedor))
+            nome = membro.display_name if membro else vendedor
+            texto += f"{nome} — R$ {valor:,.0f}\n"
+
+        await interaction.channel.send(texto)
+        await interaction.response.send_message("Relatório enviado!", ephemeral=True)
+
+
+# =========================================================
+# ================= VIEW CALCULADORA ======================
+# =========================================================
+
+class CalculadoraView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Registrar Venda",
+        style=discord.ButtonStyle.primary,
+        custom_id="calc_registrar_venda"
+    )
+    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VendaModal())
+
+    @discord.ui.button(
+        label="Relatório",
+        style=discord.ButtonStyle.success,
+        custom_id="calc_relatorio_vendas"
+    )
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RelatorioModal())
 
 # =========================================================
 # ================= PAINEL ================================
@@ -731,24 +821,26 @@ async def enviar_painel_fabricacao():
 # ================= BANCO =================
 
 async def salvar_polvora_db(user_id, vendedor, qtd, valor):
-    await db.execute(
-        "INSERT INTO polvoras (user_id, vendedor, quantidade, valor, data) VALUES ($1,$2,$3,$4,$5)",
-        str(user_id),
-        vendedor,
-        qtd,
-        valor,
-        agora().isoformat()
-    )
+    async with db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO polvoras (user_id, vendedor, quantidade, valor, data) VALUES ($1,$2,$3,$4,$5)",
+            str(user_id),
+            vendedor,
+            qtd,
+            valor,
+            agora().isoformat()
+        )
 
 
 async def carregar_polvoras_db():
-    rows = await db.fetch("SELECT * FROM polvoras")
-    return rows
+    async with db.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM polvoras")
+        return rows
 
 
 async def limpar_polvoras_db():
-    await db.execute("DELETE FROM polvoras")
-
+    async with db.acquire() as conn:
+        await conn.execute("DELETE FROM polvoras")
 
 # ================= MODAL =================
 
@@ -901,21 +993,26 @@ def formatar_real(valor: int) -> str:
 # ================= BANCO (POSTGRES) =================
 
 async def salvar_lavagem_db(user_id, valor_sujo, taxa, valor_retorno):
-    await db.execute(
-        "INSERT INTO lavagens (user_id, valor, taxa, liquido, data) VALUES ($1,$2,$3,$4,$5)",
-        str(user_id),
-        valor_sujo,
-        taxa,
-        valor_retorno,
-        agora().isoformat()
-    )
+    async with db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO lavagens (user_id, valor, taxa, liquido, data) VALUES ($1,$2,$3,$4,$5)",
+            str(user_id),
+            valor_sujo,
+            taxa,
+            valor_retorno,
+            agora().isoformat()
+        )
+
 
 async def carregar_lavagens_db():
-    rows = await db.fetch("SELECT * FROM lavagens")
-    return rows
+    async with db.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM lavagens")
+        return rows
+
 
 async def limpar_lavagens_db():
-    await db.execute("DELETE FROM lavagens")
+    async with db.acquire() as conn:
+        await conn.execute("DELETE FROM lavagens")
 
 
 # ================= MODAL =================
@@ -1145,7 +1242,9 @@ ADM_ID = 467673818375389194
 # ================= BANCO =================
 
 async def carregar_lives():
-    rows = await db.fetch("SELECT * FROM lives")
+    async with db.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM lives")
+
     return {
         r["user_id"]: {
             "link": r["link"],
@@ -1154,31 +1253,36 @@ async def carregar_lives():
         for r in rows
     }
 
+
 async def salvar_live(user_id, link):
-    await db.execute(
-        """
-        INSERT INTO lives (user_id, link, divulgado)
-        VALUES ($1, $2, false)
-        ON CONFLICT (user_id)
-        DO UPDATE SET link = $2
-        """,
-        str(user_id),
-        link
-    )
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO lives (user_id, link, divulgado)
+            VALUES ($1, $2, false)
+            ON CONFLICT (user_id)
+            DO UPDATE SET link = $2
+            """,
+            str(user_id),
+            link
+        )
+
 
 async def atualizar_divulgado(user_id, valor):
-    await db.execute(
-        "UPDATE lives SET divulgado=$1 WHERE user_id=$2",
-        valor,
-        str(user_id)
-    )
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE lives SET divulgado=$1 WHERE user_id=$2",
+            valor,
+            str(user_id)
+        )
+
 
 async def remover_live_db(user_id):
-    await db.execute(
-        "DELETE FROM lives WHERE user_id=$1",
-        str(user_id)
-    )
-
+    async with db.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM lives WHERE user_id=$1",
+            str(user_id)
+        )
 
 # ================= CHECAR TWITCH =================
 
@@ -2354,7 +2458,15 @@ async def relatorio_semanal_task():
             metas[uid]["dinheiro"] = 0
             metas[uid]["polvora"] = 0
             metas[uid]["acao"] = 0
-        salvar_metas(metas)
+        for uid, dados in metas.items():
+        await salvar_meta(
+            uid,
+            dados["canal_id"],
+            0,
+            0,
+            0
+        )
+
 
 
         print("Metas resetadas após relatório semanal.")
@@ -2382,7 +2494,7 @@ async def on_ready():
     # ================= REGISTRAR VIEWS PERSISTENTES =================
     views = [
         "RegistroView",
-        "CalculadoraView",
+        "CalcView",
         "StatusView",
         "CadastrarLiveView",
         "PainelLivesAdmin",
@@ -2391,7 +2503,6 @@ async def on_ready():
         "ConfirmarPagamentoView",
         "LavagemView",
         "PontoView",
-        "CalcView",
         "FabricacaoView"
     ]
 
@@ -2483,4 +2594,5 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
