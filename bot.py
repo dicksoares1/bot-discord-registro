@@ -368,42 +368,80 @@ class StatusView(discord.ui.View):
 # ================= MODAL DE VENDA ========================
 # =========================================================
 
-class VendaModal(discord.ui.Modal, title="Registrar Venda"):
+class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="Organização")
     qtd_pt = discord.ui.TextInput(label="Quantidade PT")
     qtd_sub = discord.ui.TextInput(label="Quantidade SUB")
+    observacoes = discord.ui.TextInput(
+        label="Observações",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
+
         try:
-            pt = int(self.qtd_pt.value)
-            sub = int(self.qtd_sub.value)
+            pt = int(self.qtd_pt.value.strip())
+            sub = int(self.qtd_sub.value.strip())
         except:
             await interaction.response.send_message("Valores inválidos.", ephemeral=True)
             return
 
+        numero_pedido = await proximo_pedido()
+
+        pacotes_pt = pt // 50
+        pacotes_sub = sub // 50
         total = (pt * 50) + (sub * 90)
 
-        # salva no banco
+        # SALVA NO POSTGRES
         await salvar_venda_db(str(interaction.user.id), total)
 
-        valor_formatado = f"{total:,.0f}".replace(",", ".")
+        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+        org_nome = self.organizacao.value.strip().upper()
+        config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
 
         embed = discord.Embed(
-            title="📦 Nova Venda",
-            color=0x2ecc71
+            title=f"📦 NOVA ENCOMENDA • Pedido #{numero_pedido:04d}",
+            color=config["cor"]
         )
-        embed.add_field(name="Vendedor", value=interaction.user.mention)
-        embed.add_field(name="Organização", value=self.organizacao.value)
-        embed.add_field(name="PT", value=str(pt))
-        embed.add_field(name="SUB", value=str(sub))
-        embed.add_field(name="Total", value=f"R$ {valor_formatado}")
+
+        embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
+        embed.add_field(name="🏷 Organização", value=f"{config['emoji']} {org_nome}", inline=False)
+
+        embed.add_field(
+            name="🔫 PT",
+            value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🔫 SUB",
+            value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💰 Total",
+            value=f"**R$ {valor_formatado}**",
+            inline=False
+        )
+
+        embed.add_field(
+            name="📌 Status",
+            value="⏳ Pagamento pendente",
+            inline=False
+        )
+
+        if self.observacoes.value:
+            embed.add_field(name="📝 Observações", value=self.observacoes.value, inline=False)
+
+        embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
 
         canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
         await canal.send(embed=embed, view=StatusView())
 
-        await interaction.response.send_message("Venda registrada!", ephemeral=True)
-
-
+        await interaction.response.defer()
 # =========================================================
 # ================= MODAL RELATÓRIO =======================
 # =========================================================
@@ -2590,6 +2628,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
