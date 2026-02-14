@@ -51,13 +51,16 @@ TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
 # ======================== ARQUIVOS ========================
 # =========================================================
 
-ARQUIVO_PRODUCOES = "producoes.json"
-ARQUIVO_PEDIDOS = "pedidos.json"
-ARQUIVO_POLVORAS = "polvoras.json"
-ARQUIVO_LIVES = "lives.json"
-ARQUIVO_LAVAGENS = "lavagens.json"
-ARQUIVO_PONTO = "ponto.json"
-ARQUIVO_METAS = "metas.json"
+BASE_PATH = "/mnt/data"
+
+ARQUIVO_PRODUCOES = f"{BASE_PATH}/producoes.json"
+ARQUIVO_PEDIDOS = f"{BASE_PATH}/pedidos.json"
+ARQUIVO_POLVORAS = f"{BASE_PATH}/polvoras.json"
+ARQUIVO_LIVES = f"{BASE_PATH}/lives.json"
+ARQUIVO_LAVAGENS = f"{BASE_PATH}/lavagens.json"
+ARQUIVO_PONTO = f"{BASE_PATH}/ponto.json"
+ARQUIVO_METAS = f"{BASE_PATH}/metas.json"
+
 
 
 # =========================================================
@@ -241,7 +244,7 @@ def proximo_pedido():
 
 # ================= SALVAR VENDAS (RELATÓRIO) =================
 
-ARQUIVO_VENDAS = "vendas.json"
+ARQUIVO_VENDAS = f"{BASE_PATH}/vendas.json"
 
 def carregar_vendas():
     if not os.path.exists(ARQUIVO_VENDAS):
@@ -1176,12 +1179,17 @@ async def enviar_ou_atualizar_painel(canal_id, titulo_embed, embed, view):
 # ========================= LIVES ==========================
 # =========================================================
 
-ADM_ID = 467673818375389194  # COLOQUE SEU ID AQUI
-
+ADM_ID = 467673818375389194
 
 def carregar_lives():
     if not os.path.exists(ARQUIVO_LIVES):
+        try:
+            with open(ARQUIVO_LIVES, "w") as f:
+                json.dump({}, f)
+        except:
+            return {}
         return {}
+
     try:
         with open(ARQUIVO_LIVES, "r") as f:
             return json.load(f)
@@ -1190,8 +1198,12 @@ def carregar_lives():
         return {}
 
 def salvar_lives(dados):
-    with open(ARQUIVO_LIVES, "w") as f:
-        json.dump(dados, f, indent=4)
+    try:
+        with open(ARQUIVO_LIVES, "w") as f:
+            json.dump(dados, f, indent=4)
+    except Exception as e:
+        print("Erro ao salvar lives:", e)
+
 
 
 # ================= CHECAR TWITCH =================
@@ -1480,7 +1492,6 @@ class PainelLivesAdmin(discord.ui.View):
         )
 
 
-
 # ================= PAINÉIS =================
 
 async def enviar_painel_admin_lives():
@@ -1510,7 +1521,6 @@ async def enviar_painel_lives():
         embed,
         CadastrarLiveView()
     )
-
 
 # =========================================================
 # ====================== PONTO ELETRÔNICO =================
@@ -1943,7 +1953,6 @@ import os
 import json
 
 RESULTADOS_METAS_ID = 1341403574483288125
-ARQUIVO_METAS = "metas.json"
 
 # =========================================================
 # JSON
@@ -2475,3 +2484,4 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
