@@ -380,6 +380,33 @@ class StatusView(discord.ui.View):
 # ================= MODAL DE VENDA ========================
 # =========================================================
 
+# =========================================================
+# ================= PAINEL ================================
+# =========================================================
+
+async def enviar_painel_vendas():
+    try:
+        canal = await bot.fetch_channel(CANAL_VENDAS_ID)
+    except:
+        print("❌ Canal de vendas não encontrado")
+        return
+
+    embed = discord.Embed(
+        title="🛒 Painel de Vendas",
+        description="Escolha uma opção abaixo.",
+        color=0x2ecc71
+    )
+
+    async for msg in canal.history(limit=20):
+        if msg.author == bot.user and msg.embeds:
+            if msg.embeds[0].title == "🛒 Painel de Vendas":
+                await msg.edit(embed=embed, view=CalculadoraView())
+                return
+
+    await canal.send(embed=embed, view=CalculadoraView())
+    print("🛒 Painel de vendas criado")
+
+
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="Organização")
     qtd_pt = discord.ui.TextInput(label="Quantidade PT (R$50)")
@@ -526,24 +553,6 @@ class CalculadoraView(discord.ui.View):
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioModal())
 
-
-# =========================================================
-# ================= PAINEL ================================
-# =========================================================
-
-async def enviar_painel_vendas():
-    embed = discord.Embed(
-        title="🛒 Painel de Vendas",
-        description="Escolha uma opção abaixo.",
-        color=0x2ecc71
-    )
-
-    await enviar_ou_atualizar_painel(
-        CANAL_VENDAS_ID,
-        "🛒 Painel de Vendas",
-        embed,
-        CalculadoraView()
-    )
 
 # =========================================================
 # ======================== PRODUÇÃO ========================
@@ -2528,6 +2537,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
