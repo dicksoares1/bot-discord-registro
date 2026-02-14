@@ -550,6 +550,36 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
         await interaction.response.defer()
 
+# ================= 2ª TASK =================
+
+class SegundaTaskView(discord.ui.View):
+    def __init__(self, pid):
+        super().__init__(timeout=None)
+        self.pid = pid
+
+    @discord.ui.button(
+        label="✅ Confirmar 2ª Task",
+        style=discord.ButtonStyle.success,
+        custom_id="segunda_task_btn"
+    )
+    async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        prod = await carregar_producao(self.pid)
+        if not prod:
+            await interaction.response.defer()
+            return
+
+        prod["segunda_task_confirmada"] = {
+            "user": interaction.user.id,
+            "time": agora().isoformat()
+        }
+
+        await salvar_producao(self.pid, prod)
+
+        await interaction.message.edit(view=None)
+        await interaction.response.defer()
+
+
 
 # =========================================================
 # ================= VIEW FABRICAÇÃO ========================
@@ -2433,6 +2463,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
