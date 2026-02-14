@@ -53,6 +53,8 @@ TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
 
 BASE_PATH = "/mnt/data"
 
+os.makedirs(BASE_PATH, exist_ok=True)
+
 ARQUIVO_PRODUCOES = f"{BASE_PATH}/producoes.json"
 ARQUIVO_PEDIDOS = f"{BASE_PATH}/pedidos.json"
 ARQUIVO_POLVORAS = f"{BASE_PATH}/polvoras.json"
@@ -2484,4 +2486,5 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
