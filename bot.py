@@ -2359,16 +2359,19 @@ async def relatorio_semanal_task():
 
         print("Metas resetadas após relatório semanal.")
 
-
+# =========================================================
+# ========================= ON_READY ======================
+# =========================================================
 
 @bot.event
 async def on_ready():
-
     global db
 
+    # ================= CONECTA NO POSTGRES =================
     if not db:
         await conectar_db()
 
+    # evita rodar duas vezes
     if hasattr(bot, "ready_once"):
         return
     bot.ready_once = True
@@ -2376,8 +2379,8 @@ async def on_ready():
     print("🔄 Iniciando configuração do bot...")
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
 
-    # ================= VIEWS =================
-    for view in [
+    # ================= REGISTRAR VIEWS PERSISTENTES =================
+    views = [
         "RegistroView",
         "CalculadoraView",
         "StatusView",
@@ -2390,11 +2393,17 @@ async def on_ready():
         "PontoView",
         "CalcView",
         "FabricacaoView"
-    ]:
+    ]
+
+    for view_name in views:
         try:
-            bot.add_view(globals()[view]())
+            view_class = globals().get(view_name)
+            if view_class:
+                bot.add_view(view_class())
+            else:
+                print(f"⚠️ View não encontrada: {view_name}")
         except Exception as e:
-            print(f"Erro ao registrar view {view}:", e)
+            print(f"Erro ao registrar view {view_name}:", e)
 
     # ================= LOOPS =================
     try:
@@ -2428,12 +2437,11 @@ async def on_ready():
 
         for r in rows:
             bot.loop.create_task(acompanhar_producao(r["pid"]))
-
     except Exception as e:
         print("Erro restaurar produções:", e)
 
-    # ================= PAINÉIS =================
-    for func in [
+    # ================= ENVIAR PAINÉIS =================
+    funcoes_paineis = [
         "enviar_painel_fabricacao",
         "enviar_painel_lives",
         "enviar_painel_admin_lives",
@@ -2442,12 +2450,20 @@ async def on_ready():
         "enviar_painel_ponto",
         "painel_calc",
         "enviar_painel_vendas"
-    ]:
+    ]
+
+    for func in funcoes_paineis:
         try:
+            f = globals().get(func)
+            if not f:
+                print(f"⚠️ Função não encontrada: {func}")
+                continue
+
             if func == "enviar_painel_polvoras":
-                await globals()[func](bot)
+                await f(bot)
             else:
-                await globals()[func]()
+                await f()
+
         except Exception as e:
             print(f"Erro ao enviar painel {func}:", e)
 
@@ -2467,13 +2483,4 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
-
-
-
-
-
-
-
-
-
 
