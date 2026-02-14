@@ -2450,24 +2450,20 @@ async def enviar_relatorio_semanal():
 @tasks.loop(time=time(hour=12, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
 async def relatorio_semanal_task():
     agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
     if agora.weekday() == 5:
         await enviar_relatorio_semanal()
 
         metas = await carregar_metas()
-        for uid in metas:
-            metas[uid]["dinheiro"] = 0
-            metas[uid]["polvora"] = 0
-            metas[uid]["acao"] = 0
+
         for uid, dados in metas.items():
-        await salvar_meta(
-            uid,
-            dados["canal_id"],
-            0,
-            0,
-            0
-        )
-
-
+            await salvar_meta(
+                uid,
+                dados["canal_id"],
+                0,
+                0,
+                0
+            )
 
         print("Metas resetadas após relatório semanal.")
 
@@ -2594,5 +2590,6 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
