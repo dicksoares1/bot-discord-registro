@@ -2318,7 +2318,7 @@ async def criar_sala_meta(member: discord.Member):
         criando_meta.discard(member.id)
 
 # =========================================================
-# ATUALIZAR / RECRIAR PAINEL
+# ATUALIZAR / RECRIAR PAINEL (VERSÃO COMPLETA)
 # =========================================================
 
 async def atualizar_painel_meta(member: discord.Member):
@@ -2339,21 +2339,59 @@ async def atualizar_painel_meta(member: discord.Member):
     embed = discord.Embed(title="📊 META INDIVIDUAL", color=0x2ecc71)
 
     if meta_alvo > 0:
-        embed.add_field(name="💰 Dinheiro", value=f"R$ {dinheiro:,}".replace(",", "."), inline=True)
-        embed.add_field(name="🎯 Ação", value=f"R$ {acao:,}".replace(",", "."), inline=True)
-        embed.add_field(name="📈 Progresso", value=f"R$ {dinheiro:,} / {meta_alvo:,}".replace(",", "."), inline=False)
+        embed.add_field(
+            name="💰 Dinheiro",
+            value=f"R$ {dinheiro:,}".replace(",", "."),
+            inline=True
+        )
+        embed.add_field(
+            name="🎯 Ação",
+            value=f"R$ {acao:,}".replace(",", "."),
+            inline=True
+        )
+        embed.add_field(
+            name="📈 Progresso",
+            value=f"R$ {dinheiro:,} / {meta_alvo:,}".replace(",", "."),
+            inline=False
+        )
     else:
-        embed.add_field(name="💣 Pólvora", value=str(polvora), inline=True)
+        embed.add_field(
+            name="💣 Pólvora",
+            value=str(polvora),
+            inline=True
+        )
 
     view = MetaView(member)
 
-    async for msg in canal.history(limit=20):
-        if msg.author == member.guild.me and msg.embeds:
-            await msg.edit(embed=embed, view=view)
-            return
+    painel_encontrado = None
 
-    msg = await canal.send(embed=embed, view=view)
-    await msg.pin()
+    # procura painel existente
+    async for msg in canal.history(limit=30):
+        if msg.author == member.guild.me and msg.embeds:
+            painel_encontrado = msg
+            break
+
+    # se achou, atualiza
+    if painel_encontrado:
+        try:
+            await painel_encontrado.edit(embed=embed, view=view)
+
+            # garante que esteja fixado
+            try:
+                await painel_encontrado.pin()
+            except:
+                pass
+
+            return
+        except:
+            pass
+
+    # se não achou ou deu erro → cria novo
+    try:
+        novo = await canal.send(embed=embed, view=view)
+        await novo.pin()
+    except:
+        pass
 
 # =========================================================
 # MOVER CATEGORIA AO SUBIR CARGO
@@ -2628,6 +2666,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
