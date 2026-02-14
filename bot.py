@@ -752,6 +752,39 @@ async def acompanhar_producao(pid):
 
         await asyncio.sleep(60)
 
+# ================= PAINEL =================
+
+async def enviar_painel_fabricacao():
+    try:
+        canal = await bot.fetch_channel(CANAL_FABRICACAO_ID)
+    except:
+        print("❌ Canal de fabricação não encontrado")
+        return
+
+    # evita duplicar painel
+    async for m in canal.history(limit=20):
+        if (
+            m.author == bot.user
+            and m.embeds
+            and m.embeds[0].title == "🏭 Fabricação"
+        ):
+            try:
+                await m.edit(view=FabricacaoView())
+                return
+            except:
+                return
+
+    # cria o painel se não existir
+    await canal.send(
+        embed=discord.Embed(
+            title="🏭 Fabricação",
+            description="Selecione Norte, Sul ou Teste para iniciar a produção.",
+            color=0x2c3e50
+        ),
+        view=FabricacaoView()
+    )
+
+
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
@@ -2495,6 +2528,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
