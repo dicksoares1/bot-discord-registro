@@ -429,7 +429,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
 
         embed.add_field(
             name="📌 Status",
-            value="⏳ Pagamento pendente",
+            value="⏳ A Entregar",
             inline=False
         )
 
@@ -2666,6 +2666,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
