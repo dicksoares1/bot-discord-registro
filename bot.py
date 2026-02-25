@@ -1038,7 +1038,7 @@ async def salvar_lavagem_db(user_id, valor_sujo, taxa, valor_retorno):
             valor_sujo,
             taxa,
             valor_retorno,
-            agora()
+            agora().replace(tzinfo=None)
         )
 
 
@@ -1089,57 +1089,46 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
 @bot.event
 async def on_message(message: discord.Message):
 
-    print("DEBUG: mensagem recebida")
-
     if message.author.bot:
-        print("DEBUG: mensagem de bot")
         return
 
-    print("DEBUG: canal =", message.channel.id)
+    # ================= LAVAGEM =================
+    if message.channel.id == CANAL_INICIAR_LAVAGEM_ID:
 
-    if message.channel.id != CANAL_INICIAR_LAVAGEM_ID:
-        print("DEBUG: canal errado")
-        return
+        if message.attachments and message.author.id in lavagens_pendentes:
 
-    if not message.attachments:
-        print("DEBUG: sem anexo")
-        return
+            dados_temp = lavagens_pendentes.pop(message.author.id)
 
-    print("DEBUG: anexos detectados")
+            valor_sujo = dados_temp["sujo"]
+            valor_retorno = dados_temp["retorno"]
+            taxa = dados_temp["taxa"]
 
-    print("DEBUG: pendentes =", lavagens_pendentes)
+            canal_destino = bot.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+            arquivo = await message.attachments[0].to_file()
 
-    if message.author.id not in lavagens_pendentes:
-        print("DEBUG: usuário não está em lavagens pendentes")
-        return
+            try:
+                await message.delete()
+            except:
+                pass
 
-    print("DEBUG: iniciando lavagem")
+            try:
+                await dados_temp["msg_info"].delete()
+            except:
+                pass
 
-    dados_temp = lavagens_pendentes.pop(message.author.id)
+            await salvar_lavagem_db(message.author.id, valor_sujo, taxa, valor_retorno)
 
-    valor_sujo = dados_temp["sujo"]
-    valor_retorno = dados_temp["retorno"]
-    taxa = dados_temp["taxa"]
+            embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
+            embed.add_field(name="Membro", value=message.author.mention, inline=False)
+            embed.add_field(name="Valor sujo", value=formatar_real(valor_sujo), inline=True)
+            embed.add_field(name="Valor a repassar (80%)", value=formatar_real(valor_retorno), inline=True)
+            embed.set_image(url=f"attachment://{arquivo.filename}")
 
-    canal_destino = bot.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+            await canal_destino.send(embed=embed, file=arquivo)
 
-    if not canal_destino:
-        print("DEBUG: canal destino não encontrado")
-        return
+            return
 
-    arquivo = await message.attachments[0].to_file()
-
-    await salvar_lavagem_db(message.author.id, valor_sujo, taxa, valor_retorno)
-
-    embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
-    embed.add_field(name="Membro", value=message.author.mention, inline=False)
-    embed.add_field(name="Valor sujo", value=formatar_real(valor_sujo), inline=True)
-    embed.add_field(name="Valor a repassar (80%)", value=formatar_real(valor_retorno), inline=True)
-    embed.set_image(url=f"attachment://{arquivo.filename}")
-
-    await canal_destino.send(embed=embed, file=arquivo)
-
-    print("DEBUG: lavagem enviada")
+    await bot.process_commands(message)
 
 
 # ================= PERMISSÃO =================
@@ -2677,6 +2666,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
