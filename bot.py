@@ -1088,17 +1088,32 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
 
 @bot.event
 async def on_message(message: discord.Message):
+
+    print("DEBUG: mensagem recebida")
+
     if message.author.bot:
+        print("DEBUG: mensagem de bot")
         return
 
+    print("DEBUG: canal =", message.channel.id)
+
     if message.channel.id != CANAL_INICIAR_LAVAGEM_ID:
+        print("DEBUG: canal errado")
         return
 
     if not message.attachments:
+        print("DEBUG: sem anexo")
         return
 
+    print("DEBUG: anexos detectados")
+
+    print("DEBUG: pendentes =", lavagens_pendentes)
+
     if message.author.id not in lavagens_pendentes:
+        print("DEBUG: usuário não está em lavagens pendentes")
         return
+
+    print("DEBUG: iniciando lavagem")
 
     dados_temp = lavagens_pendentes.pop(message.author.id)
 
@@ -1107,19 +1122,13 @@ async def on_message(message: discord.Message):
     taxa = dados_temp["taxa"]
 
     canal_destino = bot.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+
+    if not canal_destino:
+        print("DEBUG: canal destino não encontrado")
+        return
+
     arquivo = await message.attachments[0].to_file()
 
-    try:
-        await message.delete()
-    except:
-        pass
-
-    try:
-        await dados_temp["msg_info"].delete()
-    except:
-        pass
-
-    # SALVA NO POSTGRES
     await salvar_lavagem_db(message.author.id, valor_sujo, taxa, valor_retorno)
 
     embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
@@ -1129,6 +1138,8 @@ async def on_message(message: discord.Message):
     embed.set_image(url=f"attachment://{arquivo.filename}")
 
     await canal_destino.send(embed=embed, file=arquivo)
+
+    print("DEBUG: lavagem enviada")
 
 
 # ================= PERMISSÃO =================
@@ -2666,6 +2677,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
