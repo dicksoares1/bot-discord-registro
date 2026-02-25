@@ -1038,7 +1038,7 @@ async def salvar_lavagem_db(user_id, valor_sujo, taxa, valor_retorno):
             valor_sujo,
             taxa,
             valor_retorno,
-            agora().isoformat()
+            agora()
         )
 
 
@@ -2666,6 +2666,7 @@ while True:
         print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
         print("Erro:", e)
         time.sleep(10)
+
 
 
 
