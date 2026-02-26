@@ -1035,7 +1035,7 @@ async def salvar_lavagem_db(user_id, valor_sujo, taxa, valor_retorno):
             valor_sujo,
             taxa,
             valor_retorno,
-            agora().replace(tzinfo=None)
+            agora()  # <-- datetime direto
         )
 
 
@@ -2531,5 +2531,6 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
