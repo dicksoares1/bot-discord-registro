@@ -7,7 +7,7 @@ import json
 import asyncio
 import aiohttp
 import discord
-import time
+import time as systime
 import gc
 import asyncpg
 
@@ -16,7 +16,7 @@ http_session = None
 from discord.ext import commands, tasks
 from discord.utils import escape_markdown
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 
 # =========================================================
@@ -40,7 +40,7 @@ tentativas = 0
 while not TOKEN:
     tentativas += 1
     print(f"⚠️ TOKEN não carregado... tentativa {tentativas}")
-    time.sleep(2)
+    systime.sleep(2)
     TOKEN = os.environ.get("TOKEN")
 
 print("🔐 TOKEN carregado com sucesso.")
@@ -2531,4 +2531,5 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
