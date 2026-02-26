@@ -11,6 +11,7 @@ import time
 import gc
 import asyncpg
 
+http_session = None
 
 from discord.ext import commands, tasks
 from discord.utils import escape_markdown
@@ -49,8 +50,6 @@ TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
 
 # ================= BANCO POSTGRES (POOL PROFISSIONAL) =================
 
-import asyncpg
-
 DATABASE_URL = os.environ.get("DATABASE_URL")
 db = None
 
@@ -65,21 +64,11 @@ async def conectar_db():
         db = await asyncpg.create_pool(
             DATABASE_URL,
             min_size=1,
-            max_size=10
+            max_size=5,
+            command_timeout=60
         )
         print("🟢 Pool PostgreSQL conectado!")
 
-
-# =========================================================
-# ======================== VENDAS DB =======================
-# =========================================================
-
-async def carregar_vendas_db():
-    if not db:
-        return []
-
-    rows = await db.fetch("SELECT * FROM vendas")
-    return [dict(r) for r in rows]
 
 # =========================================================
 # ======================== ARQUIVOS ========================
@@ -94,7 +83,6 @@ ARQUIVO_PEDIDOS = f"{BASE_PATH}/pedidos.json"
 ARQUIVO_POLVORAS = f"{BASE_PATH}/polvoras.json"
 ARQUIVO_LIVES = f"{BASE_PATH}/lives.json"
 ARQUIVO_LAVAGENS = f"{BASE_PATH}/lavagens.json"
-ARQUIVO_PONTO = f"{BASE_PATH}/ponto.json"
 ARQUIVO_METAS = f"{BASE_PATH}/metas.json"
 
 
@@ -136,9 +124,6 @@ CANAL_DIVULGACAO_LIVE_ID = 1243325102917943335
 CANAL_INICIAR_LAVAGEM_ID = 1467152989499293768
 CANAL_LAVAGEM_MEMBROS_ID = 1467159346923311216
 CANAL_RELATORIO_LAVAGEM_ID = 1467150805273546878
-
-# PONTO
-CANAL_PONTO_ID = 1468941297162391715
 
 # METAS
 CANAL_SOLICITAR_SALA_ID = 1337374500366450741
@@ -543,6 +528,8 @@ async def enviar_painel_vendas():
 # ======================== PRODUÇÃO ========================
 # =========================================================
 
+producoes_tasks = {}
+
 async def carregar_producao(pid):
     async with db.acquire() as conn:
         r = await conn.fetchrow(
@@ -678,7 +665,10 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
         }
 
         await salvar_producao(pid, dados)
-        bot.loop.create_task(acompanhar_producao(pid))
+
+        if pid not in producoes_tasks:
+            task = bot.loop.create_task(acompanhar_producao(pid))
+            producoes_tasks[pid] = task
 
         await interaction.response.defer()
 
@@ -748,7 +738,6 @@ async def acompanhar_producao(pid):
     print(f"▶ Produção retomada: {pid}")
 
     while not bot.is_closed():
-        await asyncio.sleep(5)
 
         prod = await carregar_producao(pid)
         if not prod:
@@ -808,6 +797,10 @@ async def acompanhar_producao(pid):
                 pass
 
             await deletar_producao(pid)
+
+            if pid in producoes_tasks:
+                producoes_tasks.pop(pid)
+
             print(f"🗑️ Produção removida: {pid}")
             return
 
@@ -1023,6 +1016,10 @@ async def enviar_painel_polvoras(bot):
 # =========================================================
 
 lavagens_pendentes = {}
+
+@tasks.loop(minutes=15)
+async def limpar_lavagens_pendentes():
+    lavagens_pendentes.clear()
 
 def formatar_real(valor: int) -> str:
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -1325,6 +1322,9 @@ async def remover_live_db(user_id):
 # ================= CHECAR TWITCH =================
 
 async def checar_se_esta_ao_vivo(canal):
+
+    session = http_session
+
     url_token = "https://id.twitch.tv/oauth2/token"
 
     params = {
@@ -1333,24 +1333,23 @@ async def checar_se_esta_ao_vivo(canal):
         "grant_type": "client_credentials"
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url_token, params=params) as r:
-            data = await r.json()
-            token = data.get("access_token")
+    async with session.post(url_token, params=params) as r:
+        data = await r.json()
+        token = data.get("access_token")
 
-        headers = {
-            "Client-ID": TWITCH_CLIENT_ID,
-            "Authorization": f"Bearer {token}"
-        }
+    headers = {
+        "Client-ID": TWITCH_CLIENT_ID,
+        "Authorization": f"Bearer {token}"
+    }
 
-        url_stream = f"https://api.twitch.tv/helix/streams?user_login={canal}"
+    url_stream = f"https://api.twitch.tv/helix/streams?user_login={canal}"
 
-        async with session.get(url_stream, headers=headers) as r:
-            data = await r.json()
+    async with session.get(url_stream, headers=headers) as r:
+        data = await r.json()
 
-            if data.get("data"):
-                info = data["data"][0]
-                return True, info.get("title"), info.get("game_name"), info.get("thumbnail_url").replace("{width}", "1280").replace("{height}", "720")
+        if data.get("data"):
+            info = data["data"][0]
+            return True, info.get("title"), info.get("game_name"), info.get("thumbnail_url").replace("{width}", "1280").replace("{height}", "720")
 
     return False, None, None, None
 
@@ -1616,192 +1615,6 @@ async def enviar_painel_lives():
     )
 
 # =========================================================
-# ====================== PONTO ELETRÔNICO =================
-# =========================================================
-
-def carregar_ponto():
-    if not os.path.exists(ARQUIVO_PONTO):
-        return {}
-    try:
-        with open(ARQUIVO_PONTO, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def salvar_ponto(dados):
-    with open(ARQUIVO_PONTO, "w") as f:
-        json.dump(dados, f, indent=4)
-
-def hoje_str():
-    return agora().strftime("%d/%m/%Y")
-
-def hora_str():
-    return agora().strftime("%H:%M")
-
-
-# ================= VIEW =================
-
-class PontoView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="🟢 Abrir Ponto",
-        style=discord.ButtonStyle.success,
-        custom_id="abrir_ponto"
-    )
-    async def abrir(self, interaction: discord.Interaction, button: discord.ui.Button):
-        ponto = carregar_ponto()
-        uid = str(interaction.user.id)
-        hoje = hoje_str()
-
-        ponto.setdefault(uid, {}).setdefault(hoje, [])
-
-        for r in ponto[uid][hoje]:
-            if "saida" not in r:
-                await interaction.response.defer()
-                return
-
-        ponto[uid][hoje].append({"entrada": hora_str()})
-        salvar_ponto(ponto)
-
-        await atualizar_painel_ponto(interaction.guild)
-        await interaction.response.defer()
-
-    @discord.ui.button(
-        label="🔴 Fechar Ponto",
-        style=discord.ButtonStyle.danger,
-        custom_id="fechar_ponto"
-    )
-    async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        ponto = carregar_ponto()
-        uid = str(interaction.user.id)
-        hoje = hoje_str()
-
-        if uid in ponto and hoje in ponto[uid]:
-            for r in reversed(ponto[uid][hoje]):
-                if "saida" not in r:
-                    r["saida"] = hora_str()
-                    break
-
-        salvar_ponto(ponto)
-        await atualizar_painel_ponto(interaction.guild)
-        await interaction.response.defer()
-
-    @discord.ui.button(
-        label="📊 Relatório Semanal",
-        style=discord.ButtonStyle.primary,
-        custom_id="relatorio_ponto"
-    )
-    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            await interaction.response.defer()
-            return
-
-        ponto = carregar_ponto()
-        desc = ""
-
-        for uid, dias in ponto.items():
-            membro = interaction.guild.get_member(int(uid))
-            if not membro:
-                continue
-
-            total_min = 0
-
-            for dia, registros in dias.items():
-                data = datetime.strptime(dia, "%d/%m/%Y")
-                if data.weekday() >= 5:
-                    continue
-
-                for r in registros:
-                    if "saida" in r:
-                        ent = datetime.strptime(r["entrada"], "%H:%M")
-                        sai = datetime.strptime(r["saida"], "%H:%M")
-                        total_min += int((sai - ent).total_seconds() / 60)
-
-            if total_min > 0:
-                horas = total_min // 60
-                minutos = total_min % 60
-                desc += f"👤 **{membro.display_name}** — {horas}h {minutos}min\n"
-
-        embed = discord.Embed(
-            title="📊 Relatório Semanal de Horas",
-            description=desc or "Sem dados.",
-            color=0x3498db
-        )
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-# ================= ATUALIZAR PAINEL =================
-
-async def atualizar_painel_ponto(guild):
-    canal = guild.get_channel(CANAL_PONTO_ID)
-    if not canal:
-        return
-
-    ponto = carregar_ponto()
-    hoje = hoje_str()
-
-    em_servico = ""
-    registros = ""
-    total_servico = 0
-
-    for uid, dias in ponto.items():
-        membro = guild.get_member(int(uid))
-        if not membro:
-            continue
-
-        if hoje in dias:
-            for r in dias[hoje]:
-                if "saida" not in r:
-                    total_servico += 1
-                    em_servico += (
-                        f"🟢 **{membro.display_name}**\n"
-                        f"└ ⏰ Entrou às **{r['entrada']}**\n\n"
-                    )
-                else:
-                    registros += (
-                        f"👤 **{membro.display_name}**\n"
-                        f"└ 🕓 {r['entrada']} ➜ {r['saida']}\n\n"
-                    )
-
-    if not em_servico:
-        em_servico = "🛑 Ninguém em serviço."
-    if not registros:
-        registros = "📭 Nenhum registro finalizado hoje."
-
-    if total_servico == 0:
-        cor = 0xe74c3c
-    elif total_servico <= 2:
-        cor = 0xf1c40f
-    else:
-        cor = 0x2ecc71
-
-    embed = discord.Embed(
-        title="🛠️ PAINEL DE PONTO — MECÂNICA",
-        description=f"📅 {hoje}\n━━━━━━━━━━━━━━━━━━━━━━",
-        color=cor
-    )
-
-    embed.add_field(name="👷 EM SERVIÇO AGORA", value=em_servico, inline=False)
-    embed.add_field(name="📋 REGISTROS FINALIZADOS HOJE", value=registros, inline=False)
-
-    async for m in canal.history(limit=10):
-        if m.author == guild.me and m.embeds and "PAINEL DE PONTO" in m.embeds[0].title:
-            await m.edit(embed=embed, view=PontoView())
-            return
-
-    await canal.send(embed=embed, view=PontoView())
-
-
-# ================= PAINEL INICIAL =================
-
-async def enviar_painel_ponto():
-    canal = bot.get_channel(CANAL_PONTO_ID)
-    if canal:
-        await atualizar_painel_ponto(canal.guild)
-# =========================================================
 # =============== CALCULADORA MECÂNICA PRO ================
 # =========================================================
 
@@ -2037,23 +1850,19 @@ async def painel_calc():
 #   CATEGORIA_META_GERENTE_ID
 #   GUILD_ID
 
-from discord.ext import tasks
-from datetime import datetime, time
-from zoneinfo import ZoneInfo
-import discord
-import asyncio
-import os
-import json
-
-RESULTADOS_METAS_ID = 1341403574483288125
+metas_cache = {}
 
 # =========================================================
 # JSON
 # =========================================================
 
-async def carregar_metas():
-    rows = await db.fetch("SELECT * FROM metas")
-    return {
+async def carregar_metas_cache():
+    global metas_cache
+
+    async with db.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM metas")
+
+    metas_cache = {
         r["user_id"]: {
             "canal_id": int(r["canal_id"]),
             "dinheiro": r["dinheiro"],
@@ -2064,23 +1873,32 @@ async def carregar_metas():
     }
 
 async def salvar_meta(user_id, canal_id, dinheiro, polvora, acao):
-    await db.execute(
-        """
-        INSERT INTO metas (user_id, canal_id, dinheiro, polvora, acao)
-        VALUES ($1,$2,$3,$4,$5)
-        ON CONFLICT (user_id)
-        DO UPDATE SET
-        canal_id=$2,
-        dinheiro=$3,
-        polvora=$4,
-        acao=$5
-        """,
-        str(user_id),
-        str(canal_id),
-        dinheiro,
-        polvora,
-        acao
-    )
+
+    metas_cache[str(user_id)] = {
+        "canal_id": canal_id,
+        "dinheiro": dinheiro,
+        "polvora": polvora,
+        "acao": acao
+    }
+
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO metas (user_id, canal_id, dinheiro, polvora, acao)
+            VALUES ($1,$2,$3,$4,$5)
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+            canal_id=$2,
+            dinheiro=$3,
+            polvora=$4,
+            acao=$5
+            """,
+            str(user_id),
+            str(canal_id),
+            dinheiro,
+            polvora,
+            acao
+        )
 
 # =========================================================
 # CATEGORIA POR CARGO
@@ -2162,7 +1980,7 @@ class RegistrarValorModal(discord.ui.Modal):
         self.add_item(self.valor)
 
     async def on_submit(self, interaction: discord.Interaction):
-        metas = await carregar_metas()
+        metas = metas_cache
         dados = metas.get(str(self.member_id))
         if not dados:
             return
@@ -2240,13 +2058,14 @@ class MetaView(discord.ui.View):
 # =========================================================
 
 async def criar_sala_meta(member: discord.Member):
+
     if member.id in criando_meta:
         return
 
     criando_meta.add(member.id)
 
     try:
-        metas = await carregar_metas()
+        metas = metas_cache
         guild = member.guild
 
         # Já existe no banco
@@ -2254,15 +2073,29 @@ async def criar_sala_meta(member: discord.Member):
             canal = guild.get_channel(metas[str(member.id)]["canal_id"])
             if canal:
                 await atualizar_painel_meta(member)
+                criando_meta.discard(member.id)
                 return
 
-        # Verifica se já existe canal antigo com permissão
+        # =================================================
+        # VERIFICA SE JÁ EXISTE CANAL ANTIGO
+        # =================================================
+
         canal_encontrado = None
+
         for cat in guild.categories:
+
+            if not cat.name.lower().startswith("metas"):
+                continue
+
             for c in cat.channels:
+
+                if not isinstance(c, discord.TextChannel):
+                    continue
+
                 if c.overwrites_for(member).view_channel:
                     canal_encontrado = c
                     break
+
             if canal_encontrado:
                 break
 
@@ -2274,15 +2107,24 @@ async def criar_sala_meta(member: discord.Member):
                 0,
                 0
             )
+
             await atualizar_painel_meta(member)
+
+            criando_meta.discard(member.id)
             return
+
+        # =================================================
+        # CRIAR NOVA SALA
+        # =================================================
 
         categoria_id = obter_categoria_meta(member)
         if not categoria_id:
+            criando_meta.discard(member.id)
             return
 
         categoria = guild.get_channel(categoria_id)
         if not categoria:
+            criando_meta.discard(member.id)
             return
 
         nick = member.display_name.lower().replace(" ", "-")
@@ -2303,7 +2145,10 @@ async def criar_sala_meta(member: discord.Member):
             overwrites=overwrites
         )
 
-        # SALVA NO POSTGRES
+        # =================================================
+        # SALVAR META
+        # =================================================
+
         await salvar_meta(
             member.id,
             canal.id,
@@ -2314,6 +2159,9 @@ async def criar_sala_meta(member: discord.Member):
 
         await atualizar_painel_meta(member)
 
+    except Exception as e:
+        print("Erro criar canal meta:", e)
+
     finally:
         criando_meta.discard(member.id)
 
@@ -2322,13 +2170,14 @@ async def criar_sala_meta(member: discord.Member):
 # =========================================================
 
 async def atualizar_painel_meta(member: discord.Member):
-    metas = await carregar_metas()
+    metas = metas_cache
     dados = metas.get(str(member.id))
     if not dados:
         return
 
     canal = member.guild.get_channel(dados["canal_id"])
     if not canal:
+        await criar_sala_meta(member)
         return
 
     dinheiro = dados["dinheiro"]
@@ -2398,7 +2247,7 @@ async def atualizar_painel_meta(member: discord.Member):
 # =========================================================
 
 async def atualizar_categoria_meta(member):
-    metas = await carregar_metas()
+    metas = metas_cache
     if str(member.id) not in metas:
         return
 
@@ -2416,7 +2265,7 @@ async def atualizar_categoria_meta(member):
 
 @bot.event
 async def on_member_update(before, after):
-    metas = await carregar_metas()
+    metas = metas_cache
 
     # Se recebeu agregado e ainda não tem sala
     tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
@@ -2443,7 +2292,7 @@ async def on_member_update(before, after):
 
 @bot.event
 async def on_member_join(member):
-    await asyncio.sleep(5)
+    
     if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
         await criar_sala_meta(member)
 
@@ -2457,7 +2306,7 @@ async def varrer_agregados_sem_sala():
     if not guild:
         return
 
-    metas = await carregar_metas()
+    metas = metas_cache
 
     for member in guild.members:
         if member.bot:
@@ -2485,7 +2334,7 @@ async def varrer_agregados_sem_sala():
 async def enviar_relatorio_semanal():
     canal = bot.get_channel(RESULTADOS_METAS_ID)
     guild = bot.get_guild(GUILD_ID)
-    metas = await carregar_metas()
+    metas = metas_cache
 
     linhas = []
     total = 0
@@ -2530,11 +2379,11 @@ async def relatorio_semanal_task():
     if agora.weekday() == 5:
         await enviar_relatorio_semanal()
 
-        metas = await carregar_metas()
+        metas = metas_cache
 
         for uid, dados in metas.items():
             await salvar_meta(
-                uid,
+                int(uid),
                 dados["canal_id"],
                 0,
                 0,
@@ -2550,10 +2399,18 @@ async def relatorio_semanal_task():
 @bot.event
 async def on_ready():
     global db
+    global http_session
+
+    if not http_session:
+        http_session = aiohttp.ClientSession()
 
     # ================= CONECTA NO POSTGRES =================
     if not db:
         await conectar_db()
+
+    # ================= CACHE DE METAS =================
+    await carregar_metas_cache()
+    print(f"📊 Metas carregadas: {len(metas_cache)}")
 
     # evita rodar duas vezes
     if hasattr(bot, "ready_once"):
@@ -2574,8 +2431,8 @@ async def on_ready():
         "PolvoraView",
         "ConfirmarPagamentoView",
         "LavagemView",
-        "PontoView",
-        "FabricacaoView"
+        "FabricacaoView",
+        "FecharSalaView"
     ]
 
     for view_name in views:
@@ -2610,8 +2467,17 @@ async def on_ready():
     try:
         if not varrer_agregados_sem_sala.is_running():
             varrer_agregados_sem_sala.start()
+            
+        await varrer_agregados_sem_sala()
+        
     except Exception as e:
         print("Erro varredura metas:", e)
+      
+    try:
+        if not limpar_lavagens_pendentes.is_running():
+            limpar_lavagens_pendentes.start()
+    except Exception as e:
+        print("Erro loop limpeza lavagens:", e)
 
     # ================= RESTAURAR PRODUÇÕES =================
     try:
@@ -2619,7 +2485,12 @@ async def on_ready():
             rows = await conn.fetch("SELECT pid FROM producoes")
 
         for r in rows:
-            bot.loop.create_task(acompanhar_producao(r["pid"]))
+            pid = r["pid"]
+
+            if pid not in producoes_tasks:
+                task = bot.loop.create_task(acompanhar_producao(pid))
+                producoes_tasks[pid] = task
+
     except Exception as e:
         print("Erro restaurar produções:", e)
 
@@ -2630,7 +2501,6 @@ async def on_ready():
         "enviar_painel_admin_lives",
         "enviar_painel_polvoras",
         "enviar_painel_lavagem",
-        "enviar_painel_ponto",
         "painel_calc",
         "enviar_painel_vendas"
     ]
@@ -2658,20 +2528,7 @@ async def on_ready():
 # ========================= START BOT =====================
 # =========================================================
 
-while True:
-    try:
-        print("🚀 Iniciando bot...")
-        bot.run(TOKEN)
-    except Exception as e:
-        print("⚠️ Bot caiu. Reiniciando em 10 segundos...")
-        print("Erro:", e)
-        time.sleep(10)
-
-
-
-
-
-
-
-
+if __name__ == "__main__":
+    print("🚀 Iniciando bot...")
+    bot.run(TOKEN)
 
