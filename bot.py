@@ -1143,16 +1143,18 @@ def pode_gerenciar_lavagem(member: discord.Member):
 # ================= VIEW =================
 
 class LavagemView(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(
         label="Iniciar Lavagem",
         style=discord.ButtonStyle.primary,
-        custom_id="lavagem_btn"
+        custom_id="lavagem_iniciar"
     )
     async def iniciar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(LavagemModal())
+
 
     @discord.ui.button(
         label="🧹 Limpar Sala",
@@ -1160,6 +1162,7 @@ class LavagemView(discord.ui.View):
         custom_id="lavagem_limpar"
     )
     async def limpar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         if not pode_gerenciar_lavagem(interaction.user):
             await interaction.response.send_message("Você não tem permissão.", ephemeral=True)
             return
@@ -1173,7 +1176,9 @@ class LavagemView(discord.ui.View):
                 pass
 
         await limpar_lavagens_db()
+
         await interaction.response.send_message("Sala limpa!", ephemeral=True)
+
 
     @discord.ui.button(
         label="📊 Gerar Relatório",
@@ -1181,6 +1186,7 @@ class LavagemView(discord.ui.View):
         custom_id="lavagem_relatorio"
     )
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         if not pode_gerenciar_lavagem(interaction.user):
             await interaction.response.send_message("Você não tem permissão.", ephemeral=True)
             return
@@ -1190,6 +1196,7 @@ class LavagemView(discord.ui.View):
 
         for item in dados:
             user = await bot.fetch_user(int(item["user_id"]))
+
             await canal.send(
                 f"{user.mention} - Valor a repassar: {formatar_real(item['liquido'])} "
                 f"- Valor sujo: {formatar_real(item['valor'])}"
@@ -1197,12 +1204,14 @@ class LavagemView(discord.ui.View):
 
         await interaction.response.send_message("Relatório enviado!", ephemeral=True)
 
+
     @discord.ui.button(
         label="📩 Avisar TODOS no DM",
         style=discord.ButtonStyle.primary,
-        custom_id="lavagem_dm_todos"
+        custom_id="lavagem_dm"
     )
     async def avisar_todos(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         if not pode_gerenciar_lavagem(interaction.user):
             await interaction.response.send_message("Você não tem permissão.", ephemeral=True)
             return
@@ -1215,12 +1224,15 @@ class LavagemView(discord.ui.View):
         for item in dados:
             try:
                 user = await bot.fetch_user(int(item["user_id"]))
+
                 await user.send(
                     f"🧼 **Seu dinheiro foi lavado com sucesso!**\n\n"
                     f"💵 Dinheiro informado: {formatar_real(item['valor'])}\n"
                     f"💰 Valor repassado: {formatar_real(item['liquido'])}"
                 )
+
                 enviados += 1
+
             except:
                 falhas += 1
 
@@ -1228,7 +1240,6 @@ class LavagemView(discord.ui.View):
             f"DM enviada para {enviados} membros.\nFalhas: {falhas}",
             ephemeral=True
         )
-
 
 # ================= PAINEL =================
 
@@ -2531,6 +2542,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
