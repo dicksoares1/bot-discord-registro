@@ -1975,31 +1975,54 @@ class FecharSalaView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔒 Fechar Sala", style=discord.ButtonStyle.danger, custom_id="meta_fechar")
+    @discord.ui.button(
+        label="🔒 Fechar Sala",
+        style=discord.ButtonStyle.danger,
+        custom_id="meta_fechar"
+    )
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            return await interaction.response.send_message("Apenas Gerentes podem fechar.", ephemeral=True)
+            await interaction.response.send_message(
+                "Apenas Gerentes podem fechar.",
+                ephemeral=True
+            )
+            return
+
         await interaction.channel.delete()
 
+
 class RegistrarValorModal(discord.ui.Modal):
+
     def __init__(self, tipo, member_id):
         super().__init__(title=f"Registrar {tipo}")
+
         self.tipo = tipo
         self.member_id = member_id
 
-        self.valor = discord.ui.TextInput(label="Valor", placeholder="Ex: 50000")
+        self.valor = discord.ui.TextInput(
+            label="Valor",
+            placeholder="Ex: 50000"
+        )
+
         self.add_item(self.valor)
 
     async def on_submit(self, interaction: discord.Interaction):
+
         metas = metas_cache
         dados = metas.get(str(self.member_id))
+
         if not dados:
             return
 
         try:
             valor = int(self.valor.value.replace(".", "").replace(",", ""))
         except:
-            return await interaction.response.send_message("Valor inválido.", ephemeral=True)
+            await interaction.response.send_message(
+                "Valor inválido.",
+                ephemeral=True
+            )
+            return
 
         # Atualiza valor local
         dados[self.tipo] += valor
@@ -2014,56 +2037,116 @@ class RegistrarValorModal(discord.ui.Modal):
         )
 
         membro = interaction.guild.get_member(self.member_id)
+
         if membro:
             await atualizar_painel_meta(membro)
 
-        await interaction.response.send_message("Registrado.", ephemeral=True)
+        await interaction.response.send_message(
+            "Registrado.",
+            ephemeral=True
+        )
+
 
 class MetaView(discord.ui.View):
+
     def __init__(self, member: discord.Member):
+
         super().__init__(timeout=None)
+
         roles = [r.id for r in member.roles]
 
         # Agregado puro → só pólvora
         if AGREGADO_ROLE_ID in roles and CARGO_MEMBRO_ID not in roles:
             self.add_item(self.BotaoPolvora(member.id))
+
         else:
             # Membro/Resp → dinheiro + ação
             self.add_item(self.BotaoDinheiro(member.id))
             self.add_item(self.BotaoAcao(member.id))
 
+        # botão fechar sala
         self.add_item(FecharSalaView().children[0])
 
+
+    # ================= DINHEIRO =================
+
     class BotaoDinheiro(discord.ui.Button):
+
         def __init__(self, member_id):
-            super().__init__(label="💰 Dinheiro", style=discord.ButtonStyle.success)
+
+            super().__init__(
+                label="💰 Dinheiro",
+                style=discord.ButtonStyle.success,
+                custom_id=f"meta_dinheiro_{member_id}"
+            )
+
             self.member_id = member_id
 
         async def callback(self, interaction: discord.Interaction):
+
             if interaction.user.id != self.member_id:
                 return
-            await interaction.response.send_modal(RegistrarValorModal("dinheiro", self.member_id))
+
+            if interaction.response.is_done():
+                return
+
+            await interaction.response.send_modal(
+                RegistrarValorModal("dinheiro", self.member_id)
+            )
+
+
+    # ================= AÇÃO =================
 
     class BotaoAcao(discord.ui.Button):
+
         def __init__(self, member_id):
-            super().__init__(label="🎯 Ação", style=discord.ButtonStyle.secondary)
+
+            super().__init__(
+                label="🎯 Ação",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"meta_acao_{member_id}"
+            )
+
             self.member_id = member_id
 
         async def callback(self, interaction: discord.Interaction):
+
             if interaction.user.id != self.member_id:
                 return
-            await interaction.response.send_modal(RegistrarValorModal("acao", self.member_id))
+
+            if interaction.response.is_done():
+                return
+
+            await interaction.response.send_modal(
+                RegistrarValorModal("acao", self.member_id)
+            )
+
+
+    # ================= PÓLVORA =================
 
     class BotaoPolvora(discord.ui.Button):
+
         def __init__(self, member_id):
-            super().__init__(label="💣 Pólvora", style=discord.ButtonStyle.primary)
+
+            super().__init__(
+                label="💣 Pólvora",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"meta_polvora_{member_id}"
+            )
+
             self.member_id = member_id
 
         async def callback(self, interaction: discord.Interaction):
+
             if interaction.user.id != self.member_id:
                 return
-            await interaction.response.send_modal(RegistrarValorModal("polvora", self.member_id))
 
+            if interaction.response.is_done():
+                return
+           
+            await interaction.response.send_modal(
+                RegistrarValorModal("polvora", self.member_id)
+            )
 # =========================================================
 # CRIAR SALA
 # =========================================================
@@ -2443,7 +2526,8 @@ async def on_ready():
         "ConfirmarPagamentoView",
         "LavagemView",
         "FabricacaoView",
-        "FecharSalaView"
+        "FecharSalaView",
+        "MetaView"
     ]
 
     for view_name in views:
@@ -2514,6 +2598,7 @@ async def on_ready():
         "enviar_painel_lavagem",
         "painel_calc",
         "enviar_painel_vendas"
+        
     ]
 
     for func in funcoes_paineis:
@@ -2542,6 +2627,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
