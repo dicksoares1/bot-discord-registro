@@ -2146,6 +2146,14 @@ class MetaView(discord.ui.View):
 
         self.member_id = member_id
 
+        guild = bot.get_guild(GUILD_ID)
+        member = guild.get_member(member_id) if guild else None
+
+        if not member:
+            return
+
+        roles = [r.id for r in member.roles]
+
         # Agregado puro → só pólvora
         if AGREGADO_ROLE_ID in roles and CARGO_MEMBRO_ID not in roles:
             self.add_item(self.BotaoPolvora(member.id))
@@ -2868,4 +2876,5 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
