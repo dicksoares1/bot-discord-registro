@@ -218,14 +218,17 @@ async def obter_token_twitch():
 
         data = await r.json()
 
-        twitch_token = data["access_token"]
+        if "access_token" not in data:
+            print("Erro Twitch API:", data)
+            return None
 
-        # token dura ~60 dias
+        twitch_token = data["access_token"]
         twitch_token_expira = agora_ts + data["expires_in"] - 100
 
-        print("🔑 Novo token Twitch obtido")
-
         return twitch_token
+
+print("TWITCH_CLIENT_ID:", TWITCH_CLIENT_ID)
+print("TWITCH_CLIENT_SECRET:", TWITCH_CLIENT_SECRET)
 
 # =========================================================
 # ======================= REGISTRO =========================
@@ -2741,6 +2744,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
