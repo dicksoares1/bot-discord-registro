@@ -783,6 +783,8 @@ class FabricacaoView(discord.ui.View):
 
 async def acompanhar_producao(pid):
 
+    print(f"▶ Produção retomada: {pid}")
+
     msg = None
 
     while not bot.is_closed():
@@ -792,8 +794,12 @@ async def acompanhar_producao(pid):
             return
 
         canal = bot.get_channel(prod["canal_id"])
+        if not canal:
+            await asyncio.sleep(10)
+            continue
 
-        if not msg:
+        # pega mensagem apenas 1 vez
+        if msg is None:
             try:
                 msg = await canal.fetch_message(prod["msg_id"])
             except:
@@ -2735,6 +2741,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
