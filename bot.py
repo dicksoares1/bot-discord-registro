@@ -227,9 +227,6 @@ async def obter_token_twitch():
 
         return twitch_token
 
-print("TWITCH_CLIENT_ID:", TWITCH_CLIENT_ID)
-print("TWITCH_CLIENT_SECRET:", TWITCH_CLIENT_SECRET)
-
 # =========================================================
 # ======================= REGISTRO =========================
 # =========================================================
@@ -761,25 +758,35 @@ class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary)
+    @discord.ui.button(
+        label="🏭 Galpões Norte",
+        style=discord.ButtonStyle.primary,
+        custom_id="fabricacao_norte"
+    )
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(
             ObservacaoProducaoModal("GALPÕES NORTE", 65)
         )
 
-    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label="🏭 Galpões Sul",
+        style=discord.ButtonStyle.secondary,
+        custom_id="fabricacao_sul"
+    )
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(
             ObservacaoProducaoModal("GALPÕES SUL", 130)
         )
 
-    @discord.ui.button(label="🧪 TESTE 3 MIN", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label="🧪 TESTE 3 MIN",
+        style=discord.ButtonStyle.success,
+        custom_id="fabricacao_teste"
+    )
     async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(
             ObservacaoProducaoModal("TESTE", 3)
         )
-
-
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
 # =========================================================
@@ -2135,11 +2142,12 @@ class RegistrarValorModal(discord.ui.Modal):
 
 class MetaView(discord.ui.View):
 
-    def __init__(self, member: discord.Member):
+    def __init__(self, member_id=None):
 
         super().__init__(timeout=None)
 
-        roles = [r.id for r in member.roles]
+        if member_id:
+            self.member_id = member_id
 
         # Agregado puro → só pólvora
         if AGREGADO_ROLE_ID in roles and CARGO_MEMBRO_ID not in roles:
@@ -2250,11 +2258,18 @@ async def criar_sala_meta(member: discord.Member):
 
         # Já existe no banco
         if str(member.id) in metas:
-            canal = guild.get_channel(metas[str(member.id)]["canal_id"])
-            if canal:
-                await atualizar_painel_meta(member)
-                criando_meta.discard(member.id)
-                return
+
+    canal = guild.get_channel(metas[str(member.id)]["canal_id"])
+
+    # canal existe
+    if canal:
+        await atualizar_painel_meta(member)
+        criando_meta.discard(member.id)
+        return
+
+    # canal foi apagado
+    else:
+        metas.pop(str(member.id))
 
         # =================================================
         # VERIFICA SE JÁ EXISTE CANAL ANTIGO
@@ -2395,7 +2410,7 @@ async def atualizar_painel_meta(member: discord.Member):
     painel_encontrado = None
 
     # procura painel existente
-    async for msg in canal.history(limit=30):
+    async for msg in canal.history(limit=100):
         if msg.author == member.guild.me and msg.embeds:
             painel_encontrado = msg
             break
@@ -2445,37 +2460,147 @@ async def atualizar_categoria_meta(member):
 
 @bot.event
 async def on_member_update(before, after):
+
+    if after.bot:
+        return
+
     metas = metas_cache
 
-    # Se recebeu agregado e ainda não tem sala
+    # recebeu agregado
     tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
     tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
 
+    # =====================================================
+    # NOVO AGREGADO → CRIAR META
+    # =====================================================
+
     if not tinha_agregado and tem_agregado:
+
         await asyncio.sleep(2)
-        await criar_sala_meta(after)
+
+        # anti duplicação
+        if str(after.id) not in metas:
+            await criar_sala_meta(after)
+
         return
 
-    # SE JÁ TEM SALA → QUALQUER mudança de cargo atualiza tudo
+    # =====================================================
+    # MEMBRO JÁ TEM META → ATUALIZA
+    # =====================================================
+
     if str(after.id) in metas:
+
         await asyncio.sleep(1)
 
-        # mover categoria
         await atualizar_categoria_meta(after)
-
-        # recalcular meta (100k mecânico / 150k resp / 250k membro)
         await atualizar_painel_meta(after)
 
+    # agregado sempre mantém painel atualizado
     if tem_agregado:
         await atualizar_categoria_meta(after)
         await atualizar_painel_meta(after)
 
+
+# =========================================================
+# NOVO MEMBRO
+# =========================================================
+
 @bot.event
 async def on_member_join(member):
-    
-    if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
-        await criar_sala_meta(member)
 
+    if member.bot:
+        return
+
+    if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
+
+        await asyncio.sleep(2)
+
+        if str(member.id) not in metas_cache:
+            await criar_sala_meta(member)
+
+
+# =========================================================
+# DETECTA EXCLUSÃO DE CANAL DE META
+# =========================================================
+
+@bot.event
+async def on_guild_channel_delete(channel):
+
+    metas = metas_cache
+
+    for uid, dados in list(metas.items()):
+
+        if dados["canal_id"] == channel.id:
+
+            print(f"🗑️ Canal de meta apagado: {uid}")
+
+            metas.pop(uid)
+
+            try:
+                async with db.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM metas WHERE user_id=$1",
+                        uid
+                    )
+            except Exception as e:
+                print("Erro removendo meta do banco:", e)
+
+            break
+
+
+# =========================================================
+# RECRIAR PAINEL SE APAGAREM A MENSAGEM
+# =========================================================
+
+@bot.event
+async def on_raw_message_delete(payload):
+
+    metas = metas_cache
+
+    if payload.guild_id != GUILD_ID:
+        return
+
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+
+    for uid, dados in metas.items():
+
+        if dados["canal_id"] != payload.channel_id:
+            continue
+
+        member = guild.get_member(int(uid))
+        if not member:
+            return
+
+        canal = guild.get_channel(payload.channel_id)
+        if not canal:
+            return
+
+        encontrou = False
+
+        try:
+
+            async for msg in canal.history(limit=30):
+
+                if msg.author == guild.me and msg.embeds:
+                    encontrou = True
+                    break
+
+        except:
+            return
+
+        # painel foi apagado
+        if not encontrou:
+
+            print(f"♻️ Painel recriado automaticamente para {member.display_name}")
+
+            try:
+                await atualizar_painel_meta(member)
+            except Exception as e:
+                print("Erro recriando painel:", e)
+
+        break
 # =========================================================
 # VARREDURA (ATUALIZA TODOS QUE TÊM SALA)
 # =========================================================
@@ -2744,6 +2869,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
