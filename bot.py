@@ -2259,17 +2259,18 @@ async def criar_sala_meta(member: discord.Member):
         # Já existe no banco
         if str(member.id) in metas:
 
-    canal = guild.get_channel(metas[str(member.id)]["canal_id"])
+            canal = guild.get_channel(metas[str(member.id)]["canal_id"])
 
-    # canal existe
-    if canal:
-        await atualizar_painel_meta(member)
-        criando_meta.discard(member.id)
-        return
+            # canal existe
+            if canal:
+                await atualizar_painel_meta(member)
+                criando_meta.discard(member.id)
+                return
 
-    # canal foi apagado
-    else:
-        metas.pop(str(member.id))
+            # canal foi apagado
+            else:
+                metas.pop(str(member.id))
+
 
         # =================================================
         # VERIFICA SE JÁ EXISTE CANAL ANTIGO
@@ -2869,6 +2870,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
