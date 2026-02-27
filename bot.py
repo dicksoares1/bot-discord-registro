@@ -2009,6 +2009,7 @@ async def salvar_meta(user_id, canal_id, dinheiro, polvora, acao):
 # =========================================================
 
 def obter_categoria_meta(member: discord.Member):
+
     roles = [r.id for r in member.roles]
 
     if CARGO_GERENTE_ID in roles:
@@ -2038,13 +2039,12 @@ def obter_categoria_meta(member: discord.Member):
 # =========================================================
 
 def obter_meta_dinheiro(member: discord.Member) -> int:
+
     roles = [r.id for r in member.roles]
 
-    # MECÂNICO TEM PRIORIDADE MÁXIMA
     if CARGO_MECANICO_ID in roles:
         return 100_000
 
-    # RESPONSÁVEIS
     if any(r in roles for r in [
         CARGO_RESP_METAS_ID,
         CARGO_RESP_ACAO_ID,
@@ -2053,11 +2053,9 @@ def obter_meta_dinheiro(member: discord.Member) -> int:
     ]):
         return 150_000
 
-    # MEMBRO / SOLDADO
     if CARGO_MEMBRO_ID in roles or CARGO_SOLDADO_ID in roles:
         return 250_000
 
-    # AGREGADO
     return 0
 
 # =========================================================
@@ -2870,6 +2868,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
