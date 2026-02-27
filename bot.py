@@ -2426,6 +2426,7 @@ async def varrer_agregados_sem_sala():
 # =========================================================
 
 async def enviar_relatorio_semanal():
+
     canal = bot.get_channel(RESULTADOS_METAS_ID)
     guild = bot.get_guild(GUILD_ID)
     metas = metas_cache
@@ -2435,6 +2436,7 @@ async def enviar_relatorio_semanal():
     zerados = 0
 
     for uid, dados in metas.items():
+
         m = guild.get_member(int(uid))
         if not m:
             continue
@@ -2443,16 +2445,31 @@ async def enviar_relatorio_semanal():
         polvora = dados["polvora"]
         acao = dados["acao"]
 
+        meta = obter_meta_dinheiro(m)
+
         total += dinheiro
 
+        # ================= STATUS DA META =================
+
         if dinheiro == 0 and polvora == 0 and acao == 0:
+
             zerados += 1
-            status = "❌ ZERADO"
+            status = "❌ Não pagou"
+
+        elif meta > 0 and dinheiro >= meta:
+
+            status = "✅ META BATIDA"
+
         else:
-            status = "✅ Produziu"
+
+            status = "⚠️ Pagou parcialmente"
 
         linhas.append(
-            f"**{m.display_name}**\n{status}\n💰 {dinheiro}\n💣 {polvora}\n🎯 {acao}\n"
+            f"**{m.display_name}**\n"
+            f"{status}\n"
+            f"💰 {dinheiro}\n"
+            f"💣 {polvora}\n"
+            f"🎯 {acao}\n"
         )
 
     embed = discord.Embed(
@@ -2460,6 +2477,20 @@ async def enviar_relatorio_semanal():
         description="\n".join(linhas[:25]),
         color=0x2ecc71
     )
+
+    embed.add_field(
+        name="💰 Total Facção",
+        value=f"R$ {total:,}".replace(",", "."),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📉 Não pagaram",
+        value=str(zerados),
+        inline=True
+    )
+
+    await canal.send(embed=embed)
 
     embed.add_field(name="💰 Total Facção", value=f"R$ {total:,}".replace(",", "."), inline=False)
     embed.add_field(name="📉 Zerados", value=str(zerados))
@@ -2627,6 +2658,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
