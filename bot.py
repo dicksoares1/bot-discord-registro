@@ -181,6 +181,45 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 criando_meta = set()
 
 # =========================================================
+# ================= TWITCH TOKEN CACHE ====================
+# =========================================================
+
+twitch_token = None
+twitch_token_expira = 0
+
+
+async def obter_token_twitch():
+
+    global twitch_token
+    global twitch_token_expira
+
+    agora_ts = time.time()
+
+    if twitch_token and agora_ts < twitch_token_expira:
+        return twitch_token
+
+    url = "https://id.twitch.tv/oauth2/token"
+
+    params = {
+        "client_id": TWITCH_CLIENT_ID,
+        "client_secret": TWITCH_CLIENT_SECRET,
+        "grant_type": "client_credentials"
+    }
+
+    async with http_session.post(url, params=params) as r:
+
+        data = await r.json()
+
+        twitch_token = data["access_token"]
+
+        # token dura ~60 dias
+        twitch_token_expira = agora_ts + data["expires_in"] - 100
+
+        print("🔑 Novo token Twitch obtido")
+
+        return twitch_token
+
+# =========================================================
 # ======================= REGISTRO =========================
 # =========================================================
 
@@ -1334,102 +1373,127 @@ async def remover_live_db(user_id):
 
 async def checar_se_esta_ao_vivo(canal):
 
-    session = http_session
+    try:
 
-    url_token = "https://id.twitch.tv/oauth2/token"
+        token = await obter_token_twitch()
 
-    params = {
-        "client_id": TWITCH_CLIENT_ID,
-        "client_secret": TWITCH_CLIENT_SECRET,
-        "grant_type": "client_credentials"
-    }
+        headers = {
+            "Client-ID": TWITCH_CLIENT_ID,
+            "Authorization": f"Bearer {token}"
+        }
 
-    async with session.post(url_token, params=params) as r:
-        data = await r.json()
-        token = data.get("access_token")
+        url = f"https://api.twitch.tv/helix/streams?user_login={canal}"
 
-    headers = {
-        "Client-ID": TWITCH_CLIENT_ID,
-        "Authorization": f"Bearer {token}"
-    }
+        async with http_session.get(url, headers=headers) as r:
 
-    url_stream = f"https://api.twitch.tv/helix/streams?user_login={canal}"
+            data = await r.json()
 
-    async with session.get(url_stream, headers=headers) as r:
-        data = await r.json()
+            if data.get("data"):
 
-        if data.get("data"):
-            info = data["data"][0]
-            return True, info.get("title"), info.get("game_name"), info.get("thumbnail_url").replace("{width}", "1280").replace("{height}", "720")
+                info = data["data"][0]
 
-    return False, None, None, None
+                thumbnail = info["thumbnail_url"]\
+                    .replace("{width}", "1280")\
+                    .replace("{height}", "720")
 
+                return (
+                    True,
+                    info.get("title"),
+                    info.get("game_name"),
+                    thumbnail
+                )
+
+        return False, None, None, None
+
+    except Exception as e:
+
+        print("Erro Twitch API:", e)
+
+        return False, None, None, None
 
 # ================= DIVULGAÇÃO =================
 
 async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
+
     try:
+
         canal = await bot.fetch_channel(CANAL_DIVULGACAO_LIVE_ID)
+
+        user = await bot.fetch_user(int(user_id))
+
+        embed = discord.Embed(
+            title="🔴 LIVE AO VIVO NA TWITCH!",
+            color=0x9146FF
+        )
+
+        embed.description = (
+            f"👤 **Streamer:** {user.mention}\n"
+            f"🎮 **Jogo:** {jogo or 'Não informado'}\n"
+            f"📝 **Título:** {titulo or 'Sem título'}\n\n"
+            f"🔗 {link}\n\n"
+            f"🚨 **Entrou ao vivo agora!**"
+        )
+
+        if thumbnail:
+            embed.set_image(url=thumbnail)
+
+        await canal.send(
+            content=f"🚨 {user.mention} está ao vivo!",
+            embed=embed
+        )
+
+        print(f"📢 Live divulgada: {user_id}")
+
     except Exception as e:
-        print("❌ Erro ao buscar canal divulgação:", e)
-        return
 
-    user = await bot.fetch_user(int(user_id))
-    link_formatado = escape_markdown(link)
-
-    descricao = (
-        f"👤 Streamer: {user.mention}\n"
-        f"🎮 Jogo: **{jogo or 'Não informado'}**\n"
-        f"📝 Título: **{titulo or 'Sem título'}**\n\n"
-        f"🔗 {link_formatado}\n\n"
-        f"🚨 Está AO VIVO agora! Corre lá!"
-    )
-
-    embed = discord.Embed(
-        title="🔴 LIVE AO VIVO NA TWITCH!",
-        description=descricao,
-        color=0x9146FF
-    )
-
-    if thumbnail:
-        embed.set_image(url=thumbnail)
-
-    await canal.send(content="@everyone", embed=embed)
-
+        print("Erro divulgar live:", e)
 
 # ================= LOOP TWITCH =================
 
 @tasks.loop(minutes=2)
 async def verificar_lives_twitch():
+
     print("🔄 Verificando lives na Twitch...")
 
-    lives = await carregar_lives()
+    try:
 
-    for user_id, data in lives.items():
-        link = data.get("link", "")
-        divulgado = data.get("divulgado", False)
+        lives = await carregar_lives()
 
-        canal_twitch = link.lower().strip()
-        canal_twitch = canal_twitch.replace("https://", "")
-        canal_twitch = canal_twitch.replace("http://", "")
-        canal_twitch = canal_twitch.replace("www.", "")
-        canal_twitch = canal_twitch.replace("twitch.tv/", "")
-        canal_twitch = canal_twitch.split("/")[0].strip()
+        for user_id, data in lives.items():
 
-        if not canal_twitch:
-            continue
+            link = data.get("link", "")
+            divulgado = data.get("divulgado", False)
 
-        ao_vivo, titulo, jogo, thumbnail = await checar_se_esta_ao_vivo(canal_twitch)
+            canal = link.lower().strip()
 
-        print(f"🎮 {canal_twitch} ao vivo? {ao_vivo}")
+            canal = canal.replace("https://", "")
+            canal = canal.replace("http://", "")
+            canal = canal.replace("www.", "")
+            canal = canal.replace("twitch.tv/", "")
+            canal = canal.split("/")[0].strip()
 
-        if not ao_vivo and divulgado:
-            await atualizar_divulgado(user_id, False)
+            if not canal:
+                continue
 
-        if ao_vivo and not divulgado:
-            await divulgar_live(user_id, link, titulo, jogo, thumbnail)
-            await atualizar_divulgado(user_id, True)
+            ao_vivo, titulo, jogo, thumbnail = await checar_se_esta_ao_vivo(canal)
 
+            print(f"🎮 {canal} ao vivo? {ao_vivo}")
+
+            # live terminou
+            if not ao_vivo and divulgado:
+
+                await atualizar_divulgado(user_id, False)
+
+            # live começou
+            if ao_vivo and not divulgado:
+
+                await divulgar_live(user_id, link, titulo, jogo, thumbnail)
+
+                await atualizar_divulgado(user_id, True)
+
+    except Exception as e:
+
+        print("Erro no loop Twitch:", e)
 
 # ================= CADASTRO =================
 
@@ -2658,6 +2722,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
