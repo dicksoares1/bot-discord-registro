@@ -2,23 +2,31 @@
 # ======================== IMPORTS =========================
 # =========================================================
 
+# ================= SISTEMA =================
 import os
 import json
+import gc
+
+# ================= ASYNC =================
 import asyncio
 import aiohttp
-import discord
-import time as systime
-import gc
+
+# ================= BANCO =================
 import asyncpg
 
-http_session = None
-
+# ================= DISCORD =================
+import discord
 from discord.ext import commands, tasks
 from discord.utils import escape_markdown
 
+# ================= TEMPO =================
+import time as time_module
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 
+# =========================================================
+
+http_session = None
 # =========================================================
 # ===================== RELÓGIO GLOBAL ====================
 # =========================================================
@@ -40,7 +48,7 @@ tentativas = 0
 while not TOKEN:
     tentativas += 1
     print(f"⚠️ TOKEN não carregado... tentativa {tentativas}")
-    systime.sleep(2)
+    time_module.sleep(2)
     TOKEN = os.environ.get("TOKEN")
 
 print("🔐 TOKEN carregado com sucesso.")
@@ -193,7 +201,7 @@ async def obter_token_twitch():
     global twitch_token
     global twitch_token_expira
 
-    agora_ts = time.time()
+    agora_ts = time_module.time()
 
     if twitch_token and agora_ts < twitch_token_expira:
         return twitch_token
@@ -2722,6 +2730,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
