@@ -2002,15 +2002,46 @@ ACOES_CONFIG = {
     "Fleeca": 4
 }
 
+# =========================================================
+# ================= FORMATAR DINHEIRO =====================
+# =========================================================
+
+def formatar_dinheiro(valor):
+
+    try:
+        valor = float(valor)
+    except:
+        valor = 0
+
+    return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 
 # =========================================================
-# ================= CARREGAR AÇÕES DA SEMANA ==============
+# =============== CARGOS PERMITIDOS AÇÃO ==================
+# =========================================================
+
+CARGOS_ACAO = [
+    AGREGADO_ROLE_ID,
+    CARGO_MEMBRO_ID,
+    CARGO_SOLDADO_ID,
+    CARGO_GERENTE_ID,
+    CARGO_GERENTE_GERAL_ID,
+    CARGO_01_ID,
+    CARGO_02_ID,
+    CARGO_RESP_METAS_ID,
+    CARGO_RESP_ACAO_ID,
+    CARGO_RESP_VENDAS_ID,
+    CARGO_RESP_PRODUCAO_ID
+]
+
+
+# =========================================================
+# ================= CARREGAR AÇÕES SEMANA =================
 # =========================================================
 
 async def carregar_acoes_semana():
 
-    inicio_semana = agora() - timedelta(days=agora().weekday())
-    inicio_semana = inicio_semana.replace(tzinfo=None)
+    inicio_semana = agora_db() - timedelta(days=agora_db().weekday())
 
     async with db.acquire() as conn:
 
@@ -2028,7 +2059,7 @@ async def carregar_acoes_semana():
 
 
 # =========================================================
-# ================= EMBED PAINEL AÇÕES ====================
+# ================= EMBED PAINEL ==========================
 # =========================================================
 
 async def gerar_embed_acoes():
@@ -2048,17 +2079,15 @@ async def gerar_embed_acoes():
         else:
             status = "🔴"
 
-        linhas.append(
-            f"{status} **{acao:<18}** {qtd}/{limite}"
-        )
+        linhas.append(f"{status} **{acao:<18}** {qtd}/{limite}")
 
     embed = discord.Embed(
-        title="🚨 PAINEL DE OPERAÇÕES DA SEMANA",
+        title="🚨 OPERAÇÕES DA SEMANA",
         description="\n".join(linhas),
         color=0xe74c3c
     )
 
-    embed.set_footer(text="Planeje ou registre ações usando o menu abaixo")
+    embed.set_footer(text="Use o menu abaixo para registrar ações")
 
     return embed
 
@@ -2109,7 +2138,20 @@ class SelecionarMembros(discord.ui.UserSelect):
 
     async def callback(self, interaction: discord.Interaction):
 
-        membros = self.values
+        membros_validos = []
+
+        for m in self.values:
+
+            if any(role.id in CARGOS_ACAO for role in m.roles):
+                membros_validos.append(m)
+
+        if not membros_validos:
+
+            await interaction.response.send_message(
+                "Nenhum membro selecionado possui cargo permitido.",
+                ephemeral=True
+            )
+            return
 
         async with db.acquire() as conn:
 
@@ -2120,11 +2162,11 @@ class SelecionarMembros(discord.ui.UserSelect):
                 RETURNING id
                 """,
                 self.acao,
-                agora().replace(tzinfo=None),
+                agora_db(),
                 str(interaction.user.id)
             )
 
-            for m in membros:
+            for m in membros_validos:
 
                 await conn.execute(
                     """
@@ -2167,7 +2209,7 @@ class SelecionarMembros(discord.ui.UserSelect):
         await atualizar_painel_acoes(interaction.guild)
 
         await interaction.response.send_message(
-            "Ação registrada!",
+            "Ação registrada com sucesso!",
             ephemeral=True
         )
 
@@ -2228,7 +2270,7 @@ async def atualizar_painel_acoes(guild):
 
         if msg.author == guild.me and msg.embeds:
 
-            if msg.embeds[0].title == "🚨 PAINEL DE OPERAÇÕES DA SEMANA":
+            if msg.embeds[0].title == "🚨 OPERAÇÕES DA SEMANA":
 
                 await msg.edit(embed=embed, view=PainelAcoesView())
                 return
@@ -2292,7 +2334,7 @@ class ResultadoModal(discord.ui.Modal):
 
         resultado = "🟢 Vitória" if self.venceu else "🔴 Derrota"
 
-        valor_total = self.dinheiro.value or "0"
+        valor_total = formatar_dinheiro(self.dinheiro.value)
         ouro_total = self.ouro.value or "0"
 
         lista = []
@@ -2316,7 +2358,7 @@ class ResultadoModal(discord.ui.Modal):
 
         embed.add_field(
             name="💰 Valores",
-            value=f"Total: ${valor_total}\nOuro: {ouro_total}",
+            value=f"Total obtido: **R$ {valor_total}**\n🥇 Ouro: **{ouro_total}**",
             inline=False
         )
 
@@ -2334,7 +2376,6 @@ class ResultadoModal(discord.ui.Modal):
             "Resultado registrado!",
             ephemeral=True
         )
-
 
 # =========================================================
 # ================= RELATÓRIO AÇÃO ========================
@@ -2361,7 +2402,6 @@ async def registrar_relatorio_acao(guild, acao_id):
         embed=embed,
         view=ResultadoAcaoView(acao_id)
     )
-
 
 # =========================================================
 # =========================== METAS ========================
@@ -3310,6 +3350,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
