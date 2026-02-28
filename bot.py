@@ -36,6 +36,16 @@ BRASIL = ZoneInfo("America/Sao_Paulo")
 def agora():
     return datetime.now(BRASIL)
 
+# =========================================================
+# =============== DATETIME PADRÃO PARA DB =================
+# =========================================================
+
+def agora_db():
+    """
+    Retorna datetime sem timezone para usar no PostgreSQL
+    evitando erro de timezone (offset-aware vs offset-naive)
+    """
+    return agora().replace(tzinfo=None)
 
 # =========================================================
 # ======================== CONFIG ==========================
@@ -2000,6 +2010,7 @@ ACOES_CONFIG = {
 async def carregar_acoes_semana():
 
     inicio_semana = agora() - timedelta(days=agora().weekday())
+    inicio_semana = inicio_semana.replace(tzinfo=None)
 
     async with db.acquire() as conn:
 
@@ -2109,7 +2120,7 @@ class SelecionarMembros(discord.ui.UserSelect):
                 RETURNING id
                 """,
                 self.acao,
-                agora(),
+                agora().replace(tzinfo=None),
                 str(interaction.user.id)
             )
 
@@ -3299,6 +3310,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
