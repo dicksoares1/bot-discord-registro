@@ -119,6 +119,7 @@ CANAL_VENDAS_ID = CANAL_CALCULADORA_ID
 # PRODUÇÃO
 CANAL_FABRICACAO_ID = 1466421612566810634
 CANAL_REGISTRO_GALPAO_ID = 1356174712337862819
+CANAL_BAU_GALPAO_SUL_ID = 1356174937764794521
 
 # POLVORA
 CANAL_CALCULO_POLVORA_ID = 1462834441968943157
@@ -358,6 +359,7 @@ class StatusView(discord.ui.View):
 
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
@@ -368,31 +370,76 @@ class StatusView(discord.ui.View):
         linhas = self.toggle_linha(linhas, "💰", f"💰 Pago • Recebido por {user} • {agora_str}")
 
         embed = self.set_status(embed, idx, linhas)
+
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
 
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
     async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
-        user = interaction.user.mention
+        user = interaction.user
 
-        linhas = self.toggle_linha(linhas, "✅", f"✅ Entregue por {user} • {agora_str}")
+        linhas = self.toggle_linha(
+            linhas,
+            "✅",
+            f"✅ Entregue por {user.mention} • {agora_str}"
+        )
 
         embed = self.set_status(embed, idx, linhas)
+
         await interaction.message.edit(embed=embed)
+
+        # ===============================
+        # PEGAR PACOTES DO EMBED
+        # ===============================
+
+        pacotes_pt = 0
+        pacotes_sub = 0
+
+        for field in embed.fields:
+
+            if field.name == "🔫 PT":
+                try:
+                    pacotes_pt = int(field.value.split("📦")[1].split()[0])
+                except:
+                    pass
+
+            if field.name == "🔫 SUB":
+                try:
+                    pacotes_sub = int(field.value.split("📦")[1].split()[0])
+                except:
+                    pass
+
+        # ===============================
+        # ENVIAR NO BAÚ
+        # ===============================
+
+        canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+
+        if canal_bau:
+            await canal_bau.send(
+                f"📦 **Retirada do Baú**\n\n"
+                f"👤 Retirado por: {user.mention}\n"
+                f"🔫 PT: {pacotes_pt} pacotes\n"
+                f"🔫 SUB: {pacotes_sub} pacotes"
+            )
+
         await interaction.response.defer()
 
     @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
     async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
         linhas = self.toggle_linha(linhas, "⏳", "⏳ Pagamento pendente")
 
         embed = self.set_status(embed, idx, linhas)
+
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
 
@@ -2871,6 +2918,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
