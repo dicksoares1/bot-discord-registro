@@ -1994,12 +1994,24 @@ async def painel_calc():
 # =========================================================
 
 ACOES_CONFIG = {
+
+    # AÇÕES COM LIMITE
     "Banco Central": 1,
     "Banco Paleto": 1,
     "Nióbio": 1,
     "Banco Central BH": 1,
     "Joalheria": 5,
-    "Fleeca": 4
+    "Fleeca": 4,
+
+    # AÇÕES ILIMITADAS
+    "Mergulhador": None,
+    "Cemitério de Aviões": None,
+    "Loja de Bebidas": None,
+    "Ammunation": None,
+    "Loja de Departamento": None,
+    "Companhia de Gás": None,
+    "Life Invader": None,
+    "Grapeseed": None
 }
 
 # =========================================================
@@ -2066,26 +2078,54 @@ async def gerar_embed_acoes():
 
     feitos = await carregar_acoes_semana()
 
-    linhas = []
+    linhas_limitadas = []
+    linhas_ilimitadas = []
 
     for acao, limite in ACOES_CONFIG.items():
 
         qtd = feitos.get(acao, 0)
 
-        if qtd >= limite:
-            status = "🟢"
-        elif qtd > 0:
-            status = "🟡"
-        else:
-            status = "🔴"
+        # ================= LIMITADAS =================
 
-        linhas.append(f"{status} **{acao:<18}** {qtd}/{limite}")
+        if limite is not None:
+
+            if qtd >= limite:
+                status = "🟢"
+            elif qtd > 0:
+                status = "🟡"
+            else:
+                status = "🔴"
+
+            linhas_limitadas.append(
+                f"{status} **{acao:<20}** {qtd}/{limite}"
+            )
+
+        # ================= ILIMITADAS =================
+
+        else:
+
+            linhas_ilimitadas.append(
+                f"🔹 **{acao:<20}** {qtd}"
+            )
 
     embed = discord.Embed(
         title="🚨 OPERAÇÕES DA SEMANA",
-        description="\n".join(linhas),
         color=0xe74c3c
     )
+
+    if linhas_limitadas:
+        embed.add_field(
+            name="🎯 Ações principais",
+            value="\n".join(linhas_limitadas),
+            inline=False
+        )
+
+    if linhas_ilimitadas:
+        embed.add_field(
+            name="📦 Ações secundárias (ilimitadas)",
+            value="\n".join(linhas_ilimitadas),
+            inline=False
+        )
 
     embed.set_footer(text="Use o menu abaixo para registrar ações")
 
@@ -3350,6 +3390,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
