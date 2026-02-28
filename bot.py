@@ -138,6 +138,9 @@ CANAL_RELATORIO_LAVAGEM_ID = 1467150805273546878
 CANAL_SOLICITAR_SALA_ID = 1337374500366450741
 RESULTADOS_METAS_ID = 1341403574483288125
 
+# AÇÕES
+CANAL_ESCALACOES_ID = 1241406819545514064
+CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 
 # =========================================================
 # ======================== CARGOS ==========================
@@ -1975,6 +1978,380 @@ async def painel_calc():
 
     await canal.send(embed=embed_calc(), view=CalcView())
 
+
+# =========================================================
+# ======================== AÇÕES ==========================
+# =========================================================
+
+ACOES_CONFIG = {
+    "Banco Central": 1,
+    "Banco Paleto": 1,
+    "Nióbio": 1,
+    "Banco Central BH": 1,
+    "Joalheria": 5,
+    "Fleeca": 4
+}
+
+
+# =========================================================
+# ================= CARREGAR AÇÕES DA SEMANA ==============
+# =========================================================
+
+async def carregar_acoes_semana():
+
+    inicio_semana = agora() - timedelta(days=agora().weekday())
+
+    async with db.acquire() as conn:
+
+        rows = await conn.fetch(
+            """
+            SELECT tipo, COUNT(*) as total
+            FROM acoes_semana
+            WHERE data >= $1
+            GROUP BY tipo
+            """,
+            inicio_semana
+        )
+
+    return {r["tipo"]: r["total"] for r in rows}
+
+
+# =========================================================
+# ================= EMBED PAINEL AÇÕES ====================
+# =========================================================
+
+async def gerar_embed_acoes():
+
+    feitos = await carregar_acoes_semana()
+
+    linhas = []
+
+    for acao, limite in ACOES_CONFIG.items():
+
+        qtd = feitos.get(acao, 0)
+
+        if qtd >= limite:
+            status = "🟢"
+        elif qtd > 0:
+            status = "🟡"
+        else:
+            status = "🔴"
+
+        linhas.append(
+            f"{status} **{acao:<18}** {qtd}/{limite}"
+        )
+
+    embed = discord.Embed(
+        title="🚨 PAINEL DE OPERAÇÕES DA SEMANA",
+        description="\n".join(linhas),
+        color=0xe74c3c
+    )
+
+    embed.set_footer(text="Planeje ou registre ações usando o menu abaixo")
+
+    return embed
+
+
+# =========================================================
+# ================= MODAL EXTERNOS ========================
+# =========================================================
+
+class ExternosModal(discord.ui.Modal, title="Participantes externos"):
+
+    nomes = discord.ui.TextInput(
+        label="Pessoas de fora (opcional)",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
+
+    def __init__(self, acao):
+        super().__init__()
+        self.acao = acao
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        view = SelecionarMembrosView(self.acao, self.nomes.value)
+
+        await interaction.response.send_message(
+            "Selecione os participantes:",
+            view=view,
+            ephemeral=True
+        )
+
+
+# =========================================================
+# ================= SELECIONAR MEMBROS ====================
+# =========================================================
+
+class SelecionarMembros(discord.ui.UserSelect):
+
+    def __init__(self, acao, externos):
+
+        super().__init__(
+            placeholder="Selecione os participantes",
+            min_values=1,
+            max_values=10
+        )
+
+        self.acao = acao
+        self.externos = externos
+
+    async def callback(self, interaction: discord.Interaction):
+
+        membros = self.values
+
+        async with db.acquire() as conn:
+
+            acao_id = await conn.fetchval(
+                """
+                INSERT INTO acoes_semana (tipo,data,autor)
+                VALUES ($1,$2,$3)
+                RETURNING id
+                """,
+                self.acao,
+                agora(),
+                str(interaction.user.id)
+            )
+
+            for m in membros:
+
+                await conn.execute(
+                    """
+                    INSERT INTO participantes_acoes (acao_id,user_id)
+                    VALUES ($1,$2)
+                    """,
+                    acao_id,
+                    str(m.id)
+                )
+
+                if str(m.id) in metas_cache:
+
+                    metas_cache[str(m.id)]["acao"] += 1
+
+                    await salvar_meta(
+                        m.id,
+                        metas_cache[str(m.id)]["canal_id"],
+                        metas_cache[str(m.id)]["dinheiro"],
+                        metas_cache[str(m.id)]["polvora"],
+                        metas_cache[str(m.id)]["acao"]
+                    )
+
+            if self.externos:
+
+                nomes = [n.strip() for n in self.externos.split("\n") if n.strip()]
+
+                for nome in nomes:
+
+                    await conn.execute(
+                        """
+                        INSERT INTO participantes_acoes (acao_id,nome_externo)
+                        VALUES ($1,$2)
+                        """,
+                        acao_id,
+                        nome
+                    )
+
+        await registrar_relatorio_acao(interaction.guild, acao_id)
+
+        await atualizar_painel_acoes(interaction.guild)
+
+        await interaction.response.send_message(
+            "Ação registrada!",
+            ephemeral=True
+        )
+
+
+class SelecionarMembrosView(discord.ui.View):
+
+    def __init__(self, acao, externos):
+        super().__init__(timeout=120)
+
+        self.add_item(SelecionarMembros(acao, externos))
+
+
+# =========================================================
+# ================= SELECT AÇÃO ===========================
+# =========================================================
+
+class AcaoSelect(discord.ui.Select):
+
+    def __init__(self):
+
+        options = [
+            discord.SelectOption(label=a)
+            for a in ACOES_CONFIG.keys()
+        ]
+
+        super().__init__(
+            placeholder="Escolha a ação",
+            options=options,
+            custom_id="acao_select_menu"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+
+        acao = self.values[0]
+
+        await interaction.response.send_modal(ExternosModal(acao))
+
+
+class PainelAcoesView(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+        self.add_item(AcaoSelect())
+
+
+# =========================================================
+# ================= ATUALIZAR PAINEL ======================
+# =========================================================
+
+async def atualizar_painel_acoes(guild):
+
+    canal = guild.get_channel(CANAL_ESCALACOES_ID)
+
+    embed = await gerar_embed_acoes()
+
+    async for msg in canal.history(limit=20):
+
+        if msg.author == guild.me and msg.embeds:
+
+            if msg.embeds[0].title == "🚨 PAINEL DE OPERAÇÕES DA SEMANA":
+
+                await msg.edit(embed=embed, view=PainelAcoesView())
+                return
+
+    await canal.send(embed=embed, view=PainelAcoesView())
+
+
+# =========================================================
+# ================= RESULTADO DA AÇÃO =====================
+# =========================================================
+
+class ResultadoAcaoView(discord.ui.View):
+
+    def __init__(self, acao_id):
+        super().__init__(timeout=None)
+        self.acao_id = acao_id
+
+    @discord.ui.button(label="🏆 Ganhou", style=discord.ButtonStyle.success)
+    async def ganhou(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        await interaction.response.send_modal(ResultadoModal(self.acao_id, True))
+
+    @discord.ui.button(label="💀 Perdeu", style=discord.ButtonStyle.danger)
+    async def perdeu(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        await interaction.response.send_modal(ResultadoModal(self.acao_id, False))
+
+
+# =========================================================
+# ================= MODAL RESULTADO =======================
+# =========================================================
+
+class ResultadoModal(discord.ui.Modal):
+
+    dinheiro = discord.ui.TextInput(label="Dinheiro ganho", required=False)
+    ouro = discord.ui.TextInput(label="Ouro ganho", required=False)
+
+    def __init__(self, acao_id, venceu):
+        super().__init__(title="Resultado da ação")
+
+        self.acao_id = acao_id
+        self.venceu = venceu
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        async with db.acquire() as conn:
+
+            acao = await conn.fetchrow(
+                "SELECT tipo FROM acoes_semana WHERE id=$1",
+                self.acao_id
+            )
+
+            participantes = await conn.fetch(
+                """
+                SELECT user_id, nome_externo
+                FROM participantes_acoes
+                WHERE acao_id=$1
+                """,
+                self.acao_id
+            )
+
+        resultado = "🟢 Vitória" if self.venceu else "🔴 Derrota"
+
+        valor_total = self.dinheiro.value or "0"
+        ouro_total = self.ouro.value or "0"
+
+        lista = []
+
+        for p in participantes:
+
+            if p["user_id"]:
+                lista.append(f"<@{p['user_id']}>")
+            else:
+                lista.append(f"👤 {p['nome_externo']}")
+
+        embed = discord.Embed(
+            title="🚨 RESULTADO DA AÇÃO",
+            color=0x2ecc71 if self.venceu else 0xe74c3c
+        )
+
+        embed.description = (
+            f"🏦 **Ação:** {acao['tipo']}\n"
+            f"🎯 **Resultado:** {resultado}"
+        )
+
+        embed.add_field(
+            name="💰 Valores",
+            value=f"Total: ${valor_total}\nOuro: {ouro_total}",
+            inline=False
+        )
+
+        embed.add_field(
+            name="👥 Participantes",
+            value="\n".join(lista),
+            inline=False
+        )
+
+        embed.set_footer(text="Sistema de Operações • Semana atual")
+
+        await interaction.message.edit(embed=embed, view=None)
+
+        await interaction.response.send_message(
+            "Resultado registrado!",
+            ephemeral=True
+        )
+
+
+# =========================================================
+# ================= RELATÓRIO AÇÃO ========================
+# =========================================================
+
+async def registrar_relatorio_acao(guild, acao_id):
+
+    canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+
+    async with db.acquire() as conn:
+
+        acao = await conn.fetchrow(
+            "SELECT tipo FROM acoes_semana WHERE id=$1",
+            acao_id
+        )
+
+    embed = discord.Embed(
+        title="🚨 Nova Ação Registrada",
+        description=f"🏦 **Ação:** {acao['tipo']}",
+        color=0xf39c12
+    )
+
+    await canal.send(
+        embed=embed,
+        view=ResultadoAcaoView(acao_id)
+    )
+
+
 # =========================================================
 # =========================== METAS ========================
 # =========================================================
@@ -2817,7 +3194,8 @@ async def on_ready():
         "ConfirmarPagamentoView",
         "LavagemView",
         "FabricacaoView",
-        "FecharSalaView"
+        "FecharSalaView",
+        "PainelAcoesView"
         
     ]
 
@@ -2888,8 +3266,8 @@ async def on_ready():
         "enviar_painel_polvoras",
         "enviar_painel_lavagem",
         "painel_calc",
-        "enviar_painel_vendas"
-        
+        "enviar_painel_vendas",
+        "atualizar_painel_acoes"
     ]
 
     for func in funcoes_paineis:
@@ -2901,6 +3279,10 @@ async def on_ready():
 
             if func == "enviar_painel_polvoras":
                 await f(bot)
+
+            elif func == "atualizar_painel_acoes":
+                await f(bot.get_guild(GUILD_ID))
+
             else:
                 await f()
 
@@ -2910,7 +3292,6 @@ async def on_ready():
     gc.collect()
     print("🧹 Limpeza de memória executada")
     print("✅ BOT ONLINE 100%")
-
 # =========================================================
 # ========================= START BOT =====================
 # =========================================================
@@ -2918,6 +3299,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
