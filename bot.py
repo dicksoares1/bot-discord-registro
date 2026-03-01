@@ -2670,9 +2670,17 @@ class MetaView(discord.ui.View):
         self.member_id = member_id
 
         guild = bot.get_guild(GUILD_ID)
-        member = guild.get_member(member_id) if guild else None
 
+        if not guild:
+            return
+
+        member = guild.get_member(member_id)
+
+        # se membro não estiver no cache ainda
         if not member:
+            self.add_item(self.BotaoDinheiro(member_id))
+            self.add_item(self.BotaoAcao(member_id))
+            self.add_item(FecharSalaView().children[0])
             return
 
         roles = [r.id for r in member.roles]
@@ -2685,78 +2693,95 @@ class MetaView(discord.ui.View):
             self.add_item(self.BotaoDinheiro(member_id))
             self.add_item(self.BotaoAcao(member_id))
 
+        self.add_item(FecharSalaView().children[0])
 
-    # ================= DINHEIRO =================
 
-    class BotaoDinheiro(discord.ui.Button):
+    # =========================================================
+# ================= BOTÕES META ===========================
+# =========================================================
 
-        def __init__(self, member_id):
+# ================= DINHEIRO =================
 
-            super().__init__(
-                label="💰 Dinheiro",
-                style=discord.ButtonStyle.success,
-                custom_id=f"meta_dinheiro_{member_id}"
+class BotaoDinheiro(discord.ui.Button):
+
+    def __init__(self, member_id):
+
+        super().__init__(
+            label="💰 Dinheiro",
+            style=discord.ButtonStyle.success,
+            custom_id=f"meta_dinheiro_{member_id}"
+        )
+
+        self.member_id = member_id
+
+    async def callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.member_id:
+            await interaction.response.send_message(
+                "Você não pode registrar meta de outro membro.",
+                ephemeral=True
             )
+            return
 
-            self.member_id = member_id
+        await interaction.response.send_modal(
+            RegistrarValorModal("dinheiro", self.member_id)
+        )
 
-        async def callback(self, interaction: discord.Interaction):
 
-            if interaction.user.id != self.member_id:
-                return
+# ================= AÇÃO =================
 
-            await interaction.response.send_modal(
-                RegistrarValorModal("dinheiro", self.member_id)
+class BotaoAcao(discord.ui.Button):
+
+    def __init__(self, member_id):
+
+        super().__init__(
+            label="🎯 Ação",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"meta_acao_{member_id}"
+        )
+
+        self.member_id = member_id
+
+    async def callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.member_id:
+            await interaction.response.send_message(
+                "Você não pode registrar meta de outro membro.",
+                ephemeral=True
             )
+            return
+
+        await interaction.response.send_modal(
+            RegistrarValorModal("acao", self.member_id)
+        )
 
 
-    # ================= AÇÃO =================
+# ================= PÓLVORA =================
 
-    class BotaoAcao(discord.ui.Button):
+class BotaoPolvora(discord.ui.Button):
 
-        def __init__(self, member_id):
+    def __init__(self, member_id):
 
-            super().__init__(
-                label="🎯 Ação",
-                style=discord.ButtonStyle.secondary,
-                custom_id=f"meta_acao_{member_id}"
+        super().__init__(
+            label="💣 Pólvora",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"meta_polvora_{member_id}"
+        )
+
+        self.member_id = member_id
+
+    async def callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.member_id:
+            await interaction.response.send_message(
+                "Você não pode registrar meta de outro membro.",
+                ephemeral=True
             )
+            return
 
-            self.member_id = member_id
-
-        async def callback(self, interaction: discord.Interaction):
-
-            if interaction.user.id != self.member_id:
-                return
-
-            await interaction.response.send_modal(
-                RegistrarValorModal("acao", self.member_id)
-            )
-
-
-    # ================= PÓLVORA =================
-
-    class BotaoPolvora(discord.ui.Button):
-
-        def __init__(self, member_id):
-
-            super().__init__(
-                label="💣 Pólvora",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"meta_polvora_{member_id}"
-            )
-
-            self.member_id = member_id
-
-        async def callback(self, interaction: discord.Interaction):
-
-            if interaction.user.id != self.member_id:
-                return
-
-            await interaction.response.send_modal(
-                RegistrarValorModal("polvora", self.member_id)
-            )
-        
+        await interaction.response.send_modal(
+            RegistrarValorModal("polvora", self.member_id)
+        )
 # =========================================================
 # CRIAR SALA
 # =========================================================
@@ -3293,6 +3318,13 @@ async def on_ready():
     if not db:
         await conectar_db()
 
+    # ================= CARREGAR MEMBROS DO DISCORD =================
+    guild = bot.get_guild(GUILD_ID)
+
+    if guild:
+        await guild.chunk()
+        print("👥 Membros carregados no cache.")
+
     # ================= CACHE DE METAS =================
     await carregar_metas_cache()
     print(f"📊 Metas carregadas: {len(metas_cache)}")
@@ -3426,5 +3458,6 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
