@@ -2606,6 +2606,10 @@ class FecharSalaView(discord.ui.View):
         await interaction.channel.delete()
 
 
+# =========================================================
+# MODAL REGISTRAR VALOR
+# =========================================================
+
 class RegistrarValorModal(discord.ui.Modal):
 
     def __init__(self, tipo, member_id):
@@ -2627,6 +2631,10 @@ class RegistrarValorModal(discord.ui.Modal):
         dados = metas.get(str(self.member_id))
 
         if not dados:
+            await interaction.response.send_message(
+                "Meta não encontrada.",
+                ephemeral=True
+            )
             return
 
         try:
@@ -2661,13 +2669,97 @@ class RegistrarValorModal(discord.ui.Modal):
         )
 
 
+# =========================================================
+# BOTÕES META
+# =========================================================
+
+class BotaoDinheiro(discord.ui.Button):
+
+    def __init__(self, member_id):
+
+        super().__init__(
+            label="💰 Dinheiro",
+            style=discord.ButtonStyle.success,
+            custom_id=f"meta_dinheiro_{member_id}"
+        )
+
+        self.member_id = member_id
+
+    async def callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.member_id:
+            await interaction.response.send_message(
+                "Você não pode registrar meta de outro membro.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(
+            RegistrarValorModal("dinheiro", self.member_id)
+        )
+
+
+class BotaoAcao(discord.ui.Button):
+
+    def __init__(self, member_id):
+
+        super().__init__(
+            label="🎯 Ação",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"meta_acao_{member_id}"
+        )
+
+        self.member_id = member_id
+
+    async def callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.member_id:
+            await interaction.response.send_message(
+                "Você não pode registrar meta de outro membro.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(
+            RegistrarValorModal("acao", self.member_id)
+        )
+
+
+class BotaoPolvora(discord.ui.Button):
+
+    def __init__(self, member_id):
+
+        super().__init__(
+            label="💣 Pólvora",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"meta_polvora_{member_id}"
+        )
+
+        self.member_id = member_id
+
+    async def callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.member_id:
+            await interaction.response.send_message(
+                "Você não pode registrar meta de outro membro.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(
+            RegistrarValorModal("polvora", self.member_id)
+        )
+
+
+# =========================================================
+# VIEW META
+# =========================================================
+
 class MetaView(discord.ui.View):
 
     def __init__(self, member_id):
 
         super().__init__(timeout=None)
-
-        self.member_id = member_id
 
         guild = bot.get_guild(GUILD_ID)
 
@@ -2676,10 +2768,10 @@ class MetaView(discord.ui.View):
 
         member = guild.get_member(member_id)
 
-        # se membro não estiver no cache ainda
+        # se membro não estiver no cache
         if not member:
-            self.add_item(self.BotaoDinheiro(member_id))
-            self.add_item(self.BotaoAcao(member_id))
+            self.add_item(BotaoDinheiro(member_id))
+            self.add_item(BotaoAcao(member_id))
             self.add_item(FecharSalaView().children[0])
             return
 
@@ -2687,16 +2779,16 @@ class MetaView(discord.ui.View):
 
         # agregado puro → só pólvora
         if AGREGADO_ROLE_ID in roles and CARGO_MEMBRO_ID not in roles:
-            self.add_item(self.BotaoPolvora(member_id))
+            self.add_item(BotaoPolvora(member_id))
 
         else:
-            self.add_item(self.BotaoDinheiro(member_id))
-            self.add_item(self.BotaoAcao(member_id))
+            self.add_item(BotaoDinheiro(member_id))
+            self.add_item(BotaoAcao(member_id))
 
         self.add_item(FecharSalaView().children[0])
 
 
-    # =========================================================
+# =========================================================
 # ================= BOTÕES META ===========================
 # =========================================================
 
@@ -3458,6 +3550,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
