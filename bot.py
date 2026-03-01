@@ -815,6 +815,7 @@ class SegundaTaskView(discord.ui.View):
 # =========================================================
 
 class FabricacaoView(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -824,9 +825,11 @@ class FabricacaoView(discord.ui.View):
         custom_id="fabricacao_norte"
     )
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         await interaction.response.send_modal(
             ObservacaoProducaoModal("GALPÕES NORTE", 65)
         )
+
 
     @discord.ui.button(
         label="🏭 Galpões Sul",
@@ -834,19 +837,39 @@ class FabricacaoView(discord.ui.View):
         custom_id="fabricacao_sul"
     )
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         await interaction.response.send_modal(
             ObservacaoProducaoModal("GALPÕES SUL", 130)
         )
 
+
     @discord.ui.button(
         label="🧪 TESTE 3 MIN",
-        style=discord.ButtonStyle.success,
+        style=discord.ButtonStyle.secondary,
         custom_id="fabricacao_teste"
     )
     async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(
-            ObservacaoProducaoModal("TESTE", 3)
+
+        inicio = agora()
+        fim = inicio + timedelta(minutes=3)
+
+        embed = discord.Embed(
+            title="🏭 Produção (TESTE)",
+            description="Iniciando produção de teste...",
+            color=0x95a5a6
         )
+
+        msg = await interaction.channel.send(embed=embed)
+
+        # PID apenas para controle interno (não vai para o banco)
+        pid = f"TESTE_{msg.id}"
+
+        # inicia acompanhamento apenas em memória
+        task = bot.loop.create_task(acompanhar_producao(pid))
+
+        producoes_tasks[pid] = task
+
+        await interaction.response.defer()
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
 # =========================================================
@@ -3530,7 +3553,9 @@ async def on_ready():
     # ================= RESTAURAR PRODUÇÕES =================
     try:
         async with db.acquire() as conn:
-            rows = await conn.fetch("SELECT pid FROM producoes")
+            rows = await conn.fetch(
+                "SELECT pid FROM producoes WHERE pid NOT LIKE 'TESTE_%'"
+            )
 
         for r in rows:
             pid = r["pid"]
@@ -3584,6 +3609,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
