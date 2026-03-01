@@ -617,7 +617,7 @@ async def enviar_painel_vendas():
     )
 
     # procura painel existente
-    async for msg in canal.history(limit=20):
+    async for msg in canal.history(limit=30):
         if (
             msg.author == bot.user
             and msg.embeds
@@ -2955,6 +2955,33 @@ async def atualizar_painel_meta(member: discord.Member):
         pass
 
 # =========================================================
+# =========== RECONSTRUIR VIEWS DAS METAS =================
+# =========================================================
+
+async def reconstruir_views_metas():
+
+    guild = bot.get_guild(GUILD_ID)
+
+    if not guild:
+        return
+
+    for uid, dados in metas_cache.items():
+
+        canal = guild.get_channel(dados["canal_id"])
+
+        if not canal:
+            continue
+
+        async for msg in canal.history(limit=10):
+
+            if msg.author == bot.user and msg.embeds:
+
+                membro = guild.get_member(int(uid))
+
+                if membro:
+                    await msg.edit(view=MetaView(membro))
+
+# =========================================================
 # MOVER CATEGORIA AO SUBIR CARGO
 # =========================================================
 
@@ -3265,6 +3292,9 @@ async def on_ready():
     await carregar_metas_cache()
     print(f"📊 Metas carregadas: {len(metas_cache)}")
 
+    # ================= RESTAURAR BOTÕES DAS METAS =================
+    await reconstruir_views_metas()
+
     # evita rodar duas vezes
     if hasattr(bot, "ready_once"):
         return
@@ -3358,7 +3388,8 @@ async def on_ready():
         "enviar_painel_lavagem",
         "painel_calc",
         "enviar_painel_vendas",
-        "atualizar_painel_acoes"
+        "atualizar_painel_acoes",
+        "reconstruir_views_metas"
     ]
 
     for func in funcoes_paineis:
@@ -3390,12 +3421,4 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
-
-
-
-
-
-
-
-
 
