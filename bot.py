@@ -860,10 +860,12 @@ async def acompanhar_producao(pid):
     while not bot.is_closed():
 
         prod = await carregar_producao(pid)
+
         if not prod:
             return
 
         canal = bot.get_channel(prod["canal_id"])
+
         if not canal:
             await asyncio.sleep(10)
             continue
@@ -876,25 +878,12 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(10)
                 continue
 
-        # pega mensagem apenas 1 vez
-        if msg is None:
-            try:
-                msg = await canal.fetch_message(prod["msg_id"])
-            except:
-                await asyncio.sleep(10)
-                continue
-
-        try:
-            msg = await canal.fetch_message(prod["msg_id"])
-        except:
-            await asyncio.sleep(10)
-            continue
-
         inicio = datetime.fromisoformat(prod["inicio"])
         fim = datetime.fromisoformat(prod["fim"])
 
         total = (fim - inicio).total_seconds()
         restante = max(0, (fim - agora()).total_seconds())
+
         pct = max(0, min(1, 1 - (restante / total)))
         mins = int(restante // 60)
 
@@ -917,7 +906,10 @@ async def acompanhar_producao(pid):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
+        # ================= FINALIZA PRODUÇÃO =================
+
         if restante <= 0:
+
             desc += "\n\n🔵 **Produção Finalizada**"
 
             try:
@@ -932,13 +924,18 @@ async def acompanhar_producao(pid):
             except:
                 pass
 
+            # remove do banco
             await deletar_producao(pid)
 
+            # remove da lista de tasks
             if pid in producoes_tasks:
                 producoes_tasks.pop(pid)
 
             print(f"🗑️ Produção removida: {pid}")
+
             return
+
+        # ================= ATUALIZA PROGRESSO =================
 
         try:
             await msg.edit(
@@ -951,8 +948,8 @@ async def acompanhar_producao(pid):
         except:
             pass
 
+        # espera antes de atualizar novamente
         await asyncio.sleep(75)
-
 
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
@@ -3587,6 +3584,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
