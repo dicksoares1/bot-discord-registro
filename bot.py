@@ -2972,14 +2972,19 @@ async def reconstruir_views_metas():
         if not canal:
             continue
 
-        async for msg in canal.history(limit=10):
+        membro = guild.get_member(int(uid))
+
+        if not membro:
+            continue
+
+        async for msg in canal.history(limit=30):
 
             if msg.author == bot.user and msg.embeds:
 
-                membro = guild.get_member(int(uid))
-
-                if membro:
+                try:
                     await msg.edit(view=MetaView(membro))
+                except Exception as e:
+                    print("Erro restaurando view meta:", e)
 
 # =========================================================
 # MOVER CATEGORIA AO SUBIR CARGO
@@ -3421,4 +3426,5 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
