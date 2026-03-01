@@ -2356,59 +2356,96 @@ class ResultadoModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        async with db.acquire() as conn:
+        resultado = "GANHOU" if self.venceu else "PERDEU"
 
-            acao = await conn.fetchrow(
-                "SELECT tipo FROM acoes_semana WHERE id=$1",
-                self.acao_id
+        dinheiro = 0
+        ouro = 0
+
+        try:
+            if self.dinheiro.value:
+                dinheiro = int(self.dinheiro.value.replace(".", "").replace(",", ""))
+
+            if self.ouro.value:
+                ouro = int(self.ouro.value.replace(".", "").replace(",", ""))
+
+        except:
+            await interaction.response.send_message(
+                "Valor inválido.",
+                ephemeral=True
             )
+            return
+
+        async with db.acquire() as conn:
 
             participantes = await conn.fetch(
                 """
-                SELECT user_id, nome_externo
+                SELECT user_id
                 FROM participantes_acoes
                 WHERE acao_id=$1
                 """,
                 self.acao_id
             )
 
-        resultado = "🟢 Vitória" if self.venceu else "🔴 Derrota"
+        qtd = len(participantes)
 
-        valor_total = formatar_dinheiro(self.dinheiro.value)
-        ouro_total = self.ouro.value or "0"
+        if qtd == 0:
+            qtd = 1
 
-        lista = []
+        valor_por_pessoa = dinheiro // qtd
+
+        # ==============================
+        # DISTRIBUIR NAS METAS
+        # ==============================
 
         for p in participantes:
 
-            if p["user_id"]:
-                lista.append(f"<@{p['user_id']}>")
-            else:
-                lista.append(f"👤 {p['nome_externo']}")
+            uid = p["user_id"]
+
+            if uid not in metas_cache:
+                continue
+
+            metas_cache[uid]["acao"] += valor_por_pessoa
+
+            await salvar_meta(
+                int(uid),
+                metas_cache[uid]["canal_id"],
+                metas_cache[uid]["dinheiro"],
+                metas_cache[uid]["polvora"],
+                metas_cache[uid]["acao"]
+            )
+
+            guild = interaction.guild
+            membro = guild.get_member(int(uid))
+
+            if membro:
+                await atualizar_painel_meta(membro)
+
+        # ==============================
+        # EMBED RESULTADO
+        # ==============================
 
         embed = discord.Embed(
-            title="🚨 RESULTADO DA AÇÃO",
+            title="📊 Resultado da Ação",
             color=0x2ecc71 if self.venceu else 0xe74c3c
         )
 
-        embed.description = (
-            f"🏦 **Ação:** {acao['tipo']}\n"
-            f"🎯 **Resultado:** {resultado}"
-        )
+        embed.add_field(name="Resultado", value=resultado)
 
-        embed.add_field(
-            name="💰 Valores",
-            value=f"Total obtido: **R$ {valor_total}**\n🥇 Ouro: **{ouro_total}**",
-            inline=False
-        )
+        if dinheiro:
+            embed.add_field(
+                name="💰 Dinheiro Total",
+                value=f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                inline=False
+            )
 
-        embed.add_field(
-            name="👥 Participantes",
-            value="\n".join(lista),
-            inline=False
-        )
+            embed.add_field(
+                name="👥 Valor por participante",
+                value=f"R$ {valor_por_pessoa:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                inline=False
+            )
 
-        embed.set_footer(text="Sistema de Operações • Semana atual")
+        if ouro:
+            embed.add_field(name="🥇 Ouro", value=str(ouro))
 
         await interaction.message.edit(embed=embed, view=None)
 
@@ -3550,6 +3587,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
