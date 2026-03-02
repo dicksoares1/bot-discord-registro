@@ -594,7 +594,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
 
         embed.add_field(
             name="📌 Status",
-            value="⏳ A Entregar",
+            value="📦 A Entregar",
             inline=False
         )
 
@@ -3682,6 +3682,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
