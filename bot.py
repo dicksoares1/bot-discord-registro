@@ -370,6 +370,7 @@ class StatusView(discord.ui.View):
         linhas.append(nova_linha)
         return linhas
 
+
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
 
@@ -387,6 +388,7 @@ class StatusView(discord.ui.View):
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
 
+
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
     async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
 
@@ -395,6 +397,9 @@ class StatusView(discord.ui.View):
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user
+
+        # remove "A entregar"
+        linhas = [l for l in linhas if not l.startswith("📦")]
 
         linhas = self.toggle_linha(
             linhas,
@@ -442,6 +447,7 @@ class StatusView(discord.ui.View):
             )
 
         await interaction.response.defer()
+
 
     @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
     async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3609,6 +3615,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
