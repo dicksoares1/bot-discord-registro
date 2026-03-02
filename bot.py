@@ -351,16 +351,21 @@ class StatusView(discord.ui.View):
         return None, []
 
     def set_status(self, embed, idx, linhas):
-        if not linhas:
-            linhas = ["⏳ Pagamento pendente"]
 
-        embed.set_field_at(
-            idx,
-            name="📌 Status",
-            value="\n".join(linhas),
-            inline=False
-        )
-        return embed
+    if not linhas:
+        linhas = [
+            "📦 A entregar",
+            "⏳ Pagamento pendente"
+        ]
+
+    embed.set_field_at(
+        idx,
+        name="📌 Status",
+        value="\n".join(linhas),
+        inline=False
+    )
+
+    return embed
 
     def toggle_linha(self, linhas, prefixo, nova_linha):
         for l in linhas:
@@ -380,8 +385,15 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
+        # remove pendente
         linhas = [l for l in linhas if not l.startswith("⏳")]
-        linhas = self.toggle_linha(linhas, "💰", f"💰 Pago • Recebido por {user} • {agora_str}")
+
+        # remove pago antigo
+        linhas = [l for l in linhas if not l.startswith("💰")]
+
+        linhas.append(
+            f"💰 Pago • Recebido por {user} • {agora_str}"
+        )
 
         embed = self.set_status(embed, idx, linhas)
 
@@ -398,15 +410,15 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user
 
-        # remove "A entregar"
+        # remove A entregar
         linhas = [l for l in linhas if not l.startswith("📦")]
 
-        linhas = self.toggle_linha(
-            linhas,
-            "✅",
+        # remove entregue antigo
+        linhas = [l for l in linhas if not l.startswith("✅")]
+
+        linhas.append(
             f"✅ Entregue por {user.mention} • {agora_str}"
         )
-
         embed = self.set_status(embed, idx, linhas)
 
         await interaction.message.edit(embed=embed)
@@ -3615,6 +3627,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
