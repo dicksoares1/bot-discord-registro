@@ -406,7 +406,12 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
+        # remove pagamento pendente
+        linhas = [l for l in linhas if not l.startswith("⏳")]
+
+        # remove pago antigo
         linhas = [l for l in linhas if not l.startswith("💰")]
+
 
         linhas.append(
             f"💰 Pago • Recebido por {user} • {agora_str}"
@@ -445,7 +450,10 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user
 
+        # remove A entregar
         linhas = [l for l in linhas if not l.startswith("📦")]
+
+        # remove entregue antigo
         linhas = [l for l in linhas if not l.startswith("✅")]
 
         linhas.append(
@@ -594,7 +602,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
 
         embed.add_field(
             name="📌 Status",
-            value="📦 A Entregar",
+            value="📦 A Entregar\n⏳ Pagamento pendente"
             inline=False
         )
 
@@ -3682,6 +3690,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
