@@ -341,8 +341,17 @@ async def carregar_vendas_db():
 # =========================================================
 
 class StatusView(discord.ui.View):
-    def __init__(self):
+
+    def __init__(self, disabled: bool = False):
         super().__init__(timeout=None)
+
+        if disabled:
+            for item in self.children:
+                item.disabled = True
+
+    # =====================================================
+    # ================= UTILIDADES ========================
+    # =====================================================
 
     def get_status(self, embed):
         for i, field in enumerate(embed.fields):
@@ -353,9 +362,7 @@ class StatusView(discord.ui.View):
     def set_status(self, embed, idx, linhas):
 
         if not linhas:
-            linhas = [
-                "📦 A entregar"
-            ]
+            linhas = ["📦 A entregar"]
 
         embed.set_field_at(
             idx,
@@ -366,6 +373,15 @@ class StatusView(discord.ui.View):
 
         return embed
 
+    def pedido_pago(self, linhas):
+        return any(l.startswith("💰") for l in linhas)
+
+    def pedido_cancelado(self, linhas):
+        return any(l.startswith("❌") for l in linhas)
+
+    # =====================================================
+    # ================= BOTÃO PAGO ========================
+    # =====================================================
 
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -373,10 +389,23 @@ class StatusView(discord.ui.View):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
+        if self.pedido_cancelado(linhas):
+            await interaction.response.send_message(
+                "⚠️ Este pedido foi cancelado e não pode ser pago.",
+                ephemeral=True
+            )
+            return
+
+        if self.pedido_pago(linhas):
+            await interaction.response.send_message(
+                "⚠️ Este pedido já foi pago.",
+                ephemeral=True
+            )
+            return
+
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        # remove pago antigo
         linhas = [l for l in linhas if not l.startswith("💰")]
 
         linhas.append(
@@ -385,9 +414,13 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        await interaction.message.edit(embed=embed)
+        # Finaliza pedido → trava botões
+        await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
         await interaction.response.defer()
 
+    # =====================================================
+    # ================= BOTÃO ENTREGUE ====================
+    # =====================================================
 
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
     async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -395,13 +428,24 @@ class StatusView(discord.ui.View):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
+        if self.pedido_pago(linhas):
+            await interaction.response.send_message(
+                "⚠️ Este pedido já foi pago.",
+                ephemeral=True
+            )
+            return
+
+        if self.pedido_cancelado(linhas):
+            await interaction.response.send_message(
+                "⚠️ Este pedido foi cancelado.",
+                ephemeral=True
+            )
+            return
+
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user
 
-        # remove A entregar
         linhas = [l for l in linhas if not l.startswith("📦")]
-
-        # remove entregue antigo
         linhas = [l for l in linhas if not l.startswith("✅")]
 
         linhas.append(
@@ -449,6 +493,9 @@ class StatusView(discord.ui.View):
 
         await interaction.response.defer()
 
+    # =====================================================
+    # ================= BOTÃO CANCELADO ===================
+    # =====================================================
 
     @discord.ui.button(label="❌ Pedido cancelado", style=discord.ButtonStyle.danger, custom_id="status_cancelado")
     async def cancelado(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -456,22 +503,31 @@ class StatusView(discord.ui.View):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
+        if self.pedido_pago(linhas):
+            await interaction.response.send_message(
+                "⚠️ Este pedido já foi pago e não pode ser cancelado.",
+                ephemeral=True
+            )
+            return
+
+        if self.pedido_cancelado(linhas):
+            await interaction.response.send_message(
+                "⚠️ Este pedido já foi cancelado.",
+                ephemeral=True
+            )
+            return
+
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        # remove status antigos
-        linhas = [l for l in linhas if not l.startswith("📦")]
-        linhas = [l for l in linhas if not l.startswith("✅")]
-        linhas = [l for l in linhas if not l.startswith("💰")]
-        linhas = [l for l in linhas if not l.startswith("❌")]
-
-        linhas.append(
+        linhas = [
             f"❌ Pedido cancelado por {user} • {agora_str}"
-        )
+        ]
 
         embed = self.set_status(embed, idx, linhas)
 
-        await interaction.message.edit(embed=embed)
+        # Finaliza pedido → trava botões
+        await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
         await interaction.response.defer()
 # =========================================================
 # ================= MODAL DE VENDA ========================
@@ -3626,6 +3682,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
