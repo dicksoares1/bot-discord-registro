@@ -352,20 +352,20 @@ class StatusView(discord.ui.View):
 
     def set_status(self, embed, idx, linhas):
 
-    if not linhas:
-        linhas = [
-            "📦 A entregar",
-            "⏳ Pagamento pendente"
-        ]
+        if not linhas:
+            linhas = [
+                "📦 A entregar",
+                "⏳ Pagamento pendente"
+            ]
 
-    embed.set_field_at(
-        idx,
-        name="📌 Status",
-        value="\n".join(linhas),
-        inline=False
-    )
+        embed.set_field_at(
+            idx,
+            name="📌 Status",
+            value="\n".join(linhas),
+            inline=False
+        )
 
-    return embed
+        return embed
 
     def toggle_linha(self, linhas, prefixo, nova_linha):
         for l in linhas:
@@ -419,6 +419,7 @@ class StatusView(discord.ui.View):
         linhas.append(
             f"✅ Entregue por {user.mention} • {agora_str}"
         )
+
         embed = self.set_status(embed, idx, linhas)
 
         await interaction.message.edit(embed=embed)
@@ -473,7 +474,6 @@ class StatusView(discord.ui.View):
 
         await interaction.message.edit(embed=embed)
         await interaction.response.defer()
-
 # =========================================================
 # ================= MODAL DE VENDA ========================
 # =========================================================
@@ -3627,6 +3627,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
