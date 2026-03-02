@@ -354,8 +354,7 @@ class StatusView(discord.ui.View):
 
         if not linhas:
             linhas = [
-                "📦 A entregar",
-                "⏳ Pagamento pendente"
+                "📦 A entregar"
             ]
 
         embed.set_field_at(
@@ -367,14 +366,6 @@ class StatusView(discord.ui.View):
 
         return embed
 
-    def toggle_linha(self, linhas, prefixo, nova_linha):
-        for l in linhas:
-            if l.startswith(prefixo):
-                linhas.remove(l)
-                return linhas
-        linhas.append(nova_linha)
-        return linhas
-
 
     @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -384,9 +375,6 @@ class StatusView(discord.ui.View):
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
-
-        # remove pendente
-        linhas = [l for l in linhas if not l.startswith("⏳")]
 
         # remove pago antigo
         linhas = [l for l in linhas if not l.startswith("💰")]
@@ -462,13 +450,24 @@ class StatusView(discord.ui.View):
         await interaction.response.defer()
 
 
-    @discord.ui.button(label="⏳ Pagamento pendente", style=discord.ButtonStyle.danger, custom_id="status_pendente")
-    async def pendente(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="❌ Pedido cancelado", style=discord.ButtonStyle.danger, custom_id="status_cancelado")
+    async def cancelado(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
-        linhas = self.toggle_linha(linhas, "⏳", "⏳ Pagamento pendente")
+        agora_str = agora().strftime("%d/%m/%Y %H:%M")
+        user = interaction.user.mention
+
+        # remove status antigos
+        linhas = [l for l in linhas if not l.startswith("📦")]
+        linhas = [l for l in linhas if not l.startswith("✅")]
+        linhas = [l for l in linhas if not l.startswith("💰")]
+        linhas = [l for l in linhas if not l.startswith("❌")]
+
+        linhas.append(
+            f"❌ Pedido cancelado por {user} • {agora_str}"
+        )
 
         embed = self.set_status(embed, idx, linhas)
 
@@ -3627,6 +3626,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
