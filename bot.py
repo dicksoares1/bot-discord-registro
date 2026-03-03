@@ -2912,6 +2912,45 @@ class BotaoReiniciar(discord.ui.Button):
         membro = interaction.guild.get_member(int(self.member_id))
         if membro:
             await atualizar_painel_meta(membro)
+
+class BotaoLimparSala(discord.ui.Button):
+
+    def __init__(self):
+        super().__init__(
+            label="🧹 Limpar Sala",
+            style=discord.ButtonStyle.secondary,
+            custom_id="meta_limpar_sala"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+
+        # Permissão: apenas gerente
+        if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
+            await interaction.response.send_message(
+                "Apenas gerentes podem limpar a sala.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        canal = interaction.channel
+        mensagens_para_apagar = []
+
+        async for msg in canal.history(limit=200):
+
+            # Mantém o painel (embed META INDIVIDUAL)
+            if msg.author == interaction.guild.me and msg.embeds:
+                if msg.embeds[0].title == "📊 META INDIVIDUAL":
+                    continue
+
+            mensagens_para_apagar.append(msg)
+
+        for msg in mensagens_para_apagar:
+            try:
+                await msg.delete()
+            except:
+                pass
 # =========================================================
 # VIEW META
 # =========================================================
@@ -2934,6 +2973,7 @@ class MetaView(discord.ui.View):
             self.add_item(BotaoDinheiro(member_id))
             self.add_item(BotaoAcao(member_id))
             self.add_item(BotaoReiniciar(member_id))
+            self.add_item(BotaoLimparSala())
             return
 
         roles = [r.id for r in member.roles]
@@ -3156,12 +3196,12 @@ async def criar_sala_meta(member: discord.Member):
         criando_meta.discard(member.id)
 
 # =========================================================
-# ATUALIZAR / RECRIAR PAINEL (VERSÃO COMPLETA)
+# ATUALIZAR / RECRIAR PAINEL (VERSÃO ESTÁVEL - SEM DUPLICAR)
 # =========================================================
 
 async def atualizar_painel_meta(member: discord.Member):
-    metas = metas_cache
-    dados = metas.get(str(member.id))
+
+    dados = metas_cache.get(str(member.id))
     if not dados:
         return
 
@@ -3175,7 +3215,10 @@ async def atualizar_painel_meta(member: discord.Member):
     acao = dados["acao"]
     meta_alvo = obter_meta_dinheiro(member)
 
-    embed = discord.Embed(title="📊 META INDIVIDUAL", color=0x2ecc71)
+    embed = discord.Embed(
+        title="📊 META INDIVIDUAL",
+        color=0x2ecc71
+    )
 
     if meta_alvo > 0:
         embed.add_field(
@@ -3204,27 +3247,26 @@ async def atualizar_painel_meta(member: discord.Member):
 
     painel_encontrado = None
 
-    # procura painel existente
-    async for msg in canal.history(limit=100):
+    # Procura painel já existente (evita duplicação no redeploy)
+    async for msg in canal.history(limit=30):
         if msg.author == member.guild.me and msg.embeds:
-            painel_encontrado = msg
-            break
+            if msg.embeds[0].title == "📊 META INDIVIDUAL":
+                painel_encontrado = msg
+                break
 
-    # se achou, atualiza e move para o final
+    # Se encontrou → apenas edita (NÃO deleta)
     if painel_encontrado:
         try:
             await painel_encontrado.edit(embed=embed, view=view)
-            await painel_encontrado.delete()
-            await canal.send(embed=embed, view=view)
             return
-        except:
-            pass
+        except Exception as e:
+            print("Erro ao editar painel meta:", e)
 
-    # se não achou ou deu erro → cria novo
+    # Se não encontrou → cria novo
     try:
         await canal.send(embed=embed, view=view)
-    except:
-        pass
+    except Exception as e:
+        print("Erro ao criar painel meta:", e)
 # =========================================================
 # =========== RECONSTRUIR VIEWS DAS METAS =================
 # =========================================================
@@ -3719,6 +3761,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
