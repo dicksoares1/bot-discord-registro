@@ -3198,23 +3198,17 @@ async def atualizar_painel_meta(member: discord.Member):
     if painel_encontrado:
         try:
             await painel_encontrado.edit(embed=embed, view=view)
-
-            # Remove o antigo para recriar como última mensagem
             await painel_encontrado.delete()
-
-            novo = await canal.send(embed=embed, view=view)
-
-           
+            await canal.send(embed=embed, view=view)
             return
-
         except:
             pass
 
     # se não achou ou deu erro → cria novo
     try:
-        novo = await canal.send(embed=embed, view=view)
-        
-
+        await canal.send(embed=embed, view=view)
+    except:
+        pass
 # =========================================================
 # =========== RECONSTRUIR VIEWS DAS METAS =================
 # =========================================================
@@ -3703,6 +3697,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
