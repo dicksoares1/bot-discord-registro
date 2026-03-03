@@ -2872,33 +2872,34 @@ class BotaoReiniciar(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
 
-        if not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
-            await interaction.response.send_message(
-                "Apenas gerentes podem reiniciar.",
-                ephemeral=True
-            )
-            return
+    # Responde imediatamente para evitar erro 404
+    await interaction.response.defer(ephemeral=True)
 
-        dados = metas_cache.get(str(self.member_id))
-        if not dados:
-            return
-
-        await salvar_meta(
-            int(self.member_id),
-            dados["canal_id"],
-            0,
-            0,
-            0
-        )
-
-        membro = interaction.guild.get_member(int(self.member_id))
-        if membro:
-            await atualizar_painel_meta(membro)
-
-        await interaction.response.send_message(
-            "Quadro reiniciado com sucesso.",
+    if not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
+        await interaction.followup.send(
+            "Apenas gerentes podem reiniciar.",
             ephemeral=True
         )
+        return
+
+    dados = metas_cache.get(str(self.member_id))
+    if not dados:
+        return
+
+    # Zera no banco e no cache
+    await salvar_meta(
+        int(self.member_id),
+        dados["canal_id"],
+        0,
+        0,
+        0
+    )
+
+    membro = interaction.guild.get_member(int(self.member_id))
+    if membro:
+        await atualizar_painel_meta(membro)
+
+    # NÃO envia mensagem para não poluir
 
 # =========================================================
 # VIEW META
@@ -3208,11 +3209,7 @@ async def atualizar_painel_meta(member: discord.Member):
 
             novo = await canal.send(embed=embed, view=view)
 
-            try:
-                await novo.pin()
-            except:
-                pass
-
+           
             return
 
         except:
@@ -3221,9 +3218,7 @@ async def atualizar_painel_meta(member: discord.Member):
     # se não achou ou deu erro → cria novo
     try:
         novo = await canal.send(embed=embed, view=view)
-        await novo.pin()
-    except:
-        pass
+        
 
 # =========================================================
 # =========== RECONSTRUIR VIEWS DAS METAS =================
@@ -3713,6 +3708,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
