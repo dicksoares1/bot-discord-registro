@@ -2094,25 +2094,29 @@ async def painel_calc():
 # ======================== AÇÕES ==========================
 # =========================================================
 
-ACOES_CONFIG = {
+# =========================================================
+# AÇÕES DA SEMANA
+# =========================================================
 
-    # AÇÕES COM LIMITE
-    "Banco Central": 1,
-    "Banco Paleto": 1,
-    "Nióbio": 1,
-    "Banco Central BH": 1,
-    "Joalheria": 5,
-    "Fleeca": 4,
-
-    # AÇÕES ILIMITADAS
-    "Mergulhador": None,
-    "Cemitério de Aviões": None,
+ACOES_SEMANA = {
+    # Ilimitadas
+    "Loja de Armas (Ammunation)": None,
     "Loja de Bebidas": None,
-    "Ammunation": None,
     "Loja de Departamento": None,
+    "Mergulhador": None,
+    "Grapeseed": None,
     "Companhia de Gás": None,
     "Life Invader": None,
-    "Grapeseed": None
+    "Aeroporto de Sucata": None,
+    "Carro Forte": None,
+
+    # Limitadas
+    "Joalheria": 5,
+    "Banco Fleeca": 4,
+    "Banco de Paleto": 1,
+    "Banco Central": 1,
+    "Banco Bahamas": 1,
+    "Nióbio": 1,
 }
 
 # =========================================================
@@ -2182,12 +2186,11 @@ async def gerar_embed_acoes():
     linhas_limitadas = []
     linhas_ilimitadas = []
 
-    for acao, limite in ACOES_CONFIG.items():
+    for acao, limite in ACOES_SEMANA.items():
 
         qtd = feitos.get(acao, 0)
 
         # ================= LIMITADAS =================
-
         if limite is not None:
 
             if qtd >= limite:
@@ -2198,19 +2201,18 @@ async def gerar_embed_acoes():
                 status = "🔴"
 
             linhas_limitadas.append(
-                f"{status} **{acao:<20}** {qtd}/{limite}"
+                f"{status} **{acao}** {qtd}/{limite}"
             )
 
         # ================= ILIMITADAS =================
-
         else:
 
             linhas_ilimitadas.append(
-                f"🔹 **{acao:<20}** {qtd}"
+                f"🔹 **{acao}** {qtd} ♾️"
             )
 
     embed = discord.Embed(
-        title="🚨 OPERAÇÕES DA SEMANA",
+        title="🚨 AÇÕES DA SEMANA",
         color=0xe74c3c
     )
 
@@ -2223,15 +2225,14 @@ async def gerar_embed_acoes():
 
     if linhas_ilimitadas:
         embed.add_field(
-            name="📦 Ações secundárias (ilimitadas)",
+            name="📦 Ações ilimitadas",
             value="\n".join(linhas_ilimitadas),
             inline=False
         )
 
-    embed.set_footer(text="Use o menu abaixo para registrar ações")
+    embed.set_footer(text="Reset automático toda segunda às 00:00")
 
     return embed
-
 
 # =========================================================
 # ================= MODAL EXTERNOS ========================
@@ -2411,7 +2412,7 @@ async def atualizar_painel_acoes(guild):
 
         if msg.author == guild.me and msg.embeds:
 
-            if msg.embeds[0].title == "🚨 OPERAÇÕES DA SEMANA":
+            if msg.embeds[0].title == "🚨 AÇÕES DA SEMANA":
 
                 await msg.edit(embed=embed, view=PainelAcoesView())
                 return
@@ -2580,7 +2581,22 @@ async def registrar_relatorio_acao(guild, acao_id):
         embed=embed,
         view=ResultadoAcaoView(acao_id)
     )
+@tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
+async def reset_acoes_segunda():
 
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    if agora.weekday() == 0:  # segunda
+
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM acoes_semana")
+            await conn.execute("DELETE FROM participantes_acoes")
+
+        print("🔄 Ações da semana resetadas.")
+
+        guild = bot.get_guild(GUILD_ID)
+        if guild:
+            await atualizar_painel_acoes(guild)
 # =========================================================
 # =========================== METAS ========================
 # =========================================================
@@ -3589,7 +3605,6 @@ async def on_ready():
         "ConfirmarPagamentoView",
         "LavagemView",
         "FabricacaoView",
-        "FecharSalaView",
         "PainelAcoesView"
         
     ]
@@ -3637,6 +3652,13 @@ async def on_ready():
             limpar_lavagens_pendentes.start()
     except Exception as e:
         print("Erro loop limpeza lavagens:", e)
+
+    # 🔥 NOVO BLOCO RESET AÇÕES
+    try:
+        if not reset_acoes_segunda.is_running():
+            reset_acoes_segunda.start()
+    except Exception as e:
+        print("Erro reset ações semana:", e)
 
     # ================= RESTAURAR PRODUÇÕES =================
     try:
@@ -3697,6 +3719,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
