@@ -2870,7 +2870,7 @@ class BotaoReiniciar(discord.ui.Button):
         )
         self.member_id = int(member_id)
 
-    async def callback(self, interaction: discord.Interaction):
+   async def callback(self, interaction: discord.Interaction):
 
     # Responde imediatamente para evitar erro 404
     await interaction.response.defer(ephemeral=True)
@@ -3708,6 +3708,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
