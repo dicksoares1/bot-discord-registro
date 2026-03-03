@@ -34,9 +34,24 @@ async def edit_worker():
         coro = await edit_queue.get()
         try:
             await coro
-            await asyncio.sleep(0.7)  # intervalo seguro anti rate limit
+
+            # 🔥 delay mais seguro
+            await asyncio.sleep(1.2)
+
+        except discord.NotFound:
+            # mensagem deletada
+            pass
+
+        except discord.HTTPException as e:
+            if e.status == 429:
+                # se bater rate limit, espera mais
+                await asyncio.sleep(3)
+            else:
+                print("Erro HTTP edit_worker:", e)
+
         except Exception as e:
             print("Erro no edit_worker:", e)
+
         edit_queue.task_done()
 # =========================================================
 
@@ -3899,19 +3914,25 @@ async def on_ready():
 
     # ================= ENVIAR PAINÉIS =================
     try:
-        await enviar_painel_fabricacao()
-        await enviar_painel_lives()
-        await enviar_painel_admin_lives()
-        await enviar_painel_polvoras(bot)
-        await enviar_painel_lavagem()
-        await painel_calc()
-        await enviar_painel_vendas()
-        await atualizar_painel_acoes(bot.get_guild(GUILD_ID))
-        await enviar_painel_solicitar_sala()
+
+        painel_tasks = [
+            enviar_painel_fabricacao(),
+            enviar_painel_lives(),
+            enviar_painel_admin_lives(),
+            enviar_painel_polvoras(bot),
+            enviar_painel_lavagem(),
+            painel_calc(),
+            enviar_painel_vendas(),
+            atualizar_painel_acoes(bot.get_guild(GUILD_ID)),
+            enviar_painel_solicitar_sala()
+        ]
+
+        for task in painel_tasks:
+            await task
+            await asyncio.sleep(0.5)
 
     except Exception as e:
         print("Erro ao enviar painéis:", e)
-
     gc.collect()
     if not hasattr(bot, "edit_worker_started"):
         bot.loop.create_task(edit_worker())
@@ -3925,6 +3946,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
