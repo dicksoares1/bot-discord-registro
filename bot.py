@@ -3103,7 +3103,7 @@ class MetaView(discord.ui.View):
             self.add_item(BotaoDinheiro(member_id))
             self.add_item(BotaoAcao(member_id))
             self.add_item(BotaoReiniciar(member_id))
-            self.add_item(BotaoLimparSala(member_id))
+            self.add_item(BotaoLimparSala())
             return
 
         roles = [r.id for r in member.roles]
@@ -3925,6 +3925,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
