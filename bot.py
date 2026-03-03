@@ -2031,209 +2031,6 @@ async def enviar_painel_lives():
     )
 
 # =========================================================
-# =============== CALCULADORA MECÂNICA PRO ================
-# =========================================================
-
-CANAL_CALCULADORA_MEC_ID = 1448564716598202408
-
-ITENS = {
-    # SERVIÇOS
-    "kit_reparo": ("🧰 Kit Reparo", 600, "serv"),
-    "pneu_serv": ("🛞 Pneu Serviço", 275, "serv"),
-    "vidro": ("🔨 Repor Vidro", 600, "serv"),
-    "kit_serv": ("👨‍🔧 Kit Reposição", 600, "serv"),
-    "porta": ("🚪 Porta", 200, "serv"),
-    "capo": ("🚗 Capô", 200, "serv"),
-    "porta_malas": ("📦 Porta-malas", 200, "serv"),
-
-    # EXTERNOS
-    "chamado": ("📞 Chamado Externo", 1500, "ext"),
-    "explodido": ("💥 Veículo Explodido", 1500, "ext"),
-
-    # VENDAS
-    "pneu_venda": ("🛞 Pneu Venda", 400, "vend"),
-    "kit_venda": ("🧰 Kit Venda", 700, "vend"),
-    "pe": ("🔧 Pé de Cabra", 1000, "vend"),
-    "chave": ("🔩 Chave Inglesa", 1000, "vend"),
-    "elevador": ("📐 Elevador", 1000, "vend"),
-    "guincho": ("🚗 Guincho", 8000, "vend"),
-    "bolsa": ("🎒 Bolsa Mecânica", 18000, "vend"),
-}
-
-cont = {k: 0 for k in ITENS}
-
-
-def br(valor):
-    return f"R$ {valor:,.0f}".replace(",", ".")
-
-
-def embed_calc():
-    serv, ext, vend = [], [], []
-    total_serv = total_ext = total_vend = 0
-
-    for k, (nome, valor, tipo) in ITENS.items():
-        qtd = cont[k]
-        if qtd == 0:
-            continue
-
-        subtotal = qtd * valor
-        linha = f"{nome} x{qtd} • {br(subtotal)}"
-
-        if tipo == "serv":
-            serv.append(linha)
-            total_serv += subtotal
-        elif tipo == "ext":
-            ext.append(linha)
-            total_ext += subtotal
-        else:
-            vend.append(linha)
-            total_vend += subtotal
-
-    total = total_serv + total_ext + total_vend
-
-    embed = discord.Embed(
-        title="🔧 Calculadora Mecânica",
-        description="Controle de serviços e vendas",
-        color=0xf39c12
-    )
-
-    embed.add_field(name="🛠️ Serviços", value="\n".join(serv) if serv else "—", inline=False)
-    embed.add_field(name="🚗 Externos", value="\n".join(ext) if ext else "—", inline=False)
-    embed.add_field(name="📦 Vendas", value="\n".join(vend) if vend else "—", inline=False)
-
-    embed.add_field(name="💰 Serviços", value=br(total_serv))
-    embed.add_field(name="🚗 Externo", value=br(total_ext))
-    embed.add_field(name="📦 Vendas", value=br(total_vend))
-    embed.add_field(name="🏆 TOTAL GERAL", value=br(total), inline=False)
-
-    return embed
-
-
-# =========================================================
-# ================= MODAL QUANTIDADE ======================
-# =========================================================
-
-class QuantidadeModal(discord.ui.Modal, title="Adicionar Quantidade"):
-    qtd = discord.ui.TextInput(label="Digite a quantidade", placeholder="Ex: 10")
-
-    def __init__(self, item_key):
-        super().__init__()
-        self.item_key = item_key
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            quantidade = int(self.qtd.value)
-        except:
-            await interaction.response.send_message("Quantidade inválida.", ephemeral=True)
-            return
-
-        cont[self.item_key] += quantidade
-        await interaction.response.edit_message(embed=embed_calc(), view=CalcView())
-
-
-# =========================================================
-# ================= VIEW CALCULADORA ======================
-# =========================================================
-
-class CalcView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    # SERVIÇOS
-
-    @discord.ui.button(label="Kit Reparo", style=discord.ButtonStyle.primary, custom_id="calc_kit_reparo")
-    async def b1(self, i, b):
-        cont["kit_reparo"] += 1
-        await i.response.edit_message(embed=embed_calc(), view=self)
-
-    @discord.ui.button(label="Pneu Serv", style=discord.ButtonStyle.primary, custom_id="calc_pneu_serv")
-    async def b2(self, i, b):
-        await i.response.send_modal(QuantidadeModal("pneu_serv"))
-
-    @discord.ui.button(label="Vidro", style=discord.ButtonStyle.primary, custom_id="calc_vidro")
-    async def b3(self, i, b):
-        cont["vidro"] += 1
-        await i.response.edit_message(embed=embed_calc(), view=self)
-
-    @discord.ui.button(label="Kit Serv", style=discord.ButtonStyle.primary, custom_id="calc_kit_serv")
-    async def b4(self, i, b):
-        cont["kit_serv"] += 1
-        await i.response.edit_message(embed=embed_calc(), view=self)
-
-    @discord.ui.button(label="Porta", style=discord.ButtonStyle.primary, custom_id="calc_porta")
-    async def b5(self, i, b):
-        await i.response.send_modal(QuantidadeModal("porta"))
-
-    @discord.ui.button(label="Capô", style=discord.ButtonStyle.primary, custom_id="calc_capo")
-    async def b6(self, i, b):
-        await i.response.send_modal(QuantidadeModal("capo"))
-
-    @discord.ui.button(label="Porta-malas", style=discord.ButtonStyle.primary, custom_id="calc_pm")
-    async def b7(self, i, b):
-        await i.response.send_modal(QuantidadeModal("porta_malas"))
-
-    # EXTERNOS
-
-    @discord.ui.button(label="Chamado", style=discord.ButtonStyle.success, custom_id="calc_chamado")
-    async def b8(self, i, b):
-        cont["chamado"] += 1
-        await i.response.edit_message(embed=embed_calc(), view=self)
-
-    @discord.ui.button(label="Explodido", style=discord.ButtonStyle.success, custom_id="calc_explodido")
-    async def b9(self, i, b):
-        cont["explodido"] += 1
-        await i.response.edit_message(embed=embed_calc(), view=self)
-
-    # VENDAS (COM QUANTIDADE)
-
-    @discord.ui.button(label="Pneu Venda", style=discord.ButtonStyle.secondary, custom_id="calc_pneu_venda")
-    async def b10(self, i, b):
-        await i.response.send_modal(QuantidadeModal("pneu_venda"))
-
-    @discord.ui.button(label="Kit Venda", style=discord.ButtonStyle.secondary, custom_id="calc_kit_venda")
-    async def b11(self, i, b):
-        await i.response.send_modal(QuantidadeModal("kit_venda"))
-
-    @discord.ui.button(label="Pé de Cabra", style=discord.ButtonStyle.secondary, custom_id="calc_pe")
-    async def b12(self, i, b):
-        await i.response.send_modal(QuantidadeModal("pe"))
-
-    @discord.ui.button(label="Chave", style=discord.ButtonStyle.secondary, custom_id="calc_chave")
-    async def b13(self, i, b):
-        await i.response.send_modal(QuantidadeModal("chave"))
-
-    @discord.ui.button(label="Elevador", style=discord.ButtonStyle.secondary, custom_id="calc_elevador")
-    async def b14(self, i, b):
-        await i.response.send_modal(QuantidadeModal("elevador"))
-
-    @discord.ui.button(label="Guincho", style=discord.ButtonStyle.secondary, custom_id="calc_guincho")
-    async def b15(self, i, b):
-        await i.response.send_modal(QuantidadeModal("guincho"))
-
-    @discord.ui.button(label="Bolsa", style=discord.ButtonStyle.secondary, custom_id="calc_bolsa")
-    async def b16(self, i, b):
-        await i.response.send_modal(QuantidadeModal("bolsa"))
-
-    # LIMPAR
-
-    @discord.ui.button(label="🧹 Limpar Tudo", style=discord.ButtonStyle.danger, custom_id="calc_limpar", row=4)
-    async def limpar(self, i, b):
-        for k in cont:
-            cont[k] = 0
-        await i.response.edit_message(embed=embed_calc(), view=self)
-
-
-async def painel_calc():
-    canal = bot.get_channel(CANAL_CALCULADORA_MEC_ID)
-
-    async for m in canal.history(limit=10):
-        if m.author == bot.user:
-            return
-
-    await canal.send(embed=embed_calc(), view=CalcView())
-
-
-# =========================================================
 # ======================== AÇÕES ==========================
 # =========================================================
 
@@ -3738,7 +3535,6 @@ async def on_ready():
     # Registrar outras views
     outras_views = [
         RegistroView,
-        CalcView,
         CadastrarLiveView,
         PainelLivesAdmin,
         GerenciarLivesView,
@@ -3823,7 +3619,6 @@ async def on_ready():
             enviar_painel_admin_lives(),
             enviar_painel_polvoras(bot),
             enviar_painel_lavagem(),
-            painel_calc(),
             enviar_painel_vendas(),
             atualizar_painel_acoes(bot.get_guild(GUILD_ID)),
             enviar_painel_solicitar_sala()
@@ -3848,12 +3643,3 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
-
-
-
-
-
-
-
-
-
