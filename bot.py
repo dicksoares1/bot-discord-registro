@@ -1135,20 +1135,22 @@ async def acompanhar_producao(pid):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
-        # ================= FINALIZA PRODUÇÃO =================
+                # ================= FINALIZA PRODUÇÃO =================
 
         if restante <= 0:
 
             desc += "\n\n🔵 **Produção Finalizada**"
 
             try:
-                await msg.edit(
-                    embed=discord.Embed(
-                        title="🏭 Produção",
-                        description=desc,
-                        color=0x34495e
-                    ),
-                    view=None
+                await edit_queue.put(
+                    msg.edit(
+                        embed=discord.Embed(
+                            title="🏭 Produção",
+                            description=desc,
+                            color=0x34495e
+                        ),
+                        view=None
+                    )
                 )
             except:
                 pass
@@ -1167,11 +1169,13 @@ async def acompanhar_producao(pid):
         # ================= ATUALIZA PROGRESSO =================
 
         try:
-            await msg.edit(
-                embed=discord.Embed(
-                    title="🏭 Produção",
-                    description=desc,
-                    color=0x34495e
+            await edit_queue.put(
+                msg.edit(
+                    embed=discord.Embed(
+                        title="🏭 Produção",
+                        description=desc,
+                        color=0x34495e
+                    )
                 )
             )
         except:
@@ -1179,7 +1183,6 @@ async def acompanhar_producao(pid):
 
         # espera antes de atualizar novamente
         await asyncio.sleep(75)
-
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
@@ -1200,7 +1203,7 @@ async def enviar_painel_fabricacao():
     async for msg in canal.history(limit=20):
         if msg.author == bot.user and msg.embeds:
             if msg.embeds[0].title == "🏭 Fabricação":
-                await msg.edit(embed=embed, view=FabricacaoView())
+                await edit_queue.put(msg.edit(embed=embed, view=FabricacaoView()))
                 print("🔁 Painel de fabricação atualizado")
                 return
 
@@ -2539,7 +2542,7 @@ async def atualizar_painel_acoes(guild):
 
             if msg.embeds[0].title == "🚨 AÇÕES DA SEMANA":
 
-                await msg.edit(embed=embed, view=PainelAcoesView())
+                await edit_queue.put(msg.edit(embed=embed, view=PainelAcoesView()))
                 return
 
     await canal.send(embed=embed, view=PainelAcoesView())
@@ -2674,7 +2677,9 @@ class ResultadoModal(discord.ui.Modal):
         if ouro:
             embed.add_field(name="🥇 Ouro", value=str(ouro))
 
-        await interaction.message.edit(embed=embed, view=None)
+        await edit_queue.put(
+            interaction.message.edit(embed=embed, view=None)
+        )
 
         await interaction.response.send_message(
             "Resultado registrado!",
@@ -3421,7 +3426,7 @@ async def reconstruir_views_metas():
             if msg.author == bot.user and msg.embeds:
 
                 try:
-                    await msg.edit(view=MetaView(int(uid)))
+                    await edit_queue.put(msg.edit(view=MetaView(int(uid))))
                 except Exception as e:
                     print("Erro restaurando view meta:", e)
 
@@ -3440,7 +3445,9 @@ async def atualizar_categoria_meta(member):
 
     nova = obter_categoria_meta(member)
     if nova and canal.category_id != nova:
-        await canal.edit(category=member.guild.get_channel(nova))
+        await edit_queue.put(
+            canal.edit(category=member.guild.get_channel(nova))
+        )
 
 # =========================================================
 # EVENTOS
@@ -3764,7 +3771,7 @@ async def enviar_painel_solicitar_sala():
     async for msg in canal.history(limit=20):
         if msg.author == bot.user and msg.embeds:
             if msg.embeds[0].title == "📂 Solicitar Sala de Meta":
-                await msg.edit(embed=embed, view=SolicitarSalaView())
+                await edit_queue.put(msg.edit(embed=embed, view=SolicitarSalaView()))
                 return
 
     await canal.send(embed=embed, view=SolicitarSalaView())
