@@ -2745,38 +2745,9 @@ async def reset_acoes_segunda():
 # =========================================================
 # =========================== METAS ========================
 # =========================================================
-# REGRAS DE META:
-# - Agregado → registra 💣 Pólvora
-# - Membro/Soldado → meta 💰 250k + 🎯 Ação (ação separado do progresso)
-# - Responsáveis (RESP*) → meta 💰 150k + 🎯 Ação
-# - Se tiver tag de Mecânico → meta 💰 100k (independente de ser membro/resp)
-# - Progresso = só dinheiro
-# - Painel recria se apagar
-# - Atualiza botões e meta ao mudar cargo
-# - Move categoria ao subir cargo
-# - Varredura mantém tudo sincronizado
-# - Relatório sábado 12:00 e reset após envio
-#
-# REQUISITOS:
-# - intents.members = True + SERVER MEMBERS INTENT ligado
-# - IDs já definidos no topo:
-#   AGREGADO_ROLE_ID
-#   CARGO_MEMBRO_ID
-#   CARGO_SOLDADO_ID
-#   CARGO_RESP_METAS_ID
-#   CARGO_RESP_ACAO_ID
-#   CARGO_RESP_VENDAS_ID
-#   CARGO_RESP_PRODUCAO_ID
-#   CARGO_GERENTE_ID
-#   (opcional) CARGO_MECANICO_ID  ← se não existir, a regra 100k é ignorada
-#   CATEGORIA_META_AGREGADO_ID
-#   CATEGORIA_META_MEMBRO_ID
-#   CATEGORIA_META_SOLDADO_ID
-#   CATEGORIA_META_RESPONSAVEIS_ID
-#   CATEGORIA_META_GERENTE_ID
-#   GUILD_ID
 
 metas_cache = {}
+criando_meta = set()
 
 # =========================================================
 # JSON
@@ -2789,7 +2760,7 @@ async def carregar_metas_cache():
         rows = await conn.fetch("SELECT * FROM metas")
 
     metas_cache = {
-        r["user_id"]: {
+        str(r["user_id"]): {
             "canal_id": int(r["canal_id"]),
             "dinheiro": r["dinheiro"],
             "polvora": r["polvora"],
@@ -2797,6 +2768,7 @@ async def carregar_metas_cache():
         }
         for r in rows
     }
+
 
 async def salvar_meta(user_id, canal_id, dinheiro, polvora, acao):
 
@@ -2864,7 +2836,7 @@ def obter_meta_dinheiro(member: discord.Member) -> int:
 
     roles = [r.id for r in member.roles]
 
-    if CARGO_MECANICO_ID in roles:
+    if "CARGO_MECANICO_ID" in globals() and CARGO_MECANICO_ID in roles:
         return 100_000
 
     if any(r in roles for r in [
@@ -2880,18 +2852,16 @@ def obter_meta_dinheiro(member: discord.Member) -> int:
 
     return 0
 
-
 # =========================================================
-# MODAL REGISTRAR VALOR
+# MODAL
 # =========================================================
 
 class RegistrarValorModal(discord.ui.Modal):
 
     def __init__(self, tipo, member_id):
         super().__init__(title=f"Registrar {tipo}")
-
         self.tipo = tipo
-        self.member_id = member_id
+        self.member_id = int(member_id)
 
         self.valor = discord.ui.TextInput(
             label="Valor",
@@ -2902,29 +2872,19 @@ class RegistrarValorModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        metas = metas_cache
-        dados = metas.get(str(self.member_id))
-
+        dados = metas_cache.get(str(self.member_id))
         if not dados:
-            await interaction.response.send_message(
-                "Meta não encontrada.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("Meta não encontrada.", ephemeral=True)
             return
 
         try:
             valor = int(self.valor.value.replace(".", "").replace(",", ""))
         except:
-            await interaction.response.send_message(
-                "Valor inválido.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("Valor inválido.", ephemeral=True)
             return
 
-        # Atualiza valor local
         dados[self.tipo] += valor
 
-        # SALVA NO POSTGRES
         await salvar_meta(
             self.member_id,
             dados["canal_id"],
@@ -2934,46 +2894,32 @@ class RegistrarValorModal(discord.ui.Modal):
         )
 
         membro = interaction.guild.get_member(self.member_id)
-
         if membro:
             await atualizar_painel_meta(membro)
 
-        await interaction.response.send_message(
-            "Registrado.",
-            ephemeral=True
-        )
-
+        await interaction.response.send_message("Registrado.", ephemeral=True)
 
 # =========================================================
 # BOTÕES META
 # =========================================================
 
 class BotaoDinheiro(discord.ui.Button):
-
     def __init__(self, member_id):
         super().__init__(
             label="💰 Dinheiro",
             style=discord.ButtonStyle.success,
             custom_id=f"meta_dinheiro_{member_id}"
         )
-        self.member_id = int(member_id)  # 🔥 GARANTE INT
+        self.member_id = int(member_id)
 
     async def callback(self, interaction: discord.Interaction):
-
-        if interaction.user.id != int(self.member_id):
-            await interaction.response.send_message(
-                "Você não pode registrar meta de outro membro.",
-                ephemeral=True
-            )
+        if interaction.user.id != self.member_id:
+            await interaction.response.send_message("Você não pode registrar meta de outro membro.", ephemeral=True)
             return
-
-        await interaction.response.send_modal(
-            RegistrarValorModal("dinheiro", int(self.member_id))
-        )
+        await interaction.response.send_modal(RegistrarValorModal("dinheiro", self.member_id))
 
 
 class BotaoAcao(discord.ui.Button):
-
     def __init__(self, member_id):
         super().__init__(
             label="🎯 Ação",
@@ -2983,46 +2929,29 @@ class BotaoAcao(discord.ui.Button):
         self.member_id = int(member_id)
 
     async def callback(self, interaction: discord.Interaction):
-
-        if interaction.user.id != int(self.member_id):
-            await interaction.response.send_message(
-                "Você não pode registrar meta de outro membro.",
-                ephemeral=True
-            )
+        if interaction.user.id != self.member_id:
+            await interaction.response.send_message("Você não pode registrar meta de outro membro.", ephemeral=True)
             return
-
-        await interaction.response.send_modal(
-            RegistrarValorModal("acao", int(self.member_id))
-        )
+        await interaction.response.send_modal(RegistrarValorModal("acao", self.member_id))
 
 
 class BotaoPolvora(discord.ui.Button):
-
     def __init__(self, member_id):
-
         super().__init__(
             label="💣 Pólvora",
             style=discord.ButtonStyle.primary,
             custom_id=f"meta_polvora_{member_id}"
         )
-
-        self.member_id = member_id
+        self.member_id = int(member_id)
 
     async def callback(self, interaction: discord.Interaction):
-
         if interaction.user.id != self.member_id:
-            await interaction.response.send_message(
-                "Você não pode registrar meta de outro membro.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("Você não pode registrar meta de outro membro.", ephemeral=True)
             return
+        await interaction.response.send_modal(RegistrarValorModal("polvora", self.member_id))
 
-        await interaction.response.send_modal(
-            RegistrarValorModal("polvora", self.member_id)
-        )
 
 class BotaoReiniciar(discord.ui.Button):
-
     def __init__(self, member_id):
         super().__init__(
             label="🔄 Reiniciar Quadro",
@@ -3033,33 +2962,24 @@ class BotaoReiniciar(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
 
-        await interaction.response.defer(ephemeral=True)
-
         if not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
-            await interaction.followup.send(
-                "Apenas gerentes podem reiniciar.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("Apenas gerentes podem reiniciar.", ephemeral=True)
             return
 
         dados = metas_cache.get(str(self.member_id))
         if not dados:
             return
 
-        await salvar_meta(
-            int(self.member_id),
-            dados["canal_id"],
-            0,
-            0,
-            0
-        )
+        await salvar_meta(self.member_id, dados["canal_id"], 0, 0, 0)
 
-        membro = interaction.guild.get_member(int(self.member_id))
+        membro = interaction.guild.get_member(self.member_id)
         if membro:
             await atualizar_painel_meta(membro)
 
-class BotaoLimparSala(discord.ui.Button):
+        await interaction.response.send_message("Quadro reiniciado.", ephemeral=True)
 
+
+class BotaoLimparSala(discord.ui.Button):
     def __init__(self):
         super().__init__(
             label="🧹 Limpar Sala",
@@ -3069,69 +2989,51 @@ class BotaoLimparSala(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
 
-        # Permissão: apenas gerente
-        if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            await interaction.response.send_message(
-                "Apenas gerentes podem limpar a sala.",
-                ephemeral=True
-            )
+        if not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
+            await interaction.response.send_message("Apenas gerentes podem limpar.", ephemeral=True)
             return
 
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         canal = interaction.channel
-        mensagens_para_apagar = []
 
         async for msg in canal.history(limit=200):
-
-            # Mantém o painel (embed META INDIVIDUAL)
             if msg.author == interaction.guild.me and msg.embeds:
                 if msg.embeds[0].title == "📊 META INDIVIDUAL":
                     continue
-
-            mensagens_para_apagar.append(msg)
-
-        for msg in mensagens_para_apagar:
             try:
                 await msg.delete()
             except:
                 pass
+
+        await interaction.followup.send("Sala limpa com sucesso.", ephemeral=True)
+
 # =========================================================
 # VIEW META
 # =========================================================
 
 class MetaView(discord.ui.View):
-
     def __init__(self, member_id):
-
         super().__init__(timeout=None)
 
         guild = bot.get_guild(GUILD_ID)
-
         if not guild:
             return
 
-        member = guild.get_member(member_id)
-
-        # se membro não estiver no cache
+        member = guild.get_member(int(member_id))
         if not member:
-            self.add_item(BotaoDinheiro(member_id))
-            self.add_item(BotaoAcao(member_id))
-            self.add_item(BotaoReiniciar(member_id))
-            self.add_item(BotaoLimparSala())
             return
 
         roles = [r.id for r in member.roles]
 
-        # agregado puro → só pólvora
         if AGREGADO_ROLE_ID in roles and CARGO_MEMBRO_ID not in roles:
             self.add_item(BotaoPolvora(member_id))
-
         else:
             self.add_item(BotaoDinheiro(member_id))
             self.add_item(BotaoAcao(member_id))
 
         self.add_item(BotaoReiniciar(member_id))
+        self.add_item(BotaoLimparSala())
 
 
 # =========================================================
@@ -3946,6 +3848,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
