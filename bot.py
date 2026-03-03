@@ -2719,30 +2719,6 @@ def obter_meta_dinheiro(member: discord.Member) -> int:
 
     return 0
 
-# =========================================================
-# BOTÕES
-# =========================================================
-
-class FecharSalaView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="🔒 Fechar Sala",
-        style=discord.ButtonStyle.danger,
-        custom_id="meta_fechar"
-    )
-    async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        if not any(r.id == CARGO_GERENTE_ID for r in interaction.user.roles):
-            await interaction.response.send_message(
-                "Apenas Gerentes podem fechar.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.channel.delete()
-
 
 # =========================================================
 # MODAL REGISTRAR VALOR
@@ -2888,6 +2864,45 @@ class BotaoPolvora(discord.ui.Button):
             RegistrarValorModal("polvora", self.member_id)
         )
 
+class BotaoReiniciar(discord.ui.Button):
+
+    def __init__(self, member_id):
+        super().__init__(
+            label="🔄 Reiniciar Quadro",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"meta_reiniciar_{member_id}"
+        )
+        self.member_id = member_id
+
+    async def callback(self, interaction: discord.Interaction):
+
+        if not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
+            await interaction.response.send_message(
+                "Apenas gerentes podem reiniciar.",
+                ephemeral=True
+            )
+            return
+
+        dados = metas_cache.get(str(self.member_id))
+        if not dados:
+            return
+
+        await salvar_meta(
+            self.member_id,
+            dados["canal_id"],
+            0,
+            0,
+            0
+        )
+
+        membro = interaction.guild.get_member(self.member_id)
+        if membro:
+            await atualizar_painel_meta(membro)
+
+        await interaction.response.send_message(
+            "Quadro reiniciado com sucesso.",
+            ephemeral=True
+        )
 
 # =========================================================
 # VIEW META
@@ -2910,7 +2925,7 @@ class MetaView(discord.ui.View):
         if not member:
             self.add_item(BotaoDinheiro(member_id))
             self.add_item(BotaoAcao(member_id))
-            self.add_item(FecharSalaView().children[0])
+            self.add_item(BotaoReiniciar(member_id))
             return
 
         roles = [r.id for r in member.roles]
@@ -2923,7 +2938,7 @@ class MetaView(discord.ui.View):
             self.add_item(BotaoDinheiro(member_id))
             self.add_item(BotaoAcao(member_id))
 
-        self.add_item(FecharSalaView().children[0])
+        self.add_item(BotaoReiniciar(member_id))
 
 
 # =========================================================
@@ -3189,18 +3204,22 @@ async def atualizar_painel_meta(member: discord.Member):
 
     # se achou, atualiza
     if painel_encontrado:
+    try:
+        await painel_encontrado.edit(embed=embed, view=view)
+
+        # Move para o final reenviando referência
+        await painel_encontrado.delete()
+        novo = await canal.send(embed=embed, view=view)
+
         try:
-            await painel_encontrado.edit(embed=embed, view=view)
-
-            # garante que esteja fixado
-            try:
-                await painel_encontrado.pin()
-            except:
-                pass
-
-            return
+            await novo.pin()
         except:
             pass
+
+        return
+
+    except:
+        pass
 
     # se não achou ou deu erro → cria novo
     try:
@@ -3559,6 +3578,13 @@ async def on_ready():
     await carregar_metas_cache()
     print(f"📊 Metas carregadas: {len(metas_cache)}")
 
+    # Registrar MetaViews persistentes
+    for uid in metas_cache.keys():
+        try:
+            bot.add_view(MetaView(int(uid)))
+        except Exception as e:
+            print("Erro registrando MetaView:", e)
+
     # ================= RESTAURAR BOTÕES DAS METAS =================
     await reconstruir_views_metas()
 
@@ -3690,18 +3716,5 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
