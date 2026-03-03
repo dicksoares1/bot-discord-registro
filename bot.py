@@ -334,10 +334,14 @@ async def atualizar_valor_venda_db(vendedor_id, valor):
         await conn.execute(
             """
             UPDATE vendas
-            SET valor=$1
-            WHERE user_id=$2
-            ORDER BY data DESC
-            LIMIT 1
+            SET valor = $1
+            WHERE id = (
+                SELECT id
+                FROM vendas
+                WHERE user_id = $2
+                ORDER BY id DESC
+                LIMIT 1
+            )
             """,
             valor,
             vendedor_id
@@ -3869,6 +3873,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
