@@ -3702,6 +3702,59 @@ async def relatorio_semanal_task():
         print("Metas resetadas após relatório semanal.")
 
 # =========================================================
+# =============== SOLICITAR SALA MANUAL ===================
+# =========================================================
+
+class SolicitarSalaView(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="➕ Criar Minha Sala",
+        style=discord.ButtonStyle.success,
+        custom_id="criar_sala_manual"
+    )
+    async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        if str(interaction.user.id) in metas_cache:
+            await interaction.response.send_message(
+                "Você já possui uma sala de meta.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        await criar_sala_meta(interaction.user)
+
+        await interaction.followup.send(
+            "Sua sala foi criada com sucesso!",
+            ephemeral=True
+        )
+
+async def enviar_painel_solicitar_sala():
+
+    canal = bot.get_channel(1337374500366450741)
+
+    if not canal:
+        return
+
+    embed = discord.Embed(
+        title="📂 Solicitar Sala de Meta",
+        description="Clique no botão abaixo para criar sua sala manualmente.",
+        color=0x2ecc71
+    )
+
+    async for msg in canal.history(limit=20):
+        if msg.author == bot.user and msg.embeds:
+            if msg.embeds[0].title == "📂 Solicitar Sala de Meta":
+                await msg.edit(embed=embed, view=SolicitarSalaView())
+                return
+
+    await canal.send(embed=embed, view=SolicitarSalaView())
+
+# =========================================================
 # ========================= ON_READY ======================
 # =========================================================
 
@@ -3717,7 +3770,6 @@ async def on_ready():
     if not db:
         await conectar_db()
 
-    # ================= CARREGAR MEMBROS DO DISCORD =================
     guild = bot.get_guild(GUILD_ID)
 
     if guild:
@@ -3728,25 +3780,24 @@ async def on_ready():
     await carregar_metas_cache()
     print(f"📊 Metas carregadas: {len(metas_cache)}")
 
-    # ================= EVITA DUPLICAR EXECUÇÃO =================
-    if hasattr(bot, "ready_once"):
-        return
-    bot.ready_once = True
-
+    # ⚠️ NÃO bloqueia registro de views
     print("🔄 Iniciando configuração do bot...")
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
 
     # ================= REGISTRAR VIEWS PERSISTENTES =================
 
-    # 🔹 Registrar MetaView para cada usuário que tem meta
+    # Registrar MetaView individual
     for uid in metas_cache.keys():
         try:
             bot.add_view(MetaView(int(uid)))
         except Exception as e:
             print("Erro registrando MetaView:", e)
 
-    # 🔹 Registrar outras views persistentes
-    views = [
+    # Registrar SolicitarSalaView
+    bot.add_view(SolicitarSalaView())
+
+    # Registrar outras views
+    outras_views = [
         RegistroView,
         CalcView,
         StatusView,
@@ -3758,16 +3809,15 @@ async def on_ready():
         LavagemView,
         FabricacaoView,
         PainelAcoesView,
-        SolicitarSalaView  # 👈 botão solicitar sala manual
     ]
 
-    for view_class in views:
+    for view_class in outras_views:
         try:
             bot.add_view(view_class())
         except Exception as e:
             print(f"Erro ao registrar view {view_class.__name__}:", e)
 
-    # ================= RESTAURAR BOTÕES DAS METAS =================
+    # ================= RESTAURAR METAS =================
     await reconstruir_views_metas()
 
     # ================= LOOPS =================
@@ -3804,7 +3854,6 @@ async def on_ready():
     except Exception as e:
         print("Erro loop limpeza lavagens:", e)
 
-    # 🔥 RESET AÇÕES SEMANAIS
     try:
         if not reset_acoes_segunda.is_running():
             reset_acoes_segunda.start()
@@ -3829,31 +3878,19 @@ async def on_ready():
         print("Erro restaurar produções:", e)
 
     # ================= ENVIAR PAINÉIS =================
-    funcoes_paineis = [
-        enviar_painel_fabricacao,
-        enviar_painel_lives,
-        enviar_painel_admin_lives,
-        enviar_painel_polvoras,
-        enviar_painel_lavagem,
-        painel_calc,
-        enviar_painel_vendas,
-        atualizar_painel_acoes,
-        reconstruir_views_metas
-    ]
+    try:
+        await enviar_painel_fabricacao()
+        await enviar_painel_lives()
+        await enviar_painel_admin_lives()
+        await enviar_painel_polvoras(bot)
+        await enviar_painel_lavagem()
+        await painel_calc()
+        await enviar_painel_vendas()
+        await atualizar_painel_acoes(bot.get_guild(GUILD_ID))
+        await enviar_painel_solicitar_sala()
 
-    for func in funcoes_paineis:
-        try:
-            if func == enviar_painel_polvoras:
-                await func(bot)
-
-            elif func == atualizar_painel_acoes:
-                await func(bot.get_guild(GUILD_ID))
-
-            else:
-                await func()
-
-        except Exception as e:
-            print(f"Erro ao enviar painel {func.__name__}:", e)
+    except Exception as e:
+        print("Erro ao enviar painéis:", e)
 
     gc.collect()
     print("🧹 Limpeza de memória executada")
@@ -3865,18 +3902,5 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
