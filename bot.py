@@ -809,21 +809,20 @@ async def enviar_painel_vendas():
     )
 
     # procura painel existente
-async for msg in canal.history(limit=30):
-    if (
-        msg.author == bot.user
-        and msg.embeds
-        and msg.embeds[0].title == "🛒 Painel de Vendas"
-    ):
-        await asyncio.sleep(0.4)  # 👈 reduz rate limit
-        await msg.edit(embed=embed, view=CalculadoraView())
-        print("♻️ Painel de vendas atualizado")
-        return
+    async for msg in canal.history(limit=30):
+        if (
+            msg.author == bot.user
+            and msg.embeds
+            and msg.embeds[0].title == "🛒 Painel de Vendas"
+        ):
+            await asyncio.sleep(0.4)  # reduz rate limit
+            await msg.edit(embed=embed, view=CalculadoraView())
+            print("♻️ Painel de vendas atualizado")
+            return
 
     # cria novo
     await canal.send(embed=embed, view=CalculadoraView())
     print("🛒 Painel de vendas criado")
-
 # =========================================================
 # ======================== PRODUÇÃO ========================
 # =========================================================
@@ -3902,6 +3901,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
