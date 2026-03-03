@@ -3415,8 +3415,7 @@ async def enviar_relatorio_semanal():
     embed.add_field(name="💰 Total Facção", value=f"R$ {total:,}".replace(",", "."), inline=False)
     embed.add_field(name="📉 Zerados", value=str(zerados))
 
-    await canal.send(embed=embed)
-
+    
 @tasks.loop(time=time(hour=12, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
 async def relatorio_semanal_task():
     agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
@@ -3496,31 +3495,50 @@ async def enviar_painel_solicitar_sala():
 
 @bot.event
 async def on_ready():
+
     global db
     global http_session
 
+    print("🔄 Iniciando configuração do bot...")
+
+    # =====================================================
+    # ================= HTTP SESSION ======================
+    # =====================================================
     if not http_session:
         http_session = aiohttp.ClientSession()
 
-    # ================= CONECTA NO POSTGRES =================
+    # =====================================================
+    # ================= CONECTA NO POSTGRES ===============
+    # =====================================================
     if not db:
         await conectar_db()
 
+    # =====================================================
+    # ================= CARREGAR GUILD ====================
+    # =====================================================
     guild = bot.get_guild(GUILD_ID)
 
     if guild:
-        await guild.chunk()
-        print("👥 Membros carregados no cache.")
+        try:
+            await guild.chunk()
+            print("👥 Membros carregados no cache.")
+        except Exception as e:
+            print("Erro ao carregar membros:", e)
 
-    # ================= CACHE DE METAS =================
-    await carregar_metas_cache()
-    print(f"📊 Metas carregadas: {len(metas_cache)}")
-
-    # ⚠️ NÃO bloqueia registro de views
-    print("🔄 Iniciando configuração do bot...")
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
 
-    # ================= REGISTRAR VIEWS PERSISTENTES =================
+    # =====================================================
+    # ================= CACHE DE METAS ====================
+    # =====================================================
+    try:
+        await carregar_metas_cache()
+        print(f"📊 Metas carregadas: {len(metas_cache)}")
+    except Exception as e:
+        print("Erro ao carregar metas:", e)
+
+    # =====================================================
+    # ========== REGISTRAR VIEWS PERSISTENTES =============
+    # =====================================================
 
     # Registrar MetaView individual
     for uid in metas_cache.keys():
@@ -3530,7 +3548,10 @@ async def on_ready():
             print("Erro registrando MetaView:", e)
 
     # Registrar SolicitarSalaView
-    bot.add_view(SolicitarSalaView())
+    try:
+        bot.add_view(SolicitarSalaView())
+    except Exception as e:
+        print("Erro registrando SolicitarSalaView:", e)
 
     # Registrar outras views
     outras_views = [
@@ -3551,9 +3572,18 @@ async def on_ready():
         except Exception as e:
             print(f"Erro ao registrar view {view_class.__name__}:", e)
 
-    # ================= RESTAURAR METAS =================
-    bot.loop.create_task(reconstruir_views_metas())
-    # ================= LOOPS =================
+    # =====================================================
+    # ================= RESTAURAR VIEWS METAS =============
+    # =====================================================
+    try:
+        bot.loop.create_task(reconstruir_views_metas())
+    except Exception as e:
+        print("Erro reconstruindo views metas:", e)
+
+    # =====================================================
+    # ================= INICIAR LOOPS =====================
+    # =====================================================
+
     try:
         if not verificar_lives_twitch.is_running():
             verificar_lives_twitch.start()
@@ -3576,8 +3606,8 @@ async def on_ready():
         if not varrer_agregados_sem_sala.is_running():
             varrer_agregados_sem_sala.start()
 
+        # força primeira execução
         bot.loop.create_task(varrer_agregados_sem_sala())
-
     except Exception as e:
         print("Erro varredura metas:", e)
 
@@ -3593,7 +3623,9 @@ async def on_ready():
     except Exception as e:
         print("Erro reset ações semana:", e)
 
-    # ================= RESTAURAR PRODUÇÕES =================
+    # =====================================================
+    # ================= RESTAURAR PRODUÇÕES ===============
+    # =====================================================
     try:
         async with db.acquire() as conn:
             rows = await conn.fetch(
@@ -3607,10 +3639,15 @@ async def on_ready():
                 task = bot.loop.create_task(acompanhar_producao(pid))
                 producoes_tasks[pid] = task
 
+        print(f"🏭 Produções restauradas: {len(rows)}")
+
     except Exception as e:
         print("Erro restaurar produções:", e)
 
-    # ================= ENVIAR PAINÉIS =================
+    # =====================================================
+    # ================= ENVIAR PAINÉIS ====================
+    # =====================================================
+
     try:
 
         painel_tasks = [
@@ -3625,17 +3662,37 @@ async def on_ready():
         ]
 
         for task in painel_tasks:
-            await task
-            await asyncio.sleep(0.5)
+            try:
+                await task
+                await asyncio.sleep(0.7)  # delay anti rate limit
+            except Exception as e:
+                print("Erro em painel específico:", e)
+
+        print("🖥️ Painéis verificados/enviados.")
 
     except Exception as e:
-        print("Erro ao enviar painéis:", e)
+        print("Erro geral ao enviar painéis:", e)
+
+    # =====================================================
+    # ================= INICIAR EDIT WORKER ===============
+    # =====================================================
+    try:
+        if not hasattr(bot, "edit_worker_started"):
+            bot.loop.create_task(edit_worker())
+            bot.edit_worker_started = True
+            print("🛠️ Edit worker iniciado.")
+    except Exception as e:
+        print("Erro iniciando edit worker:", e)
+
+    # =====================================================
+    # ================= LIMPEZA FINAL =====================
+    # =====================================================
     gc.collect()
-    if not hasattr(bot, "edit_worker_started"):
-        bot.loop.create_task(edit_worker())
-        bot.edit_worker_started = True
+
     print("🧹 Limpeza de memória executada")
-    print("✅ BOT ONLINE 100%")
+    print("=========================================")
+    print("✅ BOT ONLINE 100% ESTÁVEL")
+    print("=========================================")
 # =========================================================
 # ========================= START BOT =====================
 # =========================================================
@@ -3643,3 +3700,4 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
