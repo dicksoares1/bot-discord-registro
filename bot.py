@@ -3496,6 +3496,17 @@ async def enviar_painel_solicitar_sala():
 @bot.event
 async def on_ready():
 
+    # 🔥 PROTEÇÃO CONTRA DUPLO on_ready
+    if hasattr(bot, "ja_iniciado"):
+        return
+
+    bot.ja_iniciado = True
+
+    global db
+    global http_session
+
+    print("🔄 Iniciando configuração do bot...")
+
     global db
     global http_session
 
@@ -3700,4 +3711,5 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
