@@ -3202,24 +3202,25 @@ async def atualizar_painel_meta(member: discord.Member):
             painel_encontrado = msg
             break
 
-    # se achou, atualiza
+    # se achou, atualiza e move para o final
     if painel_encontrado:
-    try:
-        await painel_encontrado.edit(embed=embed, view=view)
-
-        # Move para o final reenviando referência
-        await painel_encontrado.delete()
-        novo = await canal.send(embed=embed, view=view)
-
         try:
-            await novo.pin()
+            await painel_encontrado.edit(embed=embed, view=view)
+
+            # Remove o antigo para recriar como última mensagem
+            await painel_encontrado.delete()
+
+            novo = await canal.send(embed=embed, view=view)
+
+            try:
+                await novo.pin()
+            except:
+                pass
+
+            return
+
         except:
             pass
-
-        return
-
-    except:
-        pass
 
     # se não achou ou deu erro → cria novo
     try:
@@ -3716,5 +3717,6 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
