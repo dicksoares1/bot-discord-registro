@@ -809,15 +809,16 @@ async def enviar_painel_vendas():
     )
 
     # procura painel existente
-    async for msg in canal.history(limit=30):
-        if (
-            msg.author == bot.user
-            and msg.embeds
-            and msg.embeds[0].title == "🛒 Painel de Vendas"
-        ):
-            await msg.edit(embed=embed, view=CalculadoraView())
-            print("♻️ Painel de vendas atualizado")
-            return
+async for msg in canal.history(limit=30):
+    if (
+        msg.author == bot.user
+        and msg.embeds
+        and msg.embeds[0].title == "🛒 Painel de Vendas"
+    ):
+        await asyncio.sleep(0.4)  # 👈 reduz rate limit
+        await msg.edit(embed=embed, view=CalculadoraView())
+        print("♻️ Painel de vendas atualizado")
+        return
 
     # cria novo
     await canal.send(embed=embed, view=CalculadoraView())
@@ -3368,6 +3369,7 @@ async def atualizar_painel_meta(member: discord.Member):
     # Se encontrou → apenas edita (NÃO deleta)
     if painel_encontrado:
         try:
+            await asyncio.sleep(0.3)  # 👈 ADICIONE ESTA LINHA
             await painel_encontrado.edit(embed=embed, view=view)
             return
         except Exception as e:
@@ -3800,7 +3802,6 @@ async def on_ready():
     outras_views = [
         RegistroView,
         CalcView,
-        StatusView,
         CadastrarLiveView,
         PainelLivesAdmin,
         GerenciarLivesView,
@@ -3818,8 +3819,7 @@ async def on_ready():
             print(f"Erro ao registrar view {view_class.__name__}:", e)
 
     # ================= RESTAURAR METAS =================
-    await reconstruir_views_metas()
-
+    bot.loop.create_task(reconstruir_views_metas())
     # ================= LOOPS =================
     try:
         if not verificar_lives_twitch.is_running():
@@ -3843,7 +3843,7 @@ async def on_ready():
         if not varrer_agregados_sem_sala.is_running():
             varrer_agregados_sem_sala.start()
 
-        await varrer_agregados_sem_sala()
+        bot.loop.create_task(varrer_agregados_sem_sala())
 
     except Exception as e:
         print("Erro varredura metas:", e)
@@ -3902,5 +3902,6 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
