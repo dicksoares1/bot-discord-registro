@@ -329,6 +329,20 @@ async def salvar_venda_db(vendedor_id, valor):
             agora().strftime("%d/%m/%Y")
         )
 
+async def atualizar_valor_venda_db(vendedor_id, valor):
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE vendas
+            SET valor=$1
+            WHERE user_id=$2
+            ORDER BY data DESC
+            LIMIT 1
+            """,
+            valor,
+            vendedor_id
+        )
+
 
 async def carregar_vendas_db():
     async with db.acquire() as conn:
@@ -420,7 +434,7 @@ class StatusView(discord.ui.View):
         embed = self.set_status(embed, idx, linhas)
 
         # Finaliza pedido → trava botões
-        await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
+        await interaction.message.edit(embed=embed, view=self)
         await interaction.response.defer()
 
     # =====================================================
@@ -462,7 +476,7 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        await interaction.message.edit(embed=embed)
+        await interaction.message.edit(embed=embed, view=self)
 
         # ===============================
         # PEGAR PACOTES DO EMBED
@@ -537,6 +551,25 @@ class StatusView(discord.ui.View):
         # Finaliza pedido → trava botões
         await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
         await interaction.response.defer()
+
+    # =====================================================
+    # ================= BOTÃO EDITAR ======================
+    # =====================================================
+
+    @discord.ui.button(label="✏️ Editar Venda", style=discord.ButtonStyle.secondary)
+    async def editar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        embed = interaction.message.embeds[0]
+        idx, linhas = self.get_status(embed)
+
+        if self.pedido_cancelado(linhas):
+            await interaction.response.send_message(
+                "⚠️ Pedido cancelado não pode ser editado.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(EditarVendaModal(interaction.message))
 # =========================================================
 # ================= MODAL DE VENDA ========================
 # =========================================================
@@ -615,6 +648,81 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         await canal.send(embed=embed, view=StatusView())
 
         await interaction.response.defer()
+
+# =========================================================
+# ================= EDITAR== VENDA ========================
+# =========================================================
+class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
+
+    qtd_pt = discord.ui.TextInput(label="Nova Quantidade PT")
+    qtd_sub = discord.ui.TextInput(label="Nova Quantidade SUB")
+
+    def __init__(self, message):
+        super().__init__()
+        self.message = message
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        try:
+            pt = int(self.qtd_pt.value.strip())
+            sub = int(self.qtd_sub.value.strip())
+        except:
+            await interaction.response.send_message("Valores inválidos.", ephemeral=True)
+            return
+
+        pacotes_pt = pt // 50
+        pacotes_sub = sub // 50
+        total = (pt * 50) + (sub * 90)
+
+        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+        embed = self.message.embeds[0]
+
+        vendedor_id = None
+        for field in embed.fields:
+            if field.name == "👤 Vendedor":
+                vendedor_id = field.value.replace("<@", "").replace(">", "")
+
+        for i, field in enumerate(embed.fields):
+
+            if field.name == "🔫 PT":
+                embed.set_field_at(
+                    i,
+                    name="🔫 PT",
+                    value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
+                    inline=True
+                )
+
+            if field.name == "🔫 SUB":
+                embed.set_field_at(
+                    i,
+                    name="🔫 SUB",
+                    value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
+                    inline=True
+                )
+
+            if field.name == "💰 Total":
+                embed.set_field_at(
+                    i,
+                    name="💰 Total",
+                    value=f"**R$ {valor_formatado}**",
+                    inline=False
+                )
+
+        await atualizar_valor_venda_db(vendedor_id, total)
+
+        await self.message.edit(embed=embed)
+
+        canal_log = interaction.guild.get_channel(1478381934026424391)
+        if canal_log:
+            await canal_log.send(
+                f"✏️ **Venda editada**\n"
+                f"👤 Editor: {interaction.user.mention}\n"
+                f"🧾 Pedido: {embed.title}\n"
+                f"💰 Novo valor: R$ {valor_formatado}"
+            )
+
+        await interaction.response.send_message("Venda editada com sucesso.", ephemeral=True)
 # =========================================================
 # ================= MODAL RELATÓRIO =======================
 # =========================================================
@@ -3761,6 +3869,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
