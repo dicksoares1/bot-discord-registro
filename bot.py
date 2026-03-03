@@ -2374,7 +2374,7 @@ class AcaoSelect(discord.ui.Select):
 
         options = [
             discord.SelectOption(label=a)
-            for a in ACOES_CONFIG.keys()
+            for a in ACOES_SEMANA.keys()
         ]
 
         super().__init__(
@@ -3719,6 +3719,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
