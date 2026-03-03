@@ -2870,37 +2870,32 @@ class BotaoReiniciar(discord.ui.Button):
         )
         self.member_id = int(member_id)
 
-   async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction):
 
-    # Responde imediatamente para evitar erro 404
-    await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
 
-    if not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
-        await interaction.followup.send(
-            "Apenas gerentes podem reiniciar.",
-            ephemeral=True
+        if not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
+            await interaction.followup.send(
+                "Apenas gerentes podem reiniciar.",
+                ephemeral=True
+            )
+            return
+
+        dados = metas_cache.get(str(self.member_id))
+        if not dados:
+            return
+
+        await salvar_meta(
+            int(self.member_id),
+            dados["canal_id"],
+            0,
+            0,
+            0
         )
-        return
 
-    dados = metas_cache.get(str(self.member_id))
-    if not dados:
-        return
-
-    # Zera no banco e no cache
-    await salvar_meta(
-        int(self.member_id),
-        dados["canal_id"],
-        0,
-        0,
-        0
-    )
-
-    membro = interaction.guild.get_member(int(self.member_id))
-    if membro:
-        await atualizar_painel_meta(membro)
-
-    # NÃO envia mensagem para não poluir
-
+        membro = interaction.guild.get_member(int(self.member_id))
+        if membro:
+            await atualizar_painel_meta(membro)
 # =========================================================
 # VIEW META
 # =========================================================
@@ -3708,6 +3703,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
