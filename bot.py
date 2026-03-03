@@ -320,34 +320,30 @@ async def proximo_pedido():
         return novo
 
 
-async def salvar_venda_db(vendedor_id, valor):
+async def salvar_venda_db(vendedor_id, valor, pedido_numero):
     async with db.acquire() as conn:
         await conn.execute(
-            "INSERT INTO vendas (user_id, valor, data) VALUES ($1, $2, $3)",
+            """
+            INSERT INTO vendas (user_id, valor, data, pedido_numero)
+            VALUES ($1, $2, $3, $4)
+            """,
             vendedor_id,
             valor,
-            agora().strftime("%d/%m/%Y")
+            agora().strftime("%d/%m/%Y"),
+            pedido_numero
         )
 
-async def atualizar_valor_venda_db(vendedor_id, valor):
+async def atualizar_valor_venda_db(pedido_numero, valor):
     async with db.acquire() as conn:
         await conn.execute(
             """
             UPDATE vendas
             SET valor = $1
-            WHERE id = (
-                SELECT id
-                FROM vendas
-                WHERE user_id = $2
-                ORDER BY id DESC
-                LIMIT 1
-            )
+            WHERE pedido_numero = $2
             """,
             valor,
-            vendedor_id
+            pedido_numero
         )
-
-
 async def carregar_vendas_db():
     async with db.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM vendas")
@@ -604,7 +600,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         total = (pt * 50) + (sub * 90)
 
         # SALVA NO POSTGRES
-        await salvar_venda_db(str(interaction.user.id), total)
+        await salvar_venda_db(str(interaction.user.id), total, numero_pedido)
 
         valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -713,8 +709,11 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
                     inline=False
                 )
 
-        await atualizar_valor_venda_db(vendedor_id, total)
+       
+        titulo = embed.title
+        pedido_numero = int(titulo.split("#")[1])
 
+        await atualizar_valor_venda_db(pedido_numero, total)
         await self.message.edit(embed=embed)
 
         canal_log = interaction.guild.get_channel(1478381934026424391)
@@ -3873,6 +3872,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
