@@ -23,7 +23,21 @@ from discord.utils import escape_markdown
 import time as time_module
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+# =========================================================
+# ================== FILA GLOBAL DE EDIÇÃO =================
+# =========================================================
 
+edit_queue = asyncio.Queue()
+
+async def edit_worker():
+    while True:
+        coro = await edit_queue.get()
+        try:
+            await coro
+            await asyncio.sleep(0.7)  # intervalo seguro anti rate limit
+        except Exception as e:
+            print("Erro no edit_worker:", e)
+        edit_queue.task_done()
 # =========================================================
 
 http_session = None
@@ -816,7 +830,7 @@ async def enviar_painel_vendas():
             and msg.embeds[0].title == "🛒 Painel de Vendas"
         ):
             await asyncio.sleep(0.4)  # reduz rate limit
-            await msg.edit(embed=embed, view=CalculadoraView())
+            await edit_queue.put(msg.edit(embed=embed, view=CalculadoraView()))
             print("♻️ Painel de vendas atualizado")
             return
 
@@ -1619,7 +1633,7 @@ async def enviar_ou_atualizar_painel(canal_id, titulo_embed, embed, view):
             and msg.embeds[0].title == titulo_embed
         ):
             try:
-                await msg.edit(embed=embed, view=view)
+                await edit_queue.put(msg.edit(embed=embed, view=view))
                 return
             except:
                 return
@@ -3369,7 +3383,7 @@ async def atualizar_painel_meta(member: discord.Member):
     if painel_encontrado:
         try:
             await asyncio.sleep(0.3)  # 👈 ADICIONE ESTA LINHA
-            await painel_encontrado.edit(embed=embed, view=view)
+            await edit_queue.put(painel_encontrado.edit(embed=embed, view=view))
             return
         except Exception as e:
             print("Erro ao editar painel meta:", e)
@@ -3892,6 +3906,9 @@ async def on_ready():
         print("Erro ao enviar painéis:", e)
 
     gc.collect()
+    if not hasattr(bot, "edit_worker_started"):
+        bot.loop.create_task(edit_worker())
+        bot.edit_worker_started = True
     print("🧹 Limpeza de memória executada")
     print("✅ BOT ONLINE 100%")
 # =========================================================
@@ -3901,6 +3918,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
