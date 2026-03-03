@@ -2790,18 +2790,16 @@ class RegistrarValorModal(discord.ui.Modal):
 class BotaoDinheiro(discord.ui.Button):
 
     def __init__(self, member_id):
-
         super().__init__(
             label="💰 Dinheiro",
             style=discord.ButtonStyle.success,
             custom_id=f"meta_dinheiro_{member_id}"
         )
-
-        self.member_id = member_id
+        self.member_id = int(member_id)  # 🔥 GARANTE INT
 
     async def callback(self, interaction: discord.Interaction):
 
-        if interaction.user.id != self.member_id:
+        if interaction.user.id != int(self.member_id):
             await interaction.response.send_message(
                 "Você não pode registrar meta de outro membro.",
                 ephemeral=True
@@ -2809,25 +2807,23 @@ class BotaoDinheiro(discord.ui.Button):
             return
 
         await interaction.response.send_modal(
-            RegistrarValorModal("dinheiro", self.member_id)
+            RegistrarValorModal("dinheiro", int(self.member_id))
         )
 
 
 class BotaoAcao(discord.ui.Button):
 
     def __init__(self, member_id):
-
         super().__init__(
             label="🎯 Ação",
             style=discord.ButtonStyle.secondary,
             custom_id=f"meta_acao_{member_id}"
         )
-
-        self.member_id = member_id
+        self.member_id = int(member_id)
 
     async def callback(self, interaction: discord.Interaction):
 
-        if interaction.user.id != self.member_id:
+        if interaction.user.id != int(self.member_id):
             await interaction.response.send_message(
                 "Você não pode registrar meta de outro membro.",
                 ephemeral=True
@@ -2835,7 +2831,7 @@ class BotaoAcao(discord.ui.Button):
             return
 
         await interaction.response.send_modal(
-            RegistrarValorModal("acao", self.member_id)
+            RegistrarValorModal("acao", int(self.member_id))
         )
 
 
@@ -2872,7 +2868,7 @@ class BotaoReiniciar(discord.ui.Button):
             style=discord.ButtonStyle.danger,
             custom_id=f"meta_reiniciar_{member_id}"
         )
-        self.member_id = member_id
+        self.member_id = int(member_id)
 
     async def callback(self, interaction: discord.Interaction):
 
@@ -2888,14 +2884,14 @@ class BotaoReiniciar(discord.ui.Button):
             return
 
         await salvar_meta(
-            self.member_id,
+            int(self.member_id),
             dados["canal_id"],
             0,
             0,
             0
         )
 
-        membro = interaction.guild.get_member(self.member_id)
+        membro = interaction.guild.get_member(int(self.member_id))
         if membro:
             await atualizar_painel_meta(membro)
 
@@ -3257,7 +3253,7 @@ async def reconstruir_views_metas():
             if msg.author == bot.user and msg.embeds:
 
                 try:
-                    await msg.edit(view=MetaView(membro))
+                    await msg.edit(view=MetaView(int(uid)))
                 except Exception as e:
                     print("Erro restaurando view meta:", e)
 
@@ -3717,6 +3713,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
