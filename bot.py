@@ -3728,17 +3728,7 @@ async def on_ready():
     await carregar_metas_cache()
     print(f"📊 Metas carregadas: {len(metas_cache)}")
 
-    # Registrar MetaViews persistentes
-    for uid in metas_cache.keys():
-        try:
-            bot.add_view(MetaView(int(uid)))
-        except Exception as e:
-            print("Erro registrando MetaView:", e)
-
-    # ================= RESTAURAR BOTÕES DAS METAS =================
-    await reconstruir_views_metas()
-
-    # evita rodar duas vezes
+    # ================= EVITA DUPLICAR EXECUÇÃO =================
     if hasattr(bot, "ready_once"):
         return
     bot.ready_once = True
@@ -3747,30 +3737,38 @@ async def on_ready():
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
 
     # ================= REGISTRAR VIEWS PERSISTENTES =================
+
+    # 🔹 Registrar MetaView para cada usuário que tem meta
+    for uid in metas_cache.keys():
+        try:
+            bot.add_view(MetaView(int(uid)))
+        except Exception as e:
+            print("Erro registrando MetaView:", e)
+
+    # 🔹 Registrar outras views persistentes
     views = [
-        "RegistroView",
-        "CalcView",
-        "StatusView",
-        "CadastrarLiveView",
-        "PainelLivesAdmin",
-        "GerenciarLivesView",
-        "PolvoraView",
-        "ConfirmarPagamentoView",
-        "LavagemView",
-        "FabricacaoView",
-        "PainelAcoesView"
-        
+        RegistroView,
+        CalcView,
+        StatusView,
+        CadastrarLiveView,
+        PainelLivesAdmin,
+        GerenciarLivesView,
+        PolvoraView,
+        ConfirmarPagamentoView,
+        LavagemView,
+        FabricacaoView,
+        PainelAcoesView,
+        SolicitarSalaView  # 👈 botão solicitar sala manual
     ]
 
-    for view_name in views:
+    for view_class in views:
         try:
-            view_class = globals().get(view_name)
-            if view_class:
-                bot.add_view(view_class())
-            else:
-                print(f"⚠️ View não encontrada: {view_name}")
+            bot.add_view(view_class())
         except Exception as e:
-            print(f"Erro ao registrar view {view_name}:", e)
+            print(f"Erro ao registrar view {view_class.__name__}:", e)
+
+    # ================= RESTAURAR BOTÕES DAS METAS =================
+    await reconstruir_views_metas()
 
     # ================= LOOPS =================
     try:
@@ -3794,19 +3792,19 @@ async def on_ready():
     try:
         if not varrer_agregados_sem_sala.is_running():
             varrer_agregados_sem_sala.start()
-            
+
         await varrer_agregados_sem_sala()
-        
+
     except Exception as e:
         print("Erro varredura metas:", e)
-      
+
     try:
         if not limpar_lavagens_pendentes.is_running():
             limpar_lavagens_pendentes.start()
     except Exception as e:
         print("Erro loop limpeza lavagens:", e)
 
-    # 🔥 NOVO BLOCO RESET AÇÕES
+    # 🔥 RESET AÇÕES SEMANAIS
     try:
         if not reset_acoes_segunda.is_running():
             reset_acoes_segunda.start()
@@ -3832,35 +3830,30 @@ async def on_ready():
 
     # ================= ENVIAR PAINÉIS =================
     funcoes_paineis = [
-        "enviar_painel_fabricacao",
-        "enviar_painel_lives",
-        "enviar_painel_admin_lives",
-        "enviar_painel_polvoras",
-        "enviar_painel_lavagem",
-        "painel_calc",
-        "enviar_painel_vendas",
-        "atualizar_painel_acoes",
-        "reconstruir_views_metas"
+        enviar_painel_fabricacao,
+        enviar_painel_lives,
+        enviar_painel_admin_lives,
+        enviar_painel_polvoras,
+        enviar_painel_lavagem,
+        painel_calc,
+        enviar_painel_vendas,
+        atualizar_painel_acoes,
+        reconstruir_views_metas
     ]
 
     for func in funcoes_paineis:
         try:
-            f = globals().get(func)
-            if not f:
-                print(f"⚠️ Função não encontrada: {func}")
-                continue
+            if func == enviar_painel_polvoras:
+                await func(bot)
 
-            if func == "enviar_painel_polvoras":
-                await f(bot)
-
-            elif func == "atualizar_painel_acoes":
-                await f(bot.get_guild(GUILD_ID))
+            elif func == atualizar_painel_acoes:
+                await func(bot.get_guild(GUILD_ID))
 
             else:
-                await f()
+                await func()
 
         except Exception as e:
-            print(f"Erro ao enviar painel {func}:", e)
+            print(f"Erro ao enviar painel {func.__name__}:", e)
 
     gc.collect()
     print("🧹 Limpeza de memória executada")
@@ -3872,6 +3865,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
