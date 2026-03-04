@@ -2450,6 +2450,11 @@ class ResultadoModal(discord.ui.Modal):
                     self.acao_id
                 )
 
+                acao = await conn.fetchrow(
+                    "SELECT tipo FROM acoes_semana WHERE id=$1",
+                    self.acao_id
+                )
+
             qtd = len(participantes)
 
             if qtd == 0:
@@ -2492,6 +2497,62 @@ class ResultadoModal(discord.ui.Modal):
                 if membro:
                     await atualizar_painel_meta(membro)
 
+            # ==============================
+            # EMBED RESULTADO
+            # ==============================
+
+            participantes_marcados = []
+
+            for p in participantes:
+
+                uid = p["user_id"]
+                nome = p["nome_externo"]
+
+                if uid:
+                    participantes_marcados.append(f"<@{uid}>")
+
+                elif nome:
+                    participantes_marcados.append(nome)
+
+            embed = discord.Embed(
+                title="📊 Resultado da Ação",
+                color=0x2ecc71 if self.venceu else 0xe74c3c
+            )
+
+            embed.add_field(
+                name="🏦 Ação",
+                value=acao["tipo"],
+                inline=False
+            )
+
+            embed.add_field(
+                name="Resultado",
+                value=resultado,
+                inline=False
+            )
+
+            if self.venceu and dinheiro:
+                embed.add_field(
+                    name="💰 Dinheiro",
+                    value=f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                    inline=False
+                )
+
+            if self.venceu and ouro:
+                embed.add_field(
+                    name="🥇 Ouro",
+                    value=str(ouro),
+                    inline=False
+                )
+
+            embed.add_field(
+                name="👥 Participantes",
+                value="\n".join(participantes_marcados) if participantes_marcados else "Nenhum",
+                inline=False
+            )
+
+            await interaction.message.edit(embed=embed, view=None)
+
             await interaction.response.defer()
 
         except Exception as e:
@@ -2499,61 +2560,6 @@ class ResultadoModal(discord.ui.Modal):
             print("ERRO NO RESULTADO DA AÇÃO:")
             traceback.print_exc()
             await interaction.response.defer()
-        # ==============================
-        # EMBED RESULTADO
-        # ==============================
-     
-        participantes_marcados = []
-        for p in participantes:
-            uid = p.get("user_id")
-            nome = p.get("nome_externo")
-            if uid:
-                participantes_marcados.append(f"<@{uid}>")
-            elif nome:
-                participantes_marcados.append(nome)
-
-        async with db.acquire() as conn:
-            acao = await conn.fetchrow(
-                "SELECT tipo FROM acoes_semana WHERE id=$1",
-                self.acao_id
-            )
-
-        embed = discord.Embed(
-            title="📊 Resultado da Ação",
-            color=0x2ecc71 if self.venceu else 0xe74c3c
-        )
-
-        embed.add_field(
-            name="🏦 Ação",
-            value=acao["tipo"],
-            inline=False
-        )
-
-        embed.add_field(
-            name="Resultado",
-            value=resultado,
-            inline=False
-        )
-
-        if self.venceu and dinheiro:
-            embed.add_field(
-                name="💰 Dinheiro",
-                value=f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                inline=False
-            )
-
-        if self.venceu and ouro:
-            embed.add_field(
-                name="🥇 Ouro",
-                value=str(ouro),
-                inline=False
-            )
-
-        embed.add_field(
-            name="👥 Participantes",
-            value="\n".join(participantes_marcados),
-            inline=False
-        )
 # =========================================================
 # ================= RELATÓRIO AÇÃO ========================
 # =========================================================
@@ -3767,6 +3773,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
