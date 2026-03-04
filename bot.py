@@ -2418,6 +2418,8 @@ class ResultadoModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
 
+        try:
+
         resultado = "GANHOU" if self.venceu else "PERDEU"
 
         dinheiro = 0
@@ -2484,6 +2486,12 @@ class ResultadoModal(discord.ui.Modal):
 
             if membro:
                 await atualizar_painel_meta(membro)
+
+        except Exception as e:
+                import traceback
+                print("ERRO NO RESULTADO DA AÇÃO:")
+                traceback.print_exc()
+                await interaction.response.defer()
 
         # ==============================
         # EMBED RESULTADO
@@ -3753,6 +3761,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
