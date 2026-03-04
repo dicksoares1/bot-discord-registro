@@ -2441,7 +2441,7 @@ class ResultadoModal(discord.ui.Modal):
 
             participantes = await conn.fetch(
                 """
-                SELECT user_id
+                SELECT user_id, nome_externo
                 FROM participantes_acoes
                 WHERE acao_id=$1
                 """,
@@ -3748,6 +3748,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
