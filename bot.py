@@ -2485,11 +2485,13 @@ class ResultadoModal(discord.ui.Modal):
         # ==============================
         # EMBED RESULTADO
         # ==============================
-
+     
         participantes_marcados = []
-
         for p in participantes:
-            participantes_marcados.append(f"<@{p['user_id']}>")
+            if p["user_id"]:
+                participantes_marcados.append(f"<@{p['user_id']}>")
+            elif p["nome_externo"]:
+                participantes_marcados.append(p["nome_externo"])
 
         async with db.acquire() as conn:
             acao = await conn.fetchrow(
@@ -3746,6 +3748,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
