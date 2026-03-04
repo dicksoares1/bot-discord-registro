@@ -2453,16 +2453,19 @@ class ResultadoModal(discord.ui.Modal):
         if qtd == 0:
             qtd = 1
 
-        valor_por_pessoa = dinheiro // qtd
+        valor_por_pessoa = dinheiro // qtd if dinheiro > 0 else 0
+        if valor_por_pessoa == 0:
+            participantes = []
 
         # ==============================
         # DISTRIBUIR NAS METAS
         # ==============================
 
         for p in participantes:
-
             uid = p["user_id"]
-
+            if not uid:
+                continue
+            uid = str(uid)
             if uid not in metas_cache:
                 continue
 
@@ -2477,7 +2480,7 @@ class ResultadoModal(discord.ui.Modal):
             )
 
             guild = interaction.guild
-            membro = guild.get_member(int(uid))
+            membro = guild.get_member(int(uid)) if uid else None
 
             if membro:
                 await atualizar_painel_meta(membro)
@@ -3750,6 +3753,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
