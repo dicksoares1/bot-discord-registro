@@ -2207,7 +2207,7 @@ class ExternosModal(discord.ui.Modal, title="Participantes externos"):
 
 class SelecionarMembros(discord.ui.UserSelect):
 
-    def __init__(self, acao, externos):
+    def __init__(self, view_ref):
 
         super().__init__(
             placeholder="Selecione os participantes",
@@ -2215,8 +2215,7 @@ class SelecionarMembros(discord.ui.UserSelect):
             max_values=10
         )
 
-        self.acao = acao
-        self.externos = externos
+        self.view_ref = view_ref
 
     async def callback(self, interaction: discord.Interaction):
 
@@ -2235,6 +2234,47 @@ class SelecionarMembros(discord.ui.UserSelect):
             )
             return
 
+        self.view_ref.membros = membros_validos
+
+        await interaction.response.send_message(
+            f"{len(membros_validos)} participantes selecionados.\nClique em **Enviar Escalação** quando terminar.",
+            ephemeral=True
+        )
+
+
+class SelecionarMembrosView(discord.ui.View):
+
+    def __init__(self, acao, externos):
+        super().__init__(timeout=300)
+
+        self.acao = acao
+        self.externos = externos
+        self.membros = []
+
+        self.add_item(SelecionarMembros(self))
+        self.add_item(EnviarEscalacaoButton(self))
+
+class EnviarEscalacaoButton(discord.ui.Button):
+
+    def __init__(self, view_ref):
+        super().__init__(
+            label="📤 Enviar Escalação",
+            style=discord.ButtonStyle.success
+        )
+
+        self.view_ref = view_ref
+
+    async def callback(self, interaction: discord.Interaction):
+
+        membros = self.view_ref.membros
+
+        if not membros:
+            await interaction.response.send_message(
+                "Selecione os participantes primeiro.",
+                ephemeral=True
+            )
+            return
+
         async with db.acquire() as conn:
 
             acao_id = await conn.fetchval(
@@ -2243,12 +2283,12 @@ class SelecionarMembros(discord.ui.UserSelect):
                 VALUES ($1,$2,$3)
                 RETURNING id
                 """,
-                self.acao,
+                self.view_ref.acao,
                 agora_db(),
                 str(interaction.user.id)
             )
 
-            for m in membros_validos:
+            for m in membros:
 
                 await conn.execute(
                     """
@@ -2259,21 +2299,9 @@ class SelecionarMembros(discord.ui.UserSelect):
                     str(m.id)
                 )
 
-                if str(m.id) in metas_cache:
+            if self.view_ref.externos:
 
-                    metas_cache[str(m.id)]["acao"] += 1
-
-                    await salvar_meta(
-                        m.id,
-                        metas_cache[str(m.id)]["canal_id"],
-                        metas_cache[str(m.id)]["dinheiro"],
-                        metas_cache[str(m.id)]["polvora"],
-                        metas_cache[str(m.id)]["acao"]
-                    )
-
-            if self.externos:
-
-                nomes = [n.strip() for n in self.externos.split("\n") if n.strip()]
+                nomes = [n.strip() for n in self.view_ref.externos.split("\n") if n.strip()]
 
                 for nome in nomes:
 
@@ -2291,17 +2319,9 @@ class SelecionarMembros(discord.ui.UserSelect):
         await atualizar_painel_acoes(interaction.guild)
 
         await interaction.response.send_message(
-            "Ação registrada com sucesso!",
+            "Escalação enviada com sucesso!",
             ephemeral=True
         )
-
-
-class SelecionarMembrosView(discord.ui.View):
-
-    def __init__(self, acao, externos):
-        super().__init__(timeout=120)
-
-        self.add_item(SelecionarMembros(acao, externos))
 
 
 # =========================================================
@@ -2466,38 +2486,53 @@ class ResultadoModal(discord.ui.Modal):
         # EMBED RESULTADO
         # ==============================
 
+        participantes_marcados = []
+
+        for p in participantes:
+            participantes_marcados.append(f"<@{p['user_id']}>")
+
+        async with db.acquire() as conn:
+            acao = await conn.fetchrow(
+                "SELECT tipo FROM acoes_semana WHERE id=$1",
+                self.acao_id
+            )
+
         embed = discord.Embed(
             title="📊 Resultado da Ação",
             color=0x2ecc71 if self.venceu else 0xe74c3c
         )
 
-        embed.add_field(name="Resultado", value=resultado)
+        embed.add_field(
+            name="🏦 Ação",
+            value=acao["tipo"],
+            inline=False
+        )
 
-        if dinheiro:
+        embed.add_field(
+            name="Resultado",
+            value=resultado,
+            inline=False
+        )
+
+        if self.venceu and dinheiro:
             embed.add_field(
-                name="💰 Dinheiro Total",
+                name="💰 Dinheiro",
                 value=f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
                 inline=False
             )
 
+        if self.venceu and ouro:
             embed.add_field(
-                name="👥 Valor por participante",
-                value=f"R$ {valor_por_pessoa:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                name="🥇 Ouro",
+                value=str(ouro),
                 inline=False
             )
 
-        if ouro:
-            embed.add_field(name="🥇 Ouro", value=str(ouro))
-
-        await edit_queue.put(
-            interaction.message.edit(embed=embed, view=None)
+        embed.add_field(
+            name="👥 Participantes",
+            value="\n".join(participantes_marcados),
+            inline=False
         )
-
-        await interaction.response.send_message(
-            "Resultado registrado!",
-            ephemeral=True
-        )
-
 # =========================================================
 # ================= RELATÓRIO AÇÃO ========================
 # =========================================================
@@ -3711,5 +3746,6 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
