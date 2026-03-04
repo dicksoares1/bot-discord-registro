@@ -2497,7 +2497,7 @@ class ResultadoModal(discord.ui.Modal):
                 if membro:
                     await atualizar_painel_meta(membro)
 
-            # ==============================
+                       # ==============================
             # EMBED RESULTADO
             # ==============================
 
@@ -2514,45 +2514,69 @@ class ResultadoModal(discord.ui.Modal):
                 elif nome:
                     participantes_marcados.append(nome)
 
+            cor = 0x2ecc71 if self.venceu else 0xe74c3c
+            status = "🟢 **AÇÃO GANHA**" if self.venceu else "🔴 **AÇÃO PERDIDA**"
+
             embed = discord.Embed(
-                title="📊 Resultado da Ação",
-                color=0x2ecc71 if self.venceu else 0xe74c3c
+                title="🚨 RELATÓRIO DE AÇÕES",
+                description="━━━━━━━━━━━━━━━━━━━━━━",
+                color=cor
             )
 
+            # ================= AÇÃO =================
+
             embed.add_field(
-                name="🏦 Ação",
-                value=acao["tipo"],
+                name="🏦 AÇÃO",
+                value=f"```{acao['tipo']}```",
                 inline=False
             )
 
+            # ================= RESULTADO =================
+
             embed.add_field(
-                name="Resultado",
-                value=resultado,
+                name="🎯 RESULTADO DA AÇÃO",
+                value=status,
                 inline=False
             )
+
+            # ================= RECOMPENSA =================
+
+            recompensas = []
 
             if self.venceu and dinheiro:
-                embed.add_field(
-                    name="💰 Dinheiro",
-                    value=f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                    inline=False
+                recompensas.append(
+                    f"💰 Dinheiro: **R$ {dinheiro:,.2f}**".replace(",", "X").replace(".", ",").replace("X", ".")
                 )
 
             if self.venceu and ouro:
+                recompensas.append(f"🥇 Ouro recuperado: **{ouro}**")
+
+            if recompensas:
                 embed.add_field(
-                    name="🥇 Ouro",
-                    value=str(ouro),
+                    name="💼 VALORES",
+                    value="\n".join(recompensas),
                     inline=False
                 )
 
+            # ================= PARTICIPANTES =================
+
+            participantes_texto = "\n".join(participantes_marcados) if participantes_marcados else "Nenhum registrado"
+
             embed.add_field(
-                name="👥 Participantes",
-                value="\n".join(participantes_marcados) if participantes_marcados else "Nenhum",
+                name=f"👥 PARTICIPANTES ({len(participantes_marcados)})",
+                value=participantes_texto,
                 inline=False
             )
 
-            await interaction.message.edit(embed=embed, view=None)
+            # ================= RODAPÉ =================
 
+            embed.set_footer(
+                text="Sistema de Ações • VDR 442"
+            )
+
+            embed.description += "\n━━━━━━━━━━━━━━━━━━━━━━"
+
+            await interaction.message.edit(embed=embed, view=None)
             await interaction.response.defer()
 
         except Exception as e:
@@ -3773,6 +3797,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
