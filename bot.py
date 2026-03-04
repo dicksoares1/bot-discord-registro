@@ -2424,7 +2424,7 @@ class ResultadoModal(discord.ui.Modal):
         ouro = 0
 
         try:
-            if self.dinheiro.value:
+            if self.dinheiro.value.strip():
                 dinheiro = int(self.dinheiro.value.replace(".", "").replace(",", ""))
 
             if self.ouro.value:
@@ -2488,10 +2488,12 @@ class ResultadoModal(discord.ui.Modal):
      
         participantes_marcados = []
         for p in participantes:
-            if p["user_id"]:
-                participantes_marcados.append(f"<@{p['user_id']}>")
-            elif p["nome_externo"]:
-                participantes_marcados.append(p["nome_externo"])
+            uid = p.get("user_id")
+            nome = p.get("nome_externo")
+            if uid:
+                participantes_marcados.append(f"<@{uid}>")
+            elif nome:
+                participantes_marcados.append(nome)
 
         async with db.acquire() as conn:
             acao = await conn.fetchrow(
@@ -3748,6 +3750,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
