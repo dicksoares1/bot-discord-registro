@@ -3862,6 +3862,8 @@ async def on_ready():
 
             await atualizar_painel_meta(membro)
 
+            await asyncio.sleep(0.4)  # evita rate limit
+
         print("📊 Painéis de metas recriados")
 
     except Exception as e:
@@ -4034,6 +4036,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
