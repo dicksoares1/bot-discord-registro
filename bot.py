@@ -778,7 +778,7 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
         await atualizar_valor_venda_db(pedido_numero, total)
         await self.message.edit(embed=embed)
 
-                # ===============================
+        # ===============================
         # DETECTAR ALTERAÇÕES
         # ===============================
 
@@ -3985,6 +3985,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
