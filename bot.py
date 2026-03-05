@@ -1258,7 +1258,7 @@ async def acompanhar_producao(pid):
             if prod["galpao"] == "GALPÕES SUL":
                 base = 1688 if segunda else 1608
 
-            capsulas = int((base / 400) * polvora)
+            capsulas = (base * polvora) // 400
 
             desc += (
                 "\n\n🔵 **Produção Finalizada**"
@@ -3834,9 +3834,12 @@ async def on_ready():
     try:
         async with db.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT pid FROM producoes WHERE pid NOT LIKE 'TESTE_%'"
+                """
+                SELECT pid FROM producoes
+                WHERE pid NOT LIKE 'TESTE_%'
+                AND fim > NOW()
+                """
             )
-
         for r in rows:
             pid = r["pid"]
 
@@ -3905,6 +3908,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
