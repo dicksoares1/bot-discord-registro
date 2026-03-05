@@ -1113,6 +1113,8 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
         if pid not in producoes_tasks:
             task = bot.loop.create_task(acompanhar_producao(pid))
             producoes_tasks[pid] = task
+            if not interaction.response.is_done():
+                await interaction.response.defer()
 
         await interaction.response.defer()
 
@@ -3908,6 +3910,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
