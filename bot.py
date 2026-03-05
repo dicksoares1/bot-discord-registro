@@ -1870,10 +1870,11 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
             embed.set_image(url=thumbnail)
 
         await canal.send(
-            content=f"🚨 {user.mention} está ao vivo!",
-            embed=embed
+            content="@everyone 🔴 Live iniciada!",
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(everyone=True)
         )
-
+        
         print(f"📢 Live divulgada: {user_id}")
 
     except Exception as e:
@@ -3888,6 +3889,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
