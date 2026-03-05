@@ -627,6 +627,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         pacotes_pt = pt // 50
         pacotes_sub = sub // 50
         total = (pt * 50) + (sub * 90)
+        valor_novo = total
 
         # SALVA NO POSTGRES
         await salvar_venda_db(str(interaction.user.id), total, numero_pedido)
@@ -705,13 +706,45 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
 
         valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        embed = self.message.embeds[0]
+                embed = self.message.embeds[0]
 
-        vendedor_id = None
+        # ===============================
+        # PEGAR VALORES ANTIGOS
+        # ===============================
+
+        pt_antigo = 0
+        sub_antigo = 0
+        valor_antigo = 0
+        organizacao = "Desconhecida"
+
         for field in embed.fields:
-            if field.name == "👤 Vendedor":
-                vendedor_id = field.value.replace("<@", "").replace(">", "")
 
+            if field.name == "🔫 PT":
+                try:
+                    pt_antigo = int(field.value.split(" munições")[0])
+                except:
+                    pass
+
+            if field.name == "🔫 SUB":
+                try:
+                    sub_antigo = int(field.value.split(" munições")[0])
+                except:
+                    pass
+
+            if field.name == "💰 Total":
+                try:
+                    valor_antigo = float(
+                        field.value.replace("**R$ ", "")
+                        .replace("**", "")
+                        .replace(".", "")
+                        .replace(",", ".")
+                    )
+                except:
+                    pass
+
+            if field.name == "🏷 Organização":
+                organizacao = field.value
+                
         for i, field in enumerate(embed.fields):
 
             if field.name == "🔫 PT":
@@ -745,16 +778,62 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
         await atualizar_valor_venda_db(pedido_numero, total)
         await self.message.edit(embed=embed)
 
+                # ===============================
+        # DETECTAR ALTERAÇÕES
+        # ===============================
+
+        alteracoes = []
+
+        if pt_antigo != pt:
+            alteracoes.append(f"PT: {pt_antigo} → {pt}")
+
+        if sub_antigo != sub:
+            alteracoes.append(f"SUB: {sub_antigo} → {sub}")
+
+        if valor_antigo != valor_novo:
+            valor_antigo_fmt = f"{valor_antigo:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            alteracoes.append(f"Valor: R$ {valor_antigo_fmt} → R$ {valor_formatado}")
+
+        alteracao_texto = "\n".join(alteracoes) if alteracoes else "Nenhuma alteração detectada"
+
+        # ===============================
+        # LOG
+        # ===============================
+
         canal_log = interaction.guild.get_channel(1478381934026424391)
+
         if canal_log:
-            await canal_log.send(
-                f"✏️ **Venda editada**\n"
-                f"👤 Editor: {interaction.user.mention}\n"
-                f"🧾 Pedido: {embed.title}\n"
-                f"💰 Novo valor: R$ {valor_formatado}"
+
+            embed_log = discord.Embed(
+                title="✏️ Venda Editada",
+                color=0xf1c40f
             )
 
-        await interaction.response.send_message("Venda editada com sucesso.", ephemeral=True)
+            embed_log.add_field(
+                name="👤 Editado por",
+                value=interaction.user.mention,
+                inline=False
+            )
+
+            embed_log.add_field(
+                name="🧾 Pedido",
+                value=embed.title,
+                inline=False
+            )
+
+            embed_log.add_field(
+                name="🏷 Organização",
+                value=organizacao,
+                inline=False
+            )
+
+            embed_log.add_field(
+                name="🔧 Alterações",
+                value=alteracao_texto,
+                inline=False
+            )
+
+            await canal_log.send(embed=embed_log)
 # =========================================================
 # ================= MODAL RELATÓRIO =======================
 # =========================================================
@@ -3906,6 +3985,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
