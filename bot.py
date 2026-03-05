@@ -3848,6 +3848,26 @@ async def on_ready():
         print("Erro ao carregar metas:", e)
 
     # =====================================================
+    # ============ RECRIAR PAINÉIS DE META =================
+    # =====================================================
+
+    try:
+
+        for uid in metas_cache.keys():
+
+            membro = guild.get_member(int(uid))
+
+            if not membro:
+                continue
+
+            await atualizar_painel_meta(membro)
+
+        print("📊 Painéis de metas recriados")
+
+    except Exception as e:
+        print("Erro recriar painéis de metas:", e)
+
+    # =====================================================
     # ========== REGISTRAR VIEWS PERSISTENTES =============
     # =====================================================
 
@@ -4014,34 +4034,6 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
