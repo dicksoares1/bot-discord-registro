@@ -518,13 +518,19 @@ class StatusView(discord.ui.View):
 
             if field.name == "🔫 PT":
                 try:
-                    pacotes_pt = int(field.value.split("📦")[1].split()[0])
+                    linhas = field.value.split("\n")
+                    for l in linhas:
+                        if "📦" in l:
+                            pacotes_pt = int(l.replace("📦", "").replace("pacotes", "").strip())
                 except:
                     pass
 
             if field.name == "🔫 SUB":
                 try:
-                    pacotes_sub = int(field.value.split("📦")[1].split()[0])
+                    linhas = field.value.split("\n")
+                    for l in linhas:
+                        if "📦" in l:
+                            pacotes_sub = int(l.replace("📦", "").replace("pacotes", "").strip())
                 except:
                     pass
 
@@ -687,6 +693,17 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
     qtd_pt = discord.ui.TextInput(label="Nova Quantidade PT")
     qtd_sub = discord.ui.TextInput(label="Nova Quantidade SUB")
 
+    organizacao = discord.ui.TextInput(
+        label="Nova Organização (opcional)",
+        required=False
+    )
+
+    observacao = discord.ui.TextInput(
+        label="Nova Observação (opcional)",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
+
     def __init__(self, message):
         super().__init__()
         self.message = message
@@ -716,7 +733,7 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
         pt_antigo = 0
         sub_antigo = 0
         valor_antigo = 0
-        organizacao = "Desconhecida"
+        organizacao_antiga = "Desconhecida"
 
         for field in embed.fields:
 
@@ -744,7 +761,7 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
                     pass
 
             if field.name == "🏷 Organização":
-                organizacao = field.value
+                organizacao_antiga = field.value
 
         # ===============================
         # ATUALIZAR EMBED
@@ -776,6 +793,22 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
                     inline=False
                 )
 
+            if field.name == "🏷 Organização" and self.organizacao.value:
+                embed.set_field_at(
+                    i,
+                    name="🏷 Organização",
+                    value=self.organizacao.value.strip(),
+                    inline=False
+                )
+
+            if field.name == "📝 Observações" and self.observacao.value:
+                embed.set_field_at(
+                    i,
+                    name="📝 Observações",
+                    value=self.observacao.value.strip(),
+                    inline=False
+                )
+
         titulo = embed.title
         pedido_numero = int(titulo.split("#")[1])
 
@@ -797,6 +830,12 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
         if valor_antigo != valor_novo:
             valor_antigo_fmt = f"{valor_antigo:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             alteracoes.append(f"Valor: R$ {valor_antigo_fmt} → R$ {valor_formatado}")
+
+        if self.organizacao.value:
+            alteracoes.append(f"Organização alterada")
+
+        if self.observacao.value:
+            alteracoes.append("Observação alterada")
 
         alteracao_texto = "\n".join(alteracoes) if alteracoes else "Nenhuma alteração detectada"
 
@@ -822,12 +861,6 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
             embed_log.add_field(
                 name="🧾 Pedido",
                 value=embed.title,
-                inline=False
-            )
-
-            embed_log.add_field(
-                name="🏷 Organização",
-                value=organizacao,
                 inline=False
             )
 
@@ -3950,6 +3983,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
