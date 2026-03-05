@@ -1134,6 +1134,43 @@ class FabricacaoView(discord.ui.View):
         )
 
 
+    @discord.ui.button(
+        label="🧪 TESTE 3 MIN",
+        style=discord.ButtonStyle.secondary,
+        custom_id="fabricacao_teste"
+    )
+    async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        inicio = agora()
+        fim = inicio + timedelta(minutes=3)
+
+        embed = discord.Embed(
+            title="🏭 Produção (TESTE)",
+            description="Iniciando produção de teste...",
+            color=0x95a5a6
+        )
+
+        msg = await interaction.channel.send(embed=embed)
+
+        pid = f"TESTE_{msg.id}"
+
+        dados = {
+            "galpao": "TESTE",
+            "autor": interaction.user.id,
+            "inicio": inicio.isoformat(),
+            "fim": fim.isoformat(),
+            "obs": "Teste do sistema",
+            "polvora": 400,
+            "msg_id": msg.id,
+            "canal_id": interaction.channel.id
+        }
+
+        await salvar_producao(pid, dados)
+
+        task = bot.loop.create_task(acompanhar_producao(pid))
+        producoes_tasks[pid] = task
+
+        await interaction.response.defer()
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
 # =========================================================
@@ -3851,6 +3888,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
