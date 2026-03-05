@@ -541,14 +541,21 @@ class StatusView(discord.ui.View):
         canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
 
         if canal_bau:
-            await canal_bau.send(
-                f"📦 **Retirada do Baú**\n\n"
-                f"👤 Retirado por: {user.mention}\n"
-                f"🔫 PT: {pacotes_pt} pacotes\n"
-                f"🔫 SUB: {pacotes_sub} pacotes"
-            )
 
-        await interaction.response.defer()
+            try:
+
+                await canal_bau.send(
+                    f"📦 **Retirada do Baú**\n\n"
+                    f"👤 Retirado por: {interaction.user.mention}\n"
+                    f"🔫 PT: {pacotes_pt} pacotes\n"
+                    f"🔫 SUB: {pacotes_sub} pacotes"
+                )
+
+            except Exception as e:
+                print("Erro envio baú:", e)
+
+        else:
+            print("Canal do baú não encontrado.")
 
     # =====================================================
     # ================= BOTÃO CANCELADO ===================
@@ -3983,6 +3990,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
