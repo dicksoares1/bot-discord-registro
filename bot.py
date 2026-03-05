@@ -2668,45 +2668,45 @@ class ResultadoModal(discord.ui.Modal):
             if valor_por_pessoa == 0:
                 participantes = []
 
-        # ==============================
-        # DISTRIBUIR NAS METAS
-        # ==============================
+            # ==============================
+            # DISTRIBUIR NAS METAS
+            # ==============================
 
-        usuarios_processados = set()
+            usuarios_processados = set()
 
-        for p in participantes:
+            for p in participantes:
 
-            uid = p["user_id"]
+                uid = p["user_id"]
 
-            if not uid:
-                continue
+                if not uid:
+                    continue
 
-            uid = str(uid)
+                uid = str(uid)
 
-            # evita meta duplicada se usuário aparecer duas vezes
-            if uid in usuarios_processados:
-                continue
+                if uid in usuarios_processados:
+                    continue
 
-            usuarios_processados.add(uid)
+                usuarios_processados.add(uid)
 
-            if uid not in metas_cache:
-                continue
+                if uid not in metas_cache:
+                    continue
 
-            metas_cache[uid]["acao"] += valor_por_pessoa
+                metas_cache[uid]["acao"] += valor_por_pessoa
 
-            await salvar_meta(
-                int(uid),
-                metas_cache[uid]["canal_id"],
-                metas_cache[uid]["dinheiro"],
-                metas_cache[uid]["polvora"],
-                metas_cache[uid]["acao"]
-            )
+                await salvar_meta(
+                    int(uid),
+                    metas_cache[uid]["canal_id"],
+                    metas_cache[uid]["dinheiro"],
+                    metas_cache[uid]["polvora"],
+                    metas_cache[uid]["acao"]
+                )
 
-            guild = interaction.guild
-            membro = guild.get_member(int(uid))
+                guild = interaction.guild
+                membro = guild.get_member(int(uid))
 
-            if membro:
-                await atualizar_painel_meta(membro)
+                if membro:
+                    await atualizar_painel_meta(membro)
+
             # ==============================
             # EMBED RESULTADO
             # ==============================
@@ -2733,23 +2733,17 @@ class ResultadoModal(discord.ui.Modal):
                 color=cor
             )
 
-            # ================= AÇÃO =================
-
             embed.add_field(
                 name="🏦 AÇÃO",
                 value=f"```{acao['tipo']}```",
                 inline=False
             )
 
-            # ================= RESULTADO =================
-
             embed.add_field(
                 name="🎯 RESULTADO DA AÇÃO",
                 value=status,
                 inline=False
             )
-
-            # ================= RECOMPENSA =================
 
             recompensas = []
 
@@ -2768,8 +2762,6 @@ class ResultadoModal(discord.ui.Modal):
                     inline=False
                 )
 
-            # ================= PARTICIPANTES =================
-
             participantes_texto = "\n".join(participantes_marcados) if participantes_marcados else "Nenhum registrado"
 
             embed.add_field(
@@ -2777,8 +2769,6 @@ class ResultadoModal(discord.ui.Modal):
                 value=participantes_texto,
                 inline=False
             )
-
-            # ================= RODAPÉ =================
 
             embed.set_footer(
                 text="Sistema de Ações • VDR 442"
@@ -4024,6 +4014,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
