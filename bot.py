@@ -2655,38 +2655,45 @@ class ResultadoModal(discord.ui.Modal):
             if valor_por_pessoa == 0:
                 participantes = []
 
-            # ==============================
-            # DISTRIBUIR NAS METAS
-            # ==============================
+        # ==============================
+        # DISTRIBUIR NAS METAS
+        # ==============================
 
-            for p in participantes:
+        usuarios_processados = set()
 
-                uid = p["user_id"]
+        for p in participantes:
 
-                if not uid:
-                    continue
+            uid = p["user_id"]
 
-                uid = str(uid)
+            if not uid:
+                continue
 
-                if uid not in metas_cache:
-                    continue
+            uid = str(uid)
 
-                metas_cache[uid]["acao"] += valor_por_pessoa
+            # evita meta duplicada se usuário aparecer duas vezes
+            if uid in usuarios_processados:
+                continue
 
-                await salvar_meta(
-                    int(uid),
-                    metas_cache[uid]["canal_id"],
-                    metas_cache[uid]["dinheiro"],
-                    metas_cache[uid]["polvora"],
-                    metas_cache[uid]["acao"]
-                )
+            usuarios_processados.add(uid)
 
-                guild = interaction.guild
-                membro = guild.get_member(int(uid)) if uid else None
+            if uid not in metas_cache:
+                continue
 
-                if membro:
-                    await atualizar_painel_meta(membro)
+            metas_cache[uid]["acao"] += valor_por_pessoa
 
+            await salvar_meta(
+                int(uid),
+                metas_cache[uid]["canal_id"],
+                metas_cache[uid]["dinheiro"],
+                metas_cache[uid]["polvora"],
+                metas_cache[uid]["acao"]
+            )
+
+            guild = interaction.guild
+            membro = guild.get_member(int(uid))
+
+            if membro:
+                await atualizar_painel_meta(membro)
             # ==============================
             # EMBED RESULTADO
             # ==============================
@@ -3377,17 +3384,31 @@ async def atualizar_painel_meta(member: discord.Member):
     # Se encontrou → apenas edita (NÃO deleta)
     if painel_encontrado:
         try:
-            await asyncio.sleep(0.3)  # 👈 ADICIONE ESTA LINHA
-            await edit_queue.put(painel_encontrado.edit(embed=embed, view=view))
-            return
-        except Exception as e:
-            print("Erro ao editar painel meta:", e)
 
-    # Se não encontrou → cria novo
-    try:
-        await canal.send(embed=embed, view=view)
-    except Exception as e:
-        print("Erro ao criar painel meta:", e)
+            ultima = None
+            async for m in canal.history(limit=1):
+                ultima = m
+
+            if ultima and ultima.id != painel_encontrado.id:
+
+                try:
+                    await painel_encontrado.delete()
+                except:
+                    pass
+
+                await canal.send(embed=embed, view=view)
+
+            else:
+
+                await asyncio.sleep(0.3)
+                await edit_queue.put(
+                    painel_encontrado.edit(embed=embed, view=view)
+                )
+
+            return
+
+        except Exception as e:
+            print("Erro ao atualizar painel meta:", e)
 # =========================================================
 # =========== RECONSTRUIR VIEWS DAS METAS =================
 # =========================================================
@@ -3990,6 +4011,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
