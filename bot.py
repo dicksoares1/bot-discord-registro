@@ -2608,6 +2608,15 @@ class ResultadoModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
 
+        # ==============================
+        # PROTEÇÃO DUPLO RESULTADO
+        # ==============================
+
+        if getattr(self, "ja_processado", False):
+            return
+
+        self.ja_processado = True
+
         try:
 
             resultado = "GANHOU" if self.venceu else "PERDEU"
@@ -2617,10 +2626,14 @@ class ResultadoModal(discord.ui.Modal):
 
             try:
                 if self.dinheiro.value.strip():
-                    dinheiro = int(self.dinheiro.value.replace(".", "").replace(",", ""))
+                    dinheiro = int(
+                        self.dinheiro.value.replace(".", "").replace(",", "")
+                    )
 
                 if self.ouro.value.strip():
-                    ouro = int(self.ouro.value.replace(".", "").replace(",", ""))
+                    ouro = int(
+                        self.ouro.value.replace(".", "").replace(",", "")
+                    )
 
             except:
                 await interaction.response.send_message(
@@ -4011,6 +4024,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
