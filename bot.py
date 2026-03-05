@@ -875,7 +875,8 @@ async def carregar_producao(pid):
         "fim": r["fim"],
         "obs": r["obs"],
         "msg_id": int(r["msg_id"]),
-        "canal_id": int(r["canal_id"])
+        "canal_id": int(r["canal_id"]),
+        "polvora": r["polvora"] or 400
     }
 
     if r["segunda_task_user"]:
@@ -899,8 +900,8 @@ async def salvar_producao(pid, dados):
         await conn.execute(
             """
             INSERT INTO producoes 
-            (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, segunda_task_user, segunda_task_time)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, segunda_task_user, segunda_task_time, polvora)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
             ON CONFLICT (pid)
             DO UPDATE SET
             galpao=$2,
@@ -911,7 +912,8 @@ async def salvar_producao(pid, dados):
             msg_id=$7,
             canal_id=$8,
             segunda_task_user=$9,
-            segunda_task_time=$10
+            segunda_task_time=$10,
+            polvora=$11
             """,
             pid,
             dados["galpao"],
@@ -922,7 +924,8 @@ async def salvar_producao(pid, dados):
             str(dados["msg_id"]),
             str(dados["canal_id"]),
             segunda_user,
-            segunda_time
+            segunda_time,
+            dados.get("polvora", 400)
         )
 
 
@@ -988,6 +991,7 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
             "inicio": inicio.isoformat(),
             "fim": fim.isoformat(),
             "obs": self.obs.value,
+            "polvora": 400,
             "msg_id": msg.id,
             "canal_id": CANAL_REGISTRO_GALPAO_ID
         }
@@ -999,6 +1003,7 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
             producoes_tasks[pid] = task
 
         await interaction.response.defer()
+
 
 # ================= 2ª TASK =================
 
@@ -1030,6 +1035,71 @@ class SegundaTaskView(discord.ui.View):
         await interaction.response.defer()
 
 
+# =========================================================
+# ================= MODAL PÓLVORA =========================
+# =========================================================
+
+class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
+
+    polvora = discord.ui.TextInput(
+        label="Quantas pólvoras foram colocadas?",
+        placeholder="Ex: 400"
+    )
+
+    obs = discord.ui.TextInput(
+        label="Observação (opcional)",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
+
+    def __init__(self, galpao, tempo):
+        super().__init__()
+        self.galpao = galpao
+        self.tempo = tempo
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        try:
+            polvora = int(self.polvora.value)
+        except:
+            await interaction.response.send_message("Quantidade inválida.", ephemeral=True)
+            return
+
+        pid = f"{self.galpao}_{interaction.id}"
+
+        inicio = agora()
+        fim = inicio + timedelta(minutes=self.tempo)
+
+        canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
+
+        msg = await canal.send(
+            embed=discord.Embed(
+                title="🏭 Produção",
+                description=f"Iniciando produção em **{self.galpao}**...",
+                color=0x3498db
+            ),
+            view=SegundaTaskView(pid)
+        )
+
+        dados = {
+            "galpao": self.galpao,
+            "autor": interaction.user.id,
+            "inicio": inicio.isoformat(),
+            "fim": fim.isoformat(),
+            "obs": self.obs.value,
+            "polvora": polvora,
+            "msg_id": msg.id,
+            "canal_id": CANAL_REGISTRO_GALPAO_ID
+        }
+
+        await salvar_producao(pid, dados)
+
+        if pid not in producoes_tasks:
+            task = bot.loop.create_task(acompanhar_producao(pid))
+            producoes_tasks[pid] = task
+
+        await interaction.response.defer()
+
 
 # =========================================================
 # ================= VIEW FABRICAÇÃO ========================
@@ -1048,7 +1118,7 @@ class FabricacaoView(discord.ui.View):
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         await interaction.response.send_modal(
-            ObservacaoProducaoModal("GALPÕES NORTE", 65)
+            PolvoraProducaoModal("GALPÕES NORTE", 65)
         )
 
 
@@ -1060,37 +1130,10 @@ class FabricacaoView(discord.ui.View):
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         await interaction.response.send_modal(
-            ObservacaoProducaoModal("GALPÕES SUL", 130)
+            PolvoraProducaoModal("GALPÕES SUL", 130)
         )
 
 
-    @discord.ui.button(
-        label="🧪 TESTE 3 MIN",
-        style=discord.ButtonStyle.secondary,
-        custom_id="fabricacao_teste"
-    )
-    async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        inicio = agora()
-        fim = inicio + timedelta(minutes=3)
-
-        embed = discord.Embed(
-            title="🏭 Produção (TESTE)",
-            description="Iniciando produção de teste...",
-            color=0x95a5a6
-        )
-
-        msg = await interaction.channel.send(embed=embed)
-
-        # PID apenas para controle interno (não vai para o banco)
-        pid = f"TESTE_{msg.id}"
-
-        # inicia acompanhamento apenas em memória
-        task = bot.loop.create_task(acompanhar_producao(pid))
-
-        producoes_tasks[pid] = task
-
-        await interaction.response.defer()
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
 # =========================================================
@@ -1114,7 +1157,6 @@ async def acompanhar_producao(pid):
             await asyncio.sleep(10)
             continue
 
-        # pega mensagem apenas uma vez
         if msg is None:
             try:
                 msg = await canal.fetch_message(prod["msg_id"])
@@ -1150,11 +1192,26 @@ async def acompanhar_producao(pid):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
-                # ================= FINALIZA PRODUÇÃO =================
-
         if restante <= 0:
 
-            desc += "\n\n🔵 **Produção Finalizada**"
+            polvora = prod.get("polvora", 400)
+            segunda = prod.get("segunda_task_confirmada")
+
+            base = 0
+
+            if prod["galpao"] == "GALPÕES NORTE":
+                base = 1777 if segunda else 1688
+
+            if prod["galpao"] == "GALPÕES SUL":
+                base = 1688 if segunda else 1608
+
+            capsulas = int((base / 400) * polvora)
+
+            desc += (
+                "\n\n🔵 **Produção Finalizada**"
+                f"\n\n🧪 Produziu **{capsulas} cápsulas**"
+                f"\n💣 Pólvora utilizada: **{polvora}**"
+            )
 
             try:
                 await edit_queue.put(
@@ -1170,18 +1227,14 @@ async def acompanhar_producao(pid):
             except:
                 pass
 
-            # remove do banco
             await deletar_producao(pid)
 
-            # remove da lista de tasks
             if pid in producoes_tasks:
                 producoes_tasks.pop(pid)
 
             print(f"🗑️ Produção removida: {pid}")
 
             return
-
-        # ================= ATUALIZA PROGRESSO =================
 
         try:
             await edit_queue.put(
@@ -1196,8 +1249,9 @@ async def acompanhar_producao(pid):
         except:
             pass
 
-        # espera antes de atualizar novamente
         await asyncio.sleep(75)
+
+
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
@@ -1211,7 +1265,7 @@ async def enviar_painel_fabricacao():
 
     embed = discord.Embed(
         title="🏭 Fabricação",
-        description="Selecione Norte, Sul ou Teste para iniciar a produção.",
+        description="Selecione Norte ou Sul para iniciar a produção.",
         color=0x2c3e50
     )
 
@@ -1224,7 +1278,7 @@ async def enviar_painel_fabricacao():
 
     await canal.send(embed=embed, view=FabricacaoView())
     print("🏭 Painel de fabricação criado")
-
+    
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
@@ -2497,7 +2551,7 @@ class ResultadoModal(discord.ui.Modal):
                 if membro:
                     await atualizar_painel_meta(membro)
 
-                       # ==============================
+            # ==============================
             # EMBED RESULTADO
             # ==============================
 
@@ -3797,6 +3851,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
