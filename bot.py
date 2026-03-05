@@ -684,156 +684,165 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
 # =========================================================
 class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
 
-    qtd_pt = discord.ui.TextInput(label="Nova Quantidade PT")
-    qtd_sub = discord.ui.TextInput(label="Nova Quantidade SUB")
+```
+qtd_pt = discord.ui.TextInput(label="Nova Quantidade PT")
+qtd_sub = discord.ui.TextInput(label="Nova Quantidade SUB")
 
-    def __init__(self, message):
-        super().__init__()
-        self.message = message
+def __init__(self, message):
+    super().__init__()
+    self.message = message
 
-    async def on_submit(self, interaction: discord.Interaction):
+async def on_submit(self, interaction: discord.Interaction):
 
-        try:
-            pt = int(self.qtd_pt.value.strip())
-            sub = int(self.qtd_sub.value.strip())
-        except:
-            await interaction.response.send_message("Valores inválidos.", ephemeral=True)
-            return
+    try:
+        pt = int(self.qtd_pt.value.strip())
+        sub = int(self.qtd_sub.value.strip())
+    except:
+        await interaction.response.send_message("Valores inválidos.", ephemeral=True)
+        return
 
-        pacotes_pt = pt // 50
-        pacotes_sub = sub // 50
-        total = (pt * 50) + (sub * 90)
+    pacotes_pt = pt // 50
+    pacotes_sub = sub // 50
+    total = (pt * 50) + (sub * 90)
+    valor_novo = total
 
-        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-                embed = self.message.embeds[0]
+    embed = self.message.embeds[0]
 
-        # ===============================
-        # PEGAR VALORES ANTIGOS
-        # ===============================
+    # ===============================
+    # PEGAR VALORES ANTIGOS
+    # ===============================
 
-        pt_antigo = 0
-        sub_antigo = 0
-        valor_antigo = 0
-        organizacao = "Desconhecida"
+    pt_antigo = 0
+    sub_antigo = 0
+    valor_antigo = 0
+    organizacao = "Desconhecida"
 
-        for field in embed.fields:
+    for field in embed.fields:
 
-            if field.name == "🔫 PT":
-                try:
-                    pt_antigo = int(field.value.split(" munições")[0])
-                except:
-                    pass
+        if field.name == "🔫 PT":
+            try:
+                pt_antigo = int(field.value.split(" munições")[0])
+            except:
+                pass
 
-            if field.name == "🔫 SUB":
-                try:
-                    sub_antigo = int(field.value.split(" munições")[0])
-                except:
-                    pass
+        if field.name == "🔫 SUB":
+            try:
+                sub_antigo = int(field.value.split(" munições")[0])
+            except:
+                pass
 
-            if field.name == "💰 Total":
-                try:
-                    valor_antigo = float(
-                        field.value.replace("**R$ ", "")
-                        .replace("**", "")
-                        .replace(".", "")
-                        .replace(",", ".")
-                    )
-                except:
-                    pass
-
-            if field.name == "🏷 Organização":
-                organizacao = field.value
-                
-        for i, field in enumerate(embed.fields):
-
-            if field.name == "🔫 PT":
-                embed.set_field_at(
-                    i,
-                    name="🔫 PT",
-                    value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
-                    inline=True
+        if field.name == "💰 Total":
+            try:
+                valor_antigo = float(
+                    field.value.replace("**R$ ", "")
+                    .replace("**", "")
+                    .replace(".", "")
+                    .replace(",", ".")
                 )
+            except:
+                pass
 
-            if field.name == "🔫 SUB":
-                embed.set_field_at(
-                    i,
-                    name="🔫 SUB",
-                    value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
-                    inline=True
-                )
+        if field.name == "🏷 Organização":
+            organizacao = field.value
 
-            if field.name == "💰 Total":
-                embed.set_field_at(
-                    i,
-                    name="💰 Total",
-                    value=f"**R$ {valor_formatado}**",
-                    inline=False
-                )
+    # ===============================
+    # ATUALIZAR EMBED
+    # ===============================
 
-       
-        titulo = embed.title
-        pedido_numero = int(titulo.split("#")[1])
+    for i, field in enumerate(embed.fields):
 
-        await atualizar_valor_venda_db(pedido_numero, total)
-        await self.message.edit(embed=embed)
-
-        # ===============================
-        # DETECTAR ALTERAÇÕES
-        # ===============================
-
-        alteracoes = []
-
-        if pt_antigo != pt:
-            alteracoes.append(f"PT: {pt_antigo} → {pt}")
-
-        if sub_antigo != sub:
-            alteracoes.append(f"SUB: {sub_antigo} → {sub}")
-
-        if valor_antigo != valor_novo:
-            valor_antigo_fmt = f"{valor_antigo:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            alteracoes.append(f"Valor: R$ {valor_antigo_fmt} → R$ {valor_formatado}")
-
-        alteracao_texto = "\n".join(alteracoes) if alteracoes else "Nenhuma alteração detectada"
-
-        # ===============================
-        # LOG
-        # ===============================
-
-        canal_log = interaction.guild.get_channel(1478381934026424391)
-
-        if canal_log:
-
-            embed_log = discord.Embed(
-                title="✏️ Venda Editada",
-                color=0xf1c40f
+        if field.name == "🔫 PT":
+            embed.set_field_at(
+                i,
+                name="🔫 PT",
+                value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
+                inline=True
             )
 
-            embed_log.add_field(
-                name="👤 Editado por",
-                value=interaction.user.mention,
+        if field.name == "🔫 SUB":
+            embed.set_field_at(
+                i,
+                name="🔫 SUB",
+                value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
+                inline=True
+            )
+
+        if field.name == "💰 Total":
+            embed.set_field_at(
+                i,
+                name="💰 Total",
+                value=f"**R$ {valor_formatado}**",
                 inline=False
             )
 
-            embed_log.add_field(
-                name="🧾 Pedido",
-                value=embed.title,
-                inline=False
-            )
+    titulo = embed.title
+    pedido_numero = int(titulo.split("#")[1])
 
-            embed_log.add_field(
-                name="🏷 Organização",
-                value=organizacao,
-                inline=False
-            )
+    await atualizar_valor_venda_db(pedido_numero, total)
+    await self.message.edit(embed=embed)
 
-            embed_log.add_field(
-                name="🔧 Alterações",
-                value=alteracao_texto,
-                inline=False
-            )
+    # ===============================
+    # DETECTAR ALTERAÇÕES
+    # ===============================
 
-            await canal_log.send(embed=embed_log)
+    alteracoes = []
+
+    if pt_antigo != pt:
+        alteracoes.append(f"PT: {pt_antigo} → {pt}")
+
+    if sub_antigo != sub:
+        alteracoes.append(f"SUB: {sub_antigo} → {sub}")
+
+    if valor_antigo != valor_novo:
+        valor_antigo_fmt = f"{valor_antigo:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        alteracoes.append(f"Valor: R$ {valor_antigo_fmt} → R$ {valor_formatado}")
+
+    alteracao_texto = "\n".join(alteracoes) if alteracoes else "Nenhuma alteração detectada"
+
+    # ===============================
+    # LOG
+    # ===============================
+
+    canal_log = interaction.guild.get_channel(1478381934026424391)
+
+    if canal_log:
+
+        embed_log = discord.Embed(
+            title="✏️ Venda Editada",
+            color=0xf1c40f
+        )
+
+        embed_log.add_field(
+            name="👤 Editado por",
+            value=interaction.user.mention,
+            inline=False
+        )
+
+        embed_log.add_field(
+            name="🧾 Pedido",
+            value=embed.title,
+            inline=False
+        )
+
+        embed_log.add_field(
+            name="🏷 Organização",
+            value=organizacao,
+            inline=False
+        )
+
+        embed_log.add_field(
+            name="🔧 Alterações",
+            value=alteracao_texto,
+            inline=False
+        )
+
+        await canal_log.send(embed=embed_log)
+
+    await interaction.response.send_message("Venda editada com sucesso.", ephemeral=True)
+```
+
 # =========================================================
 # ================= MODAL RELATÓRIO =======================
 # =========================================================
@@ -3985,6 +3994,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
