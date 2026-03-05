@@ -969,6 +969,7 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
         self.tempo = tempo
 
     async def on_submit(self, interaction: discord.Interaction):
+
         pid = f"{self.galpao}_{interaction.id}"
 
         inicio = agora()
@@ -976,10 +977,25 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
 
+        desc = (
+            f"**Galpão:** {self.galpao}\n"
+            f"**Iniciado por:** {interaction.user.mention}\n"
+        )
+
+        if self.obs.value:
+            desc += f"📝 **Obs:** {self.obs.value}\n"
+
+        desc += (
+            f"Início: <t:{int(inicio.timestamp())}:t>\n"
+            f"Término: <t:{int(fim.timestamp())}:t>\n\n"
+            f"⏳ **Restante:** {self.tempo} min\n"
+            f"{barra(0)}"
+        )
+
         msg = await canal.send(
             embed=discord.Embed(
                 title="🏭 Produção",
-                description=f"Iniciando produção em **{self.galpao}**...",
+                description=desc,
                 color=0x3498db
             ),
             view=SegundaTaskView(pid)
@@ -3889,6 +3905,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
