@@ -3919,7 +3919,7 @@ async def on_ready():
                 """
                 SELECT pid FROM producoes
                 WHERE pid NOT LIKE 'TESTE_%'
-                AND fim::timestamp > NOW()
+                AND CAST(fim AS timestamp) > NOW()
                 """
             )
         for r in rows:
@@ -3990,6 +3990,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
