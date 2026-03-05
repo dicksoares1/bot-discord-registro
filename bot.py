@@ -3412,6 +3412,16 @@ async def atualizar_painel_meta(member: discord.Member):
 
         except Exception as e:
             print("Erro ao atualizar painel meta:", e)
+
+    # =====================================================
+    # SE NÃO EXISTIR PAINEL → CRIA UM NOVO
+    # =====================================================
+
+    if not painel_encontrado:
+        try:
+            await canal.send(embed=embed, view=view)
+        except Exception as e:
+            print("Erro ao criar painel meta:", e)
 # =========================================================
 # =========== RECONSTRUIR VIEWS DAS METAS =================
 # =========================================================
@@ -4036,6 +4046,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
