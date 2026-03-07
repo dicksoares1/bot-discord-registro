@@ -3293,59 +3293,73 @@ class HelicrashModal(discord.ui.Modal, title="Criar Helicrash"):
     async def on_submit(self, interaction: discord.Interaction):
 
         try:
+
             h, m = self.hora.value.split(":")
             h = int(h)
             m = int(m)
-        except:
-            await interaction.response.send_message("Hora inválida.", ephemeral=True)
-            return
 
-        agora_br = agora()
+            agora_br = agora()
 
-        horario = agora_br.replace(hour=h, minute=m, second=0, microsecond=0)
-
-        if horario < agora_br:
-            horario += timedelta(days=1)
-
-        canal = interaction.channel
-
-        embed = discord.Embed(
-            title=f"🚁 HELICRASH {self.hora.value}",
-            description="Aguardando participantes...",
-            color=0xe74c3c
-        )
-
-        embed.add_field(name="⏳ Começa em", value="Calculando...", inline=True)
-        embed.add_field(name="👥 Vagas restantes", value="10/10", inline=True)
-        embed.add_field(name="Participantes", value="Ninguém ainda", inline=False)
-
-        msg = await canal.send(
-            content="@everyone 🚁 Helicrash disponível! Clique para participar.",
-            embed=embed,
-            allowed_mentions=discord.AllowedMentions(everyone=True)
-        )
-
-        async with db.acquire() as conn:
-
-            hid = await conn.fetchval(
-                """
-                INSERT INTO helicrash (horario, canal_id, msg_id, participantes)
-                VALUES ($1,$2,$3,$4)
-                RETURNING id
-                """,
-                horario.replace(tzinfo=None),
-                str(canal.id),
-                str(msg.id),
-                ""
+            horario = agora_br.replace(
+                hour=h,
+                minute=m,
+                second=0,
+                microsecond=0
             )
 
-        await msg.edit(view=HelicrashView(hid))
+            if horario < agora_br:
+                horario += timedelta(days=1)
 
-        bot.loop.create_task(acompanhar_helicrash(hid))
+            canal = interaction.channel
 
-        await interaction.response.defer()
+            embed = discord.Embed(
+                title=f"🚁 HELICRASH {horario.strftime('%H:%M')}",
+                description="Aguardando participantes...",
+                color=0xe74c3c
+            )
 
+            embed.add_field(name="⏳ Começa em", value="Calculando...", inline=True)
+            embed.add_field(name="👥 Participantes", value="0/10", inline=True)
+            embed.add_field(name="Participantes", value="Ninguém ainda", inline=False)
 
+            msg = await canal.send(
+                content="@everyone 🚁 Helicrash disponível! Clique para participar.",
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(everyone=True)
+            )
+
+            async with db.acquire() as conn:
+
+                hid = await conn.fetchval(
+                    """
+                    INSERT INTO helicrash (horario, canal_id, msg_id, participantes)
+                    VALUES ($1,$2,$3,$4)
+                    RETURNING id
+                    """,
+                    horario.replace(tzinfo=None),
+                    str(canal.id),
+                    str(msg.id),
+                    ""
+                )
+
+            await msg.edit(view=HelicrashView(hid))
+
+            bot.loop.create_task(acompanhar_helicrash(hid))
+
+            await interaction.response.send_message(
+                f"Helicrash criado para **{horario.strftime('%H:%M')}**",
+                ephemeral=True
+            )
+
+        except Exception as e:
+
+            print("Erro criar helicrash:", e)
+
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "Erro ao criar helicrash.",
+                    ephemeral=True
+                )
 # =========================================================
 # BOTÃO PARA CRIAR HELICRASH
 # =========================================================
@@ -4559,6 +4573,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
