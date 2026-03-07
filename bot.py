@@ -3161,7 +3161,7 @@ async def atualizar_embed_helicrash(hid):
 
     vagas_restantes = 10 - len(participantes)
 
-    horario = row["horario"]
+    horario = row["horario"].replace(tzinfo=BRASIL)
 
     agora_br = agora()
 
@@ -3223,7 +3223,7 @@ async def acompanhar_helicrash(hid):
         if not row:
             return
 
-        horario = row["horario"]
+        horario = row["horario"].replace(tzinfo=BRASIL)
 
         if agora() >= horario:
 
@@ -4118,6 +4118,7 @@ async def on_raw_message_delete(payload):
 
 @tasks.loop(minutes=15)
 async def varrer_agregados_sem_sala():
+
     guild = bot.get_guild(GUILD_ID)
     if not guild:
         return
@@ -4125,24 +4126,45 @@ async def varrer_agregados_sem_sala():
     metas = metas_cache
 
     for member in guild.members:
+
         if member.bot:
             continue
 
         if not any(r.id == AGREGADO_ROLE_ID for r in member.roles):
             continue
 
+        # ================================
+        # SE NÃO ESTIVER NO CACHE
+        # ================================
         if str(member.id) not in metas:
-            await criar_sala_meta(member)
+
+            # procura canal existente
+            for canal in guild.text_channels:
+
+                if canal.name.startswith("📁・") and canal.permissions_for(member).view_channel:
+
+                    print(f"⚠️ Sala encontrada mas não estava no banco: {member.display_name}")
+
+                    await salvar_meta(member.id, canal.id, 0, 0, 0)
+                    break
+
+            else:
+                await criar_sala_meta(member)
+
             continue
 
+        # ================================
+        # SE ESTIVER NO CACHE
+        # ================================
+
         canal = guild.get_channel(metas[str(member.id)]["canal_id"])
+
         if not canal:
             await criar_sala_meta(member)
             continue
 
         await atualizar_categoria_meta(member)
         await atualizar_painel_meta(member)
-
 # =========================================================
 # RELATÓRIO + RESET
 # =========================================================
@@ -4537,6 +4559,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
