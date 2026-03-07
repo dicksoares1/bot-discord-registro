@@ -265,8 +265,6 @@ intents.presences = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # trava anti-duplicação de criação de metas
-criando_meta = set()
-
 # =========================================================
 # ================= TWITCH TOKEN CACHE ====================
 # =========================================================
@@ -3357,7 +3355,11 @@ class HelicrashPainel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🚁 Escalar Helicrash", style=discord.ButtonStyle.primary)
+    @discord.ui.button(
+        label="🚁 Escalar Helicrash",
+        style=discord.ButtonStyle.primary,
+        custom_id="helicrash_criar"
+    )
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if interaction.response.is_done():
@@ -3789,8 +3791,6 @@ async def criar_sala_meta(member: discord.Member):
     if member.id in criando_meta:
         criando_meta.discard(member.id)
 
-    return
-
     # =================================================
     # SALVAR META
     # =================================================
@@ -3822,7 +3822,7 @@ async def atualizar_painel_meta(member: discord.Member):
     if not dados:
         return
 
-        canal = member.guild.get_channel(dados["canal_id"])
+    canal = member.guild.get_channel(dados["canal_id"])
 
     if not canal:
 
@@ -4536,6 +4536,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
