@@ -3189,11 +3189,11 @@ async def atualizar_embed_helicrash(hid):
     )
 
     embed.add_field(
-        name="👥 Vagas restantes",
-        value=f"{vagas_restantes}/10",
+        name="👥 Participantes",
+        value=f"{len(participantes)}/10",
         inline=True
     )
-
+    
     embed.add_field(
         name="Participantes",
         value=lista,
@@ -4559,6 +4559,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
