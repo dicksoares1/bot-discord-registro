@@ -3321,7 +3321,11 @@ class HelicrashModal(discord.ui.Modal, title="Criar Helicrash"):
         embed.add_field(name="👥 Vagas restantes", value="10/10", inline=True)
         embed.add_field(name="Participantes", value="Ninguém ainda", inline=False)
 
-        msg = await canal.send(embed=embed)
+        msg = await canal.send(
+            content="@everyone 🚁 Helicrash disponível! Clique para participar.",
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(everyone=True)
+        )
 
         async with db.acquire() as conn:
 
@@ -3373,11 +3377,16 @@ async def enviar_painel_helicrash():
 
     embed = discord.Embed(
         title="🚁 Sistema de Helicrash",
-        description="Clique no botão para escalar um helicrash.",
+        description="Clique no botão abaixo para escalar um helicrash.",
         color=0xe74c3c
     )
 
-    await canal.send(embed=embed, view=HelicrashPainel())
+    await enviar_ou_atualizar_painel(
+        "painel_helicrash",
+        CANAL_HELICRASH_ID,
+        embed,
+        HelicrashPainel()
+    )
 # =========================================================
 # =========================== METAS ========================
 # =========================================================
@@ -4512,6 +4521,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
