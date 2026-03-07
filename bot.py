@@ -2641,6 +2641,23 @@ class ResultadoModal(discord.ui.Modal):
 
             async with db.acquire() as conn:
 
+                # ==============================
+                # PROTEÇÃO RESULTADO DUPLICADO
+                # ==============================
+
+                ja_finalizada = await conn.fetchval(
+                    "SELECT resultado FROM acoes_semana WHERE id=$1",
+                    self.acao_id
+                )
+
+                if ja_finalizada:
+
+                    await interaction.response.send_message(
+                        "Esta ação já teve resultado registrado.",
+                        ephemeral=True
+                    )
+                    return
+
                 participantes = await conn.fetch(
                     """
                     SELECT user_id, nome_externo
@@ -2652,6 +2669,12 @@ class ResultadoModal(discord.ui.Modal):
 
                 acao = await conn.fetchrow(
                     "SELECT tipo, autor FROM acoes_semana WHERE id=$1",
+                    self.acao_id
+                )
+
+                await conn.execute(
+                    "UPDATE acoes_semana SET resultado=$1 WHERE id=$2",
+                    resultado,
                     self.acao_id
                 )
 
@@ -4040,6 +4063,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
