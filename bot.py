@@ -3357,11 +3357,19 @@ class HelicrashPainel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🚁 Escalar Helicrash", style=discord.ButtonStyle.primary, custom_id="helicrash_criar")
+    @discord.ui.button(label="🚁 Escalar Helicrash", style=discord.ButtonStyle.primary)
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        await interaction.response.send_modal(HelicrashModal())
+        if interaction.response.is_done():
+            return
 
+        try:
+            await interaction.response.send_modal(HelicrashModal())
+        except:
+            try:
+                await interaction.followup.send_modal(HelicrashModal())
+            except:
+                pass
 
 # =========================================================
 # ENVIAR PAINEL HELICRASH
@@ -3687,30 +3695,35 @@ class MetaView(discord.ui.View):
 
 async def criar_sala_meta(member: discord.Member):
 
-    if member.id in criando_meta:
-        return
+    guild = member.guild
 
-    criando_meta.add(member.id)
+    # verifica se já existe canal com nome do membro
+    nome_canal = f"📁-{member.display_name}".lower()
 
-    try:
-        metas = metas_cache
-        guild = member.guild
+    for canal in guild.text_channels:
+        if canal.name == nome_canal:
+            print(f"⚠️ Sala já existe para {member.display_name}")
+            return canal
 
-        # Já existe no banco
-        if str(member.id) in metas:
+    categoria = guild.get_channel(CATEGORIA_METAS_ID)
 
-            canal = guild.get_channel(metas[str(member.id)]["canal_id"])
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(read_messages=False),
+        member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    }
 
-            # canal existe
-            if canal:
-                await atualizar_painel_meta(member)
-                criando_meta.discard(member.id)
-                return
+    canal = await guild.create_text_channel(
+        name=nome_canal,
+        category=categoria,
+        overwrites=overwrites
+    )
 
-            # canal foi apagado
-            else:
-                metas.pop(str(member.id))
+    await salvar_meta(member.id, canal.id, 0, 0, 0)
 
+    print(f"📊 Sala de meta criada para {member.display_name}")
+
+    return canal
 
         # =================================================
         # VERIFICA SE JÁ EXISTE CANAL ANTIGO
@@ -3811,10 +3824,14 @@ async def atualizar_painel_meta(member: discord.Member):
     if not dados:
         return
 
-    canal = member.guild.get_channel(dados["canal_id"])
+        canal = member.guild.get_channel(dados["canal_id"])
+
     if not canal:
-        await criar_sala_meta(member)
-        return
+
+        canal = await criar_sala_meta(member)
+
+        if not canal:
+            return
 
     dinheiro = dados["dinheiro"]
     polvora = dados["polvora"]
@@ -4357,7 +4374,7 @@ async def on_ready():
     # =====================================================
 
     # Registrar MetaView individual
-    for uid in metas_cache.keys():
+    for uid in list(metas_cache.keys()):
         try:
             bot.add_view(MetaView(int(uid)))
         except Exception as e:
@@ -4521,6 +4538,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
