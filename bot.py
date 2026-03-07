@@ -422,6 +422,7 @@ class StatusView(discord.ui.View):
     def pedido_cancelado(self, linhas):
         return any(l.startswith("❌") for l in linhas)
 
+    
     # =====================================================
     # ================= BOTÃO PAGO ========================
     # =====================================================
@@ -449,12 +450,8 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        # remove pagamento pendente
         linhas = [l for l in linhas if not l.startswith("⏳")]
-
-        # remove pago antigo
         linhas = [l for l in linhas if not l.startswith("💰")]
-
 
         linhas.append(
             f"💰 Pago • Recebido por {user} • {agora_str}"
@@ -462,9 +459,47 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        # Finaliza pedido → trava botões
-        await interaction.message.edit(embed=embed, view=self)
+        # ================= FINALIZA VENDA =================
+
+        finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
+
+        if finalizado:
+
+            embed.color = 0x2ecc71
+            embed.title = "🎉 VENDA CONCLUÍDA"
+
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            embed.add_field(
+                name="✅ VENDA FINALIZADA COM SUCESSO",
+                value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**",
+                inline=False
+            )
+
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="🔥 **Pedido encerrado no sistema**",
+                inline=False
+            )
+
+            await interaction.message.edit(
+                embed=embed,
+                view=StatusView(disabled=True)
+            )
+
+        else:
+
+            await interaction.message.edit(
+                embed=embed,
+                view=self
+            )
+
         await interaction.response.defer()
+
 
     # =====================================================
     # ================= BOTÃO ENTREGUE ====================
@@ -476,13 +511,6 @@ class StatusView(discord.ui.View):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
-        if self.pedido_pago(linhas):
-            await interaction.response.send_message(
-                "⚠️ Este pedido já foi pago.",
-                ephemeral=True
-            )
-            return
-
         if self.pedido_cancelado(linhas):
             await interaction.response.send_message(
                 "⚠️ Este pedido foi cancelado.",
@@ -493,10 +521,7 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user
 
-        # remove A entregar
         linhas = [l for l in linhas if not l.startswith("📦")]
-
-        # remove entregue antigo
         linhas = [l for l in linhas if not l.startswith("✅")]
 
         linhas.append(
@@ -505,8 +530,44 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        await interaction.message.edit(embed=embed, view=self)
+        finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
 
+        if finalizado:
+
+            embed.color = 0x2ecc71
+            embed.title = "🎉 VENDA CONCLUÍDA"
+
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            embed.add_field(
+                name="✅ VENDA FINALIZADA COM SUCESSO",
+                value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**",
+                inline=False
+            )
+
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="🔥 **Pedido encerrado no sistema**",
+                inline=False
+            )
+
+            await interaction.message.edit(
+                embed=embed,
+                view=StatusView(disabled=True)
+            )
+
+        else:
+
+            await interaction.message.edit(
+                embed=embed,
+                view=self
+            )
+
+        await interaction.response.defer()
         # ===============================
         # PEGAR PACOTES DO EMBED
         # ===============================
@@ -4063,6 +4124,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
