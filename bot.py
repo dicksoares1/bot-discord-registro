@@ -790,6 +790,62 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         await interaction.response.defer()
 
 # =========================================================
+# ================= MODAL RELATÓRIO =======================
+# =========================================================
+
+class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
+
+    periodo = discord.ui.TextInput(
+        label="Período (opcional)",
+        placeholder="Ex: Hoje / Semana / Mês",
+        required=False
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        dados = await carregar_vendas_db()
+
+        if not dados:
+            await interaction.response.send_message(
+                "Nenhuma venda registrada.",
+                ephemeral=True
+            )
+            return
+
+        total = 0
+        linhas = []
+
+        for v in dados:
+
+            valor = v["valor"]
+            total += valor
+
+            linhas.append(
+                f"👤 <@{v['user_id']}> • R$ {valor:,}".replace(",", ".")
+            )
+
+        total_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+        embed = discord.Embed(
+            title="📊 Relatório de Vendas",
+            color=0x2ecc71
+        )
+
+        embed.add_field(
+            name="💰 Total Vendido",
+            value=f"**R$ {total_formatado}**",
+            inline=False
+        )
+
+        embed.add_field(
+            name="📦 Vendas Registradas",
+            value="\n".join(linhas[:20]) or "Nenhuma",
+            inline=False
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# =========================================================
 # ================= EDITAR== VENDA ========================
 # =========================================================
 class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
@@ -4215,6 +4271,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
