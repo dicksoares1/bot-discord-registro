@@ -3108,7 +3108,7 @@ class HelicrashView(discord.ui.View):
                 await interaction.response.send_message("Evento não encontrado.", ephemeral=True)
                 return
 
-            lista = row["participantes"].split(",") if row["participantes"] else []
+            lista = [x for x in (row["participantes"] or "").split(",") if x]
 
             if str(interaction.user.id) in lista:
                 await interaction.response.send_message("Você já entrou.", ephemeral=True)
@@ -3157,7 +3157,7 @@ async def atualizar_embed_helicrash(hid):
     except:
         return
 
-    participantes = row["participantes"].split(",") if row["participantes"] else []
+    participantes = [x for x in (row["participantes"] or "").split(",") if x]
 
     vagas_restantes = 10 - len(participantes)
 
@@ -3250,7 +3250,7 @@ async def finalizar_helicrash(hid):
     if not row:
         return
 
-    participantes = row["participantes"].split(",") if row["participantes"] else []
+    participantes = [x for x in (row["participantes"] or "").split(",") if x]
 
     canal = bot.get_channel(CANAL_RELATORIO_ACOES_ID)
 
@@ -4559,6 +4559,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
