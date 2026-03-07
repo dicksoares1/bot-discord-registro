@@ -3362,17 +3362,18 @@ class HelicrashPainel(discord.ui.View):
     )
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        if interaction.response.is_done():
-            return
-
         try:
             await interaction.response.send_modal(HelicrashModal())
-        except:
-            try:
-                await interaction.followup.send_modal(HelicrashModal())
-            except:
-                pass
 
+        except Exception as e:
+
+            print("Erro abrir modal helicrash:", e)
+
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "Erro ao abrir o modal.",
+                    ephemeral=True
+                )
 # =========================================================
 # ENVIAR PAINEL HELICRASH
 # =========================================================
@@ -4536,6 +4537,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
