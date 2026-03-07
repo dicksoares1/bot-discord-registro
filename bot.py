@@ -63,23 +63,17 @@ http_session = None
 
 channel_cache = {}
 
-async def pegar_canal(cid):
+def pegar_canal(cid):
 
     if cid in channel_cache:
         return channel_cache[cid]
 
     canal = bot.get_channel(cid)
 
-    if not canal:
-        try:
-            canal = await bot.fetch_channel(cid)
-        except:
-            return None
-
-    channel_cache[cid] = canal
+    if canal:
+        channel_cache[cid] = canal
 
     return canal
-
 # =========================================================
 # ================= CACHE DE USUÁRIOS =====================
 # =========================================================
@@ -1066,7 +1060,7 @@ class CalculadoraView(discord.ui.View):
 
 async def enviar_painel_vendas():
 
-    canal = await pegar_canal(CANAL_VENDAS_ID)
+    canal = pegar_canal(CANAL_VENDAS_ID)
 
     if not canal:
         print("❌ Canal de vendas não encontrado")
@@ -1436,7 +1430,7 @@ async def acompanhar_producao(pid):
         if not prod:
             return
 
-        canal = await pegar_canal(prod["canal_id"])
+        canal = pegar_canal(prod["canal_id"])
 
         if not canal:
             await asyncio.sleep(10)
@@ -1710,7 +1704,7 @@ async def relatorio_semanal_polvoras():
     if not resumo:
         return
 
-    canal = await pegar_canal(CANAL_REGISTRO_POLVORA_ID)
+    canal = pegar_canal(CANAL_REGISTRO_POLVORA_ID)
 
     for user_id, total in resumo.items():
         user = await pegar_usuario(int(user_id))
@@ -1843,7 +1837,7 @@ async def on_message(message: discord.Message):
             valor_retorno = dados_temp["retorno"]
             taxa = dados_temp["taxa"]
 
-            canal_destino = await pegar_canal(CANAL_LAVAGEM_MEMBROS_ID)
+            canal_destino = pegar_canal(CANAL_LAVAGEM_MEMBROS_ID)
             arquivo = await message.attachments[0].to_file()
 
             try:
@@ -4216,6 +4210,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
