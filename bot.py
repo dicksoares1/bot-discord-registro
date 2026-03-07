@@ -991,16 +991,14 @@ class CalculadoraView(discord.ui.View):
         custom_id="calc_registrar_venda"
     )
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        await interaction.followup.send_modal(VendaModal())
+        await interaction.response.send_modal(VendaModal())
     @discord.ui.button(
         label="Relatório",
         style=discord.ButtonStyle.success,
         custom_id="calc_relatorio_vendas"
     )
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        await interaction.followup.send_modal(RelatorioModal())
+        await interaction.response.send_modal(RelatorioModal())
 # =========================================================
 # ================= PAINEL ================================
 # =========================================================
@@ -4217,6 +4215,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
