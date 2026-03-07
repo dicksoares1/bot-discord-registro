@@ -1931,7 +1931,7 @@ class LavagemView(discord.ui.View):
 
 async def enviar_painel_lavagem():
 
-    canal = bot.get_channel(CANAL_LAVAGEM_ID)
+    canal = bot.get_channel(CANAL_INICIAR_LAVAGEM_ID)
 
     if not canal:
         print("❌ Canal de lavagem não encontrado")
@@ -2298,6 +2298,7 @@ class PainelLivesAdmin(discord.ui.View):
 # ================= PAINÉIS =================
 
 async def enviar_painel_admin_lives():
+
     embed = discord.Embed(
         title="⚙️ Painel ADM - Lives",
         description="Gerencie todas as lives cadastradas.",
@@ -2305,8 +2306,8 @@ async def enviar_painel_admin_lives():
     )
 
     await enviar_ou_atualizar_painel(
+        "painel_lives_admin",
         CANAL_CADASTRO_LIVE_ID,
-        "⚙️ Painel ADM - Lives",
         embed,
         PainelLivesAdmin()
     )
@@ -2381,12 +2382,13 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
     canal = bot.get_channel(canal_id)
 
     if not canal:
+        print(f"❌ Canal não encontrado para painel: {nome}")
         return
 
     async with db.acquire() as conn:
 
         row = await conn.fetchrow(
-            "SELECT mensagem_id FROM paineis WHERE nome=$1",
+            "SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1",
             nome
         )
 
@@ -2394,7 +2396,9 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
 
             try:
 
-                msg = await canal.fetch_message(int(row["mensagem_id"]))
+                canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
+
+                msg = await canal_salvo.fetch_message(int(row["mensagem_id"]))
 
                 await edit_queue.put(
                     msg.edit(embed=embed, view=view)
@@ -2402,8 +2406,13 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
 
                 return
 
-            except:
-                pass
+            except discord.NotFound:
+
+                print(f"⚠️ Painel perdido: {nome}, recriando...")
+
+            except Exception as e:
+
+                print(f"Erro atualizar painel {nome}:", e)
 
         msg = await canal.send(embed=embed, view=view)
 
@@ -2412,7 +2421,9 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
             INSERT INTO paineis (nome, canal_id, mensagem_id)
             VALUES ($1,$2,$3)
             ON CONFLICT (nome)
-            DO UPDATE SET mensagem_id=$3
+            DO UPDATE SET
+            canal_id=$2,
+            mensagem_id=$3
             """,
             nome,
             str(canal_id),
@@ -3947,6 +3958,7 @@ async def enviar_painel_solicitar_sala():
     canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
 
     if not canal:
+        print("❌ Canal solicitar sala não encontrado")
         return
 
     embed = discord.Embed(
@@ -3956,11 +3968,13 @@ async def enviar_painel_solicitar_sala():
     )
 
     await enviar_ou_atualizar_painel(
-        "painel_lives_admin",
-        CANAL_CADASTRO_LIVE_ID,
+        "painel_solicitar_sala",
+        CANAL_SOLICITAR_SALA_ID,
         embed,
-        PainelLivesAdmin()
+        SolicitarSalaView()
     )
+
+    print("📂 Painel solicitar sala verificado/atualizado")
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
@@ -4203,6 +4217,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
