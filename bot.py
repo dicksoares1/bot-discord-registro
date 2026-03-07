@@ -1675,7 +1675,7 @@ async def relatorio_semanal_polvoras():
 
 async def enviar_painel_polvoras(bot):
 
-    canal = bot.get_channel(CANAL_POLVORA_ID)
+    canal = bot.get_channel(CANAL_CALCULO_POLVORA_ID)
 
     if not canal:
         print("❌ Canal de pólvora não encontrado")
@@ -1689,13 +1689,12 @@ async def enviar_painel_polvoras(bot):
 
     await enviar_ou_atualizar_painel(
         "painel_polvora",
-        CANAL_POLVORA_ID,
+        CANAL_CALCULO_POLVORA_ID,
         embed,
         PolvoraView()
     )
 
     print("💣 Painel de pólvora verificado/atualizado")
-
 # =========================================================
 # ======================== LAVAGEM =========================
 # =========================================================
@@ -3980,11 +3979,7 @@ async def on_ready():
 
     print("🔄 Iniciando configuração do bot...")
 
-    global db
-    global http_session
-
-    print("🔄 Iniciando configuração do bot...")
-
+   
     # =====================================================
     # ================= HTTP SESSION ======================
     # =====================================================
@@ -4026,7 +4021,7 @@ async def on_ready():
 
     try:
 
-        for uid in metas_cache.keys():
+        for uid in list(metas_cache.keys()):
 
             membro = guild.get_member(int(uid))
 
@@ -4170,12 +4165,11 @@ async def on_ready():
             enviar_painel_solicitar_sala()
         ]
 
-        for task in painel_tasks:
-            try:
-                await task
-                await asyncio.sleep(0.7)  # delay anti rate limit
-            except Exception as e:
-                print("Erro em painel específico:", e)
+        results = await asyncio.gather(*painel_tasks, return_exceptions=True)
+
+        for r in results:
+            if isinstance(r, Exception):
+                print("Erro em painel específico:", r)
 
         print("🖥️ Painéis verificados/enviados.")
 
@@ -4209,6 +4203,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
