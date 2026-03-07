@@ -3925,7 +3925,7 @@ async def reconstruir_views_metas():
     if not guild:
         return
 
-    for uid, dados in metas_cache.items():
+    for uid, dados in list(metas_cache.items()):
 
         canal = guild.get_channel(dados["canal_id"])
 
@@ -4559,6 +4559,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
