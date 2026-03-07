@@ -3331,7 +3331,7 @@ class HelicrashModal(discord.ui.Modal, title="Criar Helicrash"):
                 VALUES ($1,$2,$3,$4)
                 RETURNING id
                 """,
-                horario,
+                horario.replace(tzinfo=None)
                 str(canal.id),
                 str(msg.id),
                 ""
@@ -4512,6 +4512,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
