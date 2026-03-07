@@ -3713,7 +3713,7 @@ async def criar_sala_meta(member: discord.Member):
     # =================================================
 
     canal_encontrado = None
-
+    
     for cat in guild.categories:
 
         if not cat.name.lower().startswith("metas"):
@@ -3789,7 +3789,7 @@ async def criar_sala_meta(member: discord.Member):
     if member.id in criando_meta:
         criando_meta.discard(member.id)
 
-    return canal
+    return
         # =================================================
         # SALVAR META
         # =================================================
@@ -4534,6 +4534,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
