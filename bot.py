@@ -2624,17 +2624,15 @@ class ResultadoModal(discord.ui.Modal):
             ouro = 0
 
             try:
-                if self.dinheiro.value.strip():
-                    dinheiro = int(
-                        self.dinheiro.value.replace(".", "").replace(",", "")
-                    )
 
-                if self.ouro.value.strip():
-                    ouro = int(
-                        self.ouro.value.replace(".", "").replace(",", "")
-                    )
+                valor_input = (self.dinheiro.value or "").strip()
 
-            except:
+                if valor_input:
+                    valor_input = valor_input.replace(".", "").replace(",", "")
+                    dinheiro = int(valor_input)
+
+            except Exception:
+
                 await interaction.response.send_message(
                     "Valor inválido.",
                     ephemeral=True
@@ -4042,6 +4040,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
