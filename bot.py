@@ -3094,7 +3094,11 @@ class HelicrashView(discord.ui.View):
         super().__init__(timeout=None)
         self.hid = hid
 
-    @discord.ui.button(label="Entrar no Helicrash", style=discord.ButtonStyle.success, custom_id="helicrash_entrar")
+    @discord.ui.button(
+        label="Entrar no Helicrash",
+        style=discord.ButtonStyle.success,
+        custom_id="helicrash_entrar"
+    )
     async def entrar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         async with db.acquire() as conn:
@@ -3105,17 +3109,27 @@ class HelicrashView(discord.ui.View):
             )
 
             if not row:
-                await interaction.response.send_message("Evento não encontrado.", ephemeral=True)
+                await interaction.response.send_message(
+                    "Evento não encontrado.",
+                    ephemeral=True
+                )
                 return
 
+            # cria lista segura
             lista = [x for x in (row["participantes"] or "").split(",") if x]
 
             if str(interaction.user.id) in lista:
-                await interaction.response.send_message("Você já entrou.", ephemeral=True)
+                await interaction.response.send_message(
+                    "Você já entrou.",
+                    ephemeral=True
+                )
                 return
 
             if len(lista) >= 10:
-                await interaction.response.send_message("Escalação cheia.", ephemeral=True)
+                await interaction.response.send_message(
+                    "Escalação cheia.",
+                    ephemeral=True
+                )
                 return
 
             lista.append(str(interaction.user.id))
@@ -3129,7 +3143,6 @@ class HelicrashView(discord.ui.View):
         await atualizar_embed_helicrash(self.hid)
 
         await interaction.response.defer()
-
 
 # =========================================================
 # ATUALIZA EMBED DO HELICRASH
@@ -3328,21 +3341,29 @@ class HelicrashModal(discord.ui.Modal, title="Criar Helicrash"):
                 allowed_mentions=discord.AllowedMentions(everyone=True)
             )
 
-            async with db.acquire() as conn:
+            hid = None
 
-                hid = await conn.fetchval(
-                    """
-                    INSERT INTO helicrash (horario, canal_id, msg_id, participantes)
-                    VALUES ($1,$2,$3,$4)
-                    RETURNING id
-                    """,
-                    horario.replace(tzinfo=None),
-                    str(canal.id),
-                    str(msg.id),
-                    ""
-                )
+            try:
 
-            await msg.edit(view=HelicrashView(hid))
+                async with db.acquire() as conn:
+
+                    hid = await conn.fetchval(
+                        """
+                        INSERT INTO helicrash (horario, canal_id, msg_id, participantes)
+                        VALUES ($1,$2,$3,$4)
+                        RETURNING id
+                        """,
+                        horario.replace(tzinfo=None),
+                        str(canal.id),
+                        str(msg.id),
+                        ""
+                    )
+
+            except Exception as e:
+                print("Erro banco helicrash:", e)
+
+            # garante botão mesmo se banco falhar
+            await msg.edit(view=HelicrashView(hid or 0))
 
             bot.loop.create_task(acompanhar_helicrash(hid))
 
@@ -4573,6 +4594,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
