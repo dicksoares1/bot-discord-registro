@@ -3697,7 +3697,10 @@ async def criar_sala_meta(member: discord.Member):
 
     guild = member.guild
 
-    # verifica se já existe canal com nome do membro
+    # =================================================
+    # VERIFICA SE JÁ EXISTE CANAL COM NOME PADRÃO
+    # =================================================
+
     nome_canal = f"📁-{member.display_name}".lower()
 
     for canal in guild.text_channels:
@@ -3705,16 +3708,76 @@ async def criar_sala_meta(member: discord.Member):
             print(f"⚠️ Sala já existe para {member.display_name}")
             return canal
 
-    categoria = guild.get_channel(CATEGORIA_METAS_ID)
+    # =================================================
+    # VERIFICA SE JÁ EXISTE CANAL ANTIGO
+    # =================================================
+
+    canal_encontrado = None
+
+    for cat in guild.categories:
+
+        if not cat.name.lower().startswith("metas"):
+            continue
+
+        for c in cat.channels:
+
+            if not isinstance(c, discord.TextChannel):
+                continue
+
+            if c.overwrites_for(member).view_channel:
+                canal_encontrado = c
+                break
+
+        if canal_encontrado:
+            break
+
+    if canal_encontrado:
+
+        await salvar_meta(
+            member.id,
+            canal_encontrado.id,
+            0,
+            0,
+            0
+        )
+
+        await atualizar_painel_meta(member)
+
+        if member.id in criando_meta:
+            criando_meta.discard(member.id)
+
+        return canal_encontrado
+
+    # =================================================
+    # CRIAR NOVA SALA
+    # =================================================
+
+    categoria_id = obter_categoria_meta(member)
+    if not categoria_id:
+        if member.id in criando_meta:
+            criando_meta.discard(member.id)
+        return
+
+    categoria = guild.get_channel(categoria_id)
+    if not categoria:
+        if member.id in criando_meta:
+            criando_meta.discard(member.id)
+        return
+
+    nick = member.display_name.lower().replace(" ", "-")
+    nome_canal = f"📁・{nick}"
 
     overwrites = {
-        guild.default_role: discord.PermissionOverwrite(read_messages=False),
-        member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
 
+    gerente = guild.get_role(CARGO_GERENTE_ID)
+    if gerente:
+        overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
+
     canal = await guild.create_text_channel(
-        name=nome_canal,
+        nome_canal,
         category=categoria,
         overwrites=overwrites
     )
@@ -3723,77 +3786,10 @@ async def criar_sala_meta(member: discord.Member):
 
     print(f"📊 Sala de meta criada para {member.display_name}")
 
+    if member.id in criando_meta:
+        criando_meta.discard(member.id)
+
     return canal
-
-        # =================================================
-        # VERIFICA SE JÁ EXISTE CANAL ANTIGO
-        # =================================================
-
-        canal_encontrado = None
-
-        for cat in guild.categories:
-
-            if not cat.name.lower().startswith("metas"):
-                continue
-
-            for c in cat.channels:
-
-                if not isinstance(c, discord.TextChannel):
-                    continue
-
-                if c.overwrites_for(member).view_channel:
-                    canal_encontrado = c
-                    break
-
-            if canal_encontrado:
-                break
-
-        if canal_encontrado:
-            await salvar_meta(
-                member.id,
-                canal_encontrado.id,
-                0,
-                0,
-                0
-            )
-
-            await atualizar_painel_meta(member)
-
-            criando_meta.discard(member.id)
-            return
-
-        # =================================================
-        # CRIAR NOVA SALA
-        # =================================================
-
-        categoria_id = obter_categoria_meta(member)
-        if not categoria_id:
-            criando_meta.discard(member.id)
-            return
-
-        categoria = guild.get_channel(categoria_id)
-        if not categoria:
-            criando_meta.discard(member.id)
-            return
-
-        nick = member.display_name.lower().replace(" ", "-")
-        nome_canal = f"📁・{nick}"
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-        }
-
-        gerente = guild.get_role(CARGO_GERENTE_ID)
-        if gerente:
-            overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
-
-        canal = await guild.create_text_channel(
-            nome_canal,
-            category=categoria,
-            overwrites=overwrites
-        )
-
         # =================================================
         # SALVAR META
         # =================================================
@@ -4538,6 +4534,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
