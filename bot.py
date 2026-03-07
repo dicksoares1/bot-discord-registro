@@ -3790,9 +3790,12 @@ async def criar_sala_meta(member: discord.Member):
         criando_meta.discard(member.id)
 
     return
-        # =================================================
-        # SALVAR META
-        # =================================================
+
+    # =================================================
+    # SALVAR META
+    # =================================================
+
+    try:
 
         await salvar_meta(
             member.id,
@@ -3809,7 +3812,6 @@ async def criar_sala_meta(member: discord.Member):
 
     finally:
         criando_meta.discard(member.id)
-
 # =========================================================
 # ATUALIZAR / RECRIAR PAINEL (VERSÃO ESTÁVEL - SEM DUPLICAR)
 # =========================================================
@@ -4534,6 +4536,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
