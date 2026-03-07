@@ -56,6 +56,42 @@ async def edit_worker():
 # =========================================================
 
 http_session = None
+
+# =========================================================
+# ================= CACHE DE CANAIS =======================
+# =========================================================
+
+channel_cache = {}
+
+def pegar_canal(cid):
+
+    if cid in channel_cache:
+        return channel_cache[cid]
+
+    canal = bot.get_channel(cid)
+
+    if canal:
+        channel_cache[cid] = canal
+
+    return canal
+
+# =========================================================
+# ================= CACHE DE USUÁRIOS =====================
+# =========================================================
+
+user_cache = {}
+
+async def pegar_usuario(uid):
+
+    if uid in user_cache:
+        return user_cache[uid]
+
+    try:
+        user = await bot.fetch_user(uid)
+        user_cache[uid] = user
+        return user
+    except:
+        return None
 # =========================================================
 # ===================== RELÓGIO GLOBAL ====================
 # =========================================================
@@ -970,7 +1006,8 @@ class CalculadoraView(discord.ui.View):
 # =========================================================
 
 async def enviar_painel_vendas():
-    canal = bot.get_channel(CANAL_VENDAS_ID)
+
+    canal = pegar_canal(CANAL_VENDAS_ID)
 
     if not canal:
         print("❌ Canal de vendas não encontrado")
@@ -982,21 +1019,14 @@ async def enviar_painel_vendas():
         color=0x2ecc71
     )
 
-    # procura painel existente
-    async for msg in canal.history(limit=30):
-        if (
-            msg.author == bot.user
-            and msg.embeds
-            and msg.embeds[0].title == "🛒 Painel de Vendas"
-        ):
-            await asyncio.sleep(0.4)  # reduz rate limit
-            await edit_queue.put(msg.edit(embed=embed, view=CalculadoraView()))
-            print("♻️ Painel de vendas atualizado")
-            return
+    await enviar_ou_atualizar_painel(
+        "painel_vendas",
+        CANAL_VENDAS_ID,
+        embed,
+        CalculadoraView()
+    )
 
-    # cria novo
-    await canal.send(embed=embed, view=CalculadoraView())
-    print("🛒 Painel de vendas criado")
+    print("🛒 Painel de vendas verificado/atualizado")
 # =========================================================
 # ======================== PRODUÇÃO ========================
 # =========================================================
@@ -1347,16 +1377,31 @@ async def acompanhar_producao(pid):
         if not prod:
             return
 
-        canal = bot.get_channel(prod["canal_id"])
+        canal = pegar_canal(prod["canal_id"])
 
         if not canal:
             await asyncio.sleep(10)
             continue
 
         if msg is None:
+
             try:
+
                 msg = await canal.fetch_message(prod["msg_id"])
-            except:
+
+            except discord.NotFound:
+
+                print(f"⚠️ Mensagem da produção não encontrada: {pid}")
+
+                await deletar_producao(pid)
+
+                if pid in producoes_tasks:
+                    producoes_tasks.pop(pid)
+
+                return
+
+            except Exception:
+
                 await asyncio.sleep(10)
                 continue
 
@@ -1453,9 +1498,10 @@ async def acompanhar_producao(pid):
 # =========================================================
 
 async def enviar_painel_fabricacao():
-    try:
-        canal = await bot.fetch_channel(CANAL_FABRICACAO_ID)
-    except:
+
+    canal = pegar_canal(CANAL_FABRICACAO_ID)
+
+    if not canal:
         print("❌ Canal de fabricação não encontrado")
         return
 
@@ -1465,15 +1511,14 @@ async def enviar_painel_fabricacao():
         color=0x2c3e50
     )
 
-    async for msg in canal.history(limit=20):
-        if msg.author == bot.user and msg.embeds:
-            if msg.embeds[0].title == "🏭 Fabricação":
-                await edit_queue.put(msg.edit(embed=embed, view=FabricacaoView()))
-                print("🔁 Painel de fabricação atualizado")
-                return
+    await enviar_ou_atualizar_painel(
+        "painel_fabricacao",
+        CANAL_FABRICACAO_ID,
+        embed,
+        FabricacaoView()
+    )
 
-    await canal.send(embed=embed, view=FabricacaoView())
-    print("🏭 Painel de fabricação criado")
+    print("🏭 Painel de fabricação verificado/atualizado")
     
 # =========================================================
 # ======================== POLVORAS ========================
@@ -1606,10 +1651,10 @@ async def relatorio_semanal_polvoras():
     if not resumo:
         return
 
-    canal = bot.get_channel(CANAL_REGISTRO_POLVORA_ID)
+    canal = pegar_canal(CANAL_REGISTRO_POLVORA_ID)
 
     for user_id, total in resumo.items():
-        user = await bot.fetch_user(int(user_id))
+        user = await pegar_usuario(int(user_id))
 
         valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -1624,22 +1669,32 @@ async def relatorio_semanal_polvoras():
         )
 
 
-# ================= PAINEL =================
+# =========================================================
+# ================= PAINEL PÓLVORA ========================
+# =========================================================
 
 async def enviar_painel_polvoras(bot):
-    canal = bot.get_channel(CANAL_CALCULO_POLVORA_ID)
 
-    async for m in canal.history(limit=10):
-        if m.author == bot.user:
-            return
+    canal = bot.get_channel(CANAL_POLVORA_ID)
+
+    if not canal:
+        print("❌ Canal de pólvora não encontrado")
+        return
 
     embed = discord.Embed(
-        title="🧨 Calculadora de Pólvora",
-        description="Use o botão abaixo para registrar a compra.",
+        title="💣 Registro de Pólvora",
+        description="Clique no botão para registrar.",
         color=0xe67e22
     )
 
-    await canal.send(embed=embed, view=PolvoraView())
+    await enviar_ou_atualizar_painel(
+        "painel_polvora",
+        CANAL_POLVORA_ID,
+        embed,
+        PolvoraView()
+    )
+
+    print("💣 Painel de pólvora verificado/atualizado")
 
 # =========================================================
 # ======================== LAVAGEM =========================
@@ -1730,7 +1785,7 @@ async def on_message(message: discord.Message):
             valor_retorno = dados_temp["retorno"]
             taxa = dados_temp["taxa"]
 
-            canal_destino = bot.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
+            canal_destino = pegar_canal(CANAL_LAVAGEM_MEMBROS_ID)
             arquivo = await message.attachments[0].to_file()
 
             try:
@@ -1871,42 +1926,32 @@ class LavagemView(discord.ui.View):
             ephemeral=True
         )
 
-# ================= PAINEL =================
+# =========================================================
+# ================= PAINEL LAVAGEM ========================
+# =========================================================
 
 async def enviar_painel_lavagem():
-    canal = bot.get_channel(CANAL_INICIAR_LAVAGEM_ID)
 
-    async for m in canal.history(limit=10):
-        if m.author == bot.user:
-            return
+    canal = bot.get_channel(CANAL_LAVAGEM_ID)
 
-    embed = discord.Embed(
-        title="🧼 Sistema de Lavagem",
-        description="Use os botões abaixo para registrar a lavagem.",
-        color=0x1abc9c
-    )
-
-    await canal.send(embed=embed, view=LavagemView())
-
-
-async def enviar_ou_atualizar_painel(canal_id, titulo_embed, embed, view):
-    canal = bot.get_channel(canal_id)
     if not canal:
+        print("❌ Canal de lavagem não encontrado")
         return
 
-    async for msg in canal.history(limit=50):
-        if (
-            msg.author == bot.user
-            and msg.embeds
-            and msg.embeds[0].title == titulo_embed
-        ):
-            try:
-                await edit_queue.put(msg.edit(embed=embed, view=view))
-                return
-            except:
-                return
+    embed = discord.Embed(
+        title="🧼 Lavagem de Dinheiro",
+        description="Clique para iniciar lavagem.",
+        color=0x27ae60
+    )
 
-    await canal.send(embed=embed, view=view)
+    await enviar_ou_atualizar_painel(
+        "painel_lavagem",
+        CANAL_LAVAGEM_ID,
+        embed,
+        LavagemView()
+    )
+
+    print("🧼 Painel de lavagem verificado/atualizado")
 
 # =========================================================
 # ========================= LIVES ==========================
@@ -2008,9 +2053,9 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
 
     try:
 
-        canal = await bot.fetch_channel(CANAL_DIVULGACAO_LIVE_ID)
+        canal = bot.get_channel(CANAL_DIVULGACAO_LIVE_ID)
 
-        user = await bot.fetch_user(int(user_id))
+        user = await pegar_usuario(int(user_id))
 
         embed = discord.Embed(
             title="🔴 LIVE AO VIVO NA TWITCH!",
@@ -2267,7 +2312,12 @@ async def enviar_painel_admin_lives():
         PainelLivesAdmin()
     )
 
+# =========================================================
+# ================= PAINEL LIVES ==========================
+# =========================================================
+
 async def enviar_painel_lives():
+
     embed = discord.Embed(
         title="🎥 Cadastro de Live",
         description="Clique no botão para cadastrar sua live.",
@@ -2275,8 +2325,8 @@ async def enviar_painel_lives():
     )
 
     await enviar_ou_atualizar_painel(
-        CANAL_CADASTRO_LIVE_ID,
-        "🎥 Cadastro de Live",
+        "painel_lives",
+        CANAL_DIVULGACAO_LIVE_ID,
         embed,
         CadastrarLiveView()
     )
@@ -2323,7 +2373,52 @@ def formatar_dinheiro(valor):
 
     return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+# =========================================================
+# =============== SISTEMA GLOBAL DE PAINÉIS ===============
+# =========================================================
 
+async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
+
+    canal = bot.get_channel(canal_id)
+
+    if not canal:
+        return
+
+    async with db.acquire() as conn:
+
+        row = await conn.fetchrow(
+            "SELECT mensagem_id FROM paineis WHERE nome=$1",
+            nome
+        )
+
+        if row:
+
+            try:
+
+                msg = await canal.fetch_message(int(row["mensagem_id"]))
+
+                await edit_queue.put(
+                    msg.edit(embed=embed, view=view)
+                )
+
+                return
+
+            except:
+                pass
+
+        msg = await canal.send(embed=embed, view=view)
+
+        await conn.execute(
+            """
+            INSERT INTO paineis (nome, canal_id, mensagem_id)
+            VALUES ($1,$2,$3)
+            ON CONFLICT (nome)
+            DO UPDATE SET mensagem_id=$3
+            """,
+            nome,
+            str(canal_id),
+            str(msg.id)
+        )
 # =========================================================
 # =============== CARGOS PERMITIDOS AÇÃO ==================
 # =========================================================
@@ -2610,27 +2705,19 @@ class PainelAcoesView(discord.ui.View):
 
 
 # =========================================================
-# ================= ATUALIZAR PAINEL ======================
+# ================= ATUALIZAR PAINEL AÇÕES =================
 # =========================================================
 
 async def atualizar_painel_acoes(guild):
 
-    canal = guild.get_channel(CANAL_ESCALACOES_ID)
-
     embed = await gerar_embed_acoes()
 
-    async for msg in canal.history(limit=20):
-
-        if msg.author == guild.me and msg.embeds:
-
-            if msg.embeds[0].title == "🚨 AÇÕES DA SEMANA":
-
-                await edit_queue.put(msg.edit(embed=embed, view=PainelAcoesView()))
-                return
-
-    await canal.send(embed=embed, view=PainelAcoesView())
-
-
+    await enviar_ou_atualizar_painel(
+        "painel_acoes",
+        CANAL_ESCALACOES_ID,
+        embed,
+        PainelAcoesView()
+    )
 # =========================================================
 # ================= RESULTADO DA AÇÃO =====================
 # =========================================================
@@ -3858,7 +3945,7 @@ class SolicitarSalaView(discord.ui.View):
 
 async def enviar_painel_solicitar_sala():
 
-    canal = bot.get_channel(1337374500366450741)
+    canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
 
     if not canal:
         return
@@ -3869,14 +3956,12 @@ async def enviar_painel_solicitar_sala():
         color=0x2ecc71
     )
 
-    async for msg in canal.history(limit=20):
-        if msg.author == bot.user and msg.embeds:
-            if msg.embeds[0].title == "📂 Solicitar Sala de Meta":
-                await edit_queue.put(msg.edit(embed=embed, view=SolicitarSalaView()))
-                return
-
-    await canal.send(embed=embed, view=SolicitarSalaView())
-
+    await enviar_ou_atualizar_painel(
+        "painel_lives_admin",
+        CANAL_CADASTRO_LIVE_ID,
+        embed,
+        PainelLivesAdmin()
+    )
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
@@ -4124,6 +4209,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
