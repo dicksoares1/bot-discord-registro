@@ -63,15 +63,20 @@ http_session = None
 
 channel_cache = {}
 
-def pegar_canal(cid):
+async def pegar_canal(cid):
 
     if cid in channel_cache:
         return channel_cache[cid]
 
     canal = bot.get_channel(cid)
 
-    if canal:
-        channel_cache[cid] = canal
+    if not canal:
+        try:
+            canal = await bot.fetch_channel(cid)
+        except:
+            return None
+
+    channel_cache[cid] = canal
 
     return canal
 
@@ -1061,7 +1066,7 @@ class CalculadoraView(discord.ui.View):
 
 async def enviar_painel_vendas():
 
-    canal = pegar_canal(CANAL_VENDAS_ID)
+    canal = await pegar_canal(CANAL_VENDAS_ID)
 
     if not canal:
         print("❌ Canal de vendas não encontrado")
@@ -1431,7 +1436,7 @@ async def acompanhar_producao(pid):
         if not prod:
             return
 
-        canal = pegar_canal(prod["canal_id"])
+        canal = await pegar_canal(prod["canal_id"])
 
         if not canal:
             await asyncio.sleep(10)
@@ -1705,7 +1710,7 @@ async def relatorio_semanal_polvoras():
     if not resumo:
         return
 
-    canal = pegar_canal(CANAL_REGISTRO_POLVORA_ID)
+    canal = await pegar_canal(CANAL_REGISTRO_POLVORA_ID)
 
     for user_id, total in resumo.items():
         user = await pegar_usuario(int(user_id))
@@ -1727,7 +1732,7 @@ async def relatorio_semanal_polvoras():
 # ================= PAINEL PÓLVORA ========================
 # =========================================================
 
-async def enviar_painel_polvoras(bot):
+async def enviar_painel_polvoras():
 
     canal = bot.get_channel(CANAL_CALCULO_POLVORA_ID)
 
@@ -1838,7 +1843,7 @@ async def on_message(message: discord.Message):
             valor_retorno = dados_temp["retorno"]
             taxa = dados_temp["taxa"]
 
-            canal_destino = pegar_canal(CANAL_LAVAGEM_MEMBROS_ID)
+            canal_destino = await pegar_canal(CANAL_LAVAGEM_MEMBROS_ID)
             arquivo = await message.attachments[0].to_file()
 
             try:
@@ -2445,6 +2450,10 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
             nome
         )
 
+        # =====================================================
+        # TENTA EDITAR PAINEL EXISTENTE
+        # =====================================================
+
         if row:
 
             try:
@@ -2460,12 +2469,34 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
                 return
 
             except discord.NotFound:
-
                 print(f"⚠️ Painel perdido: {nome}, recriando...")
 
             except Exception as e:
-
                 print(f"Erro atualizar painel {nome}:", e)
+
+        # =====================================================
+        # LIMPA PAINÉIS DUPLICADOS (PROTEÇÃO)
+        # =====================================================
+
+        try:
+
+            async for msg in canal.history(limit=30):
+
+                if msg.author == bot.user and msg.embeds:
+
+                    if msg.embeds[0].title == embed.title:
+
+                        try:
+                            await msg.delete()
+                        except:
+                            pass
+
+        except Exception as e:
+            print("Erro limpando duplicados:", e)
+
+        # =====================================================
+        # CRIA NOVO PAINEL
+        # =====================================================
 
         msg = await canal.send(embed=embed, view=view)
 
@@ -3348,92 +3379,6 @@ class MetaView(discord.ui.View):
 
 
 # =========================================================
-# ================= BOTÕES META ===========================
-# =========================================================
-
-# ================= DINHEIRO =================
-
-class BotaoDinheiro(discord.ui.Button):
-
-    def __init__(self, member_id):
-
-        super().__init__(
-            label="💰 Dinheiro",
-            style=discord.ButtonStyle.success,
-            custom_id=f"meta_dinheiro_{member_id}"
-        )
-
-        self.member_id = member_id
-
-    async def callback(self, interaction: discord.Interaction):
-
-        if interaction.user.id != self.member_id:
-            await interaction.response.send_message(
-                "Você não pode registrar meta de outro membro.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.send_modal(
-            RegistrarValorModal("dinheiro", self.member_id)
-        )
-
-
-# ================= AÇÃO =================
-
-class BotaoAcao(discord.ui.Button):
-
-    def __init__(self, member_id):
-
-        super().__init__(
-            label="🎯 Ação",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"meta_acao_{member_id}"
-        )
-
-        self.member_id = member_id
-
-    async def callback(self, interaction: discord.Interaction):
-
-        if interaction.user.id != self.member_id:
-            await interaction.response.send_message(
-                "Você não pode registrar meta de outro membro.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.send_modal(
-            RegistrarValorModal("acao", self.member_id)
-        )
-
-
-# ================= PÓLVORA =================
-
-class BotaoPolvora(discord.ui.Button):
-
-    def __init__(self, member_id):
-
-        super().__init__(
-            label="💣 Pólvora",
-            style=discord.ButtonStyle.primary,
-            custom_id=f"meta_polvora_{member_id}"
-        )
-
-        self.member_id = member_id
-
-    async def callback(self, interaction: discord.Interaction):
-
-        if interaction.user.id != self.member_id:
-            await interaction.response.send_message(
-                "Você não pode registrar meta de outro membro.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.send_modal(
-            RegistrarValorModal("polvora", self.member_id)
-        )
-# =========================================================
 # CRIAR SALA
 # =========================================================
 
@@ -4226,7 +4171,7 @@ async def on_ready():
             enviar_painel_fabricacao(),
             enviar_painel_lives(),
             enviar_painel_admin_lives(),
-            enviar_painel_polvoras(bot),
+            enviar_painel_polvoras(),
             enviar_painel_lavagem(),
             enviar_painel_vendas(),
             atualizar_painel_acoes(bot.get_guild(GUILD_ID)),
@@ -4271,6 +4216,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
