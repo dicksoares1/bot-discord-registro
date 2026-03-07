@@ -2598,8 +2598,7 @@ class ResultadoAcaoView(discord.ui.View):
 class ResultadoModal(discord.ui.Modal):
 
     dinheiro = discord.ui.TextInput(label="Dinheiro ganho", required=False)
-    ouro = discord.ui.TextInput(label="Ouro ganho", required=False)
-
+    
     def __init__(self, acao_id, venceu):
         super().__init__(title="Resultado da ação")
 
@@ -2654,7 +2653,7 @@ class ResultadoModal(discord.ui.Modal):
                 )
 
                 acao = await conn.fetchrow(
-                    "SELECT tipo FROM acoes_semana WHERE id=$1",
+                    "SELECT tipo, autor FROM acoes_semana WHERE id=$1",
                     self.acao_id
                 )
 
@@ -2707,7 +2706,7 @@ class ResultadoModal(discord.ui.Modal):
                 if membro:
                     await atualizar_painel_meta(membro)
 
-            # ==============================
+                        # ==============================
             # EMBED RESULTADO
             # ==============================
 
@@ -2721,51 +2720,49 @@ class ResultadoModal(discord.ui.Modal):
                 if uid:
                     participantes_marcados.append(f"<@{uid}>")
 
-                elif nome:
+                elif nome and nome.strip() != "0":
                     participantes_marcados.append(nome)
 
             cor = 0x2ecc71 if self.venceu else 0xe74c3c
             status = "🟢 **AÇÃO GANHA**" if self.venceu else "🔴 **AÇÃO PERDIDA**"
 
             embed = discord.Embed(
-                title="🚨 RELATÓRIO DE AÇÕES",
-                description="━━━━━━━━━━━━━━━━━━━━━━",
+                title="🚨 RELATÓRIO DE AÇÃO",
                 color=cor
             )
 
+            embed.description = "━━━━━━━━━━━━━━━━━━━━━━"
+
             embed.add_field(
-                name="🏦 AÇÃO",
+                name="🏦 Ação",
                 value=f"```{acao['tipo']}```",
                 inline=False
             )
 
             embed.add_field(
-                name="🎯 RESULTADO DA AÇÃO",
+                name="📋 Escalação feita por",
+                value=f"<@{acao['autor']}>",
+                inline=False
+            )
+
+            embed.add_field(
+                name="🎯 Resultado",
                 value=status,
                 inline=False
             )
 
-            recompensas = []
-
             if self.venceu and dinheiro:
-                recompensas.append(
-                    f"💰 Dinheiro: **R$ {dinheiro:,.2f}**".replace(",", "X").replace(".", ",").replace("X", ".")
-                )
 
-            if self.venceu and ouro:
-                recompensas.append(f"🥇 Ouro recuperado: **{ouro}**")
-
-            if recompensas:
                 embed.add_field(
-                    name="💼 VALORES",
-                    value="\n".join(recompensas),
+                    name="💰 Dinheiro Recuperado",
+                    value=f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
                     inline=False
                 )
 
             participantes_texto = "\n".join(participantes_marcados) if participantes_marcados else "Nenhum registrado"
 
             embed.add_field(
-                name=f"👥 PARTICIPANTES ({len(participantes_marcados)})",
+                name=f"👥 Participantes ({len(participantes_marcados)})",
                 value=participantes_texto,
                 inline=False
             )
@@ -2775,7 +2772,6 @@ class ResultadoModal(discord.ui.Modal):
             )
 
             embed.description += "\n━━━━━━━━━━━━━━━━━━━━━━"
-
             await interaction.message.edit(embed=embed, view=None)
             await interaction.response.defer()
 
@@ -4046,6 +4042,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
