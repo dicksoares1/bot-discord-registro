@@ -215,6 +215,7 @@ RESULTADOS_METAS_ID = 1341403574483288125
 # AÇÕES
 CANAL_ESCALACOES_ID = 1241406819545514064
 CANAL_RELATORIO_ACOES_ID = 1477308788531921019
+CANAL_HELICRASH_ID = 1478919637260435498
 
 # =========================================================
 # ======================== CARGOS ==========================
@@ -2963,7 +2964,7 @@ class ResultadoModal(discord.ui.Modal):
                 if membro:
                     await atualizar_painel_meta(membro)
 
-                        # ==============================
+            # ==============================
             # EMBED RESULTADO
             # ==============================
 
@@ -3078,6 +3079,305 @@ async def reset_acoes_segunda():
         guild = bot.get_guild(GUILD_ID)
         if guild:
             await atualizar_painel_acoes(guild)
+
+# =========================================================
+# ====================== HELICRASH ========================
+# =========================================================
+
+CANAL_HELICRASH_ID = 1478919637260435498
+
+# =========================================================
+# VIEW DO HELICRASH
+# =========================================================
+
+class HelicrashView(discord.ui.View):
+
+    def __init__(self, hid):
+        super().__init__(timeout=None)
+        self.hid = hid
+
+    @discord.ui.button(label="Entrar no Helicrash", style=discord.ButtonStyle.success, custom_id="helicrash_entrar")
+    async def entrar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        async with db.acquire() as conn:
+
+            row = await conn.fetchrow(
+                "SELECT participantes FROM helicrash WHERE id=$1",
+                self.hid
+            )
+
+            if not row:
+                await interaction.response.send_message("Evento não encontrado.", ephemeral=True)
+                return
+
+            lista = row["participantes"].split(",") if row["participantes"] else []
+
+            if str(interaction.user.id) in lista:
+                await interaction.response.send_message("Você já entrou.", ephemeral=True)
+                return
+
+            if len(lista) >= 10:
+                await interaction.response.send_message("Escalação cheia.", ephemeral=True)
+                return
+
+            lista.append(str(interaction.user.id))
+
+            await conn.execute(
+                "UPDATE helicrash SET participantes=$1 WHERE id=$2",
+                ",".join(lista),
+                self.hid
+            )
+
+        await atualizar_embed_helicrash(self.hid)
+
+        await interaction.response.defer()
+
+
+# =========================================================
+# ATUALIZA EMBED DO HELICRASH
+# =========================================================
+
+async def atualizar_embed_helicrash(hid):
+
+    async with db.acquire() as conn:
+
+        row = await conn.fetchrow(
+            "SELECT * FROM helicrash WHERE id=$1",
+            hid
+        )
+
+    if not row:
+        return
+
+    canal = bot.get_channel(int(row["canal_id"]))
+
+    if not canal:
+        return
+
+    try:
+        msg = await canal.fetch_message(int(row["msg_id"]))
+    except:
+        return
+
+    participantes = row["participantes"].split(",") if row["participantes"] else []
+
+    vagas_restantes = 10 - len(participantes)
+
+    horario = row["horario"]
+
+    agora_br = agora()
+
+    restante = horario - agora_br
+
+    segundos = int(restante.total_seconds())
+
+    if segundos < 0:
+        segundos = 0
+
+    minutos = segundos // 60
+    segundos = segundos % 60
+
+    lista = "\n".join(f"<@{uid}>" for uid in participantes) if participantes else "Ninguém ainda"
+
+    embed = discord.Embed(
+        title=f"🚁 HELICRASH {horario.strftime('%H:%M')}",
+        color=0xe74c3c
+    )
+
+    embed.add_field(
+        name="⏳ Começa em",
+        value=f"{minutos}m {segundos}s",
+        inline=True
+    )
+
+    embed.add_field(
+        name="👥 Vagas restantes",
+        value=f"{vagas_restantes}/10",
+        inline=True
+    )
+
+    embed.add_field(
+        name="Participantes",
+        value=lista,
+        inline=False
+    )
+
+    await msg.edit(embed=embed, view=HelicrashView(hid))
+
+
+# =========================================================
+# LOOP DO HELICRASH
+# =========================================================
+
+async def acompanhar_helicrash(hid):
+
+    while True:
+
+        await asyncio.sleep(10)
+
+        async with db.acquire() as conn:
+
+            row = await conn.fetchrow(
+                "SELECT * FROM helicrash WHERE id=$1",
+                hid
+            )
+
+        if not row:
+            return
+
+        horario = row["horario"]
+
+        if agora() >= horario:
+
+            await finalizar_helicrash(hid)
+
+            return
+
+        await atualizar_embed_helicrash(hid)
+
+
+# =========================================================
+# FINALIZA HELICRASH
+# =========================================================
+
+async def finalizar_helicrash(hid):
+
+    async with db.acquire() as conn:
+
+        row = await conn.fetchrow(
+            "SELECT * FROM helicrash WHERE id=$1",
+            hid
+        )
+
+    if not row:
+        return
+
+    participantes = row["participantes"].split(",") if row["participantes"] else []
+
+    canal = bot.get_channel(CANAL_RELATORIO_ACOES_ID)
+
+    lista = "\n".join(f"<@{uid}>" for uid in participantes) if participantes else "Sem participantes"
+
+    embed = discord.Embed(
+        title=f"🚁 HELICRASH {row['horario'].strftime('%H:%M')}",
+        description=lista,
+        color=0xe74c3c
+    )
+
+    if canal:
+        await canal.send(embed=embed)
+
+    canal_evento = bot.get_channel(int(row["canal_id"]))
+
+    if canal_evento:
+
+        try:
+            msg = await canal_evento.fetch_message(int(row["msg_id"]))
+            await msg.delete()
+        except:
+            pass
+
+    async with db.acquire() as conn:
+        await conn.execute("DELETE FROM helicrash WHERE id=$1", hid)
+
+
+# =========================================================
+# MODAL PARA CRIAR HELICRASH
+# =========================================================
+
+class HelicrashModal(discord.ui.Modal, title="Criar Helicrash"):
+
+    hora = discord.ui.TextInput(
+        label="Hora do helicrash (HH:MM)",
+        placeholder="Ex: 21:30"
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        try:
+            h, m = self.hora.value.split(":")
+            h = int(h)
+            m = int(m)
+        except:
+            await interaction.response.send_message("Hora inválida.", ephemeral=True)
+            return
+
+        agora_br = agora()
+
+        horario = agora_br.replace(hour=h, minute=m, second=0, microsecond=0)
+
+        if horario < agora_br:
+            horario += timedelta(days=1)
+
+        canal = interaction.channel
+
+        embed = discord.Embed(
+            title=f"🚁 HELICRASH {self.hora.value}",
+            description="Aguardando participantes...",
+            color=0xe74c3c
+        )
+
+        embed.add_field(name="⏳ Começa em", value="Calculando...", inline=True)
+        embed.add_field(name="👥 Vagas restantes", value="10/10", inline=True)
+        embed.add_field(name="Participantes", value="Ninguém ainda", inline=False)
+
+        msg = await canal.send(embed=embed)
+
+        async with db.acquire() as conn:
+
+            hid = await conn.fetchval(
+                """
+                INSERT INTO helicrash (horario, canal_id, msg_id, participantes)
+                VALUES ($1,$2,$3,$4)
+                RETURNING id
+                """,
+                horario,
+                str(canal.id),
+                str(msg.id),
+                ""
+            )
+
+        await msg.edit(view=HelicrashView(hid))
+
+        bot.loop.create_task(acompanhar_helicrash(hid))
+
+        await interaction.response.defer()
+
+
+# =========================================================
+# BOTÃO PARA CRIAR HELICRASH
+# =========================================================
+
+class HelicrashPainel(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🚁 Escalar Helicrash", style=discord.ButtonStyle.primary, custom_id="helicrash_criar")
+    async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        await interaction.response.send_modal(HelicrashModal())
+
+
+# =========================================================
+# ENVIAR PAINEL HELICRASH
+# =========================================================
+
+async def enviar_painel_helicrash():
+
+    canal = bot.get_channel(CANAL_HELICRASH_ID)
+
+    if not canal:
+        print("❌ Canal helicrash não encontrado")
+        return
+
+    embed = discord.Embed(
+        title="🚁 Sistema de Helicrash",
+        description="Clique no botão para escalar um helicrash.",
+        color=0xe74c3c
+    )
+
+    await canal.send(embed=embed, view=HelicrashPainel())
 # =========================================================
 # =========================== METAS ========================
 # =========================================================
@@ -4071,7 +4371,8 @@ async def on_ready():
         LavagemView,
         FabricacaoView,
         PainelAcoesView,
-        CalculadoraView
+        CalculadoraView,
+        HelicrashPainel
     ]
 
     for view_class in outras_views:
@@ -4169,7 +4470,8 @@ async def on_ready():
             enviar_painel_lavagem(),
             enviar_painel_vendas(),
             atualizar_painel_acoes(bot.get_guild(GUILD_ID)),
-            enviar_painel_solicitar_sala()
+            enviar_painel_solicitar_sala(),
+            enviar_painel_helicrash()
         ]
 
         results = await asyncio.gather(*painel_tasks, return_exceptions=True)
@@ -4210,6 +4512,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
