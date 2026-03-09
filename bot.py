@@ -1436,13 +1436,10 @@ async def acompanhar_producao(pid):
             continue
 
         if msg is None:
-
             try:
-
-                msg = await canal.fetch_message(prod["msg_id"])
+                msg = await canal.fetch_message(int(prod["msg_id"]))
 
             except discord.NotFound:
-
                 print(f"⚠️ Mensagem da produção não encontrada: {pid}")
 
                 await deletar_producao(pid)
@@ -1452,9 +1449,9 @@ async def acompanhar_producao(pid):
 
                 return
 
-            except Exception:
-
-                await asyncio.sleep(10)
+            except Exception as e:
+                print("Erro buscar mensagem produção:", e)
+                await asyncio.sleep(5)
                 continue
 
         inicio = datetime.fromisoformat(prod["inicio"])
@@ -4538,6 +4535,8 @@ async def on_ready():
     except Exception as e:
         print("Erro restaurar produções:", e)
 
+    
+
     # =====================================================
     # ================= ENVIAR PAINÉIS ====================
     # =====================================================
@@ -4594,6 +4593,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
