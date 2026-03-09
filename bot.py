@@ -1329,7 +1329,8 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
             pid = f"{self.galpao}_{interaction.id}"
 
             inicio = agora()
-            fim = inicio + timedelta(minutes=self.tempo)
+            tempo_real = int(self.tempo * (polvora / 400))
+            fim = inicio + timedelta(minutes=tempo_real)
 
             canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
 
@@ -1353,7 +1354,7 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
             desc += (
                 f"Início: <t:{int(inicio.timestamp())}:t>\n"
                 f"Término: <t:{int(fim.timestamp())}:t>\n\n"
-                f"⏳ **Restante:** {self.tempo} min\n"
+                f"⏳ **Restante:** {tempo_real} min\n"
                 f"{barra(0)}"
             )
 
@@ -1572,13 +1573,15 @@ async def acompanhar_producao(pid):
                 base = 1777 if segunda else 1688
 
             if prod["galpao"] == "GALPÕES SUL":
-                base = 1688 if segunda else 1608
+                base = 1618 if segunda else 1608
 
             capsulas = (base * polvora) // 400
+            peso = capsulas * 0.05
 
             desc += (
                 "\n\n🔵 **Produção Finalizada**"
                 f"\n\n🧪 Produziu **{capsulas} cápsulas**"
+                f"\n⚖️ Peso total: **{peso:.2f} kg**"
                 f"\n💣 Pólvora utilizada: **{polvora}**"
             )
 
@@ -4696,6 +4699,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
