@@ -1084,7 +1084,7 @@ async def enviar_painel_vendas():
 # =========================================================
 
 producoes_tasks = {}
-
+producoes_ativas = set()
 async def carregar_producao(pid):
     async with db.acquire() as conn:
         r = await conn.fetchrow(
@@ -1353,6 +1353,8 @@ class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ================= GALPÕES NORTE =================
+
     @discord.ui.button(
         label="🏭 Galpões Norte",
         style=discord.ButtonStyle.primary,
@@ -1360,10 +1362,20 @@ class FabricacaoView(discord.ui.View):
     )
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
 
+        if interaction.user.id in producoes_ativas:
+            await interaction.response.send_message(
+                "Você já iniciou uma produção.",
+                ephemeral=True
+            )
+            return
+
+        producoes_ativas.add(interaction.user.id)
+
         await interaction.response.send_modal(
             PolvoraProducaoModal("GALPÕES NORTE", 65)
         )
 
+    # ================= GALPÕES SUL =================
 
     @discord.ui.button(
         label="🏭 Galpões Sul",
@@ -1372,10 +1384,20 @@ class FabricacaoView(discord.ui.View):
     )
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
 
+        if interaction.user.id in producoes_ativas:
+            await interaction.response.send_message(
+                "Você já iniciou uma produção.",
+                ephemeral=True
+            )
+            return
+
+        producoes_ativas.add(interaction.user.id)
+
         await interaction.response.send_modal(
             PolvoraProducaoModal("GALPÕES SUL", 130)
         )
 
+    # ================= TESTE =================
 
     @discord.ui.button(
         label="🧪 TESTE 3 MIN",
@@ -1383,6 +1405,15 @@ class FabricacaoView(discord.ui.View):
         custom_id="fabricacao_teste"
     )
     async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        if interaction.user.id in producoes_ativas:
+            await interaction.response.send_message(
+                "Você já iniciou uma produção.",
+                ephemeral=True
+            )
+            return
+
+        producoes_ativas.add(interaction.user.id)
 
         inicio = agora()
         fim = inicio + timedelta(minutes=3)
@@ -1396,6 +1427,9 @@ class FabricacaoView(discord.ui.View):
         msg = await interaction.channel.send(embed=embed)
 
         pid = f"TESTE_{msg.id}"
+
+        if pid in producoes_tasks:
+            return
 
         dados = {
             "galpao": "TESTE",
@@ -1444,6 +1478,8 @@ async def acompanhar_producao(pid):
 
                 await deletar_producao(pid)
 
+                producoes_ativas.discard(prod["autor"])
+
                 if pid in producoes_tasks:
                     producoes_tasks.pop(pid)
 
@@ -1459,6 +1495,9 @@ async def acompanhar_producao(pid):
 
         total = (fim - inicio).total_seconds()
         restante = max(0, (fim - agora()).total_seconds())
+
+        if total <= 0:
+            total = 1
 
         pct = max(0, min(1, 1 - (restante / total)))
         mins = int(restante // 60)
@@ -1481,6 +1520,8 @@ async def acompanhar_producao(pid):
         if prod.get("segunda_task_confirmada"):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
+
+        # ================= FINALIZAÇÃO =================
 
         if restante <= 0:
 
@@ -1519,12 +1560,16 @@ async def acompanhar_producao(pid):
 
             await deletar_producao(pid)
 
+            producoes_ativas.discard(prod["autor"])
+
             if pid in producoes_tasks:
                 producoes_tasks.pop(pid)
 
             print(f"🗑️ Produção removida: {pid}")
 
             return
+
+        # ================= ATUALIZA EMBED =================
 
         try:
             await edit_queue.put(
@@ -1540,8 +1585,6 @@ async def acompanhar_producao(pid):
             pass
 
         await asyncio.sleep(75)
-
-
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
@@ -4593,6 +4636,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
