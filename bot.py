@@ -1309,46 +1309,68 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        try:
-            polvora = int(self.polvora.value)
-        except:
-            await interaction.response.send_message("Quantidade inválida.", ephemeral=True)
-            return
-
-        pid = f"{self.galpao}_{interaction.id}"
-
-        inicio = agora()
-        fim = inicio + timedelta(minutes=self.tempo)
-
-        canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
-
-        msg = await canal.send(
-            embed=discord.Embed(
-                title="🏭 Produção",
-                description=f"Iniciando produção em **{self.galpao}**...",
-                color=0x3498db
-            ),
-            view=SegundaTaskView(pid)
-        )
-
-        dados = {
-            "galpao": self.galpao,
-            "autor": interaction.user.id,
-            "inicio": inicio.isoformat(),
-            "fim": fim.isoformat(),
-            "obs": self.obs.value,
-            "polvora": polvora,
-            "msg_id": msg.id,
-            "canal_id": CANAL_REGISTRO_GALPAO_ID
-        }
-
-        await salvar_producao(pid, dados)
-
-        if pid not in producoes_tasks:
-            task = bot.loop.create_task(acompanhar_producao(pid))
-            producoes_tasks[pid] = task
-
+        # RESPONDE IMEDIATAMENTE PARA NÃO EXPIRAR
         await interaction.response.defer()
+
+        try:
+
+            try:
+                polvora = int(self.polvora.value)
+            except:
+                await interaction.followup.send(
+                    "Quantidade inválida.",
+                    ephemeral=True
+                )
+                return
+
+            pid = f"{self.galpao}_{interaction.id}"
+
+            inicio = agora()
+            fim = inicio + timedelta(minutes=self.tempo)
+
+            canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
+
+            if not canal:
+                await interaction.followup.send(
+                    "Canal de produção não encontrado.",
+                    ephemeral=True
+                )
+                return
+
+            msg = await canal.send(
+                embed=discord.Embed(
+                    title="🏭 Produção",
+                    description=f"Iniciando produção em **{self.galpao}**...",
+                    color=0x3498db
+                ),
+                view=SegundaTaskView(pid)
+            )
+
+            dados = {
+                "galpao": self.galpao,
+                "autor": interaction.user.id,
+                "inicio": inicio.isoformat(),
+                "fim": fim.isoformat(),
+                "obs": self.obs.value,
+                "polvora": polvora,
+                "msg_id": msg.id,
+                "canal_id": CANAL_REGISTRO_GALPAO_ID
+            }
+
+            await salvar_producao(pid, dados)
+
+            if pid not in producoes_tasks:
+                task = bot.loop.create_task(acompanhar_producao(pid))
+                producoes_tasks[pid] = task
+
+        except Exception as e:
+
+            print("ERRO PRODUÇÃO:", e)
+
+            await interaction.followup.send(
+                "Erro interno ao iniciar produção.",
+                ephemeral=True
+            )
 
 
 # =========================================================
@@ -4660,6 +4682,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
