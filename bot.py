@@ -1248,8 +1248,11 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
         await salvar_producao(pid, dados)
 
+        # pequena pausa para garantir consistência
+        await asyncio.sleep(1)
+
         if pid not in producoes_tasks:
-            task = bot.loop.create_task(acompanhar_producao(pid))
+            task = asyncio.create_task(acompanhar_producao(pid))
             producoes_tasks[pid] = task
 
         await interaction.response.defer()
@@ -4682,6 +4685,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
