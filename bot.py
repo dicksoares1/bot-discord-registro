@@ -27,8 +27,6 @@ from zoneinfo import ZoneInfo
 # ================== FILA GLOBAL DE EDIÇÃO =================
 # =========================================================
 
-edit_queue = asyncio.Queue()
-
 async def edit_worker():
     while True:
         coro = await edit_queue.get()
@@ -1083,8 +1081,17 @@ async def enviar_painel_vendas():
 # ======================== PRODUÇÃO ========================
 # =========================================================
 
+    
+# ==============================
+# VARIÁVEIS GLOBAIS
+# ==============================
+
 producoes_tasks = {}
+galpoes_ativos = set()
+edit_queue = asyncio.Queue()
 producoes_ativas = set()
+
+
 async def carregar_producao(pid):
     async with db.acquire() as conn:
         r = await conn.fetchrow(
@@ -4651,5 +4658,6 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
