@@ -1347,7 +1347,7 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
         if pid not in producoes_tasks:
             task = bot.loop.create_task(acompanhar_producao(pid))
             producoes_tasks[pid] = task
-            
+
         await interaction.response.defer()
 
 
@@ -1359,8 +1359,6 @@ class FabricacaoView(discord.ui.View):
 
     def __init__(self):
         super().__init__(timeout=None)
-
-    # ================= GALPÕES NORTE =================
 
     @discord.ui.button(
         label="🏭 Galpões Norte",
@@ -1378,11 +1376,13 @@ class FabricacaoView(discord.ui.View):
 
         galpoes_ativos.add("GALPÕES NORTE")
 
-        await interaction.response.send_modal(
-            PolvoraProducaoModal("GALPÕES NORTE", 65)
-        )
+        try:
+            await interaction.response.send_modal(
+                PolvoraProducaoModal("GALPÕES NORTE", 65)
+            )
+        except Exception:
+            galpoes_ativos.discard("GALPÕES NORTE")
 
-    # ================= GALPÕES SUL =================
 
     @discord.ui.button(
         label="🏭 Galpões Sul",
@@ -1400,10 +1400,12 @@ class FabricacaoView(discord.ui.View):
 
         galpoes_ativos.add("GALPÕES SUL")
 
-        await interaction.response.send_modal(
-            PolvoraProducaoModal("GALPÕES SUL", 130)
-        )
-
+        try:
+            await interaction.response.send_modal(
+                PolvoraProducaoModal("GALPÕES SUL", 130)
+            )
+        except Exception:
+            galpoes_ativos.discard("GALPÕES SUL")
     # ================= TESTE =================
 
     @discord.ui.button(
@@ -4658,6 +4660,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
