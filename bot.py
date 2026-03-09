@@ -1362,14 +1362,14 @@ class FabricacaoView(discord.ui.View):
     )
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        if interaction.user.id in producoes_ativas:
+        if "GALPÕES NORTE" in galpoes_ativos:
             await interaction.response.send_message(
-                "Você já iniciou uma produção.",
+                "Este galpão já está em produção.",
                 ephemeral=True
             )
             return
 
-        producoes_ativas.add(interaction.user.id)
+        galpoes_ativos.add("GALPÕES NORTE")
 
         await interaction.response.send_modal(
             PolvoraProducaoModal("GALPÕES NORTE", 65)
@@ -1384,14 +1384,14 @@ class FabricacaoView(discord.ui.View):
     )
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        if interaction.user.id in producoes_ativas:
+        if "GALPÕES SUL" in galpoes_ativos:
             await interaction.response.send_message(
-                "Você já iniciou uma produção.",
+                "Este galpão já está em produção.",
                 ephemeral=True
             )
             return
 
-        producoes_ativas.add(interaction.user.id)
+        galpoes_ativos.add("GALPÕES SUL")
 
         await interaction.response.send_modal(
             PolvoraProducaoModal("GALPÕES SUL", 130)
@@ -1405,15 +1405,6 @@ class FabricacaoView(discord.ui.View):
         custom_id="fabricacao_teste"
     )
     async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        if interaction.user.id in producoes_ativas:
-            await interaction.response.send_message(
-                "Você já iniciou uma produção.",
-                ephemeral=True
-            )
-            return
-
-        producoes_ativas.add(interaction.user.id)
 
         inicio = agora()
         fim = inicio + timedelta(minutes=3)
@@ -1446,6 +1437,8 @@ class FabricacaoView(discord.ui.View):
 
         task = bot.loop.create_task(acompanhar_producao(pid))
         producoes_tasks[pid] = task
+
+
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
 # =========================================================
@@ -1478,7 +1471,7 @@ async def acompanhar_producao(pid):
 
                 await deletar_producao(pid)
 
-                producoes_ativas.discard(prod["autor"])
+                galpoes_ativos.discard(prod["galpao"])
 
                 if pid in producoes_tasks:
                     producoes_tasks.pop(pid)
@@ -1560,7 +1553,7 @@ async def acompanhar_producao(pid):
 
             await deletar_producao(pid)
 
-            producoes_ativas.discard(prod["autor"])
+            galpoes_ativos.discard(prod["galpao"])
 
             if pid in producoes_tasks:
                 producoes_tasks.pop(pid)
@@ -4566,6 +4559,7 @@ async def on_ready():
                 AND CAST(fim AS timestamp) > NOW()
                 """
             )
+
         for r in rows:
             pid = r["pid"]
 
@@ -4577,6 +4571,27 @@ async def on_ready():
 
     except Exception as e:
         print("Erro restaurar produções:", e)
+
+
+    # =====================================================
+    # ================= RESTAURAR GALPÕES ATIVOS ==========
+    # =====================================================
+    try:
+        async with db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT galpao FROM producoes
+                WHERE CAST(fim AS timestamp) > NOW()
+                """
+            )
+
+        for r in rows:
+            galpoes_ativos.add(r["galpao"])
+
+        print(f"🏭 Galpões ativos restaurados: {len(rows)}")
+
+    except Exception as e:
+        print("Erro restaurar galpões:", e)
 
     
 
@@ -4636,38 +4651,5 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
