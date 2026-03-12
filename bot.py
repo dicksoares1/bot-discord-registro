@@ -222,6 +222,8 @@ CANAL_HELICRASH_ID = 1478919637260435498
 # REGISTRO
 AGREGADO_ROLE_ID = 1422847202937536532
 CONVIDADO_ROLE_ID = 1337382961456353342
+STREAMER_ROLE_ID = 1229797158375653416
+LIVE_ROLE_ID = 1481616175476641922
 
 # METAS / LAVAGEM / PONTO
 CARGO_01_ID = 1258753233355014144
@@ -309,7 +311,7 @@ async def obter_token_twitch():
 class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
     nome = discord.ui.TextInput(label="Nome Completo")
     passaporte = discord.ui.TextInput(label="Passaporte")
-    indicado = discord.ui.TextInput(label="Indicado por")
+    indicado = discord.ui.TextInput(label="Indicado por", required=False)
     telefone = discord.ui.TextInput(label="Telefone In Game")
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -319,26 +321,101 @@ class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
         # Atualiza nick
         await membro.edit(nick=f"{self.passaporte.value} - {self.nome.value}")
 
+        view = TipoRegistroView(
+            self.nome.value,
+            self.passaporte.value,
+            self.indicado.value,
+            self.telefone.value
+        )
+
+        await interaction.response.send_message(
+            "Selecione o tipo de entrada:",
+            view=view,
+            ephemeral=True
+        )
+
+
+# =========================================================
+# =================== SELETOR DE TIPO ======================
+# =========================================================
+
+class TipoRegistroSelect(discord.ui.Select):
+
+    def __init__(self, nome, passaporte, indicado, telefone):
+        self.nome = nome
+        self.passaporte = passaporte
+        self.indicado = indicado
+        self.telefone = telefone
+
+        options = [
+            discord.SelectOption(
+                label="Agregado",
+                description="Se for se tornar membro da fac",
+                emoji="🕴️"
+            ),
+            discord.SelectOption(
+                label="Amigos",
+                description="Se está apenas para resenha ou reunião",
+                emoji="🤝"
+            )
+        ]
+
+        super().__init__(
+            placeholder="Escolha o tipo de acesso",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+
+        guild = interaction.guild
+        membro = interaction.user
+
         agregado = guild.get_role(AGREGADO_ROLE_ID)
+        amigos = guild.get_role(1309121290241704046)
         convidado = guild.get_role(CONVIDADO_ROLE_ID)
 
-        if agregado:
-            await membro.add_roles(agregado)
+        escolha = self.values[0]
+
+        if escolha == "Agregado":
+            if agregado:
+                await membro.add_roles(agregado)
+
+        if escolha == "Amigos":
+            if amigos:
+                await membro.add_roles(amigos)
 
         if convidado:
             await membro.remove_roles(convidado)
 
         canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
+
         if canal_log:
             embed = discord.Embed(title="📋 Novo Registro", color=0x2ecc71)
-            embed.add_field(name="Nome", value=self.nome.value)
-            embed.add_field(name="Passaporte", value=self.passaporte.value)
-            embed.add_field(name="Indicado por", value=self.indicado.value)
-            embed.add_field(name="Telefone", value=self.telefone.value)
+
+            embed.add_field(name="Nome", value=self.nome)
+            embed.add_field(name="Passaporte", value=self.passaporte)
+            embed.add_field(name="Indicado por", value=self.indicado)
+            embed.add_field(name="Telefone", value=self.telefone)
+            embed.add_field(name="Tipo", value=escolha)
             embed.add_field(name="Usuário", value=membro.mention)
+
             await canal_log.send(embed=embed)
 
-        await interaction.response.defer()
+        await interaction.response.send_message(
+            f"✅ Registro concluído como **{escolha}**",
+            ephemeral=True
+        )
+
+
+class TipoRegistroView(discord.ui.View):
+
+    def __init__(self, nome, passaporte, indicado, telefone):
+        super().__init__(timeout=300)
+        self.add_item(
+            TipoRegistroSelect(nome, passaporte, indicado, telefone)
+        )
 
 
 class RegistroView(discord.ui.View):
@@ -2250,12 +2327,30 @@ async def verificar_lives_twitch():
             # live terminou
             if not ao_vivo and divulgado:
 
+                guild = bot.get_guild(SEU_GUILD_ID)
+                membro = guild.get_member(int(user_id))
+
+                if membro:
+                    live_role = guild.get_role(LIVE_ROLE_ID)
+
+                    if live_role:
+                        await membro.remove_roles(live_role)
+
                 await atualizar_divulgado(user_id, False)
 
             # live começou
             if ao_vivo and not divulgado:
 
                 await divulgar_live(user_id, link, titulo, jogo, thumbnail)
+
+                guild = bot.get_guild(SEU_GUILD_ID)
+                membro = guild.get_member(int(user_id))
+
+                if membro:
+                    live_role = guild.get_role(LIVE_ROLE_ID)
+
+                    if live_role:
+                        await membro.add_roles(live_role)
 
                 await atualizar_divulgado(user_id, True)
 
@@ -2298,6 +2393,23 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
                 return
 
         await salvar_live(interaction.user.id, novo_link)
+
+        # ===== DAR CARGO DE STREAMER =====
+        membro = interaction.user
+        guild = interaction.guild
+
+        streamer = guild.get_role(STREAMER_ROLE_ID)
+
+        if streamer:
+            await membro.add_roles(streamer)
+
+        embed = discord.Embed(
+            title="✅ Live cadastrada!",
+            description=f"{interaction.user.mention}\n{novo_link}",
+            color=0x2ecc71
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
         embed = discord.Embed(
             title="✅ Live cadastrada!",
@@ -4039,5 +4151,6 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
