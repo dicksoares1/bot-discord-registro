@@ -2327,30 +2327,12 @@ async def verificar_lives_twitch():
             # live terminou
             if not ao_vivo and divulgado:
 
-                guild = bot.get_guild(SEU_GUILD_ID)
-                membro = guild.get_member(int(user_id))
-
-                if membro:
-                    live_role = guild.get_role(LIVE_ROLE_ID)
-
-                    if live_role:
-                        await membro.remove_roles(live_role)
-
                 await atualizar_divulgado(user_id, False)
 
             # live começou
             if ao_vivo and not divulgado:
 
                 await divulgar_live(user_id, link, titulo, jogo, thumbnail)
-
-                guild = bot.get_guild(SEU_GUILD_ID)
-                membro = guild.get_member(int(user_id))
-
-                if membro:
-                    live_role = guild.get_role(LIVE_ROLE_ID)
-
-                    if live_role:
-                        await membro.add_roles(live_role)
 
                 await atualizar_divulgado(user_id, True)
 
@@ -2393,23 +2375,6 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
                 return
 
         await salvar_live(interaction.user.id, novo_link)
-
-        # ===== DAR CARGO DE STREAMER =====
-        membro = interaction.user
-        guild = interaction.guild
-
-        streamer = guild.get_role(STREAMER_ROLE_ID)
-
-        if streamer:
-            await membro.add_roles(streamer)
-
-        embed = discord.Embed(
-            title="✅ Live cadastrada!",
-            description=f"{interaction.user.mention}\n{novo_link}",
-            color=0x2ecc71
-        )
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
         embed = discord.Embed(
             title="✅ Live cadastrada!",
@@ -2574,6 +2539,7 @@ async def enviar_painel_lives():
         embed,
         CadastrarLiveView()
     )
+
 
 # =========================================================
 # ======================== AÇÕES ==========================
@@ -4151,6 +4117,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
