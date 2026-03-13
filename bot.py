@@ -1474,6 +1474,8 @@ class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ================= GALPÕES NORTE =================
+
     @discord.ui.button(
         label="🏭 Galpões Norte",
         style=discord.ButtonStyle.primary,
@@ -1497,19 +1499,8 @@ class FabricacaoView(discord.ui.View):
         except Exception:
             galpoes_ativos.discard("GALPÕES NORTE")
 
-class FabricacaoView(discord.ui.View):
 
-    @discord.ui.button(
-        label="🏭 Bahamas",
-        style=discord.ButtonStyle.primary,
-        custom_id="fabricacao_bahamas"
-    )
-    async def bahamas(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        await interaction.response.send_modal(
-            ObservacaoProducaoModal("BAHAMAS", 65)
-        )
-
+    # ================= GALPÕES SUL =================
 
     @discord.ui.button(
         label="🏭 Galpões Sul",
@@ -1533,6 +1524,34 @@ class FabricacaoView(discord.ui.View):
             )
         except Exception:
             galpoes_ativos.discard("GALPÕES SUL")
+
+
+    # ================= BAHAMAS =================
+
+    @discord.ui.button(
+        label="🏭 Bahamas",
+        style=discord.ButtonStyle.primary,
+        custom_id="fabricacao_bahamas"
+    )
+    async def bahamas(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        if "BAHAMAS" in galpoes_ativos:
+            await interaction.response.send_message(
+                "Este galpão já está em produção.",
+                ephemeral=True
+            )
+            return
+
+        galpoes_ativos.add("BAHAMAS")
+
+        try:
+            await interaction.response.send_modal(
+                PolvoraProducaoModal("BAHAMAS", 65)
+            )
+        except Exception:
+            galpoes_ativos.discard("BAHAMAS")
+
+
     # ================= TESTE =================
 
     @discord.ui.button(
@@ -4130,6 +4149,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
