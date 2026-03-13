@@ -1497,7 +1497,7 @@ class FabricacaoView(discord.ui.View):
         except Exception:
             galpoes_ativos.discard("GALPÕES NORTE")
 
-    class FabricacaoView(discord.ui.View):
+class FabricacaoView(discord.ui.View):
 
     @discord.ui.button(
         label="🏭 Bahamas",
@@ -4130,6 +4130,7 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
+
 
 
 
