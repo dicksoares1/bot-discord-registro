@@ -2248,9 +2248,58 @@ async def remover_live_db(user_id):
             str(user_id)
         )
 
-# ================= CHECAR TWITCH =================
 
-async def checar_se_esta_ao_vivo(canal):
+# =========================================================
+# ================= DETECTAR PLATAFORMA ===================
+# =========================================================
+
+def detectar_plataforma(link):
+
+    link = link.lower()
+
+    if "twitch.tv" in link:
+        return "twitch"
+
+    if "kick.com" in link:
+        return "kick"
+
+    if "tiktok.com" in link:
+        return "tiktok"
+
+    return None
+
+
+# =========================================================
+# ================= EXTRAIR CANAL =========================
+# =========================================================
+
+def extrair_canal(link):
+
+    link = link.lower().strip()
+
+    link = link.replace("https://", "")
+    link = link.replace("http://", "")
+    link = link.replace("www.", "")
+
+    partes = link.split("/")
+
+    if "twitch.tv" in link:
+        return partes[1]
+
+    if "kick.com" in link:
+        return partes[1]
+
+    if "tiktok.com" in link:
+        return partes[1].replace("@", "")
+
+    return None
+
+
+# =========================================================
+# ================= CHECAR TWITCH =========================
+# =========================================================
+
+async def checar_twitch(canal):
 
     try:
 
@@ -2275,12 +2324,7 @@ async def checar_se_esta_ao_vivo(canal):
                     .replace("{width}", "1280")\
                     .replace("{height}", "720")
 
-                return (
-                    True,
-                    info.get("title"),
-                    info.get("game_name"),
-                    thumbnail
-                )
+                return True, info.get("title"), info.get("game_name"), thumbnail
 
         return False, None, None, None
 
@@ -2290,7 +2334,81 @@ async def checar_se_esta_ao_vivo(canal):
 
         return False, None, None, None
 
-# ================= DIVULGAÇÃO =================
+
+# =========================================================
+# ================= CHECAR KICK ===========================
+# =========================================================
+
+async def checar_kick(canal):
+
+    try:
+
+        url = f"https://kick.com/api/v2/channels/{canal}"
+
+        async with http_session.get(url) as r:
+
+            data = await r.json()
+
+        if data.get("livestream"):
+
+            titulo = data["livestream"]["session_title"]
+
+            thumb = data["livestream"]["thumbnail"]["url"]
+
+            return True, titulo, None, thumb
+
+        return False, None, None, None
+
+    except:
+
+        return False, None, None, None
+
+
+# =========================================================
+# ================= CHECAR TIKTOK =========================
+# =========================================================
+
+async def checar_tiktok(username):
+
+    try:
+
+        url = f"https://www.tiktok.com/@{username}/live"
+
+        headers = {"User-Agent": "Mozilla/5.0"}
+
+        async with http_session.get(url, headers=headers) as r:
+
+            html = await r.text()
+
+        if '"isLiveBroadcast":true' not in html:
+            return False, None, None, None
+
+        titulo = "Live no TikTok"
+        thumb = None
+
+        if '"title":"' in html:
+            try:
+                titulo = html.split('"title":"')[1].split('"')[0]
+            except:
+                pass
+
+        if '"cover":"' in html:
+            try:
+                thumb = html.split('"cover":"')[1].split('"')[0]
+                thumb = thumb.replace("\\u002F", "/")
+            except:
+                pass
+
+        return True, titulo, None, thumb
+
+    except:
+
+        return False, None, None, None
+
+
+# =========================================================
+# ================= DIVULGAÇÃO ============================
+# =========================================================
 
 async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
 
@@ -2300,17 +2418,31 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
 
         user = await pegar_usuario(int(user_id))
 
+        plataforma = detectar_plataforma(link)
+
+        cores = {
+            "twitch": 0x9146FF,
+            "kick": 0x53FC18,
+            "tiktok": 0x000000
+        }
+
+        nomes = {
+            "twitch": "Twitch",
+            "kick": "Kick",
+            "tiktok": "TikTok"
+        }
+
         embed = discord.Embed(
-            title="🔴 LIVE AO VIVO NA TWITCH!",
-            color=0x9146FF
+            title="🔴 LIVE AO VIVO!",
+            color=cores.get(plataforma, 0xffffff)
         )
 
         embed.description = (
             f"👤 **Streamer:** {user.mention}\n"
+            f"📺 **Plataforma:** {nomes.get(plataforma)}\n"
             f"🎮 **Jogo:** {jogo or 'Não informado'}\n"
             f"📝 **Título:** {titulo or 'Sem título'}\n\n"
-            f"🔗 {link}\n\n"
-            f"🚨 **Entrou ao vivo agora!**"
+            f"🔗 {link}"
         )
 
         if thumbnail:
@@ -2321,19 +2453,20 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
             embed=embed,
             allowed_mentions=discord.AllowedMentions(everyone=True)
         )
-        
-        print(f"📢 Live divulgada: {user_id}")
 
     except Exception as e:
 
         print("Erro divulgar live:", e)
 
-# ================= LOOP TWITCH =================
+
+# =========================================================
+# ================= LOOP =========================
+# =========================================================
 
 @tasks.loop(minutes=2)
-async def verificar_lives_twitch():
+async def verificar_lives():
 
-    print("🔄 Verificando lives na Twitch...")
+    print("🔄 Verificando lives...")
 
     try:
 
@@ -2344,36 +2477,42 @@ async def verificar_lives_twitch():
             link = data.get("link", "")
             divulgado = data.get("divulgado", False)
 
-            canal = link.lower().strip()
+            plataforma = detectar_plataforma(link)
+            canal = extrair_canal(link)
 
-            canal = canal.replace("https://", "")
-            canal = canal.replace("http://", "")
-            canal = canal.replace("www.", "")
-            canal = canal.replace("twitch.tv/", "")
-            canal = canal.split("/")[0].strip()
-
-            if not canal:
+            if not plataforma or not canal:
                 continue
 
-            ao_vivo, titulo, jogo, thumbnail = await checar_se_esta_ao_vivo(canal)
+            if plataforma == "twitch":
 
-            print(f"🎮 {canal} ao vivo? {ao_vivo}")
+                ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal)
 
-            # live terminou
+            elif plataforma == "kick":
+
+                ao_vivo, titulo, jogo, thumbnail = await checar_kick(canal)
+
+            elif plataforma == "tiktok":
+
+                ao_vivo, titulo, jogo, thumbnail = await checar_tiktok(canal)
+
+            else:
+                continue
+
             if not ao_vivo and divulgado:
 
                 await atualizar_divulgado(user_id, False)
 
-            # live começou
             if ao_vivo and not divulgado:
 
                 await divulgar_live(user_id, link, titulo, jogo, thumbnail)
 
                 await atualizar_divulgado(user_id, True)
 
+
     except Exception as e:
 
-        print("Erro no loop Twitch:", e)
+        print("Erro no loop de lives:", e)
+
 
 # ================= CADASTRO =================
 
@@ -2383,30 +2522,29 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
         placeholder="https://twitch.tv/seucanal"
     )
 
-    def extrair_canal_twitch(self, link):
-        canal = link.lower().strip()
-        canal = canal.replace("https://", "")
-        canal = canal.replace("http://", "")
-        canal = canal.replace("www.", "")
-        canal = canal.replace("twitch.tv/", "")
-        canal = canal.split("/")[0].strip()
-        return canal
-
     async def on_submit(self, interaction: discord.Interaction):
+
         lives = await carregar_lives()
 
         novo_link = self.link.value.strip()
-        novo_canal = self.extrair_canal_twitch(novo_link)
 
-        if not novo_canal:
+        plataforma = detectar_plataforma(novo_link)
+        novo_canal = extrair_canal(novo_link)
+
+        if not plataforma or not novo_canal:
             await interaction.response.send_message("❌ Link inválido.", ephemeral=True)
             return
 
         for uid, data in lives.items():
-            canal_existente = self.extrair_canal_twitch(data.get("link", ""))
+
+            canal_existente = extrair_canal(data.get("link", ""))
 
             if canal_existente == novo_canal:
-                await interaction.response.send_message("❌ Esse canal já está cadastrado.", ephemeral=True)
+
+                await interaction.response.send_message(
+                    "❌ Esse canal já está cadastrado.",
+                    ephemeral=True
+                )
                 return
 
         await salvar_live(interaction.user.id, novo_link)
@@ -2556,9 +2694,6 @@ async def enviar_painel_admin_lives():
         PainelLivesAdmin()
     )
 
-# =========================================================
-# ================= PAINEL LIVES ==========================
-# =========================================================
 
 async def enviar_painel_lives():
 
@@ -2574,8 +2709,6 @@ async def enviar_painel_lives():
         embed,
         CadastrarLiveView()
     )
-
-
 # =========================================================
 # ======================== AÇÕES ==========================
 # =========================================================
@@ -4028,10 +4161,10 @@ async def on_ready():
     # =====================================================
 
     try:
-        if not verificar_lives_twitch.is_running():
-            verificar_lives_twitch.start()
+        if not verificar_lives.is_running():
+            verificar_lives.start()
     except Exception as e:
-        print("Erro loop twitch:", e)
+        print("Erro loop lives:", e)
 
     try:
         if not relatorio_semanal_polvoras.is_running():
@@ -4152,10 +4285,6 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
-
-
-
-
 
 
 
