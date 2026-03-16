@@ -2660,8 +2660,12 @@ class GerenciarLivesView(discord.ui.View):
         lives = await carregar_lives()
 
         texto = ""
-        for uid, data in lives.items():
-            texto += f"👤 <@{uid}>\n🔗 {data['link']}\n\n"
+
+        for uid, lista_lives in lives.items():
+
+            for data in lista_lives:
+
+                texto += f"👤 <@{uid}>\n🔗 {data['link']}\n\n"
 
         embed = discord.Embed(
             title="📡 Lives cadastradas",
@@ -2670,7 +2674,6 @@ class GerenciarLivesView(discord.ui.View):
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
     @discord.ui.button(
         label="🗑️ Remover Live",
         style=discord.ButtonStyle.danger,
