@@ -2206,26 +2206,34 @@ ADM_ID = 467673818375389194
 # ================= BANCO =================
 
 async def carregar_lives():
+
     async with db.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM lives")
 
-    return {
-        r["user_id"]: {
+    lives = {}
+
+    for r in rows:
+
+        uid = r["user_id"]
+
+        lives.setdefault(uid, [])
+
+        lives[uid].append({
             "link": r["link"],
             "divulgado": r["divulgado"]
-        }
-        for r in rows
-    }
+        })
+
+    return lives
 
 
 async def salvar_live(user_id, link):
+
     async with db.acquire() as conn:
+
         await conn.execute(
             """
             INSERT INTO lives (user_id, link, divulgado)
             VALUES ($1, $2, false)
-            ON CONFLICT (user_id)
-            DO UPDATE SET link = $2
             """,
             str(user_id),
             link
@@ -2472,47 +2480,47 @@ async def verificar_lives():
 
         lives = await carregar_lives()
 
-        for user_id, data in lives.items():
+        for user_id, lista_lives in lives.items():
 
-            link = data.get("link", "")
-            divulgado = data.get("divulgado", False)
+            for data in lista_lives:
 
-            plataforma = detectar_plataforma(link)
-            canal = extrair_canal(link)
+                link = data.get("link", "")
+                divulgado = data.get("divulgado", False)
 
-            if not plataforma or not canal:
-                continue
+                plataforma = detectar_plataforma(link)
+                canal = extrair_canal(link)
 
-            if plataforma == "twitch":
+                if not plataforma or not canal:
+                    continue
 
-                ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal)
+                if plataforma == "twitch":
 
-            elif plataforma == "kick":
+                    ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal)
 
-                ao_vivo, titulo, jogo, thumbnail = await checar_kick(canal)
+                elif plataforma == "kick":
 
-            elif plataforma == "tiktok":
+                    ao_vivo, titulo, jogo, thumbnail = await checar_kick(canal)
 
-                ao_vivo, titulo, jogo, thumbnail = await checar_tiktok(canal)
+                elif plataforma == "tiktok":
 
-            else:
-                continue
+                    ao_vivo, titulo, jogo, thumbnail = await checar_tiktok(canal)
 
-            if not ao_vivo and divulgado:
+                else:
+                    continue
 
-                await atualizar_divulgado(user_id, False)
+                if not ao_vivo and divulgado:
 
-            if ao_vivo and not divulgado:
+                    await atualizar_divulgado(user_id, False)
 
-                await divulgar_live(user_id, link, titulo, jogo, thumbnail)
+                if ao_vivo and not divulgado:
 
-                await atualizar_divulgado(user_id, True)
+                    await divulgar_live(user_id, link, titulo, jogo, thumbnail)
 
+                    await atualizar_divulgado(user_id, True)
 
     except Exception as e:
 
         print("Erro no loop de lives:", e)
-
 
 # ================= CADASTRO =================
 
