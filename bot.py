@@ -2805,26 +2805,6 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
                 print(f"Erro atualizar painel {nome}:", e)
 
         # =====================================================
-        # LIMPA PAINÉIS DUPLICADOS (PROTEÇÃO)
-        # =====================================================
-
-        try:
-
-            async for msg in canal.history(limit=30):
-
-                if msg.author == bot.user and msg.embeds:
-
-                    if msg.embeds and msg.embeds[0].title == embed.title:
-
-                        try:
-                            await msg.delete()
-                        except:
-                            pass
-
-        except Exception as e:
-            print("Erro limpando duplicados:", e)
-
-        # =====================================================
         # CRIA NOVO PAINEL
         # =====================================================
 
