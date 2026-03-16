@@ -2697,18 +2697,28 @@ async def enviar_painel_admin_lives():
 
 async def enviar_painel_lives():
 
+    canal = bot.get_channel(CANAL_CADASTRO_LIVE_ID)
+
+    if not canal:
+        print("❌ Canal cadastro live não encontrado")
+        return
+
     embed = discord.Embed(
         title="🎥 Cadastro de Live",
-        description="Clique no botão para cadastrar sua live.",
+        description="Clique no botão abaixo para cadastrar sua live.",
         color=0x9146FF
     )
+
+    view = CadastrarLiveView()
 
     await enviar_ou_atualizar_painel(
         "painel_lives",
         CANAL_CADASTRO_LIVE_ID,
         embed,
-        CadastrarLiveView()
+        view
     )
+
+    print("🎥 Painel de cadastro de live verificado/atualizado")
 # =========================================================
 # ======================== AÇÕES ==========================
 # =========================================================
@@ -2804,7 +2814,7 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
 
                 if msg.author == bot.user and msg.embeds:
 
-                    if msg.embeds[0].title == embed.title:
+                    if msg.embeds and msg.embeds[0].title == embed.title:
 
                         try:
                             await msg.delete()
@@ -4232,7 +4242,9 @@ async def on_ready():
     # =====================================================
     # ================= ENVIAR PAINÉIS ====================
     # =====================================================
-
+    
+    await asyncio.sleep(2)
+    
     try:
 
         painel_tasks = [
