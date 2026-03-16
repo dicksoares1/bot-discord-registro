@@ -2705,7 +2705,7 @@ async def enviar_painel_lives():
 
     await enviar_ou_atualizar_painel(
         "painel_lives",
-        CANAL_DIVULGACAO_LIVE_ID,
+        CANAL_CADASTRO_LIVE_ID,
         embed,
         CadastrarLiveView()
     )
