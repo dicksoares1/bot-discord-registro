@@ -2240,15 +2240,19 @@ async def salvar_live(user_id, link):
         )
 
 
-async def atualizar_divulgado(user_id, valor):
+async def atualizar_divulgado(link, valor):
+
     async with db.acquire() as conn:
+
         await conn.execute(
-            "UPDATE lives SET divulgado=$1 WHERE user_id=$2",
+            """
+            UPDATE lives
+            SET divulgado=$1
+            WHERE link=$2
+            """,
             valor,
-            str(user_id)
+            link
         )
-
-
 async def remover_live_db(user_id):
     async with db.acquire() as conn:
         await conn.execute(
@@ -2510,13 +2514,13 @@ async def verificar_lives():
 
                 if not ao_vivo and divulgado:
 
-                    await atualizar_divulgado(user_id, False)
+                    await atualizar_divulgado(link, False)
 
                 if ao_vivo and not divulgado:
 
                     await divulgar_live(user_id, link, titulo, jogo, thumbnail)
 
-                    await atualizar_divulgado(user_id, True)
+                    await atualizar_divulgado(link, True)
 
     except Exception as e:
 
@@ -2543,17 +2547,19 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
             await interaction.response.send_message("❌ Link inválido.", ephemeral=True)
             return
 
-        for uid, data in lives.items():
+        for uid, lista_lives in lives.items():
 
-            canal_existente = extrair_canal(data.get("link", ""))
+            for data in lista_lives:
 
-            if canal_existente == novo_canal:
+                canal_existente = extrair_canal(data.get("link", ""))
 
-                await interaction.response.send_message(
-                    "❌ Esse canal já está cadastrado.",
-                    ephemeral=True
-                )
-                return
+                if canal_existente == novo_canal:
+
+                    await interaction.response.send_message(
+                        "❌ Esse canal já está cadastrado.",
+                        ephemeral=True
+                    )
+                    return
 
         await salvar_live(interaction.user.id, novo_link)
 
