@@ -2253,6 +2253,8 @@ async def atualizar_divulgado(link, valor):
             valor,
             link
         )
+
+
 async def remover_live_db(user_id):
     async with db.acquire() as conn:
         await conn.execute(
@@ -2526,6 +2528,7 @@ async def verificar_lives():
 
         print("Erro no loop de lives:", e)
 
+
 # ================= CADASTRO =================
 
 class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
@@ -2538,7 +2541,8 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
 
         lives = await carregar_lives()
 
-        novo_link = self.link.value.strip()
+        novo_link = self.link.value.strip().lower()
+        novo_link = novo_link.split("?")[0].rstrip("/")
 
         plataforma = detectar_plataforma(novo_link)
         novo_canal = extrair_canal(novo_link)
@@ -2547,16 +2551,27 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
             await interaction.response.send_message("❌ Link inválido.", ephemeral=True)
             return
 
+        plataforma_nova = detectar_plataforma(novo_link)
+
         for uid, lista_lives in lives.items():
+
+            if str(uid) != str(interaction.user.id):
+                continue
 
             for data in lista_lives:
 
-                canal_existente = extrair_canal(data.get("link", ""))
+                link_existente = data.get("link", "")
 
-                if canal_existente == novo_canal:
+                plataforma_existente = detectar_plataforma(link_existente)
+                canal_existente = extrair_canal(link_existente)
+
+                if (
+                    plataforma_existente == plataforma_nova
+                    and canal_existente == novo_canal
+                ):
 
                     await interaction.response.send_message(
-                        "❌ Esse canal já está cadastrado.",
+                        "❌ Você já cadastrou esse canal nessa plataforma.",
                         ephemeral=True
                     )
                     return
@@ -2570,7 +2585,6 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
 
 # ================= VIEW CADASTRO =================
 
@@ -2619,16 +2633,13 @@ class RemoverLiveView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
 
-    async def on_timeout(self):
-        self.stop()
+    async def setup(self):
 
-    async def interaction_check(self, interaction):
         select = SelectRemoverLive()
         await select.refresh_options()
+
         self.clear_items()
         self.add_item(select)
-        return True
-
 
 # ================= ADMIN =================
 
@@ -2671,9 +2682,13 @@ class GerenciarLivesView(discord.ui.View):
             return
 
         view = RemoverLiveView()
-        await interaction.response.send_message("Escolha:", view=view, ephemeral=True)
+        await view.setup()
 
-
+        await interaction.response.send_message(
+            "Escolha a live para remover:",
+            view=view,
+            ephemeral=True
+        )
 class PainelLivesAdmin(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
