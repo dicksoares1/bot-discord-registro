@@ -1281,8 +1281,8 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        pid = f"{self.galpao}_{interaction.id}"
-
+        pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
+        
         inicio = agora()
         fim = inicio + timedelta(minutes=self.tempo)
 
@@ -1403,7 +1403,7 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
                 )
                 return
 
-            pid = f"{self.galpao}_{interaction.id}"
+            pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
 
             inicio = agora()
             tempo_real = int(self.tempo * (polvora / 400))
@@ -1683,6 +1683,9 @@ async def acompanhar_producao(pid):
 
             if prod["galpao"] == "GALPÕES SUL":
                 base = 1618 if segunda else 1608
+
+            if prod["galpao"] == "BAHAMAS":
+                base = 1777 if segunda else 1688
 
             capsulas = (base * polvora) // 400
             peso = capsulas * 0.05
