@@ -768,7 +768,7 @@ class StatusView(discord.ui.View):
     # ================= BOTÃO EDITAR ======================
     # =====================================================
 
-       @discord.ui.button(
+    @discord.ui.button(
         label="✏️ Editar Venda",
         style=discord.ButtonStyle.secondary,
         custom_id="status_editar_venda"
