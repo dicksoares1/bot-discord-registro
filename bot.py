@@ -1394,27 +1394,27 @@ class SegundaTaskView(discord.ui.View):
 
     async def confirmar(self, interaction: discord.Interaction):
 
+    if not interaction.response.is_done():
         await interaction.response.defer()
 
-        try:
+    try:
 
-            prod = await carregar_producao(self.pid)
+        prod = await carregar_producao(self.pid)
 
-            if not prod:
-                return
+        if not prod:
+            return
 
-            prod["segunda_task_confirmada"] = {
-                "user": interaction.user.id,
-                "time": agora().isoformat()
-            }
+        prod["segunda_task_confirmada"] = {
+            "user": interaction.user.id,
+            "time": agora().isoformat()
+        }
 
-            await salvar_producao(self.pid, prod)
+        await salvar_producao(self.pid, prod)
 
-            await interaction.message.edit(view=None)
+        await interaction.message.edit(view=None)
 
-        except Exception as e:
-            print("Erro segunda task:", e)
-
+    except Exception as e:
+        print("Erro segunda task:", e)
 
 # =========================================================
 # ================= MODAL PÓLVORA =========================
