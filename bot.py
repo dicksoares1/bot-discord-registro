@@ -3461,6 +3461,45 @@ class ResultadoModal(discord.ui.Modal):
 # ================= RELATÓRIO AÇÃO ========================
 # =========================================================
 
+async def registrar_relatorio_acao(guild, acao_id):
+
+    canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+
+    async with db.acquire() as conn:
+
+        acao = await conn.fetchrow(
+            "SELECT tipo FROM acoes_semana WHERE id=$1",
+            acao_id
+        )
+
+    embed = discord.Embed(
+        title="🚨 Nova Ação Registrada",
+        description=f"🏦 **Ação:** {acao['tipo']}",
+        color=0xf39c12
+    )
+
+    await canal.send(
+        embed=embed,
+        view=ResultadoAcaoView(acao_id)
+    )
+@tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
+async def reset_acoes_segunda():
+
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    if agora.weekday() == 0:  # segunda
+
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM acoes_semana")
+            await conn.execute("DELETE FROM participantes_acoes")
+
+        print("🔄 Ações da semana resetadas.")
+
+        guild = bot.get_guild(GUILD_ID)
+        if guild:
+            await atualizar_painel_acoes(guild)
+
+
 class RelatorioAcoesModal(discord.ui.Modal, title="📊 Relatório de Ações"):
 
     data_inicio = discord.ui.TextInput(
