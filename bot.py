@@ -910,19 +910,22 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        await responder_interacao(interaction, defer=True)
+    await interaction.response.defer(ephemeral=True)
 
-        try:
+    try:
 
-            inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
-            fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y")
+        inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
 
-        except:
-            await interaction.followup.send(
-                "Formato de data inválido. Use DD/MM/AAAA.",
-                ephemeral=True
-            )
-            return
+        fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y")
+        fim = fim + timedelta(days=1)
+
+    except Exception:
+
+        await interaction.followup.send(
+            "Formato inválido. Use **DD/MM/AAAA**",
+            ephemeral=True
+        )
+        return
 
         async with db.acquire() as conn:
 
@@ -3765,7 +3768,7 @@ class RelatorioAcoesModal(discord.ui.Modal, title="📊 Relatório de Ações"):
                     COUNT(a.id) as total_acoes
                 FROM participantes_acoes p
                 JOIN acoes_semana a ON a.id = p.acao_id
-                WHERE a.resultado = 'GANHOU'
+                WHERE a.data BETWEEN $1 AND $2
                 AND a.data BETWEEN $1 AND $2
                 AND p.user_id IS NOT NULL
                 GROUP BY p.user_id
