@@ -51,7 +51,30 @@ async def edit_worker():
             print("Erro no edit_worker:", e)
 
         edit_queue.task_done()
-# =========================================================
+# ================ ANTI ERRO DE INTERAÇÃO ==================
+
+async def responder_interacao(interaction: discord.Interaction, *, defer=False, ephemeral=False):
+
+    try:
+
+        if interaction.response.is_done():
+            return
+
+        if defer:
+            await interaction.response.defer(ephemeral=ephemeral)
+        else:
+            await responder_interacao(interaction, defer=True, ephemeral=True)
+
+    except discord.errors.HTTPException:
+
+        # interação já foi respondida ou expirou
+        pass
+
+    except Exception as e:
+
+        print("Erro responder_interacao:", e)
+        
+# ==================== HTTP SESSÃO=========================
 
 http_session = None
 
@@ -607,7 +630,7 @@ class StatusView(discord.ui.View):
                 view=self
             )
 
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
 
 
     # =====================================================
@@ -676,7 +699,7 @@ class StatusView(discord.ui.View):
                 view=self
             )
 
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
         # ===============================
         # PEGAR PACOTES DO EMBED
         # ===============================
@@ -762,7 +785,7 @@ class StatusView(discord.ui.View):
 
         # Finaliza pedido → trava botões
         await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
 
     # =====================================================
     # ================= BOTÃO EDITAR ======================
@@ -867,7 +890,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
         await canal.send(embed=embed, view=StatusView())
 
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
 
 # =========================================================
 # ================= MODAL RELATÓRIO =======================
@@ -887,7 +910,7 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
 
         try:
 
@@ -1319,7 +1342,7 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
     async def on_submit(self, interaction: discord.Interaction):
 
         pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
-        
+
         inicio = agora()
         fim = inicio + timedelta(minutes=self.tempo)
 
@@ -1366,11 +1389,14 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
         await asyncio.sleep(1)
 
         if pid not in producoes_tasks:
-            task = asyncio.create_task(acompanhar_producao(pid))
+
+            task = bot.loop.create_task(
+                acompanhar_producao(pid)
+            )
+
             producoes_tasks[pid] = task
 
-        await interaction.response.defer()
-
+        await responder_interacao(interaction, defer=True)
 
 # ================= 2ª TASK =================
 
@@ -1395,7 +1421,7 @@ class SegundaTaskView(discord.ui.View):
     async def confirmar(self, interaction: discord.Interaction):
 
     if not interaction.response.is_done():
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
 
     try:
 
@@ -1441,7 +1467,7 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
     async def on_submit(self, interaction: discord.Interaction):
 
         # responde rápido para não expirar interação
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
 
         try:
 
@@ -1534,7 +1560,20 @@ class FabricacaoView(discord.ui.View):
     )
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        if "GALPÕES NORTE" in galpoes_ativos:
+        async with db.acquire() as conn:
+
+            ativo = await conn.fetchval(
+                """
+                SELECT 1
+                FROM producoes
+                WHERE galpao=$1
+                AND CAST(fim AS timestamp) > NOW()
+                """,
+                "GALPÕES NORTE"
+            )
+
+        if ativo:
+
             await interaction.response.send_message(
                 "Este galpão já está em produção.",
                 ephemeral=True
@@ -1544,10 +1583,13 @@ class FabricacaoView(discord.ui.View):
         galpoes_ativos.add("GALPÕES NORTE")
 
         try:
+
             await interaction.response.send_modal(
                 PolvoraProducaoModal("GALPÕES NORTE", 65)
             )
+
         except Exception:
+
             galpoes_ativos.discard("GALPÕES NORTE")
 
 
@@ -1560,7 +1602,20 @@ class FabricacaoView(discord.ui.View):
     )
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        if "GALPÕES SUL" in galpoes_ativos:
+        async with db.acquire() as conn:
+
+            ativo = await conn.fetchval(
+                """
+                SELECT 1
+                FROM producoes
+                WHERE galpao=$1
+                AND CAST(fim AS timestamp) > NOW()
+                """,
+                "GALPÕES SUL"
+            )
+
+        if ativo:
+
             await interaction.response.send_message(
                 "Este galpão já está em produção.",
                 ephemeral=True
@@ -1570,10 +1625,13 @@ class FabricacaoView(discord.ui.View):
         galpoes_ativos.add("GALPÕES SUL")
 
         try:
+
             await interaction.response.send_modal(
                 PolvoraProducaoModal("GALPÕES SUL", 130)
             )
+
         except Exception:
+
             galpoes_ativos.discard("GALPÕES SUL")
 
 
@@ -1586,7 +1644,20 @@ class FabricacaoView(discord.ui.View):
     )
     async def bahamas(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        if "BAHAMAS" in galpoes_ativos:
+        async with db.acquire() as conn:
+
+            ativo = await conn.fetchval(
+                """
+                SELECT 1
+                FROM producoes
+                WHERE galpao=$1
+                AND CAST(fim AS timestamp) > NOW()
+                """,
+                "BAHAMAS"
+            )
+
+        if ativo:
+
             await interaction.response.send_message(
                 "Este galpão já está em produção.",
                 ephemeral=True
@@ -1596,10 +1667,13 @@ class FabricacaoView(discord.ui.View):
         galpoes_ativos.add("BAHAMAS")
 
         try:
+
             await interaction.response.send_modal(
                 PolvoraProducaoModal("BAHAMAS", 65)
             )
+
         except Exception:
+
             galpoes_ativos.discard("BAHAMAS")
 
 
@@ -1651,6 +1725,11 @@ class FabricacaoView(discord.ui.View):
 
 async def acompanhar_producao(pid):
 
+    if pid in producoes_ativas:
+        return
+
+    producoes_ativas.add(pid)
+
     print(f"▶ Produção retomada: {pid}")
 
     msg = None
@@ -1660,6 +1739,7 @@ async def acompanhar_producao(pid):
         prod = await carregar_producao(pid)
 
         if not prod:
+            producoes_ativas.discard(pid)
             return
 
         canal = pegar_canal(prod["canal_id"])
@@ -1673,6 +1753,7 @@ async def acompanhar_producao(pid):
                 msg = await canal.fetch_message(int(prod["msg_id"]))
 
             except discord.NotFound:
+
                 print(f"⚠️ Mensagem da produção não encontrada: {pid}")
 
                 await deletar_producao(pid)
@@ -1682,9 +1763,11 @@ async def acompanhar_producao(pid):
                 if pid in producoes_tasks:
                     producoes_tasks.pop(pid)
 
+                producoes_ativas.discard(pid)
                 return
 
             except Exception as e:
+
                 print("Erro buscar mensagem produção:", e)
                 await asyncio.sleep(5)
                 continue
@@ -1768,6 +1851,8 @@ async def acompanhar_producao(pid):
 
             if pid in producoes_tasks:
                 producoes_tasks.pop(pid)
+
+            producoes_ativas.discard(pid)
 
             print(f"🗑️ Produção removida: {pid}")
 
@@ -1901,7 +1986,7 @@ class ConfirmarPagamentoView(discord.ui.View):
             content=interaction.message.content + "\n\n✅ **PAGO**",
             view=None
         )
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
 
 
 # ================= VIEW =================
@@ -2036,7 +2121,7 @@ class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
     valor = discord.ui.TextInput(label="Valor do dinheiro sujo")
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
 
         try:
             valor_sujo = int(self.valor.value.replace(".", "").replace(",", ""))
@@ -3450,13 +3535,13 @@ class ResultadoModal(discord.ui.Modal):
 
             await interaction.message.edit(embed=embed, view=None)
 
-            await interaction.response.defer()
+            await responder_interacao(interaction, defer=True)
 
         except Exception as e:
             import traceback
             print("ERRO NO RESULTADO DA AÇÃO:")
             traceback.print_exc()
-            await interaction.response.defer()
+            await responder_interacao(interaction, defer=True)
 # =========================================================
 # ================= RELATÓRIO AÇÃO ========================
 # =========================================================
@@ -3660,7 +3745,7 @@ class HelicrashView(discord.ui.View):
 
         await atualizar_embed_helicrash(self.hid)
 
-        await interaction.response.defer()
+        await responder_interacao(interaction, defer=True)
 
 # =========================================================
 # ATUALIZA EMBED DO HELICRASH
@@ -4258,21 +4343,34 @@ async def enviar_painel_solicitar_sala():
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
 
-    if not interaction.type == discord.InteractionType.component:
-        return
+    try:
 
-    cid = interaction.data.get("custom_id")
+        if interaction.type != discord.InteractionType.component:
+            return
 
-    if not cid:
-        return
+        cid = interaction.data.get("custom_id")
 
-    if cid.startswith("segunda_task_"):
+        if not cid:
+            return
 
-        pid = cid.replace("segunda_task_", "")
+        if cid.startswith("segunda_task_"):
 
-        view = SegundaTaskView(pid)
+            pid = cid.replace("segunda_task_", "")
 
-        await view.confirmar(interaction)
+            view = SegundaTaskView(pid)
+
+            await view.confirmar(interaction)
+
+    except discord.errors.HTTPException as e:
+
+        if e.code in (40060, 10062):
+            return
+
+        print("Erro HTTP interaction:", e)
+
+    except Exception as e:
+
+        print("Erro geral interaction:", e)
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
