@@ -3307,19 +3307,24 @@ class SelecionarMembrosView(discord.ui.View):
         self.add_item(SelecionarMembros(self))
         self.add_item(EnviarEscalacaoButton(self))
 
-class EnviarEscalacaoButton(discord.ui.Button):
+class SelecionarMembrosView(discord.ui.View):
 
-    def __init__(self, view_ref):
-        super().__init__(
-            label="📤 Enviar Escalação",
-            style=discord.ButtonStyle.success
-        )
+    def __init__(self, acao, externos):
+        super().__init__(timeout=300)
 
-        self.view_ref = view_ref
+        self.acao = acao
+        self.externos = externos
+        self.membros = []
 
-    async def callback(self, interaction: discord.Interaction):
+        self.add_item(SelecionarMembros(self))
 
-        membros = self.view_ref.membros
+    @discord.ui.button(
+        label="📤 Enviar Escalação",
+        style=discord.ButtonStyle.success
+    )
+    async def enviar_escalacao(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        membros = self.membros
 
         if not membros:
             await interaction.response.send_message(
@@ -3336,7 +3341,7 @@ class EnviarEscalacaoButton(discord.ui.Button):
                 VALUES ($1,$2,$3)
                 RETURNING id
                 """,
-                self.view_ref.acao,
+                self.acao,
                 agora_db(),
                 str(interaction.user.id)
             )
@@ -3352,9 +3357,13 @@ class EnviarEscalacaoButton(discord.ui.Button):
                     str(m.id)
                 )
 
-            if self.view_ref.externos:
+            if self.externos:
 
-                nomes = [n.strip() for n in self.view_ref.externos.split("\n") if n.strip()]
+                nomes = [
+                    n.strip()
+                    for n in self.externos.split("\n")
+                    if n.strip()
+                ]
 
                 for nome in nomes:
 
@@ -3375,8 +3384,6 @@ class EnviarEscalacaoButton(discord.ui.Button):
             "Escalação enviada com sucesso!",
             ephemeral=True
         )
-
-
 # =========================================================
 # ================= SELECT AÇÃO ===========================
 # =========================================================
