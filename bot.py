@@ -975,8 +975,15 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
             value="\n".join(linhas),
             inline=False
         )
+        canal = interaction.guild.get_channel(1365372467723501723)
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        if canal:
+            await canal.send(embed=embed)
+
+        await interaction.followup.send(
+            "Relatório enviado no canal de vendas.",
+            ephemeral=True
+        )
 
 # =========================================================
 # ================= EDITAR== VENDA ========================
