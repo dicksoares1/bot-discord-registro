@@ -1375,16 +1375,24 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 # ================= 2ª TASK =================
 
 class SegundaTaskView(discord.ui.View):
+
     def __init__(self, pid):
         super().__init__(timeout=None)
+
         self.pid = pid
 
-    @discord.ui.button(
-        label="✅ Confirmar 2ª Task",
-        style=discord.ButtonStyle.success,
-        custom_id="segunda_task_btn"
-    )
-    async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
+        botao = discord.ui.Button(
+            label="✅ Confirmar 2ª Task",
+            style=discord.ButtonStyle.success,
+            custom_id=f"segunda_task_{pid}"
+        )
+
+        botao.callback = self.confirmar
+
+        self.add_item(botao)
+
+
+    async def confirmar(self, interaction: discord.Interaction):
 
         await interaction.response.defer()
 
@@ -4137,6 +4145,26 @@ async def enviar_painel_solicitar_sala():
         SolicitarSalaView()
     )
 
+#=================== SEGUNDA TASK =========================
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+
+    if not interaction.type == discord.InteractionType.component:
+        return
+
+    cid = interaction.data.get("custom_id")
+
+    if not cid:
+        return
+
+    if cid.startswith("segunda_task_"):
+
+        pid = cid.replace("segunda_task_", "")
+
+        view = SegundaTaskView(pid)
+
+        await view.confirmar(interaction)
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
