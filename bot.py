@@ -768,20 +768,27 @@ class StatusView(discord.ui.View):
     # ================= BOTÃO EDITAR ======================
     # =====================================================
 
-    @discord.ui.button(label="✏️ Editar Venda", style=discord.ButtonStyle.secondary)
+       @discord.ui.button(
+        label="✏️ Editar Venda",
+        style=discord.ButtonStyle.secondary,
+        custom_id="status_editar_venda"
+    )
     async def editar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
         if self.pedido_cancelado(linhas):
+
             await interaction.response.send_message(
                 "⚠️ Pedido cancelado não pode ser editado.",
                 ephemeral=True
             )
             return
 
-        await interaction.response.send_modal(EditarVendaModal(interaction.message))
+        await interaction.response.send_modal(
+            EditarVendaModal(interaction.message)
+        )
 # =========================================================
 # ================= MODAL DE VENDA ========================
 # =========================================================
@@ -4203,7 +4210,6 @@ async def on_ready():
         ConfirmarPagamentoView,
         LavagemView,
         FabricacaoView,
-        SegundaTaskView,
         PainelAcoesView,
         CalculadoraView,
         StatusView,
