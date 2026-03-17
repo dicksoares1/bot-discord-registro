@@ -868,19 +868,49 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
 
 class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
 
-    periodo = discord.ui.TextInput(
-        label="Período (opcional)",
-        placeholder="Ex: Hoje / Semana / Mês",
-        required=False
+    data_inicio = discord.ui.TextInput(
+        label="Data inicial",
+        placeholder="Ex: 01/03/2026"
+    )
+
+    data_fim = discord.ui.TextInput(
+        label="Data final",
+        placeholder="Ex: 17/03/2026"
     )
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        dados = await carregar_vendas_db()
+        await interaction.response.defer()
 
-        if not dados:
-            await interaction.response.send_message(
-                "Nenhuma venda registrada.",
+        try:
+
+            inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y")
+
+        except:
+            await interaction.followup.send(
+                "Formato de data inválido. Use DD/MM/AAAA.",
+                ephemeral=True
+            )
+            return
+
+        async with db.acquire() as conn:
+
+            rows = await conn.fetch(
+                """
+                SELECT user_id, SUM(valor) as total
+                FROM vendas
+                WHERE TO_DATE(data, 'DD/MM/YYYY') BETWEEN $1 AND $2
+                GROUP BY user_id
+                """,
+                inicio,
+                fim
+            )
+
+        if not rows:
+
+            await interaction.followup.send(
+                "Nenhuma venda no período.",
                 ephemeral=True
             )
             return
@@ -888,16 +918,16 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
         total = 0
         linhas = []
 
-        for v in dados:
+        for r in rows:
 
-            valor = v["valor"]
+            valor = r["total"]
             total += valor
 
             linhas.append(
-                f"👤 <@{v['user_id']}> • R$ {valor:,}".replace(",", ".")
+                f"👤 <@{r['user_id']}> • R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             )
 
-        total_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        total_fmt = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
         embed = discord.Embed(
             title="📊 Relatório de Vendas",
@@ -906,17 +936,17 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
 
         embed.add_field(
             name="💰 Total Vendido",
-            value=f"**R$ {total_formatado}**",
+            value=f"R$ {total_fmt}",
             inline=False
         )
 
         embed.add_field(
-            name="📦 Vendas Registradas",
-            value="\n".join(linhas[:20]) or "Nenhuma",
+            name="👥 Por vendedor",
+            value="\n".join(linhas),
             inline=False
         )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 # =========================================================
 # ================= EDITAR== VENDA ========================
@@ -1349,20 +1379,26 @@ class SegundaTaskView(discord.ui.View):
     )
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        prod = await carregar_producao(self.pid)
-        if not prod:
-            await interaction.response.defer()
-            return
-
-        prod["segunda_task_confirmada"] = {
-            "user": interaction.user.id,
-            "time": agora().isoformat()
-        }
-
-        await salvar_producao(self.pid, prod)
-
-        await interaction.message.edit(view=None)
         await interaction.response.defer()
+
+        try:
+
+            prod = await carregar_producao(self.pid)
+
+            if not prod:
+                return
+
+            prod["segunda_task_confirmada"] = {
+                "user": interaction.user.id,
+                "time": agora().isoformat()
+            }
+
+            await salvar_producao(self.pid, prod)
+
+            await interaction.message.edit(view=None)
+
+        except Exception as e:
+            print("Erro segunda task:", e)
 
 
 # =========================================================
@@ -4167,8 +4203,10 @@ async def on_ready():
         ConfirmarPagamentoView,
         LavagemView,
         FabricacaoView,
+        SegundaTaskView,
         PainelAcoesView,
         CalculadoraView,
+        StatusView,
         HelicrashPainel
     ]
 
@@ -4309,6 +4347,5 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
-
 
 
