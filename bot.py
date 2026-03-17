@@ -1710,6 +1710,18 @@ class FabricacaoView(discord.ui.View):
         task = bot.loop.create_task(acompanhar_producao(pid))
         producoes_tasks[pid] = task
 
+    # ================ RELATORIO =========================
+    @discord.ui.button(
+        label="📊 Relatório Produção",
+        style=discord.ButtonStyle.success,
+        custom_id="fabricacao_relatorio"
+    )
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        await interaction.response.send_modal(
+            RelatorioProducaoModal()
+        )
+
 
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
@@ -1892,6 +1904,130 @@ async def enviar_painel_fabricacao():
     )
 
     print("🏭 Painel de fabricação verificado/atualizado")
+
+# ================= RELATÓRIO =====================
+
+class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
+
+    data_inicio = discord.ui.TextInput(
+        label="Data inicial",
+        placeholder="Ex: 01/03/2026"
+    )
+
+    data_fim = discord.ui.TextInput(
+        label="Data final",
+        placeholder="Ex: 17/03/2026"
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        await responder_interacao(interaction, defer=True, ephemeral=True)
+
+        try:
+
+            inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y") + timedelta(days=1)
+
+        except:
+
+            await interaction.followup.send(
+                "Formato inválido. Use **DD/MM/AAAA**",
+                ephemeral=True
+            )
+            return
+
+        async with db.acquire() as conn:
+
+            rows = await conn.fetch(
+                """
+                SELECT autor, galpao, polvora
+                FROM producoes
+                WHERE CAST(inicio AS timestamp) BETWEEN $1 AND $2
+                """,
+                inicio,
+                fim
+            )
+
+        if not rows:
+
+            await interaction.followup.send(
+                "Nenhuma produção encontrada.",
+                ephemeral=True
+            )
+            return
+
+        ranking = {}
+        total_capsulas = 0
+
+        for r in rows:
+
+            autor = r["autor"]
+            galpao = r["galpao"]
+            polvora = r["polvora"] or 400
+
+            base = 0
+
+            if galpao == "GALPÕES NORTE":
+                base = 1688
+
+            if galpao == "GALPÕES SUL":
+                base = 1608
+
+            if galpao == "BAHAMAS":
+                base = 1688
+
+            capsulas = (base * polvora) // 400
+
+            ranking.setdefault(autor, 0)
+            ranking[autor] += capsulas
+
+            total_capsulas += capsulas
+
+        ranking_ordenado = sorted(
+            ranking.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        linhas = []
+
+        medalhas = ["🥇", "🥈", "🥉"]
+
+        for i, (uid, total) in enumerate(ranking_ordenado[:20]):
+
+            medalha = medalhas[i] if i < 3 else "▫️"
+
+            linhas.append(
+                f"{medalha} <@{uid}> — **{total:,} cápsulas**".replace(",", ".")
+            )
+
+        embed = discord.Embed(
+            title="🏭 RELATÓRIO DE PRODUÇÃO",
+            color=0x2ecc71
+        )
+
+        embed.description = (
+            f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n"
+            f"💊 **Total produzido:** {total_capsulas:,} cápsulas".replace(",", ".")
+        )
+
+        embed.add_field(
+            name="🏆 Ranking de Produtores",
+            value="\n".join(linhas),
+            inline=False
+        )
+
+        embed.set_footer(text="Sistema de Produção • VDR 442")
+
+        canal = interaction.guild.get_channel(1422853066541109338)
+
+        if canal:
+            await canal.send(embed=embed)
+
+        await interaction.followup.send(
+            "Relatório enviado no canal de produção.",
+            ephemeral=True
+        )
     
 # =========================================================
 # ======================== POLVORAS ========================
