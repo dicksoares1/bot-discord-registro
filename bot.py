@@ -3190,6 +3190,17 @@ class PainelAcoesView(discord.ui.View):
 
         self.add_item(AcaoSelect())
 
+    @discord.ui.button(
+        label="📊 Gerar Relatório",
+        style=discord.ButtonStyle.secondary,
+        custom_id="acoes_relatorio_btn"
+    )
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        await interaction.response.send_modal(
+            RelatorioAcoesModal()
+        )
+
 
 # =========================================================
 # ================= ATUALIZAR PAINEL AÇÕES =================
@@ -3450,43 +3461,101 @@ class ResultadoModal(discord.ui.Modal):
 # ================= RELATÓRIO AÇÃO ========================
 # =========================================================
 
-async def registrar_relatorio_acao(guild, acao_id):
+class RelatorioAcoesModal(discord.ui.Modal, title="📊 Relatório de Ações"):
 
-    canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
-
-    async with db.acquire() as conn:
-
-        acao = await conn.fetchrow(
-            "SELECT tipo FROM acoes_semana WHERE id=$1",
-            acao_id
-        )
-
-    embed = discord.Embed(
-        title="🚨 Nova Ação Registrada",
-        description=f"🏦 **Ação:** {acao['tipo']}",
-        color=0xf39c12
+    data_inicio = discord.ui.TextInput(
+        label="Data inicial",
+        placeholder="Ex: 01/03/2026"
     )
 
-    await canal.send(
-        embed=embed,
-        view=ResultadoAcaoView(acao_id)
+    data_fim = discord.ui.TextInput(
+        label="Data final",
+        placeholder="Ex: 17/03/2026"
     )
-@tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
-async def reset_acoes_segunda():
 
-    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    async def on_submit(self, interaction: discord.Interaction):
 
-    if agora.weekday() == 0:  # segunda
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+
+            inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y")
+
+        except Exception:
+
+            await interaction.followup.send(
+                "Formato inválido. Use **DD/MM/AAAA**",
+                ephemeral=True
+            )
+            return
 
         async with db.acquire() as conn:
-            await conn.execute("DELETE FROM acoes_semana")
-            await conn.execute("DELETE FROM participantes_acoes")
 
-        print("🔄 Ações da semana resetadas.")
+            rows = await conn.fetch(
+                """
+                SELECT
+                    p.user_id,
+                    COUNT(a.id) as total_acoes
+                FROM participantes_acoes p
+                JOIN acoes_semana a ON a.id = p.acao_id
+                WHERE a.resultado = 'GANHOU'
+                AND a.data BETWEEN $1 AND $2
+                AND p.user_id IS NOT NULL
+                GROUP BY p.user_id
+                """,
+                inicio,
+                fim
+            )
 
-        guild = bot.get_guild(GUILD_ID)
-        if guild:
-            await atualizar_painel_acoes(guild)
+        if not rows:
+
+            await interaction.followup.send(
+                "Nenhuma ação encontrada no período.",
+                ephemeral=True
+            )
+            return
+
+        total_geral = 0
+        linhas = []
+
+        for r in rows:
+
+            uid = r["user_id"]
+            qtd = r["total_acoes"]
+
+            valor = qtd * 0  # placeholder caso queira calcular valores futuramente
+
+            total_geral += valor
+
+            linhas.append(
+                f"👤 <@{uid}> — {qtd} ações"
+            )
+
+        embed = discord.Embed(
+            title="📊 Relatório de Ações",
+            color=0x3498db
+        )
+
+        embed.add_field(
+            name="Participações",
+            value="\n".join(linhas),
+            inline=False
+        )
+
+        embed.set_footer(
+            text=f"Período: {self.data_inicio.value} até {self.data_fim.value}"
+        )
+
+        canal = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+
+        if canal:
+            await canal.send(embed=embed)
+
+        await interaction.followup.send(
+            "Relatório enviado no canal de ações.",
+            ephemeral=True
+        )
 
 # =========================================================
 # ====================== HELICRASH ========================
