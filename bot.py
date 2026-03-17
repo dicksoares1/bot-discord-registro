@@ -1404,43 +1404,36 @@ class SegundaTaskView(discord.ui.View):
 
     def __init__(self, pid):
         super().__init__(timeout=None)
-
         self.pid = pid
 
-        botao = discord.ui.Button(
-            label="✅ Confirmar 2ª Task",
-            style=discord.ButtonStyle.success,
-            custom_id=f"segunda_task_{pid}"
-        )
+    @discord.ui.button(
+        label="✅ Confirmar 2ª Task",
+        style=discord.ButtonStyle.success,
+        custom_id="segunda_task_btn"
+    )
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        botao.callback = self.confirmar
+        if not interaction.response.is_done():
+            await interaction.response.defer()
 
-        self.add_item(botao)
+        try:
 
+            prod = await carregar_producao(self.pid)
 
-async def confirmar(self, interaction: discord.Interaction):
+            if not prod:
+                return
 
-    if not interaction.response.is_done():
-        await interaction.response.defer()
+            prod["segunda_task_confirmada"] = {
+                "user": interaction.user.id,
+                "time": agora().isoformat()
+            }
 
-    try:
+            await salvar_producao(self.pid, prod)
 
-        prod = await carregar_producao(self.pid)
+            await interaction.message.edit(view=None)
 
-        if not prod:
-            return
-
-        prod["segunda_task_confirmada"] = {
-            "user": interaction.user.id,
-            "time": agora().isoformat()
-        }
-
-        await salvar_producao(self.pid, prod)
-
-        await interaction.message.edit(view=None)
-
-    except Exception as e:
-        print("Erro segunda task:", e)
+        except Exception as e:
+            print("Erro segunda task:", e)
 # =========================================================
 # ================= MODAL PÓLVORA =========================
 # =========================================================
@@ -4338,38 +4331,40 @@ async def enviar_painel_solicitar_sala():
     )
 
 #=================== SEGUNDA TASK =========================
+class SegundaTaskView(discord.ui.View):
 
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
+    def __init__(self, pid):
+        super().__init__(timeout=None)
+        self.pid = pid
 
-    try:
+    @discord.ui.button(
+        label="✅ Confirmar 2ª Task",
+        style=discord.ButtonStyle.success,
+        custom_id="segunda_task_btn"
+    )
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        if interaction.type != discord.InteractionType.component:
-            return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
 
-        cid = interaction.data.get("custom_id")
+        try:
 
-        if not cid:
-            return
+            prod = await carregar_producao(self.pid)
 
-        if cid.startswith("segunda_task_"):
+            if not prod:
+                return
 
-            pid = cid.replace("segunda_task_", "")
+            prod["segunda_task_confirmada"] = {
+                "user": interaction.user.id,
+                "time": agora().isoformat()
+            }
 
-            view = SegundaTaskView(pid)
+            await salvar_producao(self.pid, prod)
 
-            await view.confirmar(interaction)
+            await interaction.message.edit(view=None)
 
-    except discord.errors.HTTPException as e:
-
-        if e.code in (40060, 10062):
-            return
-
-        print("Erro HTTP interaction:", e)
-
-    except Exception as e:
-
-        print("Erro geral interaction:", e)
+        except Exception as e:
+            print("Erro segunda task:", e)
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
