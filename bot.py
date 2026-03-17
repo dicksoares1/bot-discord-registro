@@ -910,22 +910,22 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-    await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
 
-    try:
+        try:
 
-        inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
+            inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
 
-        fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y")
-        fim = fim + timedelta(days=1)
+            fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y")
+            fim = fim + timedelta(days=1)
 
-    except Exception:
+        except Exception:
 
-        await interaction.followup.send(
-            "Formato inválido. Use **DD/MM/AAAA**",
-            ephemeral=True
-        )
-        return
+            await interaction.followup.send(
+                "Formato inválido. Use **DD/MM/AAAA**",
+                ephemeral=True
+            )
+            return
 
         async with db.acquire() as conn:
 
@@ -978,6 +978,7 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
             value="\n".join(linhas),
             inline=False
         )
+
         canal = interaction.guild.get_channel(1365372467723501723)
 
         if canal:
@@ -3297,18 +3298,6 @@ class SelecionarMembros(discord.ui.UserSelect):
             ephemeral=True
         )
 
-
-class SelecionarMembrosView(discord.ui.View):
-
-    def __init__(self, acao, externos):
-        super().__init__(timeout=300)
-
-        self.acao = acao
-        self.externos = externos
-        self.membros = []
-
-        self.add_item(SelecionarMembros(self))
-        self.add_item(EnviarEscalacaoButton(self))
 
 class SelecionarMembrosView(discord.ui.View):
 
