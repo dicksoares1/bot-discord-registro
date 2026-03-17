@@ -1418,10 +1418,10 @@ class SegundaTaskView(discord.ui.View):
         self.add_item(botao)
 
 
-    async def confirmar(self, interaction: discord.Interaction):
+async def confirmar(self, interaction: discord.Interaction):
 
     if not interaction.response.is_done():
-        await responder_interacao(interaction, defer=True)
+        await interaction.response.defer()
 
     try:
 
@@ -1441,7 +1441,6 @@ class SegundaTaskView(discord.ui.View):
 
     except Exception as e:
         print("Erro segunda task:", e)
-
 # =========================================================
 # ================= MODAL PÓLVORA =========================
 # =========================================================
