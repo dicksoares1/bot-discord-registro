@@ -3945,6 +3945,16 @@ class ResultadoModal(discord.ui.Modal):
                     metas_cache[str(uid)]["polvora"],
                     metas_cache[str(uid)]["acao"]
                 )
+                # 🔥 ENVIA NO CANAL DO MEMBRO
+        canal_id = metas_cache[uid_str]["canal_id"]
+        canal = interaction.guild.get_channel(canal_id)
+        if canal:
+            try:
+                await canal.send(
+                    f"💰 Você recebeu **R$ {formatar_dinheiro(ganho)}** da ação **{acao['tipo']}**."
+                )
+            except Exception as e:
+                print(f"Erro ao enviar mensagem para {uid}:", e)
 
         embed = interaction.message.embeds[0]
 
