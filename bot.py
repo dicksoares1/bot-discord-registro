@@ -4195,6 +4195,9 @@ async def registrar_relatorio_acao(guild, acao_id):
         embed.set_footer(
             text=f"ID da ação: {acao_id}"
         )
+        except Exception as e:
+            print("Erro registrar_relatorio_acao:", e)
+  
 
         # ================= ENVIO =================
 
