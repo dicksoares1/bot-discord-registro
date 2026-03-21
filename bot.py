@@ -23,26 +23,28 @@ from discord.utils import escape_markdown
 import time as time_module
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+
+
 # =========================================================
-# ================== FILA GLOBAL DE EDIÇÃO =================
+# ================= FILA GLOBAL DE EDIÇÃO =================
 # =========================================================
+
+edit_queue = asyncio.Queue()
+
 
 async def edit_worker():
     while True:
         coro = await edit_queue.get()
+
         try:
             await coro
-
-            # 🔥 delay mais seguro
             await asyncio.sleep(1.2)
 
         except discord.NotFound:
-            # mensagem deletada
             pass
 
         except discord.HTTPException as e:
             if e.status == 429:
-                # se bater rate limit, espera mais
                 await asyncio.sleep(3)
             else:
                 print("Erro HTTP edit_worker:", e)
@@ -51,10 +53,13 @@ async def edit_worker():
             print("Erro no edit_worker:", e)
 
         edit_queue.task_done()
-# ================ ANTI ERRO DE INTERAÇÃO ==================
+
+
+# =========================================================
+# ================ ANTI ERRO DE INTERAÇÃO =================
+# =========================================================
 
 async def responder_interacao(interaction: discord.Interaction, *, defer=False, ephemeral=False):
-
     try:
 
         if interaction.response.is_done():
@@ -63,20 +68,21 @@ async def responder_interacao(interaction: discord.Interaction, *, defer=False, 
         if defer:
             await interaction.response.defer(ephemeral=ephemeral)
         else:
-            await responder_interacao(interaction, defer=True, ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
 
     except discord.errors.HTTPException:
-
-        # interação já foi respondida ou expirou
         pass
 
     except Exception as e:
-
         print("Erro responder_interacao:", e)
-        
-# ==================== HTTP SESSÃO=========================
+
+
+# =========================================================
+# ==================== HTTP SESSÃO =========================
+# =========================================================
 
 http_session = None
+
 
 # =========================================================
 # ================= CACHE DE CANAIS =======================
@@ -95,6 +101,8 @@ def pegar_canal(cid):
         channel_cache[cid] = canal
 
     return canal
+
+
 # =========================================================
 # ================= CACHE DE USUÁRIOS =====================
 # =========================================================
@@ -112,6 +120,8 @@ async def pegar_usuario(uid):
         return user
     except:
         return None
+
+
 # =========================================================
 # ===================== RELÓGIO GLOBAL ====================
 # =========================================================
@@ -121,16 +131,10 @@ BRASIL = ZoneInfo("America/Sao_Paulo")
 def agora():
     return datetime.now(BRASIL)
 
-# =========================================================
-# =============== DATETIME PADRÃO PARA DB =================
-# =========================================================
 
 def agora_db():
-    """
-    Retorna datetime sem timezone para usar no PostgreSQL
-    evitando erro de timezone (offset-aware vs offset-naive)
-    """
     return agora().replace(tzinfo=None)
+
 
 # =========================================================
 # ======================== CONFIG ==========================
@@ -151,10 +155,14 @@ print("🔐 TOKEN carregado com sucesso.")
 TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
 
-# ================= BANCO POSTGRES (POOL PROFISSIONAL) =================
+
+# =========================================================
+# ================= BANCO POSTGRES ========================
+# =========================================================
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 db = None
+
 
 async def conectar_db():
     global db
@@ -178,7 +186,6 @@ async def conectar_db():
 # =========================================================
 
 BASE_PATH = "/mnt/data"
-
 os.makedirs(BASE_PATH, exist_ok=True)
 
 ARQUIVO_PRODUCOES = f"{BASE_PATH}/producoes.json"
@@ -189,14 +196,12 @@ ARQUIVO_LAVAGENS = f"{BASE_PATH}/lavagens.json"
 ARQUIVO_METAS = f"{BASE_PATH}/metas.json"
 
 
-
 # =========================================================
 # ======================== GUILD ===========================
 # =========================================================
 
 GUILD_ID = 1229526644193099880
 GUILD = discord.Object(id=GUILD_ID)
-
 
 # =========================================================
 # ======================== CANAIS ==========================
@@ -220,7 +225,7 @@ CANAL_BAU_GALPAO_SUL_ID = 1356174937764794521
 CANAL_CALCULO_POLVORA_ID = 1462834441968943157
 CANAL_REGISTRO_POLVORA_ID = 1448570795101261846
 
-# 
+# LIVES
 CANAL_CADASTRO_LIVE_ID = 1466464557215256790
 CANAL_DIVULGACAO_LIVE_ID = 1243325102917943335
 
@@ -237,6 +242,7 @@ RESULTADOS_METAS_ID = 1341403574483288125
 CANAL_ESCALACOES_ID = 1241406819545514064
 CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 CANAL_HELICRASH_ID = 1478919637260435498
+
 
 # =========================================================
 # ======================== CARGOS ==========================
@@ -262,6 +268,7 @@ CARGO_MEMBRO_ID = 1422847198789369926
 CARGO_AGREGADO_ID = 1422847202937536532
 CARGO_MECANICO_ID = 1448526080645398641
 
+
 # =========================================================
 # ===================== CATEGORIAS =========================
 # =========================================================
@@ -281,13 +288,13 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-# garante que o discord.py realmente faça cache dos membros
+# garante cache completo
 intents.guilds = True
 intents.presences = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# trava anti-duplicação de criação de metas
+
 # =========================================================
 # ================= TWITCH TOKEN CACHE ====================
 # =========================================================
@@ -338,11 +345,14 @@ class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
     telefone = discord.ui.TextInput(label="Telefone In Game")
 
     async def on_submit(self, interaction: discord.Interaction):
+
         membro = interaction.user
         guild = interaction.guild
 
         # Atualiza nick
-        await membro.edit(nick=f"{self.passaporte.value} - {self.nome.value}")
+        await membro.edit(
+            nick=f"{self.passaporte.value} - {self.nome.value}"
+        )
 
         view = TipoRegistroView(
             self.nome.value,
@@ -365,6 +375,7 @@ class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
 class TipoRegistroSelect(discord.ui.Select):
 
     def __init__(self, nome, passaporte, indicado, telefone):
+
         self.nome = nome
         self.passaporte = passaporte
         self.indicado = indicado
@@ -415,7 +426,11 @@ class TipoRegistroSelect(discord.ui.Select):
         canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
 
         if canal_log:
-            embed = discord.Embed(title="📋 Novo Registro", color=0x2ecc71)
+
+            embed = discord.Embed(
+                title="📋 Novo Registro",
+                color=0x2ecc71
+            )
 
             embed.add_field(name="Nome", value=self.nome)
             embed.add_field(name="Passaporte", value=self.passaporte)
@@ -432,16 +447,27 @@ class TipoRegistroSelect(discord.ui.Select):
         )
 
 
+# =========================================================
+# ======================== VIEWS ===========================
+# =========================================================
+
 class TipoRegistroView(discord.ui.View):
 
     def __init__(self, nome, passaporte, indicado, telefone):
         super().__init__(timeout=300)
+
         self.add_item(
-            TipoRegistroSelect(nome, passaporte, indicado, telefone)
+            TipoRegistroSelect(
+                nome,
+                passaporte,
+                indicado,
+                telefone
+            )
         )
 
 
 class RegistroView(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -450,8 +476,15 @@ class RegistroView(discord.ui.View):
         style=discord.ButtonStyle.success,
         custom_id="registro_fazer"
     )
-    async def registro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RegistroModal())
+    async def registro(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        await interaction.response.send_modal(
+            RegistroModal()
+        )
+
 # =========================================================
 # ======================== VENDAS ==========================
 # =========================================================
@@ -464,25 +497,39 @@ ORGANIZACOES_CONFIG = {
     "CIVIL": {"emoji": "👤", "cor": 0x95a5a6},
 }
 
+
 # =========================================================
 # ===================== BANCO DE DADOS =====================
 # =========================================================
 
 async def proximo_pedido():
+
     async with db.acquire() as conn:
-        row = await conn.fetchrow("SELECT ultimo FROM pedidos WHERE id=1")
+
+        row = await conn.fetchrow(
+            "SELECT ultimo FROM pedidos WHERE id=1"
+        )
 
         if not row:
-            await conn.execute("INSERT INTO pedidos (id, ultimo) VALUES (1, 1)")
+            await conn.execute(
+                "INSERT INTO pedidos (id, ultimo) VALUES (1, 1)"
+            )
             return 1
 
         novo = row["ultimo"] + 1
-        await conn.execute("UPDATE pedidos SET ultimo=$1 WHERE id=1", novo)
+
+        await conn.execute(
+            "UPDATE pedidos SET ultimo=$1 WHERE id=1",
+            novo
+        )
+
         return novo
 
 
 async def salvar_venda_db(vendedor_id, valor, pedido_numero):
+
     async with db.acquire() as conn:
+
         await conn.execute(
             """
             INSERT INTO vendas (user_id, valor, data, pedido_numero)
@@ -494,8 +541,11 @@ async def salvar_venda_db(vendedor_id, valor, pedido_numero):
             pedido_numero
         )
 
+
 async def atualizar_valor_venda_db(pedido_numero, valor):
+
     async with db.acquire() as conn:
+
         await conn.execute(
             """
             UPDATE vendas
@@ -505,11 +555,17 @@ async def atualizar_valor_venda_db(pedido_numero, valor):
             valor,
             pedido_numero
         )
-async def carregar_vendas_db():
-    async with db.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM vendas")
-        return rows
 
+
+async def carregar_vendas_db():
+
+    async with db.acquire() as conn:
+
+        rows = await conn.fetch(
+            "SELECT * FROM vendas"
+        )
+
+        return rows
 
 # =========================================================
 # ================= STATUS DOS BOTÕES =====================
@@ -529,10 +585,13 @@ class StatusView(discord.ui.View):
     # =====================================================
 
     def get_status(self, embed):
+
         for i, field in enumerate(embed.fields):
             if field.name == "📌 Status":
                 return i, field.value.split("\n")
+
         return None, []
+
 
     def set_status(self, embed, idx, linhas):
 
@@ -548,18 +607,24 @@ class StatusView(discord.ui.View):
 
         return embed
 
+
     def pedido_pago(self, linhas):
         return any(l.startswith("💰") for l in linhas)
+
 
     def pedido_cancelado(self, linhas):
         return any(l.startswith("❌") for l in linhas)
 
-    
+
     # =====================================================
     # ================= BOTÃO PAGO ========================
     # =====================================================
 
-    @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
+    @discord.ui.button(
+        label="💰 Pago",
+        style=discord.ButtonStyle.primary,
+        custom_id="status_pago"
+    )
     async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         embed = interaction.message.embeds[0]
@@ -593,7 +658,10 @@ class StatusView(discord.ui.View):
 
         # ================= FINALIZA VENDA =================
 
-        finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
+        finalizado = (
+            any(l.startswith("💰") for l in linhas)
+            and any(l.startswith("✅") for l in linhas)
+        )
 
         if finalizado:
 
@@ -637,7 +705,11 @@ class StatusView(discord.ui.View):
     # ================= BOTÃO ENTREGUE ====================
     # =====================================================
 
-    @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
+    @discord.ui.button(
+        label="✅ Entregue",
+        style=discord.ButtonStyle.success,
+        custom_id="status_entregue"
+    )
     async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         embed = interaction.message.embeds[0]
@@ -662,7 +734,10 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
+        finalizado = (
+            any(l.startswith("💰") for l in linhas)
+            and any(l.startswith("✅") for l in linhas)
+        )
 
         if finalizado:
 
@@ -700,6 +775,7 @@ class StatusView(discord.ui.View):
             )
 
         await responder_interacao(interaction, defer=True)
+
         # ===============================
         # PEGAR PACOTES DO EMBED
         # ===============================
@@ -714,7 +790,11 @@ class StatusView(discord.ui.View):
                     linhas = field.value.split("\n")
                     for l in linhas:
                         if "📦" in l:
-                            pacotes_pt = int(l.replace("📦", "").replace("pacotes", "").strip())
+                            pacotes_pt = int(
+                                l.replace("📦", "")
+                                .replace("pacotes", "")
+                                .strip()
+                            )
                 except:
                     pass
 
@@ -723,15 +803,22 @@ class StatusView(discord.ui.View):
                     linhas = field.value.split("\n")
                     for l in linhas:
                         if "📦" in l:
-                            pacotes_sub = int(l.replace("📦", "").replace("pacotes", "").strip())
+                            pacotes_sub = int(
+                                l.replace("📦", "")
+                                .replace("pacotes", "")
+                                .strip()
+                            )
                 except:
                     pass
+
 
         # ===============================
         # ENVIAR NO BAÚ
         # ===============================
 
-        canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+        canal_bau = interaction.guild.get_channel(
+            CANAL_BAU_GALPAO_SUL_ID
+        )
 
         if canal_bau:
 
@@ -750,11 +837,16 @@ class StatusView(discord.ui.View):
         else:
             print("Canal do baú não encontrado.")
 
+
     # =====================================================
     # ================= BOTÃO CANCELADO ===================
     # =====================================================
 
-    @discord.ui.button(label="❌ Pedido cancelado", style=discord.ButtonStyle.danger, custom_id="status_cancelado")
+    @discord.ui.button(
+        label="❌ Pedido cancelado",
+        style=discord.ButtonStyle.danger,
+        custom_id="status_cancelado"
+    )
     async def cancelado(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         embed = interaction.message.embeds[0]
@@ -784,8 +876,13 @@ class StatusView(discord.ui.View):
         embed = self.set_status(embed, idx, linhas)
 
         # Finaliza pedido → trava botões
-        await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
+        await interaction.message.edit(
+            embed=embed,
+            view=StatusView(disabled=True)
+        )
+
         await responder_interacao(interaction, defer=True)
+
 
     # =====================================================
     # ================= BOTÃO EDITAR ======================
@@ -812,14 +909,17 @@ class StatusView(discord.ui.View):
         await interaction.response.send_modal(
             EditarVendaModal(interaction.message)
         )
+
 # =========================================================
 # ================= MODAL DE VENDA ========================
 # =========================================================
 
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
+
     organizacao = discord.ui.TextInput(label="Organização")
     qtd_pt = discord.ui.TextInput(label="Quantidade PT")
     qtd_sub = discord.ui.TextInput(label="Quantidade SUB")
+
     observacoes = discord.ui.TextInput(
         label="Observações",
         style=discord.TextStyle.paragraph,
@@ -832,31 +932,58 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             pt = int(self.qtd_pt.value.strip())
             sub = int(self.qtd_sub.value.strip())
         except:
-            await interaction.response.send_message("Valores inválidos.", ephemeral=True)
+            await interaction.response.send_message(
+                "Valores inválidos.",
+                ephemeral=True
+            )
             return
 
         numero_pedido = await proximo_pedido()
 
         pacotes_pt = pt // 50
         pacotes_sub = sub // 50
+
         total = (pt * 50) + (sub * 90)
         valor_novo = total
 
-        # SALVA NO POSTGRES
-        await salvar_venda_db(str(interaction.user.id), total, numero_pedido)
+        # ================= SALVA NO POSTGRES =================
 
-        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        await salvar_venda_db(
+            str(interaction.user.id),
+            total,
+            numero_pedido
+        )
+
+        valor_formatado = (
+            f"{total:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
 
         org_nome = self.organizacao.value.strip().upper()
-        config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
+
+        config = ORGANIZACOES_CONFIG.get(
+            org_nome,
+            {"emoji": "🏷️", "cor": 0x1e3a8a}
+        )
 
         embed = discord.Embed(
             title=f"📦 NOVA ENCOMENDA • Pedido #{numero_pedido:04d}",
             color=config["cor"]
         )
 
-        embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
-        embed.add_field(name="🏷 Organização", value=f"{config['emoji']} {org_nome}", inline=False)
+        embed.add_field(
+            name="👤 Vendedor",
+            value=interaction.user.mention,
+            inline=False
+        )
+
+        embed.add_field(
+            name="🏷 Organização",
+            value=f"{config['emoji']} {org_nome}",
+            inline=False
+        )
 
         embed.add_field(
             name="🔫 PT",
@@ -883,14 +1010,26 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         )
 
         if self.observacoes.value:
-            embed.add_field(name="📝 Observações", value=self.observacoes.value, inline=False)
 
-        embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
+            embed.add_field(
+                name="📝 Observações",
+                value=self.observacoes.value,
+                inline=False
+            )
+
+        embed.set_footer(
+            text="🛡 Sistema de Encomendas • VDR 442"
+        )
 
         canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
-        await canal.send(embed=embed, view=StatusView())
+
+        await canal.send(
+            embed=embed,
+            view=StatusView()
+        )
 
         await responder_interacao(interaction, defer=True)
+
 
 # =========================================================
 # ================= MODAL RELATÓRIO =======================
@@ -914,9 +1053,16 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
 
         try:
 
-            inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
+            inicio = datetime.strptime(
+                self.data_inicio.value,
+                "%d/%m/%Y"
+            )
 
-            fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y")
+            fim = datetime.strptime(
+                self.data_fim.value,
+                "%d/%m/%Y"
+            )
+
             fim = fim + timedelta(days=1)
 
         except Exception:
@@ -957,10 +1103,18 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
             total += valor
 
             linhas.append(
-                f"👤 <@{r['user_id']}> • R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                f"👤 <@{r['user_id']}> • R$ {valor:,.2f}"
+                .replace(",", "X")
+                .replace(".", ",")
+                .replace("X", ".")
             )
 
-        total_fmt = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        total_fmt = (
+            f"{total:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
 
         embed = discord.Embed(
             title="📊 Relatório de Vendas",
@@ -990,8 +1144,9 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
         )
 
 # =========================================================
-# ================= EDITAR== VENDA ========================
+# ================= EDITAR VENDA ===========================
 # =========================================================
+
 class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
 
     qtd_pt = discord.ui.TextInput(label="Nova Quantidade PT")
@@ -1018,15 +1173,24 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
             pt = int(self.qtd_pt.value.strip())
             sub = int(self.qtd_sub.value.strip())
         except:
-            await interaction.response.send_message("Valores inválidos.", ephemeral=True)
+            await interaction.response.send_message(
+                "Valores inválidos.",
+                ephemeral=True
+            )
             return
 
         pacotes_pt = pt // 50
         pacotes_sub = sub // 50
+
         total = (pt * 50) + (sub * 90)
         valor_novo = total
 
-        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        valor_formatado = (
+            f"{total:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
 
         embed = self.message.embeds[0]
 
@@ -1056,7 +1220,8 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
             if field.name == "💰 Total":
                 try:
                     valor_antigo = float(
-                        field.value.replace("**R$ ", "")
+                        field.value
+                        .replace("**R$ ", "")
                         .replace("**", "")
                         .replace(".", "")
                         .replace(",", ".")
@@ -1117,6 +1282,7 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
         pedido_numero = int(titulo.split("#")[1])
 
         await atualizar_valor_venda_db(pedido_numero, total)
+
         await self.message.edit(embed=embed)
 
         # ===============================
@@ -1132,16 +1298,27 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
             alteracoes.append(f"SUB: {sub_antigo} → {sub}")
 
         if valor_antigo != valor_novo:
-            valor_antigo_fmt = f"{valor_antigo:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            alteracoes.append(f"Valor: R$ {valor_antigo_fmt} → R$ {valor_formatado}")
+            valor_antigo_fmt = (
+                f"{valor_antigo:,.2f}"
+                .replace(",", "X")
+                .replace(".", ",")
+                .replace("X", ".")
+            )
+            alteracoes.append(
+                f"Valor: R$ {valor_antigo_fmt} → R$ {valor_formatado}"
+            )
 
         if self.organizacao.value:
-            alteracoes.append(f"Organização alterada")
+            alteracoes.append("Organização alterada")
 
         if self.observacao.value:
             alteracoes.append("Observação alterada")
 
-        alteracao_texto = "\n".join(alteracoes) if alteracoes else "Nenhuma alteração detectada"
+        alteracao_texto = (
+            "\n".join(alteracoes)
+            if alteracoes
+            else "Nenhuma alteração detectada"
+        )
 
         # ===============================
         # LOG
@@ -1176,12 +1353,17 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
 
             await canal_log.send(embed=embed_log)
 
-        await interaction.response.send_message("Venda editada com sucesso.", ephemeral=True)
+        await interaction.response.send_message(
+            "Venda editada com sucesso.",
+            ephemeral=True
+        )
+
 # =========================================================
 # ================= VIEW CALCULADORA ======================
 # =========================================================
 
 class CalculadoraView(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -1191,14 +1373,23 @@ class CalculadoraView(discord.ui.View):
         custom_id="calc_registrar_venda"
     )
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VendaModal())
+
+        await interaction.response.send_modal(
+            VendaModal()
+        )
+
     @discord.ui.button(
         label="Relatório",
         style=discord.ButtonStyle.success,
         custom_id="calc_relatorio_vendas"
     )
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RelatorioModal())
+
+        await interaction.response.send_modal(
+            RelatorioModal()
+        )
+
+
 # =========================================================
 # ================= PAINEL ================================
 # =========================================================
@@ -1225,11 +1416,13 @@ async def enviar_painel_vendas():
     )
 
     print("🛒 Painel de vendas verificado/atualizado")
+
+
 # =========================================================
 # ======================== PRODUÇÃO ========================
 # =========================================================
 
-    
+
 # ==============================
 # VARIÁVEIS GLOBAIS
 # ==============================
@@ -1240,8 +1433,14 @@ edit_queue = asyncio.Queue()
 producoes_ativas = set()
 
 
+# =========================================================
+# ================= FUNÇÕES DE PRODUÇÃO ===================
+# =========================================================
+
 async def carregar_producao(pid):
+
     async with db.acquire() as conn:
+
         r = await conn.fetchrow(
             "SELECT * FROM producoes WHERE pid=$1",
             pid
@@ -1271,14 +1470,17 @@ async def carregar_producao(pid):
 
 
 async def salvar_producao(pid, dados):
+
     segunda_user = None
     segunda_time = None
 
     if "segunda_task_confirmada" in dados:
+
         segunda_user = str(dados["segunda_task_confirmada"]["user"])
         segunda_time = dados["segunda_task_confirmada"]["time"]
 
     async with db.acquire() as conn:
+
         await conn.execute(
             """
             INSERT INTO producoes 
@@ -1312,14 +1514,21 @@ async def salvar_producao(pid, dados):
 
 
 async def deletar_producao(pid):
+
     async with db.acquire() as conn:
+
         await conn.execute(
             "DELETE FROM producoes WHERE pid=$1",
             pid
         )
 
 
+# =========================================================
+# ================= BARRA DE PROGRESSO ====================
+# =========================================================
+
 def barra(pct, size=20):
+
     cheio = int(pct * size)
 
     if pct <= 0.35:
@@ -1333,12 +1542,12 @@ def barra(pct, size=20):
 
     return cor + " " + ("▓" * cheio) + ("░" * (size - cheio))
 
-
 # =========================================================
 # ================= MODAL OBSERVAÇÃO ======================
 # =========================================================
 
 class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
+
     obs = discord.ui.TextInput(
         label="Observação inicial",
         style=discord.TextStyle.paragraph,
@@ -1396,7 +1605,7 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
         await salvar_producao(pid, dados)
 
-        # pequena pausa para garantir consistência
+        # pequena pausa para consistência
         await asyncio.sleep(1)
 
         if pid not in producoes_tasks:
@@ -1409,7 +1618,10 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
         await responder_interacao(interaction, defer=True)
 
-# ================= 2ª TASK =================
+
+# =========================================================
+# ================= 2ª TASK ===============================
+# =========================================================
 
 class SegundaTaskView(discord.ui.View):
 
@@ -1445,6 +1657,8 @@ class SegundaTaskView(discord.ui.View):
 
         except Exception as e:
             print("Erro segunda task:", e)
+
+
 # =========================================================
 # ================= MODAL PÓLVORA =========================
 # =========================================================
@@ -1469,7 +1683,7 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        # responde rápido para não expirar interação
+        # responde rápido pra evitar timeout
         await responder_interacao(interaction, defer=True)
 
         try:
@@ -1486,6 +1700,7 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
             pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
 
             inicio = agora()
+
             tempo_real = int(self.tempo * (polvora / 400))
             fim = inicio + timedelta(minutes=tempo_real)
 
@@ -1498,7 +1713,7 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
                 )
                 return
 
-            # ================= EMBED COMPLETO =================
+            # ================= EMBED =================
 
             desc = (
                 f"**Galpão:** {self.galpao}\n"
@@ -1538,12 +1753,13 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
             await salvar_producao(pid, dados)
 
             if pid not in producoes_tasks:
-                task = asyncio.create_task(acompanhar_producao(pid))
+                task = asyncio.create_task(
+                    acompanhar_producao(pid)
+                )
                 producoes_tasks[pid] = task
 
         except Exception as e:
             print("ERRO PRODUÇÃO:", e)
-
 
 # =========================================================
 # ================= VIEW FABRICAÇÃO ========================
@@ -1718,10 +1934,17 @@ class FabricacaoView(discord.ui.View):
 
         await salvar_producao(pid, dados)
 
-        task = bot.loop.create_task(acompanhar_producao(pid))
+        task = bot.loop.create_task(
+            acompanhar_producao(pid)
+        )
+
         producoes_tasks[pid] = task
 
-    # ================ RELATORIO =========================
+
+    # =====================================================
+    # ================= RELATORIO ==========================
+    # =====================================================
+
     @discord.ui.button(
         label="📊 Relatório Produção",
         style=discord.ButtonStyle.success,
@@ -1732,7 +1955,6 @@ class FabricacaoView(discord.ui.View):
         await interaction.response.send_modal(
             RelatorioProducaoModal()
         )
-
 
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
@@ -1763,9 +1985,14 @@ async def acompanhar_producao(pid):
             await asyncio.sleep(10)
             continue
 
+        # ================= BUSCAR MENSAGEM =================
+
         if msg is None:
+
             try:
-                msg = await canal.fetch_message(int(prod["msg_id"]))
+                msg = await canal.fetch_message(
+                    int(prod["msg_id"])
+                )
 
             except discord.NotFound:
 
@@ -1787,6 +2014,8 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(5)
                 continue
 
+        # ================= CÁLCULO DE TEMPO =================
+
         inicio = datetime.fromisoformat(prod["inicio"])
         fim = datetime.fromisoformat(prod["fim"])
 
@@ -1798,6 +2027,8 @@ async def acompanhar_producao(pid):
 
         pct = max(0, min(1, 1 - (restante / total)))
         mins = int(restante // 60)
+
+        # ================= DESCRIÇÃO =================
 
         desc = (
             f"**Galpão:** {prod['galpao']}\n"
@@ -1815,10 +2046,14 @@ async def acompanhar_producao(pid):
         )
 
         if prod.get("segunda_task_confirmada"):
+
             uid = prod["segunda_task_confirmada"]["user"]
+
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
-        # ================= FINALIZAÇÃO =================
+        # =====================================================
+        # ================= FINALIZAÇÃO =======================
+        # =====================================================
 
         if restante <= 0:
 
@@ -1847,6 +2082,7 @@ async def acompanhar_producao(pid):
             )
 
             try:
+
                 await edit_queue.put(
                     msg.edit(
                         embed=discord.Embed(
@@ -1857,6 +2093,7 @@ async def acompanhar_producao(pid):
                         view=None
                     )
                 )
+
             except:
                 pass
 
@@ -1873,9 +2110,12 @@ async def acompanhar_producao(pid):
 
             return
 
-        # ================= ATUALIZA EMBED =================
+        # =====================================================
+        # ================= ATUALIZA EMBED =====================
+        # =====================================================
 
         try:
+
             await edit_queue.put(
                 msg.edit(
                     embed=discord.Embed(
@@ -1885,10 +2125,12 @@ async def acompanhar_producao(pid):
                     )
                 )
             )
+
         except:
             pass
 
         await asyncio.sleep(75)
+
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
@@ -1916,7 +2158,10 @@ async def enviar_painel_fabricacao():
 
     print("🏭 Painel de fabricação verificado/atualizado")
 
-# ================= RELATÓRIO =====================
+
+# =========================================================
+# ================= RELATÓRIO PRODUÇÃO ====================
+# =========================================================
 
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
 
@@ -1936,8 +2181,15 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 
         try:
 
-            inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
-            fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y") + timedelta(days=1)
+            inicio = datetime.strptime(
+                self.data_inicio.value,
+                "%d/%m/%Y"
+            )
+
+            fim = datetime.strptime(
+                self.data_fim.value,
+                "%d/%m/%Y"
+            ) + timedelta(days=1)
 
         except:
 
@@ -1970,6 +2222,8 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
         ranking = {}
         total_capsulas = 0
 
+        # ================= CÁLCULO =================
+
         for r in rows:
 
             autor = r["autor"]
@@ -1994,6 +2248,8 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 
             total_capsulas += capsulas
 
+        # ================= ORDENAR =================
+
         ranking_ordenado = sorted(
             ranking.items(),
             key=lambda x: x[1],
@@ -2001,7 +2257,6 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
         )
 
         linhas = []
-
         medalhas = ["🥇", "🥈", "🥉"]
 
         for i, (uid, total) in enumerate(ranking_ordenado[:20]):
@@ -2009,8 +2264,11 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
             medalha = medalhas[i] if i < 3 else "▫️"
 
             linhas.append(
-                f"{medalha} <@{uid}> — **{total:,} cápsulas**".replace(",", ".")
+                f"{medalha} <@{uid}> — **{total:,} cápsulas**"
+                .replace(",", ".")
             )
+
+        # ================= EMBED =================
 
         embed = discord.Embed(
             title="🏭 RELATÓRIO DE PRODUÇÃO",
@@ -2019,7 +2277,8 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 
         embed.description = (
             f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n"
-            f"💊 **Total produzido:** {total_capsulas:,} cápsulas".replace(",", ".")
+            f"💊 **Total produzido:** {total_capsulas:,} cápsulas"
+            .replace(",", ".")
         )
 
         embed.add_field(
@@ -2028,7 +2287,9 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
             inline=False
         )
 
-        embed.set_footer(text="Sistema de Produção • VDR 442")
+        embed.set_footer(
+            text="Sistema de Produção • VDR 442"
+        )
 
         canal = interaction.guild.get_channel(1422853066541109338)
 
@@ -2039,7 +2300,7 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
             "Relatório enviado no canal de produção.",
             ephemeral=True
         )
-    
+
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
@@ -2047,9 +2308,14 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 # ================= BANCO =================
 
 async def salvar_polvora_db(user_id, vendedor, qtd, valor):
+
     async with db.acquire() as conn:
+
         await conn.execute(
-            "INSERT INTO polvoras (user_id, vendedor, quantidade, valor, data) VALUES ($1,$2,$3,$4,$5)",
+            """
+            INSERT INTO polvoras (user_id, vendedor, quantidade, valor, data)
+            VALUES ($1,$2,$3,$4,$5)
+            """,
             str(user_id),
             vendedor,
             qtd,
@@ -2059,18 +2325,31 @@ async def salvar_polvora_db(user_id, vendedor, qtd, valor):
 
 
 async def carregar_polvoras_db():
+
     async with db.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM polvoras")
+
+        rows = await conn.fetch(
+            "SELECT * FROM polvoras"
+        )
+
         return rows
 
 
 async def limpar_polvoras_db():
-    async with db.acquire() as conn:
-        await conn.execute("DELETE FROM polvoras")
 
-# ================= MODAL =================
+    async with db.acquire() as conn:
+
+        await conn.execute(
+            "DELETE FROM polvoras"
+        )
+
+
+# =========================================================
+# ================= MODAL PÓLVORA ==========================
+# =========================================================
 
 class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
+
     vendedor = discord.ui.TextInput(
         label="Vendedor (preencha o nome)",
         placeholder="Digite o nome do vendedor"
@@ -2082,16 +2361,31 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+
         try:
             qtd = int(self.quantidade.value)
         except:
-            await interaction.response.send_message("Quantidade inválida.", ephemeral=True)
+            await interaction.response.send_message(
+                "Quantidade inválida.",
+                ephemeral=True
+            )
             return
 
         valor = qtd * 80
-        valor_formatado = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        await salvar_polvora_db(interaction.user.id, self.vendedor.value, qtd, valor)
+        valor_formatado = (
+            f"{valor:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
+
+        await salvar_polvora_db(
+            interaction.user.id,
+            self.vendedor.value,
+            qtd,
+            valor
+        )
 
         canal = interaction.guild.get_channel(CANAL_REGISTRO_POLVORA_ID)
 
@@ -2100,18 +2394,44 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
             color=0xe67e22
         )
 
-        embed.add_field(name="Vendedor", value=self.vendedor.value, inline=False)
-        embed.add_field(name="Comprado por", value=interaction.user.mention, inline=False)
-        embed.add_field(name="Quantidade", value=str(qtd), inline=True)
-        embed.add_field(name="Valor", value=f"**R$ {valor_formatado}**", inline=True)
+        embed.add_field(
+            name="Vendedor",
+            value=self.vendedor.value,
+            inline=False
+        )
+
+        embed.add_field(
+            name="Comprado por",
+            value=interaction.user.mention,
+            inline=False
+        )
+
+        embed.add_field(
+            name="Quantidade",
+            value=str(qtd),
+            inline=True
+        )
+
+        embed.add_field(
+            name="Valor",
+            value=f"**R$ {valor_formatado}**",
+            inline=True
+        )
 
         await canal.send(embed=embed)
-        await interaction.response.send_message("Registro feito com sucesso!", ephemeral=True)
+
+        await interaction.response.send_message(
+            "Registro feito com sucesso!",
+            ephemeral=True
+        )
 
 
-# ================= CONFIRMAR PAGAMENTO =================
+# =========================================================
+# ================= CONFIRMAR PAGAMENTO ====================
+# =========================================================
 
 class ConfirmarPagamentoView(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -2121,16 +2441,21 @@ class ConfirmarPagamentoView(discord.ui.View):
         custom_id="confirmar_pagamento"
     )
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         await interaction.message.edit(
             content=interaction.message.content + "\n\n✅ **PAGO**",
             view=None
         )
+
         await responder_interacao(interaction, defer=True)
 
 
-# ================= VIEW =================
+# =========================================================
+# ================= VIEW PÓLVORA ===========================
+# =========================================================
 
 class PolvoraView(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -2140,31 +2465,52 @@ class PolvoraView(discord.ui.View):
         custom_id="polvora_btn"
     )
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PolvoraModal())
+
+        await interaction.response.send_modal(
+            PolvoraModal()
+        )
 
 
-# ================= RELATÓRIO SEMANAL =================
+# =========================================================
+# ================= RELATÓRIO SEMANAL =====================
+# =========================================================
 
 @tasks.loop(minutes=1)
 async def relatorio_semanal_polvoras():
 
     agora_br = agora()
 
-    if agora_br.weekday() != 6 or agora_br.hour != 23 or agora_br.minute != 59:
+    if (
+        agora_br.weekday() != 6
+        or agora_br.hour != 23
+        or agora_br.minute != 59
+    ):
         return
 
     dados = await carregar_polvoras_db()
 
     inicio_semana = agora_br - timedelta(days=6)
-    inicio_semana = inicio_semana.replace(hour=0, minute=0, second=0, microsecond=0)
-    fim_semana = agora_br.replace(hour=23, minute=59, second=59)
+    inicio_semana = inicio_semana.replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0
+    )
+
+    fim_semana = agora_br.replace(
+        hour=23,
+        minute=59,
+        second=59
+    )
 
     resumo = {}
 
     for item in dados:
+
         data_item = datetime.fromisoformat(item["data"])
 
         if inicio_semana <= data_item <= fim_semana:
+
             resumo.setdefault(item["user_id"], 0)
             resumo[item["user_id"]] += item["valor"]
 
@@ -2174,9 +2520,15 @@ async def relatorio_semanal_polvoras():
     canal = pegar_canal(CANAL_REGISTRO_POLVORA_ID)
 
     for user_id, total in resumo.items():
+
         user = await pegar_usuario(int(user_id))
 
-        valor_formatado = f"{total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        valor_formatado = (
+            f"{total:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
 
         await canal.send(
             content=(
@@ -2187,7 +2539,6 @@ async def relatorio_semanal_polvoras():
             ),
             view=ConfirmarPagamentoView()
         )
-
 
 # =========================================================
 # ================= PAINEL PÓLVORA ========================
@@ -2215,60 +2566,92 @@ async def enviar_painel_polvoras():
     )
 
     print("💣 Painel de pólvora verificado/atualizado")
+
 # =========================================================
 # ======================== LAVAGEM =========================
 # =========================================================
 
 lavagens_pendentes = {}
 
+
 @tasks.loop(minutes=15)
 async def limpar_lavagens_pendentes():
     lavagens_pendentes.clear()
+
 
 def formatar_real(valor: int) -> str:
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-# ================= BANCO (POSTGRES) =================
+# =========================================================
+# ================= BANCO (POSTGRES) ======================
+# =========================================================
 
 async def salvar_lavagem_db(user_id, valor_sujo, taxa, valor_retorno):
+
     async with db.acquire() as conn:
+
         await conn.execute(
-            "INSERT INTO lavagens (user_id, valor, taxa, liquido, data) VALUES ($1,$2,$3,$4,$5)",
+            """
+            INSERT INTO lavagens (user_id, valor, taxa, liquido, data)
+            VALUES ($1,$2,$3,$4,$5)
+            """,
             str(user_id),
             valor_sujo,
             taxa,
             valor_retorno,
-            agora().replace(tzinfo=None)  # <-- datetime direto
+            agora().replace(tzinfo=None)
         )
 
 
 async def carregar_lavagens_db():
+
     async with db.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM lavagens")
+
+        rows = await conn.fetch(
+            "SELECT * FROM lavagens"
+        )
+
         return rows
 
 
 async def limpar_lavagens_db():
+
     async with db.acquire() as conn:
-        await conn.execute("DELETE FROM lavagens")
+
+        await conn.execute(
+            "DELETE FROM lavagens"
+        )
 
 
-# ================= MODAL =================
+# =========================================================
+# ================= MODAL LAVAGEM ==========================
+# =========================================================
 
 class LavagemModal(discord.ui.Modal, title="Iniciar Lavagem"):
-    valor = discord.ui.TextInput(label="Valor do dinheiro sujo")
+
+    valor = discord.ui.TextInput(
+        label="Valor do dinheiro sujo"
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
+
         await responder_interacao(interaction, defer=True)
 
         try:
-            valor_sujo = int(self.valor.value.replace(".", "").replace(",", ""))
+            valor_sujo = int(
+                self.valor.value
+                .replace(".", "")
+                .replace(",", "")
+            )
         except:
-            await interaction.followup.send("Valor inválido.", ephemeral=True)
+            await interaction.followup.send(
+                "Valor inválido.",
+                ephemeral=True
+            )
             return
 
-        taxa = 20  # %
+        taxa = 20
         valor_retorno = int(valor_sujo * 0.8)
 
         msg_info = await interaction.channel.send(
@@ -2294,6 +2677,7 @@ async def on_message(message: discord.Message):
         return
 
     # ================= LAVAGEM =================
+
     if message.channel.id == CANAL_INICIAR_LAVAGEM_ID:
 
         if message.attachments and message.author.id in lavagens_pendentes:
@@ -2305,6 +2689,7 @@ async def on_message(message: discord.Message):
             taxa = dados_temp["taxa"]
 
             canal_destino = pegar_canal(CANAL_LAVAGEM_MEMBROS_ID)
+
             arquivo = await message.attachments[0].to_file()
 
             try:
@@ -2317,34 +2702,68 @@ async def on_message(message: discord.Message):
             except:
                 pass
 
-            await salvar_lavagem_db(message.author.id, valor_sujo, taxa, valor_retorno)
+            await salvar_lavagem_db(
+                message.author.id,
+                valor_sujo,
+                taxa,
+                valor_retorno
+            )
 
-            embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c)
-            embed.add_field(name="Membro", value=message.author.mention, inline=False)
-            embed.add_field(name="Valor sujo", value=formatar_real(valor_sujo), inline=True)
-            embed.add_field(name="Valor a repassar (80%)", value=formatar_real(valor_retorno), inline=True)
-            embed.set_image(url=f"attachment://{arquivo.filename}")
+            embed = discord.Embed(
+                title="🧼 Nova Lavagem",
+                color=0x1abc9c
+            )
 
-            await canal_destino.send(embed=embed, file=arquivo)
+            embed.add_field(
+                name="Membro",
+                value=message.author.mention,
+                inline=False
+            )
+
+            embed.add_field(
+                name="Valor sujo",
+                value=formatar_real(valor_sujo),
+                inline=True
+            )
+
+            embed.add_field(
+                name="Valor a repassar (80%)",
+                value=formatar_real(valor_retorno),
+                inline=True
+            )
+
+            embed.set_image(
+                url=f"attachment://{arquivo.filename}"
+            )
+
+            await canal_destino.send(
+                embed=embed,
+                file=arquivo
+            )
 
             return
 
     await bot.process_commands(message)
 
-
-# ================= PERMISSÃO =================
+# =========================================================
+# ================= PERMISSÕES ============================
+# =========================================================
 
 def pode_gerenciar_lavagem(member: discord.Member):
+
     cargos_permitidos = [
         CARGO_GERENTE_ID,
         CARGO_01_ID,
         CARGO_02_ID,
         CARGO_GERENTE_GERAL_ID
     ]
+
     return any(role.id in cargos_permitidos for role in member.roles)
 
 
-# ================= VIEW =================
+# =========================================================
+# ================= VIEW LAVAGEM ==========================
+# =========================================================
 
 class LavagemView(discord.ui.View):
 
@@ -2357,7 +2776,10 @@ class LavagemView(discord.ui.View):
         custom_id="lavagem_iniciar"
     )
     async def iniciar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(LavagemModal())
+
+        await interaction.response.send_modal(
+            LavagemModal()
+        )
 
 
     @discord.ui.button(
@@ -2368,7 +2790,10 @@ class LavagemView(discord.ui.View):
     async def limpar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if not pode_gerenciar_lavagem(interaction.user):
-            await interaction.response.send_message("Você não tem permissão.", ephemeral=True)
+            await interaction.response.send_message(
+                "Você não tem permissão.",
+                ephemeral=True
+            )
             return
 
         canal = interaction.guild.get_channel(CANAL_LAVAGEM_MEMBROS_ID)
@@ -2381,7 +2806,10 @@ class LavagemView(discord.ui.View):
 
         await limpar_lavagens_db()
 
-        await interaction.response.send_message("Sala limpa!", ephemeral=True)
+        await interaction.response.send_message(
+            "Sala limpa!",
+            ephemeral=True
+        )
 
 
     @discord.ui.button(
@@ -2392,13 +2820,18 @@ class LavagemView(discord.ui.View):
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if not pode_gerenciar_lavagem(interaction.user):
-            await interaction.response.send_message("Você não tem permissão.", ephemeral=True)
+            await interaction.response.send_message(
+                "Você não tem permissão.",
+                ephemeral=True
+            )
             return
 
         dados = await carregar_lavagens_db()
+
         canal = interaction.guild.get_channel(CANAL_RELATORIO_LAVAGEM_ID)
 
         for item in dados:
+
             user = await bot.fetch_user(int(item["user_id"]))
 
             await canal.send(
@@ -2406,7 +2839,10 @@ class LavagemView(discord.ui.View):
                 f"- Valor sujo: {formatar_real(item['valor'])}"
             )
 
-        await interaction.response.send_message("Relatório enviado!", ephemeral=True)
+        await interaction.response.send_message(
+            "Relatório enviado!",
+            ephemeral=True
+        )
 
 
     @discord.ui.button(
@@ -2417,7 +2853,10 @@ class LavagemView(discord.ui.View):
     async def avisar_todos(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if not pode_gerenciar_lavagem(interaction.user):
-            await interaction.response.send_message("Você não tem permissão.", ephemeral=True)
+            await interaction.response.send_message(
+                "Você não tem permissão.",
+                ephemeral=True
+            )
             return
 
         dados = await carregar_lavagens_db()
@@ -2426,6 +2865,7 @@ class LavagemView(discord.ui.View):
         falhas = 0
 
         for item in dados:
+
             try:
                 user = await bot.fetch_user(int(item["user_id"]))
 
@@ -2469,6 +2909,7 @@ async def enviar_painel_lavagem():
         embed,
         LavagemView()
     )
+
     print("🧼 Painel de lavagem verificado/atualizado")
 
 # =========================================================
@@ -2478,7 +2919,9 @@ async def enviar_painel_lavagem():
 ADM_ID = 467673818375389194
 
 
+# =========================================================
 # ================= BANCO =================
+# =========================================================
 
 async def carregar_lives():
 
@@ -2531,60 +2974,83 @@ async def atualizar_divulgado(link, valor):
 
 
 async def remover_live_db(user_id):
+
     async with db.acquire() as conn:
+
         await conn.execute(
             "DELETE FROM lives WHERE user_id=$1",
             str(user_id)
         )
 
-
 # =========================================================
-# ================= DETECTAR PLATAFORMA ===================
+# ========================= LIVES ==========================
 # =========================================================
 
-def detectar_plataforma(link):
-
-    link = link.lower()
-
-    if "twitch.tv" in link:
-        return "twitch"
-
-    if "kick.com" in link:
-        return "kick"
-
-    if "tiktok.com" in link:
-        return "tiktok"
-
-    return None
+ADM_ID = 467673818375389194
 
 
 # =========================================================
-# ================= EXTRAIR CANAL =========================
+# ================= BANCO =================
 # =========================================================
 
-def extrair_canal(link):
+async def carregar_lives():
 
-    link = link.lower().strip()
+    async with db.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM lives")
 
-    link = link.replace("https://", "")
-    link = link.replace("http://", "")
-    link = link.replace("www.", "")
+    lives = {}
 
-    partes = link.split("/")
+    for r in rows:
 
-    if "twitch.tv" in link:
-        return partes[1]
+        uid = r["user_id"]
 
-    if "kick.com" in link:
-        return partes[1]
+        lives.setdefault(uid, [])
 
-    if "tiktok.com" in link:
-        user = partes[1].replace("@", "")
-        user = user.split("?")[0]
-        return user
+        lives[uid].append({
+            "link": r["link"],
+            "divulgado": r["divulgado"]
+        })
 
-    return None
+    return lives
 
+
+async def salvar_live(user_id, link):
+
+    async with db.acquire() as conn:
+
+        await conn.execute(
+            """
+            INSERT INTO lives (user_id, link, divulgado)
+            VALUES ($1, $2, false)
+            """,
+            str(user_id),
+            link
+        )
+
+
+async def atualizar_divulgado(link, valor):
+
+    async with db.acquire() as conn:
+
+        await conn.execute(
+            """
+            UPDATE lives
+            SET divulgado=$1
+            WHERE link=$2
+            """,
+            valor,
+            link
+        )
+
+
+async def remover_live_db(user_id):
+
+    async with db.acquire() as conn:
+
+        await conn.execute(
+            "DELETE FROM lives WHERE user_id=$1",
+            str(user_id)
+        )
 
 # =========================================================
 # ================= CHECAR TWITCH =========================
@@ -2611,9 +3077,11 @@ async def checar_twitch(canal):
 
                 info = data["data"][0]
 
-                thumbnail = info["thumbnail_url"]\
-                    .replace("{width}", "1280")\
+                thumbnail = (
+                    info["thumbnail_url"]
+                    .replace("{width}", "1280")
                     .replace("{height}", "720")
+                )
 
                 return True, info.get("title"), info.get("game_name"), thumbnail
 
@@ -2622,7 +3090,6 @@ async def checar_twitch(canal):
     except Exception as e:
 
         print("Erro Twitch API:", e)
-
         return False, None, None, None
 
 
@@ -2643,7 +3110,6 @@ async def checar_kick(canal):
         if data.get("livestream"):
 
             titulo = data["livestream"]["session_title"]
-
             thumb = data["livestream"]["thumbnail"]["url"]
 
             return True, titulo, None, thumb
@@ -2651,7 +3117,6 @@ async def checar_kick(canal):
         return False, None, None, None
 
     except:
-
         return False, None, None, None
 
 
@@ -2683,7 +3148,6 @@ async def checar_tiktok(username):
 
         status = live_data.get("status", 0)
 
-        # status 2 = AO VIVO
         if status != 2:
             return False, None, None, None
 
@@ -2699,7 +3163,6 @@ async def checar_tiktok(username):
     except Exception as e:
 
         print("Erro TikTok API:", e)
-
         return False, None, None, None
 
 # =========================================================
@@ -2782,41 +3245,46 @@ async def verificar_lives():
                     continue
 
                 if plataforma == "twitch":
-
                     ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal)
 
                 elif plataforma == "kick":
-
                     ao_vivo, titulo, jogo, thumbnail = await checar_kick(canal)
 
                 elif plataforma == "tiktok":
-
                     ao_vivo, titulo, jogo, thumbnail = await checar_tiktok(canal)
 
                 else:
                     continue
 
                 if not ao_vivo and divulgado:
-
                     await atualizar_divulgado(link, False)
 
                 if ao_vivo:
 
                     if not divulgado:
-                       print(f"🔴 LIVE detectada ({plataforma}): {link}")
 
-                       await divulgar_live(user_id, link, titulo, jogo, thumbnail)
+                        print(f"🔴 LIVE detectada ({plataforma}): {link}")
 
-                       await atualizar_divulgado(link, True)
+                        await divulgar_live(
+                            user_id,
+                            link,
+                            titulo,
+                            jogo,
+                            thumbnail
+                        )
+
+                        await atualizar_divulgado(link, True)
 
     except Exception as e:
 
         print("Erro no loop de lives:", e)
 
-
-# ================= CADASTRO =================
+# =========================================================
+# ================= CADASTRO DE LIVE ======================
+# =========================================================
 
 class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
+
     link = discord.ui.TextInput(
         label="Cole o link da sua live",
         placeholder="https://twitch.tv/seucanal"
@@ -2833,7 +3301,10 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
         novo_canal = extrair_canal(novo_link)
 
         if not plataforma or not novo_canal:
-            await interaction.response.send_message("❌ Link inválido.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Link inválido.",
+                ephemeral=True
+            )
             return
 
         plataforma_nova = detectar_plataforma(novo_link)
@@ -2854,7 +3325,6 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
                     plataforma_existente == plataforma_nova
                     and canal_existente == novo_canal
                 ):
-
                     await interaction.response.send_message(
                         "❌ Você já cadastrou esse canal nessa plataforma.",
                         ephemeral=True
@@ -2869,11 +3339,17 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
             color=0x2ecc71
         )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
 
-# ================= VIEW CADASTRO =================
+# =========================================================
+# ================= VIEW CADASTRO =========================
+# =========================================================
 
 class CadastrarLiveView(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -2883,18 +3359,30 @@ class CadastrarLiveView(discord.ui.View):
         custom_id="cadastrar_live_btn"
     )
     async def cadastrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(CadastrarLiveModal())
 
+        await interaction.response.send_modal(
+            CadastrarLiveModal()
+        )
 
-# ================= SELECT REMOVER =================
+# =========================================================
+# ================= SELECT REMOVER LIVE ===================
+# =========================================================
 
 class SelectRemoverLive(discord.ui.Select):
+
     def __init__(self):
+
         self.options_list = []
-        super().__init__(placeholder="Carregando...", options=[])
+
+        super().__init__(
+            placeholder="Carregando...",
+            options=[]
+        )
 
     async def refresh_options(self):
+
         lives = await carregar_lives()
+
         self.options = [
             discord.SelectOption(
                 label=data["link"][:80],
@@ -2902,19 +3390,30 @@ class SelectRemoverLive(discord.ui.Select):
                 value=uid
             )
             for uid, data in lives.items()
-        ] or [discord.SelectOption(label="Nenhuma live", value="none")]
+        ] or [
+            discord.SelectOption(label="Nenhuma live", value="none")
+        ]
 
     async def callback(self, interaction: discord.Interaction):
+
         if interaction.user.id != ADM_ID:
-            await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Apenas ADM.",
+                ephemeral=True
+            )
             return
 
         uid = self.values[0]
-        await remover_live_db(uid)
-        await interaction.response.send_message("✅ Live removida.", ephemeral=True)
 
+        await remover_live_db(uid)
+
+        await interaction.response.send_message(
+            "✅ Live removida.",
+            ephemeral=True
+        )
 
 class RemoverLiveView(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=60)
 
@@ -2926,9 +3425,12 @@ class RemoverLiveView(discord.ui.View):
         self.clear_items()
         self.add_item(select)
 
-# ================= ADMIN =================
+# =========================================================
+# ================= ADMIN LIVES ===========================
+# =========================================================
 
 class GerenciarLivesView(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -2938,8 +3440,12 @@ class GerenciarLivesView(discord.ui.View):
         custom_id="ver_lives_admin_btn"
     )
     async def ver(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         if interaction.user.id != ADM_ID:
-            await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Apenas ADM.",
+                ephemeral=True
+            )
             return
 
         lives = await carregar_lives()
@@ -2958,15 +3464,24 @@ class GerenciarLivesView(discord.ui.View):
             color=0x3498db
         )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+
     @discord.ui.button(
         label="🗑️ Remover Live",
         style=discord.ButtonStyle.danger,
         custom_id="remover_live_admin_btn"
     )
     async def remover(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         if interaction.user.id != ADM_ID:
-            await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Apenas ADM.",
+                ephemeral=True
+            )
             return
 
         view = RemoverLiveView()
@@ -2977,7 +3492,9 @@ class GerenciarLivesView(discord.ui.View):
             view=view,
             ephemeral=True
         )
+
 class PainelLivesAdmin(discord.ui.View):
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -2987,14 +3504,23 @@ class PainelLivesAdmin(discord.ui.View):
         custom_id="abrir_painel_admin_lives_btn"
     )
     async def abrir(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         if interaction.user.id != ADM_ID:
-            await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Apenas ADM.",
+                ephemeral=True
+            )
             return
 
-        await interaction.response.send_message("Painel ADM:", view=GerenciarLivesView(), ephemeral=True)
+        await interaction.response.send_message(
+            "Painel ADM:",
+            view=GerenciarLivesView(),
+            ephemeral=True
+        )
 
-
-# ================= PAINÉIS =================
+# =========================================================
+# ================= PAINÉIS ===============================
+# =========================================================
 
 async def enviar_painel_admin_lives():
 
@@ -3057,16 +3583,32 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
         )
 
         if row:
+
             try:
+
                 canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
-                msg = await canal_salvo.fetch_message(int(row["mensagem_id"]))
-                await msg.edit(embed=embed, view=view)
+
+                msg = await canal_salvo.fetch_message(
+                    int(row["mensagem_id"])
+                )
+
+                await msg.edit(
+                    embed=embed,
+                    view=view
+                )
+
                 return
 
             except Exception as e:
+
                 print(f"⚠️ Erro ao atualizar painel {nome}:", e)
 
-        msg = await canal.send(embed=embed, view=view)
+        # se não existir ou falhar → cria novo
+
+        msg = await canal.send(
+            embed=embed,
+            view=view
+        )
 
         await conn.execute(
             """
@@ -3079,11 +3621,13 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
             str(canal_id),
             str(msg.id)
         )
+
 # =========================================================
 # ======================== AÇÕES ==========================
 # =========================================================
 
 ACOES_SEMANA = {
+
     "Loja de Armas (Ammunation)": None,
     "Loja de Bebidas": None,
     "Loja de Departamento": None,
@@ -3102,12 +3646,20 @@ ACOES_SEMANA = {
     "Nióbio": 1,
 }
 
+
 def formatar_dinheiro(valor):
+
     try:
         valor = float(valor)
     except:
         valor = 0
-    return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    return (
+        f"{valor:,.2f}"
+        .replace(",", "X")
+        .replace(".", ",")
+        .replace("X", ".")
+    )
 
 # =========================================================
 # SELECT AÇÃO
@@ -3116,11 +3668,16 @@ def formatar_dinheiro(valor):
 class AcaoSelect(discord.ui.Select):
 
     def __init__(self):
-        options = [discord.SelectOption(label=a) for a in ACOES_SEMANA.keys()]
+
+        options = [
+            discord.SelectOption(label=a)
+            for a in ACOES_SEMANA.keys()
+        ]
 
         super().__init__(
             placeholder="Escolha a ação",
-            options=options
+            options=options,
+            custom_id="acao_select_menu"
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -3131,13 +3688,102 @@ class AcaoSelect(discord.ui.Select):
             ephemeral=True
         )
 
-
 class PainelAcoesView(discord.ui.View):
 
     def __init__(self):
+
         super().__init__(timeout=None)
+
         self.add_item(AcaoSelect())
-        self.add_item(RelatorioButton())
+
+# =========================================================
+# ================= FUNÇÕES DO PAINEL AÇÕES ===============
+# =========================================================
+
+async def carregar_acoes_semana():
+
+    inicio_semana = agora_db() - timedelta(days=agora_db().weekday())
+
+    async with db.acquire() as conn:
+
+        rows = await conn.fetch(
+            """
+            SELECT tipo, COUNT(*) as total
+            FROM acoes_semana
+            WHERE data >= $1
+            GROUP BY tipo
+            """,
+            inicio_semana
+        )
+
+    return {r["tipo"]: r["total"] for r in rows}
+
+async def gerar_embed_acoes():
+
+    feitos = await carregar_acoes_semana()
+
+    linhas_limitadas = []
+    linhas_ilimitadas = []
+
+    for acao, limite in ACOES_SEMANA.items():
+
+        qtd = feitos.get(acao, 0)
+
+        if limite is not None:
+
+            if qtd >= limite:
+                status = "🟢"
+            elif qtd > 0:
+                status = "🟡"
+            else:
+                status = "🔴"
+
+            linhas_limitadas.append(
+                f"{status} **{acao}** {qtd}/{limite}"
+            )
+
+        else:
+            linhas_ilimitadas.append(
+                f"🔹 **{acao}** {qtd} ♾️"
+            )
+
+    embed = discord.Embed(
+        title="🚨 AÇÕES DA SEMANA",
+        color=0xe74c3c
+    )
+
+    if linhas_limitadas:
+
+        embed.add_field(
+            name="🎯 Ações principais",
+            value="\n".join(linhas_limitadas),
+            inline=False
+        )
+
+    if linhas_ilimitadas:
+
+        embed.add_field(
+            name="📦 Ações ilimitadas",
+            value="\n".join(linhas_ilimitadas),
+            inline=False
+        )
+
+    embed.set_footer(
+        text="Reset automático toda segunda às 00:00"
+    )
+
+    return embed
+
+async def atualizar_painel_acoes(guild):
+
+    embed = await gerar_embed_acoes()
+
+    await enviar_ou_atualizar_painel(
+        "painel_acoes",
+        CANAL_ESCALACOES_ID,
+        embed,
+        PainelAcoesView()
+    )
 
 # =========================================================
 # SELECIONAR MEMBROS
@@ -3176,11 +3822,13 @@ class SelecionarMembrosView(discord.ui.View):
         self.add_item(SelecionarMembros(self))
         self.add_item(EnviarEscalacaoButton(self))
 
-
 class EnviarEscalacaoButton(discord.ui.Button):
 
     def __init__(self, view):
-        super().__init__(label="📤 Enviar", style=discord.ButtonStyle.success)
+        super().__init__(
+            label="📤 Enviar",
+            style=discord.ButtonStyle.success
+        )
         self.view_ref = view
 
     async def callback(self, interaction):
@@ -3190,24 +3838,62 @@ class EnviarEscalacaoButton(discord.ui.Button):
         async with db.acquire() as conn:
 
             acao_id = await conn.fetchval(
-                "INSERT INTO acoes_semana (tipo,data,autor) VALUES ($1,$2,$3) RETURNING id",
+                """
+                INSERT INTO acoes_semana (tipo, data, autor)
+                VALUES ($1,$2,$3)
+                RETURNING id
+                """,
                 self.view_ref.acao,
                 agora_db(),
                 str(interaction.user.id)
             )
 
             for m in membros:
+
                 await conn.execute(
-                    "INSERT INTO participantes_acoes (acao_id,user_id) VALUES ($1,$2)",
+                    """
+                    INSERT INTO participantes_acoes (acao_id, user_id)
+                    VALUES ($1,$2)
+                    """,
                     acao_id,
                     str(m.id)
                 )
 
-        await registrar_relatorio_acao(interaction.guild, acao_id)
-        await interaction.response.send_message("Registrado!", ephemeral=True)
+        await registrar_relatorio_acao(
+            interaction.guild,
+            acao_id
+        )
+
+        await interaction.response.send_message(
+            "Registrado!",
+            ephemeral=True
+        )
 
 # =========================================================
-# RESULTADO + METAS + RELATÓRIO
+# RESET SEMANAL
+# =========================================================
+
+@tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
+async def reset_acoes_segunda():
+
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+    if agora.weekday() == 0:
+
+        async with db.acquire() as conn:
+
+            await conn.execute("DELETE FROM acoes_semana")
+            await conn.execute("DELETE FROM participantes_acoes")
+
+        print("🔄 Ações da semana resetadas.")
+
+        guild = bot.get_guild(GUILD_ID)
+
+        if guild:
+            await atualizar_painel_acoes(guild)
+
+# =========================================================
+# RESULTADO + METAS
 # =========================================================
 
 class ResultadoAcaoView(discord.ui.View):
@@ -3216,14 +3902,25 @@ class ResultadoAcaoView(discord.ui.View):
         super().__init__(timeout=None)
         self.acao_id = acao_id
 
-    @discord.ui.button(label="🏆 Ganhou", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label="🏆 Ganhou",
+        style=discord.ButtonStyle.success
+    )
     async def ganhou(self, interaction, button):
-        await interaction.response.send_modal(ResultadoModal(self.acao_id, True))
 
-    @discord.ui.button(label="💀 Perdeu", style=discord.ButtonStyle.danger)
+        await interaction.response.send_modal(
+            ResultadoModal(self.acao_id, True)
+        )
+
+    @discord.ui.button(
+        label="💀 Perdeu",
+        style=discord.ButtonStyle.danger
+    )
     async def perdeu(self, interaction, button):
-        await interaction.response.send_modal(ResultadoModal(self.acao_id, False))
 
+        await interaction.response.send_modal(
+            ResultadoModal(self.acao_id, False)
+        )
 
 class ResultadoModal(discord.ui.Modal):
 
@@ -3236,21 +3933,34 @@ class ResultadoModal(discord.ui.Modal):
 
     async def on_submit(self, interaction):
 
-        valor = int((self.dinheiro.value or "0").replace(".", "").replace(",", ""))
+        valor = int(
+            (self.dinheiro.value or "0")
+            .replace(".", "")
+            .replace(",", "")
+        )
 
         async with db.acquire() as conn:
 
             participantes = await conn.fetch(
-                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+                """
+                SELECT user_id
+                FROM participantes_acoes
+                WHERE acao_id=$1
+                """,
                 self.acao_id
             )
 
             acao = await conn.fetchrow(
-                "SELECT tipo, autor FROM acoes_semana WHERE id=$1",
+                """
+                SELECT tipo, autor
+                FROM acoes_semana
+                WHERE id=$1
+                """,
                 self.acao_id
             )
 
         qtd = len(participantes) or 1
+
         base = valor // qtd
         resto = valor % qtd
 
@@ -3261,6 +3971,7 @@ class ResultadoModal(discord.ui.Modal):
             ganho = base + (1 if i < resto else 0)
 
             if uid in metas_cache:
+
                 metas_cache[uid]["acao"] += ganho
 
                 await salvar_meta(
@@ -3271,15 +3982,20 @@ class ResultadoModal(discord.ui.Modal):
                     metas_cache[uid]["acao"]
                 )
 
-        embed = discord.Embed(title="Resultado da ação")
+        embed = discord.Embed(
+            title="Resultado da ação"
+        )
 
         embed.add_field(name="Ação", value=acao["tipo"])
         embed.add_field(name="Total", value=f"R$ {formatar_dinheiro(valor)}")
         embed.add_field(name="Por pessoa", value=f"R$ {formatar_dinheiro(base)}")
 
-        await interaction.message.edit(embed=embed, view=None)
-        await interaction.response.defer()
+        await interaction.message.edit(
+            embed=embed,
+            view=None
+        )
 
+        await interaction.response.defer()
 
 # =========================================================
 # RELATÓRIO POR DATA
@@ -3288,10 +4004,16 @@ class ResultadoModal(discord.ui.Modal):
 class RelatorioButton(discord.ui.Button):
 
     def __init__(self):
-        super().__init__(label="📊 Relatório", style=discord.ButtonStyle.secondary)
+        super().__init__(
+            label="📊 Relatório",
+            style=discord.ButtonStyle.secondary
+        )
 
     async def callback(self, interaction):
-        await interaction.response.send_modal(RelatorioModal())
+
+        await interaction.response.send_modal(
+            RelatorioModal()
+        )
 
 
 class RelatorioModal(discord.ui.Modal):
@@ -3307,7 +4029,11 @@ class RelatorioModal(discord.ui.Modal):
         async with db.acquire() as conn:
 
             total = await conn.fetchval(
-                "SELECT COALESCE(SUM(valor),0) FROM acoes_semana WHERE data BETWEEN $1 AND $2",
+                """
+                SELECT COALESCE(SUM(valor),0)
+                FROM acoes_semana
+                WHERE data BETWEEN $1 AND $2
+                """,
                 inicio,
                 fim
             )
@@ -3318,7 +4044,7 @@ class RelatorioModal(discord.ui.Modal):
         )
 
 # =========================================================
-# ATUALIZA EMBED DO HELICRASH
+# ================= HELICRASH =============================
 # =========================================================
 
 async def atualizar_embed_helicrash(hid):
@@ -3343,7 +4069,9 @@ async def atualizar_embed_helicrash(hid):
     except:
         return
 
-    participantes = [x for x in (row["participantes"] or "").split(",") if x]
+    participantes = [
+        x for x in (row["participantes"] or "").split(",") if x
+    ]
 
     vagas_restantes = 10 - len(participantes)
 
@@ -3361,7 +4089,10 @@ async def atualizar_embed_helicrash(hid):
     minutos = segundos // 60
     segundos = segundos % 60
 
-    lista = "\n".join(f"<@{uid}>" for uid in participantes) if participantes else "Ninguém ainda"
+    lista = (
+        "\n".join(f"<@{uid}>" for uid in participantes)
+        if participantes else "Ninguém ainda"
+    )
 
     embed = discord.Embed(
         title=f"🚁 HELICRASH {horario.strftime('%H:%M')}",
@@ -3379,19 +4110,18 @@ async def atualizar_embed_helicrash(hid):
         value=f"{len(participantes)}/10",
         inline=True
     )
-    
+
     embed.add_field(
         name="Participantes",
         value=lista,
         inline=False
     )
 
-    await msg.edit(embed=embed, view=HelicrashView(hid))
+    await msg.edit(
+        embed=embed,
+        view=HelicrashView(hid)
+    )
 
-
-# =========================================================
-# LOOP DO HELICRASH
-# =========================================================
 
 async def acompanhar_helicrash(hid):
 
@@ -3414,15 +4144,10 @@ async def acompanhar_helicrash(hid):
         if agora() >= horario:
 
             await finalizar_helicrash(hid)
-
             return
 
         await atualizar_embed_helicrash(hid)
 
-
-# =========================================================
-# FINALIZA HELICRASH
-# =========================================================
 
 async def finalizar_helicrash(hid):
 
@@ -3436,11 +4161,16 @@ async def finalizar_helicrash(hid):
     if not row:
         return
 
-    participantes = [x for x in (row["participantes"] or "").split(",") if x]
+    participantes = [
+        x for x in (row["participantes"] or "").split(",") if x
+    ]
 
     canal = bot.get_channel(CANAL_RELATORIO_ACOES_ID)
 
-    lista = "\n".join(f"<@{uid}>" for uid in participantes) if participantes else "Sem participantes"
+    lista = (
+        "\n".join(f"<@{uid}>" for uid in participantes)
+        if participantes else "Sem participantes"
+    )
 
     embed = discord.Embed(
         title=f"🚁 HELICRASH {row['horario'].strftime('%H:%M')}",
@@ -3462,11 +4192,14 @@ async def finalizar_helicrash(hid):
             pass
 
     async with db.acquire() as conn:
-        await conn.execute("DELETE FROM helicrash WHERE id=$1", hid)
+        await conn.execute(
+            "DELETE FROM helicrash WHERE id=$1",
+            hid
+        )
 
 
 # =========================================================
-# MODAL PARA CRIAR HELICRASH
+# ================= MODAL HELICRASH =======================
 # =========================================================
 
 class HelicrashModal(discord.ui.Modal, title="Criar Helicrash"):
@@ -3535,10 +4268,11 @@ class HelicrashModal(discord.ui.Modal, title="Criar Helicrash"):
             except Exception as e:
                 print("Erro banco helicrash:", e)
 
-            # garante botão mesmo se banco falhar
             await msg.edit(view=HelicrashView(hid or 0))
 
-            bot.loop.create_task(acompanhar_helicrash(hid))
+            bot.loop.create_task(
+                acompanhar_helicrash(hid)
+            )
 
             await interaction.response.send_message(
                 f"Helicrash criado para **{horario.strftime('%H:%M')}**",
@@ -3554,8 +4288,10 @@ class HelicrashModal(discord.ui.Modal, title="Criar Helicrash"):
                     "Erro ao criar helicrash.",
                     ephemeral=True
                 )
+
+
 # =========================================================
-# BOTÃO PARA CRIAR HELICRASH
+# ================= BOTÃO HELICRASH =======================
 # =========================================================
 
 class HelicrashPainel(discord.ui.View):
@@ -3571,7 +4307,9 @@ class HelicrashPainel(discord.ui.View):
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         try:
-            await interaction.response.send_modal(HelicrashModal())
+            await interaction.response.send_modal(
+                HelicrashModal()
+            )
 
         except Exception as e:
 
@@ -3582,8 +4320,10 @@ class HelicrashPainel(discord.ui.View):
                     "Erro ao abrir o modal.",
                     ephemeral=True
                 )
+
+
 # =========================================================
-# ENVIAR PAINEL HELICRASH
+# ================= PAINEL HELICRASH ======================
 # =========================================================
 
 async def enviar_painel_helicrash():
@@ -3606,6 +4346,7 @@ async def enviar_painel_helicrash():
         embed,
         HelicrashPainel()
     )
+
 # =========================================================
 # =========================== METAS ========================
 # =========================================================
@@ -3613,11 +4354,13 @@ async def enviar_painel_helicrash():
 metas_cache = {}
 criando_meta = set()
 
+
 # =========================================================
 # CARREGAR METAS DO BANCO
 # =========================================================
 
 async def carregar_metas_cache():
+
     global metas_cache
 
     async with db.acquire() as conn:
@@ -3644,6 +4387,7 @@ async def salvar_meta(user_id, canal_id, dinheiro, polvora, acao):
     }
 
     async with db.acquire() as conn:
+
         await conn.execute(
             """
             INSERT INTO metas (user_id, canal_id, dinheiro, polvora, acao)
@@ -3661,6 +4405,7 @@ async def salvar_meta(user_id, canal_id, dinheiro, polvora, acao):
             polvora,
             acao
         )
+
 
 # =========================================================
 # CATEGORIA POR CARGO
@@ -3757,6 +4502,7 @@ async def criar_sala_meta(member: discord.Member):
     }
 
     gerente = guild.get_role(CARGO_GERENTE_ID)
+
     if gerente:
         overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
 
@@ -3782,7 +4528,9 @@ async def atualizar_categoria_meta(member):
     if str(member.id) not in metas_cache:
         return
 
-    canal = member.guild.get_channel(metas_cache[str(member.id)]["canal_id"])
+    canal = member.guild.get_channel(
+        metas_cache[str(member.id)]["canal_id"]
+    )
 
     if not canal:
         return
@@ -3790,7 +4538,10 @@ async def atualizar_categoria_meta(member):
     nova = obter_categoria_meta(member)
 
     if nova and canal.category_id != nova:
-        await canal.edit(category=member.guild.get_channel(nova))
+
+        await canal.edit(
+            category=member.guild.get_channel(nova)
+        )
 
 
 # =========================================================
@@ -3844,10 +4595,12 @@ async def on_guild_channel_delete(channel):
 
             try:
                 async with db.acquire() as conn:
+
                     await conn.execute(
                         "DELETE FROM metas WHERE user_id=$1",
                         uid
                     )
+
             except Exception as e:
                 print("Erro removendo meta:", e)
 
@@ -3871,6 +4624,7 @@ class SolicitarSalaView(discord.ui.View):
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if str(interaction.user.id) in metas_cache:
+
             await interaction.response.send_message(
                 "Você já possui uma sala.",
                 ephemeral=True
@@ -3886,6 +4640,10 @@ class SolicitarSalaView(discord.ui.View):
             ephemeral=True
         )
 
+
+# =========================================================
+# PAINEL SOLICITAR SALA
+# =========================================================
 
 async def enviar_painel_solicitar_sala():
 
@@ -3908,41 +4666,6 @@ async def enviar_painel_solicitar_sala():
         SolicitarSalaView()
     )
 
-#=================== SEGUNDA TASK =========================
-class SegundaTaskView(discord.ui.View):
-
-    def __init__(self, pid):
-        super().__init__(timeout=None)
-        self.pid = pid
-
-    @discord.ui.button(
-        label="✅ Confirmar 2ª Task",
-        style=discord.ButtonStyle.success,
-        custom_id="segunda_task_btn"
-    )
-    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-
-        try:
-
-            prod = await carregar_producao(self.pid)
-
-            if not prod:
-                return
-
-            prod["segunda_task_confirmada"] = {
-                "user": interaction.user.id,
-                "time": agora().isoformat()
-            }
-
-            await salvar_producao(self.pid, prod)
-
-            await interaction.message.edit(view=None)
-
-        except Exception as e:
-            print("Erro segunda task:", e)
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
@@ -3964,18 +4687,21 @@ async def on_ready():
     # =====================================================
     # ================= HTTP SESSION ======================
     # =====================================================
+
     if not http_session:
         http_session = aiohttp.ClientSession()
 
     # =====================================================
     # ================= CONECTA NO POSTGRES ===============
     # =====================================================
+
     if not db:
         await conectar_db()
 
     # =====================================================
     # ================= CARREGAR GUILD ====================
     # =====================================================
+
     guild = bot.get_guild(GUILD_ID)
 
     if guild:
@@ -3990,6 +4716,7 @@ async def on_ready():
     # =====================================================
     # ================= CACHE DE METAS ====================
     # =====================================================
+
     try:
         await carregar_metas_cache()
         print(f"📊 Metas carregadas: {len(metas_cache)}")
@@ -4017,7 +4744,7 @@ async def on_ready():
         CalculadoraView,
         StatusView,
         HelicrashPainel,
-        PainelAcoesView  # 🔥 AGORA EXISTE
+        PainelAcoesView
     ]
 
     for view_class in outras_views:
@@ -4049,14 +4776,16 @@ async def on_ready():
         print("Erro loop limpeza lavagens:", e)
 
     try:
-        if not reset_acoes_segunda.is_running():
-            reset_acoes_segunda.start()
+        if 'reset_acoes_segunda' in globals():
+            if not reset_acoes_segunda.is_running():
+                reset_acoes_segunda.start()
     except Exception as e:
         print("Erro reset ações semana:", e)
 
     # =====================================================
     # ================= RESTAURAR PRODUÇÕES ===============
     # =====================================================
+
     try:
         async with db.acquire() as conn:
             rows = await conn.fetch(
@@ -4068,10 +4797,15 @@ async def on_ready():
             )
 
         for r in rows:
+
             pid = r["pid"]
 
             if pid not in producoes_tasks:
-                task = bot.loop.create_task(acompanhar_producao(pid))
+
+                task = bot.loop.create_task(
+                    acompanhar_producao(pid)
+                )
+
                 producoes_tasks[pid] = task
 
         print(f"🏭 Produções restauradas: {len(rows)}")
@@ -4082,6 +4816,7 @@ async def on_ready():
     # =====================================================
     # ================= RESTAURAR GALPÕES ATIVOS ==========
     # =====================================================
+
     try:
         async with db.acquire() as conn:
             rows = await conn.fetch(
@@ -4102,22 +4837,59 @@ async def on_ready():
     # =====================================================
     # ================= ENVIAR PAINÉIS ====================
     # =====================================================
-    
+
     await asyncio.sleep(2)
-    
+
     try:
 
-        painel_tasks = [
-            enviar_painel_fabricacao(),
-            enviar_painel_lives(),
-            enviar_painel_admin_lives(),
-            enviar_painel_polvoras(),
-            enviar_painel_lavagem(),
-            enviar_painel_vendas(),
-            atualizar_painel_acoes(bot.get_guild(GUILD_ID)),
-            enviar_painel_solicitar_sala(),
-            enviar_painel_helicrash()
-        ]
+        painel_tasks = []
+
+        try:
+            painel_tasks.append(enviar_painel_fabricacao())
+        except:
+            pass
+
+        try:
+            painel_tasks.append(enviar_painel_lives())
+        except:
+            pass
+
+        try:
+            painel_tasks.append(enviar_painel_admin_lives())
+        except:
+            pass
+
+        try:
+            painel_tasks.append(enviar_painel_polvoras())
+        except:
+            pass
+
+        try:
+            painel_tasks.append(enviar_painel_lavagem())
+        except:
+            pass
+
+        try:
+            painel_tasks.append(enviar_painel_vendas())
+        except:
+            pass
+
+        # 🔥 PAINEL AÇÕES
+        try:
+            if 'atualizar_painel_acoes' in globals() and guild:
+                painel_tasks.append(atualizar_painel_acoes(guild))
+        except Exception as e:
+            print("Erro painel ações:", e)
+
+        try:
+            painel_tasks.append(enviar_painel_solicitar_sala())
+        except:
+            pass
+
+        try:
+            painel_tasks.append(enviar_painel_helicrash())
+        except:
+            pass
 
         results = await asyncio.gather(*painel_tasks, return_exceptions=True)
 
@@ -4133,23 +4905,30 @@ async def on_ready():
     # =====================================================
     # ================= INICIAR EDIT WORKER ===============
     # =====================================================
+
     try:
         if not hasattr(bot, "edit_worker_started"):
+
             bot.loop.create_task(edit_worker())
+
             bot.edit_worker_started = True
+
             print("🛠️ Edit worker iniciado.")
+
     except Exception as e:
         print("Erro iniciando edit worker:", e)
 
     # =====================================================
     # ================= LIMPEZA FINAL =====================
     # =====================================================
+
     gc.collect()
 
     print("🧹 Limpeza de memória executada")
     print("=========================================")
     print("✅ BOT ONLINE 100% ESTÁVEL")
     print("=========================================")
+
 # =========================================================
 # ========================= START BOT =====================
 # =========================================================
@@ -4157,5 +4936,3 @@ async def on_ready():
 if __name__ == "__main__":
     print("🚀 Iniciando bot...")
     bot.run(TOKEN)
-
-
