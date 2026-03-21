@@ -3924,11 +3924,57 @@ class SelecionarMembrosView(discord.ui.View):
 class EnviarEscalacaoButton(discord.ui.Button):
 
     def __init__(self, view):
-        super().__init__(
-            label="📤 Enviar",
-            style=discord.ButtonStyle.success
-        )
+        super().__init__(label="📤 Enviar", style=discord.ButtonStyle.success)
         self.view_ref = view
+
+    async def callback(self, interaction: discord.Interaction):
+
+        await interaction.response.defer(ephemeral=True)
+
+        membros = self.view_ref.membros
+
+        # 🚨 VALIDAÇÃO IMPORTANTE
+        if not membros:
+            await interaction.followup.send(
+                "⚠️ Você precisa selecionar os participantes primeiro.",
+                ephemeral=True
+            )
+            return
+
+        try:
+
+            async with db.acquire() as conn:
+
+                acao_id = await conn.fetchval(
+                    "INSERT INTO acoes_semana (tipo,data,autor) VALUES ($1,$2,$3) RETURNING id",
+                    self.view_ref.acao,
+                    agora_db(),
+                    str(interaction.user.id)
+                )
+
+                for m in membros:
+                    await conn.execute(
+                        "INSERT INTO participantes_acoes (acao_id,user_id) VALUES ($1,$2)",
+                        acao_id,
+                        str(m.id)
+                    )
+
+            # 🔥 ENVIA RELATÓRIO (ESSENCIAL)
+            await registrar_relatorio_acao(interaction.guild, acao_id)
+
+            await interaction.followup.send(
+                "✅ Escalação registrada com sucesso!",
+                ephemeral=True
+            )
+
+        except Exception as e:
+
+            print("Erro ao enviar escalacao:", e)
+
+            await interaction.followup.send(
+                "❌ Erro ao registrar a ação.",
+                ephemeral=True
+            )
 
 async def callback(self, interaction):
 
