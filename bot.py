@@ -4890,6 +4890,11 @@ async def on_ready():
         painel_tasks = []
 
         try:
+            painel_tasks.append(enviar_painel_registro())
+        except:
+            pass
+
+        try:
             painel_tasks.append(enviar_painel_fabricacao())
         except:
             pass
