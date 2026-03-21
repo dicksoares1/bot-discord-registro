@@ -3655,8 +3655,6 @@ class ResultadoModal(discord.ui.Modal):
             print("ERRO NO RESULTADO DA AÇÃO:")
             traceback.print_exc()
 
-            if not interaction.response.is_done():
-                await interaction.response.defer()
 # =========================================================
 # ================= RELATÓRIO AÇÃO ========================
 # =========================================================
