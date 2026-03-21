@@ -3934,6 +3934,8 @@ class ResultadoModal(discord.ui.Modal):
 
             ganho = base + (1 if i < resto else 0)
 
+            uid_str = str(uid)  # ✅ DEFINE AQUI PRIMEIRO
+
             if str(uid) in metas_cache:
 
                 metas_cache[str(uid)]["acao"] += ganho
