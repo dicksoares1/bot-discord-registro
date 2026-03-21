@@ -268,6 +268,15 @@ CARGO_MEMBRO_ID = 1422847198789369926
 CARGO_AGREGADO_ID = 1422847202937536532
 CARGO_MECANICO_ID = 1448526080645398641
 
+CARGOS_ACAO = [
+    CARGO_GERENTE_ID,
+    CARGO_RESP_ACAO_ID,
+    CARGO_RESP_VENDAS_ID,
+    CARGO_RESP_PRODUCAO_ID,
+    CARGO_MEMBRO_ID,
+    CARGO_SOLDADO_ID,
+]
+
 
 # =========================================================
 # ===================== CATEGORIAS =========================
@@ -1682,7 +1691,7 @@ class SegundaTaskView(discord.ui.View):
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if not interaction.response.is_done():
-            await interaction.response.defer()
+            await interaction.response.defer(ephemeral=True)
 
         try:
 
@@ -3886,6 +3895,7 @@ class SelecionarMembros(discord.ui.UserSelect):
         self.view_ref = view_ref
 
     async def callback(self, interaction):
+        await interaction.response.defer(ephemeral=True)
 
         membros = []
 
@@ -3921,43 +3931,32 @@ class EnviarEscalacaoButton(discord.ui.Button):
         )
         self.view_ref = view
 
-    async def callback(self, interaction):
+async def callback(self, interaction):
 
-        membros = self.view_ref.membros
+    await interaction.response.defer(ephemeral=True)
 
-        async with db.acquire() as conn:
+    membros = self.view_ref.membros
 
-            acao_id = await conn.fetchval(
-                """
-                INSERT INTO acoes_semana (tipo, data, autor)
-                VALUES ($1,$2,$3)
-                RETURNING id
-                """,
-                self.view_ref.acao,
-                agora_db(),
-                str(interaction.user.id)
+    async with db.acquire() as conn:
+
+        acao_id = await conn.fetchval(
+            "INSERT INTO acoes_semana (tipo,data,autor) VALUES ($1,$2,$3) RETURNING id",
+            self.view_ref.acao,
+            agora_db(),
+            str(interaction.user.id)
+        )
+
+        for m in membros:
+            await conn.execute(
+                "INSERT INTO participantes_acoes (acao_id,user_id) VALUES ($1,$2)",
+                acao_id,
+                str(m.id)
             )
 
-            for m in membros:
+    # 🔥 AGORA FUNCIONA
+    await registrar_relatorio_acao(interaction.guild, acao_id)
 
-                await conn.execute(
-                    """
-                    INSERT INTO participantes_acoes (acao_id, user_id)
-                    VALUES ($1,$2)
-                    """,
-                    acao_id,
-                    str(m.id)
-                )
-
-        await registrar_relatorio_acao(
-            interaction.guild,
-            acao_id
-        )
-
-        await interaction.response.send_message(
-            "Registrado!",
-            ephemeral=True
-        )
+    await interaction.followup.send("✅ Escalação registrada com sucesso!", ephemeral=True)
 
 # =========================================================
 # RESET SEMANAL
@@ -4133,6 +4132,79 @@ class RelatorioModal(discord.ui.Modal):
             ephemeral=True
         )
 
+# =========================================================
+# ================= RELATÓRIO DE AÇÃO =====================
+# =========================================================
+
+async def registrar_relatorio_acao(guild, acao_id):
+
+    try:
+
+        async with db.acquire() as conn:
+
+            acao = await conn.fetchrow(
+                "SELECT * FROM acoes_semana WHERE id=$1",
+                acao_id
+            )
+
+            participantes = await conn.fetch(
+                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+                acao_id
+            )
+
+        if not acao:
+            return
+
+        tipo = acao["tipo"]
+        autor_id = acao["autor"]
+
+        # ================= MONTA LISTA =================
+
+        lista = []
+
+        for p in participantes:
+            lista.append(f"<@{p['user_id']}>")
+
+        participantes_texto = "\n".join(lista) if lista else "Nenhum participante"
+
+        # ================= EMBED =================
+
+        embed = discord.Embed(
+            title="🚨 NOVA AÇÃO REGISTRADA",
+            color=0xe74c3c
+        )
+
+        embed.add_field(
+            name="🎯 Ação",
+            value=tipo,
+            inline=False
+        )
+
+        embed.add_field(
+            name="👑 Líder",
+            value=f"<@{autor_id}>",
+            inline=False
+        )
+
+        embed.add_field(
+            name="👥 Participantes",
+            value=participantes_texto,
+            inline=False
+        )
+
+        embed.set_footer(
+            text=f"ID da ação: {acao_id}"
+        )
+
+        # ================= ENVIO =================
+
+        canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+
+        if canal:
+            await canal.send(
+                embed=embed,
+                view=ResultadoAcaoView(acao_id)  # 🔥 AQUI
+            )
 # =========================================================
 # ================= HELICRASH =============================
 # =========================================================
