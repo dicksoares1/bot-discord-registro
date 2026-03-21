@@ -3199,6 +3199,11 @@ async def atualizar_painel_acoes(guild):
 
     embed = await gerar_embed_acoes()
 
+    # 🔥 proteção se função ainda não carregou
+    if "enviar_ou_atualizar_painel" not in globals():
+        print("❌ enviar_ou_atualizar_painel não definida ainda")
+        return
+
     await enviar_ou_atualizar_painel(
         "painel_acoes",
         CANAL_ESCALACOES_ID,
@@ -3362,7 +3367,10 @@ class SelecionarMembros(discord.ui.UserSelect):
         membros_validos = []
 
         for m in self.values:
-            if any(role.id in CARGOS_ACAO for role in m.roles):
+            try:
+                if any(role.id in CARGOS_ACAO for role in m.roles):
+                    membros_validos.append(m)
+            except:
                 membros_validos.append(m)
 
         if not membros_validos:
