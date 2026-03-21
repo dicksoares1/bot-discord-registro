@@ -3575,83 +3575,88 @@ class ResultadoModal(discord.ui.Modal):
                 except Exception as e:
                     print("Erro enviar resultado na sala:", e)
 
-        # =================================================
-        # EMBED NO RELATÓRIO DA AÇÃO
-        # =================================================
+        try:
 
-        participantes_marcados = [
-            f"<@{p['user_id']}>"
-            for p in participantes
-            if p["user_id"]
-        ]
+            # =================================================
+            # EMBED NO RELATÓRIO DA AÇÃO
+            # =================================================
 
-        cor = 0x2ecc71 if self.venceu else 0xe74c3c
-        status = "🟢 **AÇÃO GANHA**" if self.venceu else "🔴 **AÇÃO PERDIDA**"
+            participantes_marcados = [
+                f"<@{p['user_id']}>"
+                for p in participantes
+                if p["user_id"]
+            ]
 
-        embed = discord.Embed(
-            title="🚨 RELATÓRIO DE AÇÃO",
-            color=cor
-        )
+            cor = 0x2ecc71 if self.venceu else 0xe74c3c
+            status = "🟢 **AÇÃO GANHA**" if self.venceu else "🔴 **AÇÃO PERDIDA**"
 
-        embed.description = "━━━━━━━━━━━━━━━━━━━━━━"
+            embed = discord.Embed(
+                title="🚨 RELATÓRIO DE AÇÃO",
+                color=cor
+            )
 
-        embed.add_field(
-            name="🏦 Ação",
-            value=f"```{acao['tipo']}```",
-            inline=False
-        )
-
-        embed.add_field(
-            name="📋 Escalação feita por",
-            value=f"<@{acao['autor']}>",
-            inline=False
-        )
-
-        embed.add_field(
-            name="🎯 Resultado",
-            value=status,
-            inline=False
-        )
-
-        if self.venceu and dinheiro:
-
-            total_fmt = f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            embed.description = "━━━━━━━━━━━━━━━━━━━━━━"
 
             embed.add_field(
-                name="💰 Total ganho",
-                value=total_fmt,
+                name="🏦 Ação",
+                value=f"```{acao['tipo']}```",
                 inline=False
             )
 
-            valor_fmt = f"R$ {valor_por_pessoa:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
             embed.add_field(
-                name="💸 Valor por participante",
-                value=valor_fmt,
+                name="📋 Escalação feita por",
+                value=f"<@{acao['autor']}>",
                 inline=False
             )
 
-        participantes_texto = "\n".join(participantes_marcados) if participantes_marcados else "Nenhum registrado"
+            embed.add_field(
+                name="🎯 Resultado",
+                value=status,
+                inline=False
+            )
 
-        embed.add_field(
-            name=f"👥 Participantes ({len(participantes_marcados)})",
-            value=participantes_texto,
-            inline=False
-        )
+            if self.venceu and dinheiro:
 
-        embed.set_footer(text="Sistema de Ações • VDR 442")
+                total_fmt = f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        embed.description += "\n━━━━━━━━━━━━━━━━━━━━━━"
+                embed.add_field(
+                    name="💰 Total ganho",
+                    value=total_fmt,
+                    inline=False
+                )
+
+                valor_fmt = f"R$ {valor_por_pessoa:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+                embed.add_field(
+                    name="💸 Valor por participante",
+                    value=valor_fmt,
+                    inline=False
+                )
+
+            participantes_texto = "\n".join(participantes_marcados) if participantes_marcados else "Nenhum registrado"
+
+            embed.add_field(
+                name=f"👥 Participantes ({len(participantes_marcados)})",
+                value=participantes_texto,
+                inline=False
+            )
+
+            embed.set_footer(text="Sistema de Ações • VDR 442")
+
+            embed.description += "\n━━━━━━━━━━━━━━━━━━━━━━"
 
             await interaction.message.edit(embed=embed, view=None)
 
-            await responder_interacao(interaction, defer=True)
+            if not interaction.response.is_done():
+                await interaction.response.defer()
 
         except Exception as e:
             import traceback
             print("ERRO NO RESULTADO DA AÇÃO:")
             traceback.print_exc()
-            await responder_interacao(interaction, defer=True)
+
+            if not interaction.response.is_done():
+                await interaction.response.defer()
 # =========================================================
 # ================= RELATÓRIO AÇÃO ========================
 # =========================================================
