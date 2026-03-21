@@ -3217,7 +3217,52 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
 
         print("Erro divulgar live:", e)
 
+# =========================================================
+# ================= DETECTAR PLATAFORMA ===================
+# =========================================================
 
+def detectar_plataforma(link):
+
+    link = link.lower()
+
+    if "twitch.tv" in link:
+        return "twitch"
+
+    if "kick.com" in link:
+        return "kick"
+
+    if "tiktok.com" in link:
+        return "tiktok"
+
+    return None
+
+
+# =========================================================
+# ================= EXTRAIR CANAL =========================
+# =========================================================
+
+def extrair_canal(link):
+
+    link = link.lower().strip()
+
+    link = link.replace("https://", "")
+    link = link.replace("http://", "")
+    link = link.replace("www.", "")
+
+    partes = link.split("/")
+
+    if "twitch.tv" in link:
+        return partes[1]
+
+    if "kick.com" in link:
+        return partes[1]
+
+    if "tiktok.com" in link:
+        user = partes[1].replace("@", "")
+        user = user.split("?")[0]
+        return user
+
+    return None
 # =========================================================
 # ================= LOOP =========================
 # =========================================================
