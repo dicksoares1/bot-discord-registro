@@ -3064,6 +3064,65 @@ ACOES_SEMANA = {
 }
 
 # =========================================================
+# ================= PAINEL DE AÇÕES =======================
+# =========================================================
+
+class PainelAcoesView(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="📋 Registrar Ação",
+        style=discord.ButtonStyle.primary,
+        custom_id="abrir_painel_acoes"
+    )
+    async def abrir(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        await interaction.response.send_message(
+            "Selecione a ação:",
+            view=SelecionarAcaoView(),
+            ephemeral=True
+        )
+
+
+# =========================================================
+# ================= SELECT DE AÇÕES ========================
+# =========================================================
+
+class SelecionarAcaoSelect(discord.ui.Select):
+
+    def __init__(self):
+
+        options = [
+            discord.SelectOption(label=acao)
+            for acao in ACOES_SEMANA.keys()
+        ]
+
+        super().__init__(
+            placeholder="Escolha a ação",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+
+        acao = self.values[0]
+
+        await interaction.response.send_message(
+            f"Selecionado: **{acao}**\nAgora selecione os participantes:",
+            view=SelecionarMembrosView(acao),
+            ephemeral=True
+        )
+
+
+class SelecionarAcaoView(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(SelecionarAcaoSelect())
+# =========================================================
 # BOTÃO ENVIAR ESCALAÇÃO (ADICIONADO)
 # =========================================================
 
@@ -4085,13 +4144,11 @@ async def on_ready():
     # ========== REGISTRAR VIEWS PERSISTENTES =============
     # =====================================================
 
-    # Registrar SolicitarSalaView
     try:
         bot.add_view(SolicitarSalaView())
     except Exception as e:
         print("Erro registrando SolicitarSalaView:", e)
 
-    # Registrar outras views (SEM PainelAcoesView)
     outras_views = [
         RegistroView,
         CadastrarLiveView,
@@ -4103,7 +4160,8 @@ async def on_ready():
         FabricacaoView,
         CalculadoraView,
         StatusView,
-        HelicrashPainel
+        HelicrashPainel,
+        PainelAcoesView  # 🔥 AGORA EXISTE
     ]
 
     for view_class in outras_views:
@@ -4112,11 +4170,6 @@ async def on_ready():
         except Exception as e:
             print(f"Erro ao registrar view {view_class.__name__}:", e)
 
-    # 🔥 REGISTRA PainelAcoesView SEPARADO
-    try:
-        bot.add_view(PainelAcoesView())
-    except Exception as e:
-        print("Erro ao registrar PainelAcoesView:", e)
     # =====================================================
     # ================= INICIAR LOOPS =====================
     # =====================================================
