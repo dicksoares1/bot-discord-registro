@@ -3036,6 +3036,8 @@ async def enviar_painel_lives():
     )
 
     print("🎥 Painel de cadastro de live verificado/atualizado")
+
+
 # =========================================================
 # ======================== AÇÕES ==========================
 # =========================================================
@@ -3085,7 +3087,6 @@ class PainelAcoesView(discord.ui.View):
             ephemeral=True
         )
 
-
 # =========================================================
 # ================= SELECT DE AÇÕES ========================
 # =========================================================
@@ -3122,8 +3123,9 @@ class SelecionarAcaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
         self.add_item(SelecionarAcaoSelect())
+
 # =========================================================
-# BOTÃO ENVIAR ESCALAÇÃO (ADICIONADO)
+# BOTÃO ENVIAR ESCALAÇÃO
 # =========================================================
 
 class EnviarEscalacaoButton(discord.ui.Button):
@@ -3190,53 +3192,84 @@ def formatar_dinheiro(valor):
     return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 # =========================================================
-# =============== SISTEMA GLOBAL DE PAINÉIS ===============
+# ================= ATUALIZAR PAINEL ======================
 # =========================================================
 
-async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
+async def atualizar_painel_acoes(guild):
 
-    canal = bot.get_channel(canal_id)
+    embed = await gerar_embed_acoes()
+
+    await enviar_ou_atualizar_painel(
+        "painel_acoes",
+        CANAL_ESCALACOES_ID,
+        embed,
+        PainelAcoesView()
+    )
+
+# =========================================================
+# ================= RELATÓRIO =============================
+# =========================================================
+
+async def registrar_relatorio_acao(guild, acao_id):
+
+    canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
 
     if not canal:
-        print(f"❌ Canal não encontrado para painel: {nome}")
         return
 
     async with db.acquire() as conn:
 
-        row = await conn.fetchrow(
-            "SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1",
-            nome
+        acao = await conn.fetchrow(
+            "SELECT * FROM acoes_semana WHERE id=$1",
+            acao_id
         )
 
-        if row:
-            try:
-                canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
-                msg = await canal_salvo.fetch_message(int(row["mensagem_id"]))
-                await edit_queue.put(msg.edit(embed=embed, view=view))
-                return
-
-            except discord.NotFound:
-                print(f"⚠️ Painel perdido: {nome}, recriando...")
-
-            except Exception as e:
-                print(f"Erro atualizar painel {nome}:", e)
-
-        msg = await canal.send(embed=embed, view=view)
-
-        await conn.execute(
-            """
-            INSERT INTO paineis (nome, canal_id, mensagem_id)
-            VALUES ($1,$2,$3)
-            ON CONFLICT (nome)
-            DO UPDATE SET canal_id=$2, mensagem_id=$3
-            """,
-            nome,
-            str(canal_id),
-            str(msg.id)
+        participantes = await conn.fetch(
+            "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+            acao_id
         )
+
+    membros = []
+    for p in participantes:
+        membro = guild.get_member(int(p["user_id"]))
+        if membro:
+            membros.append(membro.mention)
+
+    embed = discord.Embed(
+        title="📋 AÇÃO REGISTRADA",
+        color=0x2ecc71
+    )
+
+    embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
+    embed.add_field(name="👥 Participantes", value="\n".join(membros) or "Nenhum", inline=False)
+
+    embed.set_footer(text=agora().strftime('%d/%m/%Y %H:%M'))
+
+    await canal.send(embed=embed)
 
 # =========================================================
-# ================= CARREGAR AÇÕES SEMANA =================
+# ================= RESET SEMANAL =========================
+# =========================================================
+
+@tasks.loop(minutes=1)
+async def reset_acoes_segunda():
+
+    agora_br = agora()
+
+    if agora_br.weekday() == 0 and agora_br.hour == 0 and agora_br.minute == 0:
+
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM acoes_semana")
+            await conn.execute("DELETE FROM participantes_acoes")
+
+        print("♻️ AÇÕES RESETADAS")
+
+        guild = bot.get_guild(GUILD_ID)
+        if guild:
+            await atualizar_painel_acoes(guild)
+
+# =========================================================
+# ================= CARREGAR AÇÕES ========================
 # =========================================================
 
 async def carregar_acoes_semana():
@@ -3258,7 +3291,7 @@ async def carregar_acoes_semana():
     return {r["tipo"]: r["total"] for r in rows}
 
 # =========================================================
-# ================= EMBED PAINEL ==========================
+# ================= EMBED BONITO ==========================
 # =========================================================
 
 async def gerar_embed_acoes():
@@ -3275,29 +3308,38 @@ async def gerar_embed_acoes():
         if limite is not None:
 
             if qtd >= limite:
-                status = "🟢"
+                status = "🟢 Concluído"
             elif qtd > 0:
-                status = "🟡"
+                status = "🟡 Em andamento"
             else:
-                status = "🔴"
+                status = "🔴 Pendente"
 
-            linhas_limitadas.append(f"{status} **{acao}** {qtd}/{limite}")
+            linhas_limitadas.append(f"{status} • **{acao}**\n`{qtd}/{limite}`")
 
         else:
-            linhas_ilimitadas.append(f"🔹 **{acao}** {qtd} ♾️")
+            linhas_ilimitadas.append(f"🔹 **{acao}**\n`{qtd} realizadas`")
 
     embed = discord.Embed(
-        title="🚨 AÇÕES DA SEMANA",
+        title="🚨 Painel de Ações da Semana",
+        description="Acompanhe o progresso das ações da facção.",
         color=0xe74c3c
     )
 
     if linhas_limitadas:
-        embed.add_field(name="🎯 Ações principais", value="\n".join(linhas_limitadas), inline=False)
+        embed.add_field(
+            name="🎯 Ações com meta",
+            value="\n\n".join(linhas_limitadas),
+            inline=False
+        )
 
     if linhas_ilimitadas:
-        embed.add_field(name="📦 Ações ilimitadas", value="\n".join(linhas_ilimitadas), inline=False)
+        embed.add_field(
+            name="📦 Ações livres",
+            value="\n\n".join(linhas_ilimitadas),
+            inline=False
+        )
 
-    embed.set_footer(text="Reset automático toda segunda às 00:00")
+    embed.set_footer(text="⏰ Reset automático toda segunda às 00:00")
 
     return embed
 
@@ -3347,7 +3389,6 @@ class SelecionarMembrosView(discord.ui.View):
         self.membros = []
 
         self.add_item(SelecionarMembros(self))
-        # 🔥 NÃO adiciona botão aqui pra evitar duplicação
 
     @discord.ui.button(
         label="📤 Enviar Escalação",
