@@ -3790,99 +3790,8 @@ class AcaoSelect(discord.ui.Select):
 class PainelAcoesView(discord.ui.View):
 
     def __init__(self):
-
         super().__init__(timeout=None)
-
         self.add_item(AcaoSelect())
-
-# =========================================================
-# ================= FUNÇÕES DO PAINEL AÇÕES ===============
-# =========================================================
-
-async def carregar_acoes_semana():
-
-    inicio_semana = agora_db() - timedelta(days=agora_db().weekday())
-
-    async with db.acquire() as conn:
-
-        rows = await conn.fetch(
-            """
-            SELECT tipo, COUNT(*) as total
-            FROM acoes_semana
-            WHERE data >= $1
-            GROUP BY tipo
-            """,
-            inicio_semana
-        )
-
-    return {r["tipo"]: r["total"] for r in rows}
-
-async def gerar_embed_acoes():
-
-    feitos = await carregar_acoes_semana()
-
-    linhas_limitadas = []
-    linhas_ilimitadas = []
-
-    for acao, limite in ACOES_SEMANA.items():
-
-        qtd = feitos.get(acao, 0)
-
-        if limite is not None:
-
-            if qtd >= limite:
-                status = "🟢"
-            elif qtd > 0:
-                status = "🟡"
-            else:
-                status = "🔴"
-
-            linhas_limitadas.append(
-                f"{status} **{acao}** {qtd}/{limite}"
-            )
-
-        else:
-            linhas_ilimitadas.append(
-                f"🔹 **{acao}** {qtd} ♾️"
-            )
-
-    embed = discord.Embed(
-        title="🚨 AÇÕES DA SEMANA",
-        color=0xe74c3c
-    )
-
-    if linhas_limitadas:
-
-        embed.add_field(
-            name="🎯 Ações principais",
-            value="\n".join(linhas_limitadas),
-            inline=False
-        )
-
-    if linhas_ilimitadas:
-
-        embed.add_field(
-            name="📦 Ações ilimitadas",
-            value="\n".join(linhas_ilimitadas),
-            inline=False
-        )
-
-    embed.set_footer(
-        text="Reset automático toda segunda às 00:00"
-    )
-
-    return embed
-
-async def atualizar_painel_acoes(guild):
-
-    embed = await gerar_embed_acoes()
-
-    await enviar_ou_atualizar_painel(
-        "painel_acoes",
-        CANAL_ESCALACOES_ID,
-        embed,
-        PainelAcoesView()
-    )
 
 # =========================================================
 # SELECIONAR MEMBROS
@@ -3910,6 +3819,7 @@ class SelecionarMembros(discord.ui.UserSelect):
             f"{len(membros)} participantes selecionados",
             ephemeral=True
         )
+
 class SelecionarMembrosView(discord.ui.View):
 
     def __init__(self, acao):
@@ -3933,7 +3843,6 @@ class EnviarEscalacaoButton(discord.ui.Button):
 
         membros = self.view_ref.membros
 
-        # 🚨 VALIDAÇÃO IMPORTANTE
         if not membros:
             await interaction.followup.send(
                 "⚠️ Você precisa selecionar os participantes primeiro.",
@@ -3941,90 +3850,28 @@ class EnviarEscalacaoButton(discord.ui.Button):
             )
             return
 
-        try:
-
-            async with db.acquire() as conn:
-
-                acao_id = await conn.fetchval(
-                    "INSERT INTO acoes_semana (tipo,data,autor) VALUES ($1,$2,$3) RETURNING id",
-                    self.view_ref.acao,
-                    agora_db(),
-                    str(interaction.user.id)
-                )
-
-                for m in membros:
-                    await conn.execute(
-                        "INSERT INTO participantes_acoes (acao_id,user_id) VALUES ($1,$2)",
-                        acao_id,
-                        str(m.id)
-                    )
-
-            # 🔥 ENVIA RELATÓRIO (ESSENCIAL)
-            await registrar_relatorio_acao(interaction.guild, acao_id)
-
-            await interaction.followup.send(
-                "✅ Escalação registrada com sucesso!",
-                ephemeral=True
-            )
-
-        except Exception as e:
-
-            print("Erro ao enviar escalacao:", e)
-
-            await interaction.followup.send(
-                "❌ Erro ao registrar a ação.",
-                ephemeral=True
-            )
-
-async def callback(self, interaction):
-
-    await interaction.response.defer(ephemeral=True)
-
-    membros = self.view_ref.membros
-
-    async with db.acquire() as conn:
-
-        acao_id = await conn.fetchval(
-            "INSERT INTO acoes_semana (tipo,data,autor) VALUES ($1,$2,$3) RETURNING id",
-            self.view_ref.acao,
-            agora_db(),
-            str(interaction.user.id)
-        )
-
-        for m in membros:
-            await conn.execute(
-                "INSERT INTO participantes_acoes (acao_id,user_id) VALUES ($1,$2)",
-                acao_id,
-                str(m.id)
-            )
-
-    # 🔥 AGORA FUNCIONA
-    await registrar_relatorio_acao(interaction.guild, acao_id)
-
-    await interaction.followup.send("✅ Escalação registrada com sucesso!", ephemeral=True)
-
-# =========================================================
-# RESET SEMANAL
-# =========================================================
-
-@tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))
-async def reset_acoes_segunda():
-
-    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
-
-    if agora.weekday() == 0:
-
         async with db.acquire() as conn:
 
-            await conn.execute("DELETE FROM acoes_semana")
-            await conn.execute("DELETE FROM participantes_acoes")
+            acao_id = await conn.fetchval(
+                "INSERT INTO acoes_semana (tipo,data,autor) VALUES ($1,$2,$3) RETURNING id",
+                self.view_ref.acao,
+                agora_db(),
+                str(interaction.user.id)
+            )
 
-        print("🔄 Ações da semana resetadas.")
+            for m in membros:
+                await conn.execute(
+                    "INSERT INTO participantes_acoes (acao_id,user_id) VALUES ($1,$2)",
+                    acao_id,
+                    str(m.id)
+                )
 
-        guild = bot.get_guild(GUILD_ID)
+        await registrar_relatorio_acao(interaction.guild, acao_id)
 
-        if guild:
-            await atualizar_painel_acoes(guild)
+        await interaction.followup.send(
+            "✅ Escalação registrada com sucesso!",
+            ephemeral=True
+        )
 
 # =========================================================
 # RESULTADO + METAS
@@ -4036,146 +3883,82 @@ class ResultadoAcaoView(discord.ui.View):
         super().__init__(timeout=None)
         self.acao_id = acao_id
 
-    @discord.ui.button(
-        label="🏆 Ganhou",
-        style=discord.ButtonStyle.success
-    )
+    @discord.ui.button(label="🏆 Ganhou", style=discord.ButtonStyle.success)
     async def ganhou(self, interaction, button):
+        await interaction.response.send_modal(ResultadoModal(self.acao_id, True))
 
-        await interaction.response.send_modal(
-            ResultadoModal(self.acao_id, True)
-        )
-
-    @discord.ui.button(
-        label="💀 Perdeu",
-        style=discord.ButtonStyle.danger
-    )
+    @discord.ui.button(label="💀 Perdeu", style=discord.ButtonStyle.danger)
     async def perdeu(self, interaction, button):
-
-        await interaction.response.send_modal(
-            ResultadoModal(self.acao_id, False)
-        )
+        await interaction.response.send_modal(ResultadoModal(self.acao_id, False))
 
 class ResultadoModal(discord.ui.Modal):
 
     dinheiro = discord.ui.TextInput(label="Valor ganho")
 
     def __init__(self, acao_id, venceu):
-        super().__init__(title="Resultado")
+        super().__init__(title="Resultado da Ação")
         self.acao_id = acao_id
         self.venceu = venceu
 
     async def on_submit(self, interaction):
 
-        valor = int(
-            (self.dinheiro.value or "0")
-            .replace(".", "")
-            .replace(",", "")
-        )
+        valor = int((self.dinheiro.value or "0").replace(".", "").replace(",", ""))
 
         async with db.acquire() as conn:
 
             participantes = await conn.fetch(
-                """
-                SELECT user_id
-                FROM participantes_acoes
-                WHERE acao_id=$1
-                """,
+                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
                 self.acao_id
             )
 
             acao = await conn.fetchrow(
-                """
-                SELECT tipo, autor
-                FROM acoes_semana
-                WHERE id=$1
-                """,
+                "SELECT tipo, autor FROM acoes_semana WHERE id=$1",
                 self.acao_id
             )
 
-        qtd = len(participantes) or 1
+        autor = int(acao["autor"])
+        lista_ids = [int(p["user_id"]) for p in participantes]
+
+        # 🔥 REGRA CORRETA
+        if autor not in lista_ids:
+            ids_validos = lista_ids
+        else:
+            ids_validos = lista_ids
+
+        qtd = len(ids_validos) or 1
 
         base = valor // qtd
         resto = valor % qtd
 
-        for i, p in enumerate(participantes):
-
-            uid = str(p["user_id"])
+        for i, uid in enumerate(ids_validos):
 
             ganho = base + (1 if i < resto else 0)
 
-            if uid in metas_cache:
+            if str(uid) in metas_cache:
 
-                metas_cache[uid]["acao"] += ganho
+                metas_cache[str(uid)]["acao"] += ganho
 
                 await salvar_meta(
-                    int(uid),
-                    metas_cache[uid]["canal_id"],
-                    metas_cache[uid]["dinheiro"],
-                    metas_cache[uid]["polvora"],
-                    metas_cache[uid]["acao"]
+                    uid,
+                    metas_cache[str(uid)]["canal_id"],
+                    metas_cache[str(uid)]["dinheiro"],
+                    metas_cache[str(uid)]["polvora"],
+                    metas_cache[str(uid)]["acao"]
                 )
 
-        embed = discord.Embed(
-            title="Resultado da ação"
+        embed = interaction.message.embeds[0]
+
+        resultado = "🟢 AÇÃO GANHA" if self.venceu else "🔴 AÇÃO PERDIDA"
+
+        embed.add_field(
+            name="🎯 Resultado Final",
+            value=f"{resultado}\n💰 R$ {formatar_dinheiro(valor)}",
+            inline=False
         )
 
-        embed.add_field(name="Ação", value=acao["tipo"])
-        embed.add_field(name="Total", value=f"R$ {formatar_dinheiro(valor)}")
-        embed.add_field(name="Por pessoa", value=f"R$ {formatar_dinheiro(base)}")
+        await interaction.message.edit(embed=embed, view=None)
 
-        await interaction.message.edit(
-            embed=embed,
-            view=None
-        )
-
-        await interaction.response.defer()
-
-# =========================================================
-# RELATÓRIO POR DATA
-# =========================================================
-
-class RelatorioButton(discord.ui.Button):
-
-    def __init__(self):
-        super().__init__(
-            label="📊 Relatório",
-            style=discord.ButtonStyle.secondary
-        )
-
-    async def callback(self, interaction):
-
-        await interaction.response.send_modal(
-            RelatorioModal()
-        )
-
-
-class RelatorioModal(discord.ui.Modal):
-
-    inicio = discord.ui.TextInput(label="Data início (dd/mm/aaaa)")
-    fim = discord.ui.TextInput(label="Data fim (dd/mm/aaaa)")
-
-    async def on_submit(self, interaction):
-
-        inicio = datetime.strptime(self.inicio.value, "%d/%m/%Y")
-        fim = datetime.strptime(self.fim.value, "%d/%m/%Y") + timedelta(days=1)
-
-        async with db.acquire() as conn:
-
-            total = await conn.fetchval(
-                """
-                SELECT COALESCE(SUM(valor),0)
-                FROM acoes_semana
-                WHERE data BETWEEN $1 AND $2
-                """,
-                inicio,
-                fim
-            )
-
-        await interaction.response.send_message(
-            f"💰 Total no período: R$ {formatar_dinheiro(total)}",
-            ephemeral=True
-        )
+        await interaction.response.defer(ephemeral=True)
 
 # =========================================================
 # ================= RELATÓRIO DE AÇÃO =====================
@@ -4183,76 +3966,42 @@ class RelatorioModal(discord.ui.Modal):
 
 async def registrar_relatorio_acao(guild, acao_id):
 
-    try:
+    async with db.acquire() as conn:
 
-        async with db.acquire() as conn:
-
-            acao = await conn.fetchrow(
-                "SELECT * FROM acoes_semana WHERE id=$1",
-                acao_id
-            )
-
-            participantes = await conn.fetch(
-                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
-                acao_id
-            )
-
-        if not acao:
-            return
-
-        tipo = acao["tipo"]
-        autor_id = acao["autor"]
-
-        # ================= MONTA LISTA =================
-
-        lista = []
-
-        for p in participantes:
-            lista.append(f"<@{p['user_id']}>")
-
-        participantes_texto = "\n".join(lista) if lista else "Nenhum participante"
-
-        # ================= EMBED =================
-
-        embed = discord.Embed(
-            title="🚨 NOVA AÇÃO REGISTRADA",
-            color=0xe74c3c
+        acao = await conn.fetchrow(
+            "SELECT * FROM acoes_semana WHERE id=$1",
+            acao_id
         )
 
-        embed.add_field(
-            name="🎯 Ação",
-            value=tipo,
-            inline=False
+        participantes = await conn.fetch(
+            "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+            acao_id
         )
 
-        embed.add_field(
-            name="👑 Líder",
-            value=f"<@{autor_id}>",
-            inline=False
-        )
+    if not acao:
+        return
 
-        embed.add_field(
-            name="👥 Participantes",
-            value=participantes_texto,
-            inline=False
-        )
+    tipo = acao["tipo"]
+    autor_id = acao["autor"]
 
-        embed.set_footer(
-            text=f"ID da ação: {acao_id}"
-        )
-    except Exception as e:
-        print("Erro registrar_relatorio_acao:", e)
-  
+    lista = [f"<@{p['user_id']}>" for p in participantes]
 
-        # ================= ENVIO =================
+    participantes_texto = "\n".join(lista) if lista else "Nenhum participante"
 
-        canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+    embed = discord.Embed(
+        title="🚨 RELATÓRIO DE AÇÃO",
+        color=0xe74c3c
+    )
 
-        if canal:
-            await canal.send(
-                embed=embed,
-                view=ResultadoAcaoView(acao_id)  # 🔥 AQUI
-            )
+    embed.add_field(name="🏦 Ação", value=tipo, inline=False)
+    embed.add_field(name="📋 Escalação feita por", value=f"<@{autor_id}>", inline=False)
+    embed.add_field(name="👥 Participantes", value=participantes_texto, inline=False)
+    embed.add_field(name="🎯 Resultado", value="⏳ Aguardando resultado...", inline=False)
+
+    canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+
+    if canal:
+        await canal.send(embed=embed, view=ResultadoAcaoView(acao_id))
 # =========================================================
 # ================= HELICRASH =============================
 # =========================================================
