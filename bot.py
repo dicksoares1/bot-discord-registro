@@ -3453,7 +3453,6 @@ class ResultadoModal(discord.ui.Modal):
             dinheiro = 0
 
             try:
-
                 valor_input = (self.dinheiro.value or "").strip()
 
                 if valor_input:
@@ -3461,7 +3460,6 @@ class ResultadoModal(discord.ui.Modal):
                     dinheiro = int(valor_input)
 
             except Exception:
-
                 await interaction.response.send_message(
                     "Valor inválido.",
                     ephemeral=True
@@ -3476,7 +3474,6 @@ class ResultadoModal(discord.ui.Modal):
                 )
 
                 if ja_finalizada:
-
                     await interaction.response.send_message(
                         "Esta ação já teve resultado registrado.",
                         ephemeral=True
@@ -3485,7 +3482,7 @@ class ResultadoModal(discord.ui.Modal):
 
                 participantes = await conn.fetch(
                     """
-                    SELECT user_id, nome_externo
+                    SELECT user_id
                     FROM participantes_acoes
                     WHERE acao_id=$1
                     """,
@@ -3507,19 +3504,15 @@ class ResultadoModal(discord.ui.Modal):
             # CALCULAR VALOR POR PESSOA
             # =================================================
 
-            qtd = len(participantes)
-
-            if qtd == 0:
-                qtd = 1
+            qtd = len(participantes) or 1
 
             valor_por_pessoa = 0
-            resto = 0
+
             if dinheiro > 0:
-                valor_por_pessoa = dinheiro / qtd
-                valor_por_pessoa = round(valor_por_pessoa, 2)
+                valor_por_pessoa = round(dinheiro / qtd, 2)
 
             # =================================================
-            # ENVIAR RESULTADO NA SALA DE CADA PARTICIPANTE
+            # ENVIAR RESULTADO PARA CADA PARTICIPANTE
             # =================================================
 
             for p in participantes:
@@ -3535,7 +3528,6 @@ class ResultadoModal(discord.ui.Modal):
                     continue
 
                 canal_id = metas_cache[uid]["canal_id"]
-
                 canal = interaction.guild.get_channel(canal_id)
 
                 if not canal:
@@ -3574,8 +3566,6 @@ class ResultadoModal(discord.ui.Modal):
 
                 except Exception as e:
                     print("Erro enviar resultado na sala:", e)
-
-        try:
 
             # =================================================
             # EMBED NO RELATÓRIO DA AÇÃO
@@ -3655,6 +3645,8 @@ class ResultadoModal(discord.ui.Modal):
             print("ERRO NO RESULTADO DA AÇÃO:")
             traceback.print_exc()
 
+            if not interaction.response.is_done():
+                await interaction.response.defer()
 # =========================================================
 # ================= RELATÓRIO AÇÃO ========================
 # =========================================================
