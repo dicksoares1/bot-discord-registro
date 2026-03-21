@@ -1822,7 +1822,7 @@ async def acompanhar_producao(pid):
 
         if restante <= 0:
 
-            polvora = prod.get("polvora", 400)
+            polvora = int(prod.get("polvora", 400) or 400)
             segunda = prod.get("segunda_task_confirmada")
 
             base = 0
@@ -1836,7 +1836,7 @@ async def acompanhar_producao(pid):
             if prod["galpao"] == "BAHAMAS":
                 base = 1777 if segunda else 1688
 
-            capsulas = (base * polvora) // 400
+            capsulas = (base * polvora) / 400
             peso = capsulas * 0.05
 
             desc += (
@@ -1987,7 +1987,7 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
             if galpao == "BAHAMAS":
                 base = 1688
 
-            capsulas = (base * polvora) // 400
+            capsulas = (base * polvora) / 400
 
             ranking.setdefault(autor, 0)
             ranking[autor] += capsulas
