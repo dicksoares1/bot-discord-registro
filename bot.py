@@ -294,6 +294,8 @@ intents.presences = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+registro_msg_id = None
+
 
 # =========================================================
 # ================= TWITCH TOKEN CACHE ====================
@@ -484,6 +486,49 @@ class RegistroView(discord.ui.View):
         await interaction.response.send_modal(
             RegistroModal()
         )
+
+# =========================================================
+# ================= PAINEL REGISTRO =======================
+# =========================================================
+
+async def enviar_painel_registro():
+
+    global registro_msg_id
+
+    canal = bot.get_channel(CANAL_REGISTRO_ID)
+
+    if not canal:
+        try:
+            canal = await bot.fetch_channel(CANAL_REGISTRO_ID)
+        except Exception as e:
+            print("❌ Canal registro não encontrado:", e)
+            return
+
+    embed = discord.Embed(
+        title="📋 Registro",
+        description="Clique no botão abaixo para realizar seu registro.",
+        color=0x2ecc71
+    )
+
+    # tenta atualizar
+    if registro_msg_id:
+        try:
+            msg = await canal.fetch_message(registro_msg_id)
+
+            await msg.edit(embed=embed, view=RegistroView())
+
+            print("🔄 Painel de registro atualizado")
+            return
+
+        except:
+            print("⚠️ Mensagem antiga não encontrada, recriando...")
+
+    # cria novo
+    msg = await canal.send(embed=embed, view=RegistroView())
+
+    registro_msg_id = msg.id
+
+    print("✅ Painel de registro criado")
 
 # =========================================================
 # ======================== VENDAS ==========================
