@@ -3895,7 +3895,6 @@ class SelecionarMembros(discord.ui.UserSelect):
         self.view_ref = view_ref
 
     async def callback(self, interaction):
-        await interaction.response.defer(ephemeral=True)
 
         membros = []
 
@@ -3905,12 +3904,12 @@ class SelecionarMembros(discord.ui.UserSelect):
 
         self.view_ref.membros = membros
 
-        await interaction.response.send_message(
+        await interaction.response.defer(ephemeral=True)
+
+        await interaction.followup.send(
             f"{len(membros)} participantes selecionados",
             ephemeral=True
         )
-
-
 class SelecionarMembrosView(discord.ui.View):
 
     def __init__(self, acao):
