@@ -3967,9 +3967,35 @@ class ResultadoModal(discord.ui.Modal):
 
                 if canal:
                     try:
-                        await canal.send(
-                            f"💰 Você recebeu **R$ {formatar_dinheiro(ganho)}** da ação **{acao['tipo']}**."
+                        embed_membro = discord.Embed(
+                            title="🚨 Resultado da Ação",
+                            color=0x2ecc71 if self.venceu else 0xe74c3c
                         )
+
+                        embed_membro.add_field(
+                            name="🏦 Ação",
+                            value=acao["tipo"],
+                            inline=False
+                        )
+
+                        embed_membro.add_field(
+                            name="🎯 Resultado",
+                            value="🟢 GANHOU" if self.venceu else "💀 PERDEU",
+                            inline=False
+                        )
+
+                        if self.venceu:
+                            embed_membro.add_field(
+                                name="💰 Sua parte",
+                                value=f"R$ {formatar_dinheiro(ganho)}",
+                                inline=False
+                            )
+
+                        embed_membro.set_footer(
+                            text="Sistema de Ações • VDR 442"
+                        )
+
+                        await canal.send(embed=embed_membro)
                     except Exception as e:
                         print(f"Erro ao enviar mensagem para {uid_str}:", e)
 
