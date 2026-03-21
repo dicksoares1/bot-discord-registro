@@ -4091,7 +4091,7 @@ async def on_ready():
     except Exception as e:
         print("Erro registrando SolicitarSalaView:", e)
 
-    # Registrar outras views
+    # Registrar outras views (SEM PainelAcoesView)
     outras_views = [
         RegistroView,
         CadastrarLiveView,
@@ -4101,7 +4101,6 @@ async def on_ready():
         ConfirmarPagamentoView,
         LavagemView,
         FabricacaoView,
-        PainelAcoesView,
         CalculadoraView,
         StatusView,
         HelicrashPainel
@@ -4113,6 +4112,11 @@ async def on_ready():
         except Exception as e:
             print(f"Erro ao registrar view {view_class.__name__}:", e)
 
+    # 🔥 REGISTRA PainelAcoesView SEPARADO
+    try:
+        bot.add_view(PainelAcoesView())
+    except Exception as e:
+        print("Erro ao registrar PainelAcoesView:", e)
     # =====================================================
     # ================= INICIAR LOOPS =====================
     # =====================================================
