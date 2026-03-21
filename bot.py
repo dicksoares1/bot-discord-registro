@@ -3902,100 +3902,97 @@ class ResultadoModal(discord.ui.Modal):
 
     async def on_submit(self, interaction):
 
-    await interaction.response.defer()
+        await interaction.response.defer()
 
-    valor = int(
-        (self.dinheiro.value or "0")
-        .replace(".", "")
-        .replace(",", "")
-    )
-
-    async with db.acquire() as conn:
-
-        participantes = await conn.fetch(
-            """
-            SELECT user_id
-            FROM participantes_acoes
-            WHERE acao_id=$1
-            """,
-            self.acao_id
+        valor = int(
+            (self.dinheiro.value or "0")
+            .replace(".", "")
+            .replace(",", "")
         )
 
-        acao = await conn.fetchrow(
-            """
-            SELECT tipo, autor
-            FROM acoes_semana
-            WHERE id=$1
-            """,
-            self.acao_id
-        )
+        async with db.acquire() as conn:
 
-    if not acao:
-        return
-
-    # 🔥 REMOVE AUTOR SE NÃO ESTIVER NA LISTA
-    ids = [str(p["user_id"]) for p in participantes]
-
-    if str(acao["autor"]) not in ids:
-        ids_validos = ids
-    else:
-        ids_validos = ids
-
-    qtd = len(ids_validos) or 1
-
-    base = valor // qtd
-    resto = valor % qtd
-
-    # ================= DISTRIBUI =================
-
-    for i, uid_str in enumerate(ids_validos):
-
-        ganho = base + (1 if i < resto else 0)
-
-        if uid_str in metas_cache:
-
-            metas_cache[uid_str]["acao"] += ganho
-
-            await salvar_meta(
-                int(uid_str),
-                metas_cache[uid_str]["canal_id"],
-                metas_cache[uid_str]["dinheiro"],
-                metas_cache[uid_str]["polvora"],
-                metas_cache[uid_str]["acao"]
+            participantes = await conn.fetch(
+                """
+                SELECT user_id
+                FROM participantes_acoes
+                WHERE acao_id=$1
+                """,
+                self.acao_id
             )
 
-            # 🔥 ENVIO NO CANAL
-            canal_id = metas_cache[uid_str]["canal_id"]
-            canal = interaction.guild.get_channel(canal_id)
+            acao = await conn.fetchrow(
+                """
+                SELECT tipo, autor
+                FROM acoes_semana
+                WHERE id=$1
+                """,
+                self.acao_id
+            )
 
-            if canal:
-                try:
-                    await canal.send(
-                        f"💰 Você recebeu **R$ {formatar_dinheiro(ganho)}** da ação **{acao['tipo']}**."
-                    )
-                except Exception as e:
-                    print(f"Erro ao enviar mensagem para {uid_str}:", e)
+        if not acao:
+            return
 
-    # ================= EMBED FINAL =================
+        ids = [str(p["user_id"]) for p in participantes]
 
-    embed = discord.Embed(
-        title="📊 RESULTADO DA AÇÃO",
-        color=0x2ecc71 if self.venceu else 0xe74c3c
-    )
+        # 👉 regra: só recebe quem está na lista
+        ids_validos = ids
 
-    embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
-    embed.add_field(name="💰 Total", value=f"R$ {formatar_dinheiro(valor)}", inline=True)
-    embed.add_field(name="👥 Participantes", value=len(ids_validos), inline=True)
+        qtd = len(ids_validos) or 1
 
-    if self.venceu:
-        embed.add_field(name="💸 Por pessoa", value=f"R$ {formatar_dinheiro(base)}", inline=False)
-    else:
-        embed.add_field(name="Resultado", value="💀 Ação perdida", inline=False)
+        base = valor // qtd
+        resto = valor % qtd
 
-    await interaction.message.edit(
-        embed=embed,
-        view=None
-    )
+        # ================= DISTRIBUI =================
+
+        for i, uid_str in enumerate(ids_validos):
+
+            ganho = base + (1 if i < resto else 0)
+
+            if uid_str in metas_cache:
+
+                metas_cache[uid_str]["acao"] += ganho
+
+                await salvar_meta(
+                    int(uid_str),
+                    metas_cache[uid_str]["canal_id"],
+                    metas_cache[uid_str]["dinheiro"],
+                    metas_cache[uid_str]["polvora"],
+                    metas_cache[uid_str]["acao"]
+                )
+
+                # 🔥 ENVIA NO CANAL DO MEMBRO
+                canal_id = metas_cache[uid_str]["canal_id"]
+                canal = interaction.guild.get_channel(canal_id)
+
+                if canal:
+                    try:
+                        await canal.send(
+                            f"💰 Você recebeu **R$ {formatar_dinheiro(ganho)}** da ação **{acao['tipo']}**."
+                        )
+                    except Exception as e:
+                        print(f"Erro ao enviar mensagem para {uid_str}:", e)
+
+        # ================= EMBED FINAL =================
+
+        embed = discord.Embed(
+            title="📊 RESULTADO DA AÇÃO",
+            color=0x2ecc71 if self.venceu else 0xe74c3c
+        )
+
+        embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
+        embed.add_field(name="💰 Total", value=f"R$ {formatar_dinheiro(valor)}", inline=True)
+        embed.add_field(name="👥 Participantes", value=len(ids_validos), inline=True)
+
+        if self.venceu:
+            embed.add_field(name="💸 Por pessoa", value=f"R$ {formatar_dinheiro(base)}", inline=False)
+        else:
+            embed.add_field(name="Resultado", value="💀 Ação perdida", inline=False)
+
+        await interaction.message.edit(
+            embed=embed,
+            view=None
+        )
         await interaction.response.defer(ephemeral=True)
 
 # =========================================================
