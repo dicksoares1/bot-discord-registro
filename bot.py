@@ -3037,7 +3037,48 @@ async def enviar_painel_lives():
 
     print("🎥 Painel de cadastro de live verificado/atualizado")
 
+# =========================================================
+# ========== FUNÇÃO GLOBAL DE PAINEL (OBRIGATÓRIA) =========
+# =========================================================
 
+async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
+
+    canal = bot.get_channel(canal_id)
+
+    if not canal:
+        print(f"❌ Canal não encontrado para painel: {nome}")
+        return
+
+    async with db.acquire() as conn:
+
+        row = await conn.fetchrow(
+            "SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1",
+            nome
+        )
+
+        if row:
+            try:
+                canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
+                msg = await canal_salvo.fetch_message(int(row["mensagem_id"]))
+                await msg.edit(embed=embed, view=view)
+                return
+
+            except Exception as e:
+                print(f"⚠️ Erro ao atualizar painel {nome}:", e)
+
+        msg = await canal.send(embed=embed, view=view)
+
+        await conn.execute(
+            """
+            INSERT INTO paineis (nome, canal_id, mensagem_id)
+            VALUES ($1,$2,$3)
+            ON CONFLICT (nome)
+            DO UPDATE SET canal_id=$2, mensagem_id=$3
+            """,
+            nome,
+            str(canal_id),
+            str(msg.id)
+        )
 # =========================================================
 # ======================== AÇÕES ==========================
 # =========================================================
