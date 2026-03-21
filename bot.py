@@ -2579,7 +2579,9 @@ def extrair_canal(link):
         return partes[1]
 
     if "tiktok.com" in link:
-        return partes[1].replace("@", "")
+        user = partes[1].replace("@", "")
+        user = user.split("?")[0]
+        return user
 
     return None
 
@@ -2661,39 +2663,44 @@ async def checar_tiktok(username):
 
     try:
 
-        url = f"https://www.tiktok.com/@{username}/live"
+        url = f"https://www.tiktok.com/api/live/detail/?aid=1988&uniqueId={username}"
 
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
         async with http_session.get(url, headers=headers) as r:
 
-            html = await r.text()
+            if r.status != 200:
+                return False, None, None, None
 
-        if '"isLiveBroadcast":true' not in html:
+            data = await r.json()
+
+        live_data = data.get("data", {})
+
+        if not live_data:
             return False, None, None, None
 
-        titulo = "Live no TikTok"
+        status = live_data.get("status", 0)
+
+        # status 2 = AO VIVO
+        if status != 2:
+            return False, None, None, None
+
+        titulo = live_data.get("title") or "Live no TikTok"
+
         thumb = None
 
-        if '"title":"' in html:
-            try:
-                titulo = html.split('"title":"')[1].split('"')[0]
-            except:
-                pass
-
-        if '"cover":"' in html:
-            try:
-                thumb = html.split('"cover":"')[1].split('"')[0]
-                thumb = thumb.replace("\\u002F", "/")
-            except:
-                pass
+        if "cover" in live_data:
+            thumb = live_data["cover"]
 
         return True, titulo, None, thumb
 
-    except:
+    except Exception as e:
+
+        print("Erro TikTok API:", e)
 
         return False, None, None, None
-
 
 # =========================================================
 # ================= DIVULGAÇÃO ============================
@@ -2793,11 +2800,14 @@ async def verificar_lives():
 
                     await atualizar_divulgado(link, False)
 
-                if ao_vivo and not divulgado:
+                if ao_vivo:
 
-                    await divulgar_live(user_id, link, titulo, jogo, thumbnail)
+                    if not divulgado:
+                       print(f"🔴 LIVE detectada ({plataforma}): {link}")
 
-                    await atualizar_divulgado(link, True)
+                       await divulgar_live(user_id, link, titulo, jogo, thumbnail)
+
+                       await atualizar_divulgado(link, True)
 
     except Exception as e:
 
@@ -3232,33 +3242,6 @@ async def gerar_embed_acoes():
     return embed
 
 # =========================================================
-# ================= MODAL EXTERNOS ========================
-# =========================================================
-
-class ExternosModal(discord.ui.Modal, title="Participantes externos"):
-
-    nomes = discord.ui.TextInput(
-        label="Pessoas de fora (opcional)",
-        style=discord.TextStyle.paragraph,
-        required=False
-    )
-
-    def __init__(self, acao):
-        super().__init__()
-        self.acao = acao
-
-    async def on_submit(self, interaction: discord.Interaction):
-
-        view = SelecionarMembrosView(self.acao, self.nomes.value)
-
-        await interaction.response.send_message(
-            "Selecione os participantes:",
-            view=view,
-            ephemeral=True
-        )
-
-
-# =========================================================
 # ================= SELECIONAR MEMBROS ====================
 # =========================================================
 
@@ -3301,14 +3284,14 @@ class SelecionarMembros(discord.ui.UserSelect):
 
 class SelecionarMembrosView(discord.ui.View):
 
-    def __init__(self, acao, externos):
+    def __init__(self, acao):
         super().__init__(timeout=300)
 
         self.acao = acao
-        self.externos = externos
         self.membros = []
 
         self.add_item(SelecionarMembros(self))
+        self.add_item(EnviarEscalacaoButton(self))
 
     @discord.ui.button(
         label="📤 Enviar Escalação",
@@ -3349,25 +3332,7 @@ class SelecionarMembrosView(discord.ui.View):
                     str(m.id)
                 )
 
-            if self.externos:
-
-                nomes = [
-                    n.strip()
-                    for n in self.externos.split("\n")
-                    if n.strip()
-                ]
-
-                for nome in nomes:
-
-                    await conn.execute(
-                        """
-                        INSERT INTO participantes_acoes (acao_id,nome_externo)
-                        VALUES ($1,$2)
-                        """,
-                        acao_id,
-                        nome
-                    )
-
+            
         await registrar_relatorio_acao(interaction.guild, acao_id)
 
         await atualizar_painel_acoes(interaction.guild)
@@ -3399,7 +3364,11 @@ class AcaoSelect(discord.ui.Select):
 
         acao = self.values[0]
 
-        await interaction.response.send_modal(ExternosModal(acao))
+        await interaction.response.send_message(
+            "Selecione os participantes:",
+            view=SelecionarMembrosView(acao),
+            ephemeral=True
+        )
 
 
 class PainelAcoesView(discord.ui.View):
@@ -3543,7 +3512,11 @@ class ResultadoModal(discord.ui.Modal):
             if qtd == 0:
                 qtd = 1
 
-            valor_por_pessoa = dinheiro // qtd if dinheiro > 0 else 0
+            valor_por_pessoa = 0
+            resto = 0
+            if dinheiro > 0:
+                valor_por_pessoa = dinheiro / qtd
+                valor_por_pessoa = round(valor_por_pessoa, 2)
 
             # =================================================
             # ENVIAR RESULTADO NA SALA DE CADA PARTICIPANTE
@@ -3602,70 +3575,73 @@ class ResultadoModal(discord.ui.Modal):
                 except Exception as e:
                     print("Erro enviar resultado na sala:", e)
 
-            # =================================================
-            # EMBED NO RELATÓRIO DA AÇÃO
-            # =================================================
+        # =================================================
+        # EMBED NO RELATÓRIO DA AÇÃO
+        # =================================================
 
-            participantes_marcados = []
+        participantes_marcados = [
+            f"<@{p['user_id']}>"
+            for p in participantes
+            if p["user_id"]
+        ]
 
-            for p in participantes:
+        cor = 0x2ecc71 if self.venceu else 0xe74c3c
+        status = "🟢 **AÇÃO GANHA**" if self.venceu else "🔴 **AÇÃO PERDIDA**"
 
-                uid = p["user_id"]
-                nome = p["nome_externo"]
+        embed = discord.Embed(
+            title="🚨 RELATÓRIO DE AÇÃO",
+            color=cor
+        )
 
-                if uid:
-                    participantes_marcados.append(f"<@{uid}>")
+        embed.description = "━━━━━━━━━━━━━━━━━━━━━━"
 
-                elif nome and nome.strip() != "0":
-                    participantes_marcados.append(nome)
+        embed.add_field(
+            name="🏦 Ação",
+            value=f"```{acao['tipo']}```",
+            inline=False
+        )
 
-            cor = 0x2ecc71 if self.venceu else 0xe74c3c
-            status = "🟢 **AÇÃO GANHA**" if self.venceu else "🔴 **AÇÃO PERDIDA**"
+        embed.add_field(
+            name="📋 Escalação feita por",
+            value=f"<@{acao['autor']}>",
+            inline=False
+        )
 
-            embed = discord.Embed(
-                title="🚨 RELATÓRIO DE AÇÃO",
-                color=cor
-            )
+        embed.add_field(
+            name="🎯 Resultado",
+            value=status,
+            inline=False
+        )
 
-            embed.description = "━━━━━━━━━━━━━━━━━━━━━━"
+        if self.venceu and dinheiro:
+
+            total_fmt = f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
             embed.add_field(
-                name="🏦 Ação",
-                value=f"```{acao['tipo']}```",
+                name="💰 Total ganho",
+                value=total_fmt,
                 inline=False
             )
 
+            valor_fmt = f"R$ {valor_por_pessoa:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
             embed.add_field(
-                name="📋 Escalação feita por",
-                value=f"<@{acao['autor']}>",
+                name="💸 Valor por participante",
+                value=valor_fmt,
                 inline=False
             )
 
-            embed.add_field(
-                name="🎯 Resultado",
-                value=status,
-                inline=False
-            )
+        participantes_texto = "\n".join(participantes_marcados) if participantes_marcados else "Nenhum registrado"
 
-            if self.venceu and dinheiro:
+        embed.add_field(
+            name=f"👥 Participantes ({len(participantes_marcados)})",
+            value=participantes_texto,
+            inline=False
+        )
 
-                embed.add_field(
-                    name="💰 Dinheiro Recuperado",
-                    value=f"R$ {dinheiro:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                    inline=False
-                )
+        embed.set_footer(text="Sistema de Ações • VDR 442")
 
-            participantes_texto = "\n".join(participantes_marcados) if participantes_marcados else "Nenhum registrado"
-
-            embed.add_field(
-                name=f"👥 Participantes ({len(participantes_marcados)})",
-                value=participantes_texto,
-                inline=False
-            )
-
-            embed.set_footer(text="Sistema de Ações • VDR 442")
-
-            embed.description += "\n━━━━━━━━━━━━━━━━━━━━━━"
+        embed.description += "\n━━━━━━━━━━━━━━━━━━━━━━"
 
             await interaction.message.edit(embed=embed, view=None)
 
