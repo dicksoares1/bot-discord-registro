@@ -502,8 +502,6 @@ class RegistroView(discord.ui.View):
 
 async def enviar_painel_registro():
 
-    global registro_msg_id
-
     canal = bot.get_channel(CANAL_REGISTRO_ID)
 
     if not canal:
@@ -519,24 +517,21 @@ async def enviar_painel_registro():
         color=0x2ecc71
     )
 
-    # tenta atualizar
-    if registro_msg_id:
-        try:
-            msg = await canal.fetch_message(registro_msg_id)
+    # 🔍 PROCURA MENSAGEM EXISTENTE
+    async for msg in canal.history(limit=20):
 
-            await msg.edit(embed=embed, view=RegistroView())
+        if msg.author == bot.user and msg.embeds:
 
-            print("🔄 Painel de registro atualizado")
-            return
+            if msg.embeds[0].title == "📋 Registro":
+                try:
+                    await msg.edit(embed=embed, view=RegistroView())
+                    print("🔄 Painel de registro atualizado")
+                    return
+                except Exception as e:
+                    print("Erro ao editar painel:", e)
 
-        except:
-            print("⚠️ Mensagem antiga não encontrada, recriando...")
-
-    # cria novo
-    msg = await canal.send(embed=embed, view=RegistroView())
-
-    registro_msg_id = msg.id
-
+    # 🆕 SE NÃO EXISTIR, CRIA
+    await canal.send(embed=embed, view=RegistroView())
     print("✅ Painel de registro criado")
 
 # =========================================================
@@ -4019,8 +4014,7 @@ class ResultadoModal(discord.ui.Modal):
             embed=embed,
             view=None
         )
-        await interaction.response.defer(ephemeral=True)
-
+        
 # =========================================================
 # ================= RELATÓRIO DE AÇÃO =====================
 # =========================================================
