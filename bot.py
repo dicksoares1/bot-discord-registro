@@ -242,6 +242,7 @@ RESULTADOS_METAS_ID = 1341403574483288125
 CANAL_ESCALACOES_ID = 1241406819545514064
 CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 CANAL_HELICRASH_ID = 1478919637260435498
+CANAL_RELATORIO_HC_ID = 1485666254961512458
 
 
 # =========================================================
@@ -4255,7 +4256,7 @@ async def finalizar_helicrash(hid):
     setados = data["setados"]
     agregados = data["agregados"]
 
-    canal = bot.get_channel(CANAL_RELATORIO_ACOES_ID)
+    canal = bot.get_channel(CANAL_RELATORIO_HC_ID)
 
     lista_setados = "\n".join(f"<@{uid}>" for uid in setados) or "Nenhum"
     lista_agregados = "\n".join(f"<@{uid}>" for uid in agregados) or "Nenhum"
