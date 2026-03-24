@@ -1899,8 +1899,8 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(5)
                 continue
 
-        inicio = datetime.fromisoformat(prod["inicio"])
-        fim = datetime.fromisoformat(prod["fim"])
+        inicio = datetime.fromisoformat(prod["inicio"]).replace(tzinfo=None)
+        fim = datetime.fromisoformat(prod["fim"]).replace(tzinfo=None)
 
         total = (fim - inicio).total_seconds()
         restante = max(0, (fim - agora()).total_seconds())
@@ -1912,7 +1912,7 @@ async def acompanhar_producao(pid):
         mins = int(restante // 60)
 
         # ================= FINALIZAÇÃO =================
-        if agora() >= fim:
+        if datetime.now() >= fim:
             try:
                 # 🔥 CALCULO DE CAPSULAS
                 polvora = prod.get("polvora", 400)
@@ -1928,7 +1928,7 @@ async def acompanhar_producao(pid):
                         """,
                         str(prod["autor"]),
                         capsulas,
-                        agora()
+                        datetime.now()
                     )
 
                 # 🔥 EDITA MENSAGEM FINAL
