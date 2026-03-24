@@ -1903,7 +1903,7 @@ async def acompanhar_producao(pid):
         inicio = datetime.fromisoformat(prod["inicio"]).replace(tzinfo=None)
         fim = datetime.fromisoformat(prod["fim"]).replace(tzinfo=None)
 
-        agora_dt
+        agora_dt = agora()
 
         restante = (fim - agora_dt).total_seconds()
         total = (fim - inicio).total_seconds()
@@ -1911,13 +1911,19 @@ async def acompanhar_producao(pid):
         if total <= 0:
             total = 1
 
+        # 👉 valor bruto (usado pra finalizar)
+        restante_real = restante
+
+        # 👉 valor só pra exibição
+        restante = max(0, restante)
+
         pct = max(0, min(1, 1 - (restante / total)))
 
-        mins = max(0, int(restante // 60))
-        segundos = max(0, int(restante % 60))
+        mins = int(restante // 60)
+        segundos = int(restante % 60)
 
         # ================= FINALIZAÇÃO =================
-        if agora_dt >= fim:
+        if restante_real <= 0:
 
             try:
                 polvora = prod.get("polvora", 400)
