@@ -4554,6 +4554,7 @@ async def on_ready():
         if not reset_helicrash_diario.is_running():
             reset_helicrash_diario.start()
 
+    except Exception as e:
         print(f"✅ Bot online como {bot.user}")
 
     try:
