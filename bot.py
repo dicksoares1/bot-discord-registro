@@ -3750,6 +3750,27 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
 # ======================== AÇÕES ==========================
 # =========================================================
 
+async def enviar_painel_acoes(guild):
+
+    canal = guild.get_channel(CANAL_ESCALACOES_ID)
+
+    if not canal:
+        print("❌ Canal de ações não encontrado")
+        return
+
+    embed = discord.Embed(
+        title="📋 Sistema de Ações",
+        description="Selecione uma ação abaixo.",
+        color=0x2ecc71
+    )
+
+    await enviar_ou_atualizar_painel(
+        "painel_acoes",
+        CANAL_ESCALACOES_ID,
+        embed,
+        PainelAcoesView()
+    )
+
 async def gerar_embed_acoes():
 
     async with db.acquire() as conn:
