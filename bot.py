@@ -4211,14 +4211,22 @@ RESETADOR_ID = 1337383495743569941  # SEU ID
 class ResetAcoesView(discord.ui.View):
 
     def __init__(self):
-        super().__init__(timeout=None)  # ✅ OBRIGATÓRIO
+        super().__init__(timeout=None)
 
     @discord.ui.button(
         label="🔄 Resetar Ações",
         style=discord.ButtonStyle.danger,
-        custom_id="reset_acoes_btn"  # ✅ OBRIGATÓRIO
+        custom_id="reset_acoes_btn"
     )
     async def resetar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        # 🔒 Permissão (opcional)
+        if not any(role.id in CARGOS_ACAO for role in interaction.user.roles):
+            await interaction.response.send_message(
+                "❌ Você não tem permissão.",
+                ephemeral=True
+            )
+            return
 
         await interaction.response.defer(ephemeral=True)
 
@@ -5100,7 +5108,7 @@ async def on_ready():
         if not criar_helicrash_diario.is_running():
             criar_helicrash_diario.start()
     except Exception as e:
-        print ("Erro Helicrash diario", e)
+        print("Erro loop helicrash:", e)
 
     try:
         if not relatorio_semanal_polvoras.is_running():
@@ -5230,10 +5238,10 @@ async def on_ready():
         except:
             pass
 
-        # 🔥 PAINEL AÇÕES
+       # 🔥 PAINEL AÇÕES (CORRETO)
         try:
-            if 'atualizar_painel_acoes' in globals() and guild:
-                painel_tasks.append(atualizar_painel_acoes(guild))
+            if guild:
+                painel_tasks.append(enviar_painel_acoes(guild))
         except Exception as e:
             print("Erro painel ações:", e)
 
@@ -5257,6 +5265,25 @@ async def on_ready():
 
     except Exception as e:
         print("Erro geral ao enviar painéis:", e)
+
+    # 🔥 BOTÃO RESET AÇÕES
+        try:
+            canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+
+            if canal:
+
+        # evita duplicar botão
+                async for msg in canal.history(limit=10):
+                    if msg.author == bot.user and msg.components:
+                        break
+                else:
+                    await canal.send(
+                        "🔄 Controle de Ações:",
+                        view=ResetAcoesView()
+                    )
+
+        except Exception as e:
+            print("Erro botão reset ações:", e)
 
     # =====================================================
     # ================= INICIAR EDIT WORKER ===============
