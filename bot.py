@@ -1902,8 +1902,10 @@ async def acompanhar_producao(pid):
         inicio = datetime.fromisoformat(prod["inicio"]).replace(tzinfo=None)
         fim = datetime.fromisoformat(prod["fim"]).replace(tzinfo=None)
 
+        agora_dt = datetime.now()
+
         total = (fim - inicio).total_seconds()
-        restante = max(0, (fim - agora()).total_seconds())
+        restante = max(0, (fim - agora_dt).total_seconds())
 
         if total <= 0:
             total = 1
@@ -1912,12 +1914,11 @@ async def acompanhar_producao(pid):
         mins = int(restante // 60)
 
         # ================= FINALIZAÇÃO =================
-        if datetime.now() >= fim:
-            try:
-                # 🔥 CALCULO DE CAPSULAS
-                polvora = prod.get("polvora", 400)
+        if agora_dt >= fim:
 
-                capsulas = int(polvora * 1.5)  # ajuste se quiser
+            try:
+                polvora = prod.get("polvora", 400)
+                capsulas = int(polvora * 1.5)
 
                 async with db.acquire() as conn:
                     await conn.execute(
@@ -1928,10 +1929,9 @@ async def acompanhar_producao(pid):
                         """,
                         str(prod["autor"]),
                         capsulas,
-                        datetime.now()
+                        agora_dt
                     )
 
-                # 🔥 EDITA MENSAGEM FINAL
                 await msg.edit(
                     embed=discord.Embed(
                         title="✅ Produção Finalizada",
