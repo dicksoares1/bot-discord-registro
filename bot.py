@@ -1491,16 +1491,10 @@ async def enviar_painel_vendas():
 # ======================== PRODUÇÃO ========================
 # =========================================================
 
-
-# ==============================
-# VARIÁVEIS GLOBAIS
-# ==============================
-
 producoes_tasks = {}
 galpoes_ativos = set()
 edit_queue = asyncio.Queue()
 producoes_ativas = set()
-
 
 # =========================================================
 # ================= FUNÇÕES DE PRODUÇÃO ===================
@@ -1591,7 +1585,6 @@ async def deletar_producao(pid):
             pid
         )
 
-
 # =========================================================
 # ================= BARRA DE PROGRESSO ====================
 # =========================================================
@@ -1629,6 +1622,8 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
         self.tempo = tempo
 
     async def on_submit(self, interaction: discord.Interaction):
+
+        await interaction.response.defer(ephemeral=True)
 
         pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
 
@@ -1674,7 +1669,6 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
         await salvar_producao(pid, dados)
 
-        # pequena pausa para consistência
         await asyncio.sleep(1)
 
         if pid not in producoes_tasks:
@@ -1684,9 +1678,6 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
             )
 
             producoes_tasks[pid] = task
-
-        await responder_interacao(interaction, defer=True)
-
 
 # =========================================================
 # ================= 2ª TASK ===============================
@@ -1727,7 +1718,6 @@ class SegundaTaskView(discord.ui.View):
         except Exception as e:
             print("Erro segunda task:", e)
 
-
 # =========================================================
 # ================= MODAL PÓLVORA =========================
 # =========================================================
@@ -1752,8 +1742,7 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        # responde rápido pra evitar timeout
-        await responder_interacao(interaction, defer=True)
+        await interaction.response.defer(ephemeral=True)
 
         try:
 
@@ -1781,8 +1770,6 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
                     ephemeral=True
                 )
                 return
-
-            # ================= EMBED =================
 
             desc = (
                 f"**Galpão:** {self.galpao}\n"
@@ -1839,186 +1826,41 @@ class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    # ================= GALPÕES NORTE =================
-
-    @discord.ui.button(
-        label="🏭 Galpões Norte",
-        style=discord.ButtonStyle.primary,
-        custom_id="fabricacao_norte"
-    )
+    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary)
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         async with db.acquire() as conn:
-
             ativo = await conn.fetchval(
                 """
-                SELECT 1
-                FROM producoes
-                WHERE galpao=$1
-                AND CAST(fim AS timestamp) > NOW()
+                SELECT 1 FROM producoes
+                WHERE galpao=$1 AND CAST(fim AS timestamp) > NOW()
                 """,
                 "GALPÕES NORTE"
             )
 
         if ativo:
-
-            await interaction.response.send_message(
-                "Este galpão já está em produção.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("Já em produção.", ephemeral=True)
             return
 
-        galpoes_ativos.add("GALPÕES NORTE")
+        await interaction.response.send_modal(
+            PolvoraProducaoModal("GALPÕES NORTE", 65)
+        )
 
-        try:
-
-            await interaction.response.send_modal(
-                PolvoraProducaoModal("GALPÕES NORTE", 65)
-            )
-
-        except Exception:
-
-            galpoes_ativos.discard("GALPÕES NORTE")
-
-
-    # ================= GALPÕES SUL =================
-
-    @discord.ui.button(
-        label="🏭 Galpões Sul",
-        style=discord.ButtonStyle.secondary,
-        custom_id="fabricacao_sul"
-    )
+    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.secondary)
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        async with db.acquire() as conn:
+        await interaction.response.send_modal(
+            PolvoraProducaoModal("GALPÕES SUL", 130)
+        )
 
-            ativo = await conn.fetchval(
-                """
-                SELECT 1
-                FROM producoes
-                WHERE galpao=$1
-                AND CAST(fim AS timestamp) > NOW()
-                """,
-                "GALPÕES SUL"
-            )
-
-        if ativo:
-
-            await interaction.response.send_message(
-                "Este galpão já está em produção.",
-                ephemeral=True
-            )
-            return
-
-        galpoes_ativos.add("GALPÕES SUL")
-
-        try:
-
-            await interaction.response.send_modal(
-                PolvoraProducaoModal("GALPÕES SUL", 130)
-            )
-
-        except Exception:
-
-            galpoes_ativos.discard("GALPÕES SUL")
-
-
-    # ================= BAHAMAS =================
-
-    @discord.ui.button(
-        label="🏭 Bahamas",
-        style=discord.ButtonStyle.primary,
-        custom_id="fabricacao_bahamas"
-    )
+    @discord.ui.button(label="🏭 Bahamas", style=discord.ButtonStyle.primary)
     async def bahamas(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        async with db.acquire() as conn:
-
-            ativo = await conn.fetchval(
-                """
-                SELECT 1
-                FROM producoes
-                WHERE galpao=$1
-                AND CAST(fim AS timestamp) > NOW()
-                """,
-                "BAHAMAS"
-            )
-
-        if ativo:
-
-            await interaction.response.send_message(
-                "Este galpão já está em produção.",
-                ephemeral=True
-            )
-            return
-
-        galpoes_ativos.add("BAHAMAS")
-
-        try:
-
-            await interaction.response.send_modal(
-                PolvoraProducaoModal("BAHAMAS", 65)
-            )
-
-        except Exception:
-
-            galpoes_ativos.discard("BAHAMAS")
-
-
-    # ================= TESTE =================
-
-    @discord.ui.button(
-        label="🧪 TESTE 3 MIN",
-        style=discord.ButtonStyle.secondary,
-        custom_id="fabricacao_teste"
-    )
-    async def teste(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        inicio = agora()
-        fim = inicio + timedelta(minutes=3)
-
-        embed = discord.Embed(
-            title="🏭 Produção (TESTE)",
-            description="Iniciando produção de teste...",
-            color=0x95a5a6
+        await interaction.response.send_modal(
+            PolvoraProducaoModal("BAHAMAS", 65)
         )
 
-        msg = await interaction.channel.send(embed=embed)
-
-        pid = f"TESTE_{msg.id}"
-
-        if pid in producoes_tasks:
-            return
-
-        dados = {
-            "galpao": "TESTE",
-            "autor": interaction.user.id,
-            "inicio": inicio.isoformat(),
-            "fim": fim.isoformat(),
-            "obs": "Teste do sistema",
-            "polvora": 400,
-            "msg_id": msg.id,
-            "canal_id": interaction.channel.id
-        }
-
-        await salvar_producao(pid, dados)
-
-        task = bot.loop.create_task(
-            acompanhar_producao(pid)
-        )
-
-        producoes_tasks[pid] = task
-
-
-    # =====================================================
-    # ================= RELATORIO ==========================
-    # =====================================================
-
-    @discord.ui.button(
-        label="📊 Relatório Produção",
-        style=discord.ButtonStyle.success,
-        custom_id="fabricacao_relatorio"
-    )
+    @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.success)
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         await interaction.response.send_modal(
@@ -2026,359 +1868,65 @@ class FabricacaoView(discord.ui.View):
         )
 
 # =========================================================
-# ================= LOOP DE ACOMPANHAMENTO =================
-# =========================================================
-
-async def acompanhar_producao(pid):
-
-    if pid in producoes_ativas:
-        return
-
-    producoes_ativas.add(pid)
-
-    print(f"▶ Produção retomada: {pid}")
-
-    msg = None
-
-    while not bot.is_closed():
-
-        prod = await carregar_producao(pid)
-
-        if not prod:
-            producoes_ativas.discard(pid)
-            return
-
-        canal = pegar_canal(prod["canal_id"])
-
-        if not canal:
-            await asyncio.sleep(10)
-            continue
-
-        # ================= BUSCAR MENSAGEM =================
-
-        if msg is None:
-
-            try:
-                msg = await canal.fetch_message(
-                    int(prod["msg_id"])
-                )
-
-            except discord.NotFound:
-
-                print(f"⚠️ Mensagem da produção não encontrada: {pid}")
-
-                await deletar_producao(pid)
-
-                galpoes_ativos.discard(prod["galpao"])
-
-                if pid in producoes_tasks:
-                    producoes_tasks.pop(pid)
-
-                producoes_ativas.discard(pid)
-                return
-
-            except Exception as e:
-
-                print("Erro buscar mensagem produção:", e)
-                await asyncio.sleep(5)
-                continue
-
-        # ================= CÁLCULO DE TEMPO =================
-
-        inicio = datetime.fromisoformat(prod["inicio"])
-        fim = datetime.fromisoformat(prod["fim"])
-
-        total = (fim - inicio).total_seconds()
-        restante = max(0, (fim - agora()).total_seconds())
-
-        if total <= 0:
-            total = 1
-
-        pct = max(0, min(1, 1 - (restante / total)))
-        mins = int(restante // 60)
-
-        # ================= DESCRIÇÃO =================
-
-        desc = (
-            f"**Galpão:** {prod['galpao']}\n"
-            f"**Iniciado por:** <@{prod['autor']}>\n"
-        )
-
-        if prod.get("obs"):
-            desc += f"📝 **Obs:** {prod['obs']}\n"
-
-        desc += (
-            f"Início: <t:{int(inicio.timestamp())}:t>\n"
-            f"Término: <t:{int(fim.timestamp())}:t>\n\n"
-            f"⏳ **Restante:** {mins} min\n"
-            f"{barra(pct)}"
-        )
-
-        if prod.get("segunda_task_confirmada"):
-
-            uid = prod["segunda_task_confirmada"]["user"]
-
-            desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
-
-        # =====================================================
-        # ================= FINALIZAÇÃO =======================
-        # =====================================================
-
-        if restante <= 0:
-
-            polvora = int(prod.get("polvora", 400) or 400)
-            segunda = prod.get("segunda_task_confirmada")
-
-            base = 0
-
-            if prod["galpao"] == "GALPÕES NORTE":
-                base = 1777 if segunda else 1688
-
-            if prod["galpao"] == "GALPÕES SUL":
-                base = 1618 if segunda else 1608
-
-            if prod["galpao"] == "BAHAMAS":
-                base = 1777 if segunda else 1688
-
-            capsulas = int((base * polvora) / 400)
-            peso = capsulas * 0.05
-
-            try:
-                async with db.acquire() as conn:
-                    await conn.execute(
-                        """
-                        INSERT INTO producoes_finalizadas (user_id, galpao, polvora, capsulas, data)
-                        VALUES ($1,$2,$3,$4,$5)
-                        """,
-                        str(prod["autor"]),
-                        prod["galpao"],
-                        polvora,
-                        capsulas,
-                        agora_db()
-                    )
-            except Exception as e:
-                print("Erro ao salvar produção finalizada:", e)
-
-            try:
-                guild = bot.get_guild(GUILD_ID)
-                if guild:
-                    await atualizar_painel_acoes(guild)
-            except Exception as e:
-                print("Erro ao atualizar painel de :", e)
-
-            desc += (
-                "\n\n🔵 **Produção Finalizada**"
-                f"\n\n🧪 Produziu **{capsulas} cápsulas**"
-                f"\n⚖️ Peso total: **{peso:.2f} kg**"
-                f"\n💣 Pólvora utilizada: **{polvora}**"
-            )
-
-            try:
-
-                await edit_queue.put(
-                    msg.edit(
-                        embed=discord.Embed(
-                            title="🏭 Produção",
-                            description=desc,
-                            color=0x34495e
-                        ),
-                        view=None
-                    )
-                )
-
-            except:
-                pass
-
-            await deletar_producao(pid)
-
-            galpoes_ativos.discard(prod["galpao"])
-
-            if pid in producoes_tasks:
-                producoes_tasks.pop(pid)
-
-            producoes_ativas.discard(pid)
-
-            print(f"🗑️ Produção removida: {pid}")
-
-            return
-
-        # =====================================================
-        # ================= ATUALIZA EMBED =====================
-        # =====================================================
-
-        try:
-
-            await edit_queue.put(
-                msg.edit(
-                    embed=discord.Embed(
-                        title="🏭 Produção",
-                        description=desc,
-                        color=0x34495e
-                    )
-                )
-            )
-
-        except:
-            pass
-
-        await asyncio.sleep(75)
-
-# =========================================================
-# ================= PAINEL FABRICAÇÃO =====================
-# =========================================================
-
-async def enviar_painel_fabricacao():
-
-    canal = pegar_canal(CANAL_FABRICACAO_ID)
-
-    if not canal:
-        print("❌ Canal de fabricação não encontrado")
-        return
-
-    embed = discord.Embed(
-        title="🏭 Fabricação",
-        description="Selecione Norte ou Sul para iniciar a produção.",
-        color=0x2c3e50
-    )
-
-    await enviar_ou_atualizar_painel(
-        "painel_fabricacao",
-        CANAL_FABRICACAO_ID,
-        embed,
-        FabricacaoView()
-    )
-
-    print("🏭 Painel de fabricação verificado/atualizado")
-
-
-# =========================================================
-# ================= RELATÓRIO PRODUÇÃO ====================
+# ================= RELATÓRIO ==============================
 # =========================================================
 
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
 
-    data_inicio = discord.ui.TextInput(
-        label="Data inicial",
-        placeholder="Ex: 01/03/2026"
-    )
-
-    data_fim = discord.ui.TextInput(
-        label="Data final",
-        placeholder="Ex: 17/03/2026"
-    )
+    data_inicio = discord.ui.TextInput(label="Data inicial")
+    data_fim = discord.ui.TextInput(label="Data final")
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        await responder_interacao(interaction, defer=True, ephemeral=True)
-
         try:
+            await interaction.response.defer(ephemeral=True)
 
-            inicio = datetime.strptime(
-                self.data_inicio.value,
-                "%d/%m/%Y"
+            inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y") + timedelta(days=1)
+
+            async with db.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT user_id, SUM(capsulas) as total
+                    FROM producoes_finalizadas
+                    WHERE data >= $1 AND data < $2
+                    GROUP BY user_id
+                    """,
+                    inicio, fim
+                )
+
+            if not rows:
+                await interaction.followup.send("Sem dados.", ephemeral=True)
+                return
+
+            total_capsulas = sum(int(r["total"] or 0) for r in rows)
+
+            ranking = sorted(
+                [(str(r["user_id"]), int(r["total"])) for r in rows],
+                key=lambda x: x[1],
+                reverse=True
             )
 
-            fim = datetime.strptime(
-                self.data_fim.value,
-                "%d/%m/%Y"
-            ) + timedelta(days=1)
+            linhas = [
+                f"<@{uid}> — {total:,}".replace(",", ".")
+                for uid, total in ranking[:20]
+            ]
 
-        except:
-
-            await interaction.followup.send(
-                "Formato inválido. Use **DD/MM/AAAA**",
-                ephemeral=True
-            )
-            return
-
-        async with db.acquire() as conn:
-
-            rows = await conn.fetch(
-                """
-                SELECT user_id, SUM(capsulas) as total
-                FROM producoes_finalizadas
-                WHERE data BETWEEN $1 AND $2
-                GROUP BY user_id
-                """,
-                inicio,
-                fim
+            embed = discord.Embed(
+                title="📊 RELATÓRIO",
+                description=f"Total: {total_capsulas:,}".replace(",", ".")
             )
 
-        if not rows:
+            embed.add_field(name="Ranking", value="\n".join(linhas))
 
-            await interaction.followup.send(
-                "Nenhuma produção encontrada.",
-                ephemeral=True
-            )
-            return
+            canal = interaction.guild.get_channel(1422853066541109338)
+            if canal:
+                await canal.send(embed=embed)
 
-        ranking = {}
-        total_capsulas = 0
+            await interaction.followup.send("Enviado.", ephemeral=True)
 
-        # ================= CÁLCULO =================
-
-        ranking = {}
-        total_capsulas = 0
-
-        for r in rows:
-
-            uid = r["user_id"]
-            total = int(r["total"] or 0)
-
-            ranking[uid] = total
-            total_capsulas += total
-        # ================= ORDENAR =================
-
-        ranking_ordenado = sorted(
-            ranking.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )
-
-        linhas = []
-        medalhas = ["🥇", "🥈", "🥉"]
-
-        for i, (uid, total) in enumerate(ranking_ordenado[:20]):
-
-            medalha = medalhas[i] if i < 3 else "▫️"
-
-            linhas.append(
-                f"{medalha} <@{uid}> — **{total:,} cápsulas**"
-                .replace(",", ".")
-            )
-
-        # ================= EMBED =================
-
-        embed = discord.Embed(
-            title="🏭 RELATÓRIO DE PRODUÇÃO",
-            color=0x2ecc71
-        )
-
-        embed.description = (
-            f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n"
-            f"💊 **Total produzido:** {total_capsulas:,} cápsulas"
-            .replace(",", ".")
-        )
-
-        embed.add_field(
-            name="🏆 Ranking de Produtores",
-            value="\n".join(linhas),
-            inline=False
-        )
-
-        embed.set_footer(
-            text="Sistema de Produção • VDR 442"
-        )
-
-        canal = interaction.guild.get_channel(1422853066541109338)
-
-        if canal:
-            await canal.send(embed=embed)
-
-        await interaction.followup.send(
-            "Relatório enviado no canal de produção.",
-            ephemeral=True
-        )
+        except Exception as e:
+            print("ERRO RELATORIO:", e)
 
 # =========================================================
 # ======================== POLVORAS ========================
