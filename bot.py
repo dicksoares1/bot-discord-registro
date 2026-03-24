@@ -3794,10 +3794,11 @@ class PainelAcoesView(discord.ui.View):
         style=discord.ButtonStyle.primary,
         custom_id="acoes_relatorio"
     )
+    
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
-
+        embed = await gerar_embed_acoes()
         await interaction.response.send_message(
-            "Sistema de relatório ainda pode ser implementado aqui.",
+            embed=embed,
             ephemeral=True
         )
 
@@ -3822,26 +3823,77 @@ async def gerar_embed_acoes():
     async with db.acquire() as conn:
 
         rows = await conn.fetch("""
-            SELECT user_id, SUM(capsulas) as total
-            FROM producoes_finalizadas
-            GROUP BY user_id
-            ORDER BY total DESC
+            SELECT tipo, COUNT(*) as qtd
+            FROM acoes_semana
+            GROUP BY tipo
         """)
 
-    if not rows:
-        return discord.Embed(
-            title="📊 Ações da Semana",
-            description="Nenhuma ação registrada.",
-            color=0x95a5a6
-        )
+    feitas = {r["tipo"]: r["qtd"] for r in rows}
+
+    linhas = []
+    total_feitas = 0
+    total_meta = 0
+
+    for nome, limite in ACOES_SEMANA.items():
+
+        qtd = feitas.get(nome, 0)
+
+        if limite is None:
+            linhas.append(f"• {nome}: {qtd}")
+        else:
+            restante = max(limite - qtd, 0)
+            linhas.append(f"• {nome}: {qtd}/{limite} (restam {restante})")
+
+            total_feitas += qtd
+            total_meta += limite
+
+    embed = discord.Embed(
+        title="📊 Ações da Semana",
+        color=0x2ecc71
+    )
+
+    embed.add_field(
+        name="📌 Progresso",
+        value="\n".join(linhas),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📊 Total",
+        value=f"{total_feitas}/{total_meta} ações",
+        inline=False
+    )
+
+    return embed
+    # ================= CONTAGEM =================
+
+    feitas = {r["tipo"]: r["qtd"] for r in rows}
+
+    linhas_acoes = []
+    total_feitas = 0
+    total_meta = 0
+
+    for nome, limite in ACOES_SEMANA.items():
+
+        qtd_feita = feitas.get(nome, 0)
+
+        if limite is None:
+            linhas_acoes.append(f"• {nome}: {qtd_feita}")
+        else:
+            restante = max(limite - qtd_feita, 0)
+            linhas_acoes.append(f"• {nome}: {qtd_feita}/{limite} (restam {restante})")
+
+            total_feitas += qtd_feita
+            total_meta += limite
+
+    # ================= RANKING =================
 
     linhas = []
     total_geral = 0
 
-    for r in rows:
+    for r in ranking:
         total = int(r["total"] or 0)
         total_geral += total
-
         linhas.append(f"👤 <@{r['user_id']}> • {total:,} cápsulas".replace(",", "."))
 
     embed = discord.Embed(
@@ -3850,19 +3902,31 @@ async def gerar_embed_acoes():
     )
 
     embed.add_field(
-        name="🏆 Ranking",
-        value="\n".join(linhas[:20]),
+        name="📌 Progresso das Ações",
+        value="\n".join(linhas_acoes),
         inline=False
     )
 
     embed.add_field(
-        name="💊 Total Geral",
-        value=f"{total_geral:,} cápsulas".replace(",", "."),
+        name="📊 Total Controlado",
+        value=f"{total_feitas}/{total_meta} ações",
         inline=False
     )
 
-    return embed
+    if linhas:
+        embed.add_field(
+            name="🏆 Ranking",
+            value="\n".join(linhas[:20]),
+            inline=False
+        )
 
+        embed.add_field(
+            name="💊 Total Geral",
+            value=f"{total_geral:,} cápsulas".replace(",", "."),
+            inline=False
+        )
+
+    return embed
 
 async def enviar_painel_acoes(guild):
 
