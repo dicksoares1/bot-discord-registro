@@ -1757,7 +1757,6 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
             pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
 
             inicio = agora()
-
             tempo_real = max(1, int(self.tempo * (polvora / 400)))
             fim = inicio + timedelta(minutes=tempo_real)
 
@@ -1892,21 +1891,7 @@ async def acompanhar_producao(pid):
         if msg is None:
             try:
                 msg = await canal.fetch_message(int(prod["msg_id"]))
-
-            except discord.NotFound:
-                print(f"⚠️ Mensagem da produção não encontrada: {pid}")
-
-                await deletar_producao(pid)
-
-                galpoes_ativos.discard(prod["galpao"])
-
-                if pid in producoes_tasks:
-                    producoes_tasks.pop(pid)
-
-                return
-
-            except Exception as e:
-                print("Erro buscar mensagem produção:", e)
+            except:
                 await asyncio.sleep(5)
                 continue
 
@@ -1946,8 +1931,6 @@ async def acompanhar_producao(pid):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
-        # ================= FINALIZAÇÃO =================
-
         if restante_real <= 0:
 
             polvora = prod.get("polvora", 400)
@@ -1974,17 +1957,14 @@ async def acompanhar_producao(pid):
                 f"\n💣 Pólvora utilizada: **{polvora}**"
             )
 
-            try:
-                await msg.edit(
-                    embed=discord.Embed(
-                        title="🏭 Produção",
-                        description=desc,
-                        color=0x34495e
-                    ),
-                    view=None
-                )
-            except Exception as e:
-                print("Erro editar finalização:", e)
+            await msg.edit(
+                embed=discord.Embed(
+                    title="🏭 Produção",
+                    description=desc,
+                    color=0x34495e
+                ),
+                view=None
+            )
 
             await deletar_producao(pid)
 
@@ -1993,50 +1973,17 @@ async def acompanhar_producao(pid):
             if pid in producoes_tasks:
                 producoes_tasks.pop(pid)
 
-            print(f"🗑️ Produção removida: {pid}")
-
             return
 
-        # ================= ATUALIZA EMBED =================
-
-        try:
-            await msg.edit(
-                embed=discord.Embed(
-                    title="🏭 Produção",
-                    description=desc,
-                    color=0x34495e
-                )
+        await msg.edit(
+            embed=discord.Embed(
+                title="🏭 Produção",
+                description=desc,
+                color=0x34495e
             )
-        except Exception as e:
-            print("Erro atualizar embed:", e)
+        )
 
         await asyncio.sleep(5)
-# =========================================================
-# ================= PAINEL FABRICAÇÃO =====================
-# =========================================================
-
-async def enviar_painel_fabricacao():
-
-    canal = pegar_canal(CANAL_FABRICACAO_ID)
-
-    if not canal:
-        print("❌ Canal de fabricação não encontrado")
-        return
-
-    embed = discord.Embed(
-        title="🏭 Fabricação",
-        description="Selecione Norte ou Sul para iniciar a produção.",
-        color=0x2c3e50
-    )
-
-    await enviar_ou_atualizar_painel(
-        "painel_fabricacao",
-        CANAL_FABRICACAO_ID,
-        embed,
-        FabricacaoView()
-    )
-
-    print("🏭 Painel de fabricação verificado/atualizado")
 
 # =========================================================
 # ================= RELATÓRIO ==============================
