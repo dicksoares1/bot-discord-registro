@@ -24,8 +24,6 @@ import time as time_module
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 
-def agora():
-    return datetime.now()
 # =========================================================
 # ================= FILA GLOBAL DE EDIÇÃO =================
 # =========================================================
@@ -129,12 +127,11 @@ async def pegar_usuario(uid):
 
 BRASIL = ZoneInfo("America/Sao_Paulo")
 
-def agora():
-    return datetime.now(BRASIL)
-
-
 def agora_db():
     return agora().replace(tzinfo=None)
+
+def agora():
+    return datetime.utcnow()
 
 
 # =========================================================
@@ -1494,7 +1491,6 @@ async def enviar_painel_vendas():
 
 producoes_tasks = {}
 galpoes_ativos = set()
-edit_queue = asyncio.Queue()
 producoes_ativas = set()
 
 # =========================================================
@@ -1895,8 +1891,8 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(5)
                 continue
 
-        inicio = datetime.fromisoformat(prod["inicio"]).replace(tzinfo=None)
-        fim = datetime.fromisoformat(prod["fim"]).replace(tzinfo=None)
+        inicio = datetime.fromisoformat(prod["inicio"])
+        fim = datetime.fromisoformat(prod["fim"])
 
         agora_dt = agora()
 
@@ -1931,7 +1927,7 @@ async def acompanhar_producao(pid):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
-        if restante_real <= 0:
+        if agora_dt >= fim:
 
             polvora = prod.get("polvora", 400)
             segunda = prod.get("segunda_task_confirmada")
@@ -1950,6 +1946,18 @@ async def acompanhar_producao(pid):
             capsulas = (base * polvora) // 400
             peso = capsulas * 0.05
 
+            async with db.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO producoes_finalizadas
+                    (user_id, capsulas, data)
+                    VALUES ($1,$2,$3)
+                    """,
+                    str(prod["autor"]),
+                    capsulas,
+                    agora()
+                )
+
             desc += (
                 "\n\n🔵 **Produção Finalizada**"
                 f"\n\n🧪 Produziu **{capsulas} cápsulas**"
@@ -1957,13 +1965,15 @@ async def acompanhar_producao(pid):
                 f"\n💣 Pólvora utilizada: **{polvora}**"
             )
 
-            await msg.edit(
-                embed=discord.Embed(
-                    title="🏭 Produção",
-                    description=desc,
-                    color=0x34495e
-                ),
-                view=None
+            await edit_queue.put(
+                msg.edit(
+                    embed=discord.Embed(
+                        title="🏭 Produção",
+                        description=desc,
+                        color=0x34495e
+                    ),
+                    view=None
+                )
             )
 
             await deletar_producao(pid)
@@ -1975,11 +1985,13 @@ async def acompanhar_producao(pid):
 
             return
 
-        await msg.edit(
-            embed=discord.Embed(
-                title="🏭 Produção",
-                description=desc,
-                color=0x34495e
+        await edit_queue.put(
+            msg.edit(
+                embed=discord.Embed(
+                    title="🏭 Produção",
+                    description=desc,
+                    color=0x34495e
+                )
             )
         )
 
@@ -4584,8 +4596,7 @@ async def on_ready():
     global http_session
 
     print("🔄 Iniciando configuração do bot...")
-
-
+    
 
     # =====================================================
     # ================= HTTP SESSION ======================
@@ -4618,7 +4629,7 @@ async def on_ready():
 
     if guild:
         await enviar_painel_acoes(guild)
-    criar_helicrash_diario.start()
+    
 
     # =====================================================
     # ================= CACHE DE METAS ====================
@@ -4695,8 +4706,7 @@ async def on_ready():
     except Exception as e:
         print("Erro reset ações semana:", e)
 
-    async def reset_acoes_segunda():
-
+    
         agora_br = agora()
 
         if agora_br.weekday() == 0 and agora_br.hour == 0 and agora_br.minute == 0:
