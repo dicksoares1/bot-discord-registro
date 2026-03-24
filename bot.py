@@ -4986,8 +4986,7 @@ async def on_ready():
         CalculadoraView,
         StatusView,
         HelicrashPainel,
-        PainelAcoesView,
-        ResetAcoesView
+        PainelAcoesView        
     ]
 
     for view_class in outras_views:
