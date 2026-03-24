@@ -3750,6 +3750,40 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
 # ======================== AÇÕES ==========================
 # =========================================================
 
+ACOES_SEMANA = {
+
+    "Loja de Armas (Ammunation)": None,
+    "Loja de Bebidas": None,
+    "Loja de Departamento": None,
+    "Mergulhador": None,
+    "Grapeseed": None,
+    "Companhia de Gás": None,
+    "Life Invader": None,
+    "Aeroporto de Sucata": None,
+    "Carro Forte": None,
+
+    "Joalheria": 5,
+    "Banco Fleeca": 4,
+    "Banco de Paleto": 1,
+    "Banco Central": 1,
+    "Banco Bahamas": 1,
+    "Nióbio": 1,
+}
+
+
+def formatar_dinheiro(valor):
+
+    try:
+        valor = float(valor)
+    except:
+        valor = 0
+
+    return (
+        f"{valor:,.2f}"
+        .replace(",", "X")
+        .replace(".", ",")
+        .replace("X", ".")
+    )
 class PainelAcoesView(discord.ui.View):
 
     def __init__(self):
@@ -3851,42 +3885,6 @@ async def enviar_painel_acoes(guild):
 async def atualizar_painel_acoes(guild):
 
     await enviar_painel_acoes(guild)
-
-ACOES_SEMANA = {
-
-    "Loja de Armas (Ammunation)": None,
-    "Loja de Bebidas": None,
-    "Loja de Departamento": None,
-    "Mergulhador": None,
-    "Grapeseed": None,
-    "Companhia de Gás": None,
-    "Life Invader": None,
-    "Aeroporto de Sucata": None,
-    "Carro Forte": None,
-
-    "Joalheria": 5,
-    "Banco Fleeca": 4,
-    "Banco de Paleto": 1,
-    "Banco Central": 1,
-    "Banco Bahamas": 1,
-    "Nióbio": 1,
-}
-
-
-def formatar_dinheiro(valor):
-
-    try:
-        valor = float(valor)
-    except:
-        valor = 0
-
-    return (
-        f"{valor:,.2f}"
-        .replace(",", "X")
-        .replace(".", ",")
-        .replace("X", ".")
-    )
-
 # =========================================================
 # SELECT AÇÃO
 # =========================================================
