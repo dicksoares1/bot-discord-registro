@@ -1625,7 +1625,7 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
         pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
 
-        inicio = datetime.now()
+        inicio = agora()
         fim = inicio + timedelta(minutes=self.tempo)
 
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
@@ -1755,7 +1755,7 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
             pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
 
-            inicio = datetime.now()
+            inicio = agora()
 
             tempo_real = max(1, int(self.tempo * (polvora / 400)))
             fim = inicio + timedelta(minutes=tempo_real)
@@ -1902,7 +1902,7 @@ async def acompanhar_producao(pid):
         inicio = datetime.fromisoformat(prod["inicio"]).replace(tzinfo=None)
         fim = datetime.fromisoformat(prod["fim"]).replace(tzinfo=None)
 
-        agora_dt = datetime.now()
+        agora_dt = agora()
 
         total = (fim - inicio).total_seconds()
         restante = (fim - agora_dt).total_seconds()
