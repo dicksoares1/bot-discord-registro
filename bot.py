@@ -180,6 +180,25 @@ async def conectar_db():
         )
         print("🟢 Pool PostgreSQL conectado!")
 
+async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
+
+    canal = bot.get_channel(canal_id)
+
+    if not canal:
+        return
+
+    async for msg in canal.history(limit=20):
+
+        if msg.author == bot.user and msg.embeds:
+
+            if msg.embeds[0].title == embed.title:
+                try:
+                    await msg.edit(embed=embed, view=view)
+                    return
+                except:
+                    pass
+
+    await canal.send(embed=embed, view=view)
 
 # =========================================================
 # ======================== ARQUIVOS ========================
@@ -2121,8 +2140,31 @@ async def acompanhar_producao(pid):
             if prod["galpao"] == "BAHAMAS":
                 base = 1777 if segunda else 1688
 
-            capsulas = (base * polvora) / 400
+            capsulas = int((base * polvora) / 400)
             peso = capsulas * 0.05
+
+            try:
+                async with db.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO producoes_finalizadas (user_id, galpao, polvora, capsulas, data)
+                        VALUES ($1,$2,$3,$4,$5)
+                        """,
+                        str(prod["autor"]),
+                        prod["galpao"],
+                        polvora,
+                        capsulas,
+                        agora_db()
+                    )
+            except Exception as e:
+                print("Erro ao salvar produção finalizada:", e)
+
+            try:
+                guild = bot.get_guild(GUILD_ID)
+                if guild:
+                    await atualizar_painel_acoes(guild)
+            except Exception as e:
+                print("Erro ao atualizar painel de ações:", e)
 
             desc += (
                 "\n\n🔵 **Produção Finalizada**"
@@ -2253,9 +2295,10 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 
             rows = await conn.fetch(
                 """
-                SELECT autor, galpao, polvora
-                FROM producoes
-                WHERE CAST(inicio AS timestamp) BETWEEN $1 AND $2
+                SELECT user_id, SUM(capsulas) as total
+                FROM producoes_finalizadas
+                WHERE data BETWEEN $1 AND $2
+                GROUP BY user_id
                 """,
                 inicio,
                 fim
@@ -2274,30 +2317,16 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 
         # ================= CÁLCULO =================
 
+        ranking = {}
+        total_capsulas = 0
+
         for r in rows:
 
-            autor = r["autor"]
-            galpao = r["galpao"]
-            polvora = r["polvora"] or 400
+            uid = r["user_id"]
+            total = int(r["total"] or 0)
 
-            base = 0
-
-            if galpao == "GALPÕES NORTE":
-                base = 1688
-
-            if galpao == "GALPÕES SUL":
-                base = 1608
-
-            if galpao == "BAHAMAS":
-                base = 1688
-
-            capsulas = (base * polvora) / 400
-
-            ranking.setdefault(autor, 0)
-            ranking[autor] += capsulas
-
-            total_capsulas += capsulas
-
+            ranking[uid] = total
+            total_capsulas += total
         # ================= ORDENAR =================
 
         ranking_ordenado = sorted(
@@ -3721,6 +3750,98 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
 # ======================== AÇÕES ==========================
 # =========================================================
 
+async def gerar_embed_acoes():
+
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT user_id, SUM(capsulas) as total
+            FROM producoes_finalizadas
+            GROUP BY user_id
+            ORDER BY total DESC
+            LIMIT 10
+            """
+        )
+
+    if not rows:
+        return discord.Embed(
+            title="📊 Ações da Semana",
+            description="Sem dados ainda.",
+            color=0x95a5a6
+        )
+
+    linhas = []
+    total_geral = 0
+
+    for r in rows:
+        total = int(r["total"] or 0)
+        total_geral += total
+
+        linhas.append(f"<@{r['user_id']}> — **{total} cápsulas**")
+
+    embed = discord.Embed(
+        title="📊 Ações da Semana",
+        color=0x2ecc71
+    )
+
+    embed.add_field(
+        name="🏆 Ranking",
+        value="\n".join(linhas),
+        inline=False
+    )
+
+    embed.add_field(
+        name="💊 Total Geral",
+        value=f"{total_geral} cápsulas",
+        inline=False
+    )
+
+    return embed
+
+
+async def atualizar_painel_acoes(guild):
+
+    canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+
+    if not canal:
+        return
+
+    embed = await gerar_embed_acoes()
+
+    async for msg in canal.history(limit=20):
+
+        if msg.author == bot.user and msg.embeds:
+
+            if msg.embeds[0].title == "📊 Ações da Semana":
+                await msg.edit(embed=embed)
+                return
+
+    await canal.send(embed=embed)
+
+async def atualizar_painel_escalacoes(guild):
+
+    canal = guild.get_channel(CANAL_ESCALACOES_ID)
+
+    if not canal:
+        print("❌ Canal de ações não encontrado")
+        return
+
+    embed = discord.Embed(
+        title="🚨 Sistema de Ações",
+        description="Selecione a ação abaixo e monte a escalação.",
+        color=0xe74c3c
+    )
+    view = PainelAcoesView()
+    view.add_item(ResetAcoesButton())
+    await enviar_ou_atualizar_painel(
+        "painel_acoes",
+        CANAL_ESCALACOES_ID,
+        embed,
+        view
+    )
+
+    print("🚨 Painel de ações enviado/atualizado")
+
 ACOES_SEMANA = {
 
     "Loja de Armas (Ammunation)": None,
@@ -3788,6 +3909,32 @@ class PainelAcoesView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(AcaoSelect())
+
+class ResetAcoesButton(discord.ui.Button):
+
+    def __init__(self):
+        super().__init__(
+            label="♻️ Resetar Ações",
+            style=discord.ButtonStyle.danger
+        )
+
+    async def callback(self, interaction):
+
+        if interaction.user.id != 123456789:  # COLOCA SEU ID AQUI
+            await interaction.response.send_message(
+                "❌ Sem permissão.",
+                ephemeral=True
+            )
+            return
+
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM acoes_semana")
+            await conn.execute("DELETE FROM participantes_acoes")
+
+        await interaction.response.send_message(
+            "♻️ Ações resetadas manualmente.",
+            ephemeral=True
+        )
 
 # =========================================================
 # SELECIONAR MEMBROS
@@ -4058,9 +4205,95 @@ async def registrar_relatorio_acao(guild, acao_id):
 
     if canal:
         await canal.send(embed=embed, view=ResultadoAcaoView(acao_id))
+
+RESETADOR_ID = 1337383495743569941  # SEU ID
+
+class ResetAcoesView(discord.ui.View):
+
+    @discord.ui.button(label="♻️ Resetar Ações", style=discord.ButtonStyle.danger)
+    async def resetar(self, interaction, button):
+
+        if interaction.user.id != RESETADOR_ID:
+            await interaction.response.send_message(
+                "❌ Você não tem permissão.",
+                ephemeral=True
+            )
+            return
+
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM acoes_semana")
+            await conn.execute("DELETE FROM participantes_acoes")
+
+        await interaction.response.send_message(
+            "♻️ Ações resetadas manualmente.",
+            ephemeral=True
+        )
+
 # =========================================================
 # ================= HELICRASH =============================
 # =========================================================
+
+@tasks.loop(minutes=1)
+async def criar_helicrash_diario():
+
+    agora_br = agora()
+
+    if agora_br.hour == 0 and agora_br.minute == 0:
+
+        horarios = ["02:00", "13:00", "15:00", "22:00"]
+
+        for h in horarios:
+
+            hora, minuto = map(int, h.split(":"))
+
+            horario = agora_br.replace(
+                hour=hora,
+                minute=minuto,
+                second=0,
+                microsecond=0
+            )
+
+            canal = bot.get_channel(CANAL_HELICRASH_ID)
+
+            if not canal:
+                print("❌ Canal helicrash não encontrado")
+                continue
+
+            embed = discord.Embed(
+                title=f"🚁 HELICRASH {h}",
+                description="Selecione seu tipo abaixo.",
+                color=0xe74c3c
+            )
+
+            embed.add_field(name="👑 Setados", value="0/10", inline=True)
+            embed.add_field(name="🟡 Agregados", value="0/10", inline=True)
+            embed.add_field(name="👑 Lista Setados", value="Ninguém", inline=False)
+            embed.add_field(name="🟡 Lista Agregados", value="Ninguém", inline=False)
+
+            msg = await canal.send(embed=embed)
+
+            async with db.acquire() as conn:
+
+                hid = await conn.fetchval(
+                    """
+                    INSERT INTO helicrash (horario, canal_id, msg_id, participantes)
+                    VALUES ($1,$2,$3,$4)
+                    RETURNING id
+                    """,
+                    horario.replace(tzinfo=None),
+                    str(canal.id),
+                    str(msg.id),
+                    ""
+                )
+
+            helicrash_cache[hid] = {
+                "setados": [],
+                "agregados": []
+            }
+
+            await msg.edit(view=HelicrashView(hid))
+
+            bot.loop.create_task(acompanhar_helicrash(hid))
 
 helicrash_cache = {}
 
@@ -4836,7 +5069,8 @@ async def on_ready():
         CalculadoraView,
         StatusView,
         HelicrashPainel,
-        PainelAcoesView
+        PainelAcoesView,
+        ResetAcoesView
     ]
 
     for view_class in outras_views:
@@ -4856,6 +5090,12 @@ async def on_ready():
         print("Erro loop lives:", e)
 
     try:
+        if not criar_helicrash_diario.is_running():
+            criar_helicrash_diario.start()
+    except Exception as e:
+        print ("Erro Helicrash diario", e)
+
+    try:
         if not relatorio_semanal_polvoras.is_running():
             relatorio_semanal_polvoras.start()
     except Exception as e:
@@ -4873,6 +5113,18 @@ async def on_ready():
                 reset_acoes_segunda.start()
     except Exception as e:
         print("Erro reset ações semana:", e)
+
+    async def reset_acoes_segunda():
+
+        agora_br = agora()
+
+        if agora_br.weekday() == 0 and agora_br.hour == 0 and agora_br.minute == 0:
+
+           async with db.acquire() as conn:
+                await conn.execute("DELETE FROM acoes_semana")
+                await conn.execute("DELETE FROM participantes_acoes")
+
+            print("♻️ Ações resetadas (segunda)")
 
     # =====================================================
     # ================= RESTAURAR PRODUÇÕES ===============
