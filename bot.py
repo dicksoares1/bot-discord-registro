@@ -1872,10 +1872,7 @@ class FabricacaoView(discord.ui.View):
 
 async def acompanhar_producao(pid):
 
-    if pid in producoes_ativas:
-        return
-
-    producoes_ativas.add(pid)
+    print(f"▶ Produção retomada: {pid}")
 
     msg = None
 
@@ -1884,7 +1881,6 @@ async def acompanhar_producao(pid):
         prod = await carregar_producao(pid)
 
         if not prod:
-            producoes_ativas.discard(pid)
             return
 
         canal = pegar_canal(prod["canal_id"])
@@ -1896,7 +1892,21 @@ async def acompanhar_producao(pid):
         if msg is None:
             try:
                 msg = await canal.fetch_message(int(prod["msg_id"]))
-            except:
+
+            except discord.NotFound:
+                print(f"⚠️ Mensagem da produção não encontrada: {pid}")
+
+                await deletar_producao(pid)
+
+                galpoes_ativos.discard(prod["galpao"])
+
+                if pid in producoes_tasks:
+                    producoes_tasks.pop(pid)
+
+                return
+
+            except Exception as e:
+                print("Erro buscar mensagem produção:", e)
                 await asyncio.sleep(5)
                 continue
 
@@ -1905,72 +1915,17 @@ async def acompanhar_producao(pid):
 
         agora_dt = agora()
 
-        restante = (fim - agora_dt).total_seconds()
         total = (fim - inicio).total_seconds()
+        restante_real = (fim - agora_dt).total_seconds()
+        restante = max(0, restante_real)
 
         if total <= 0:
             total = 1
-
-        # 👉 valor bruto (usado pra finalizar)
-        restante_real = restante
-
-        # 👉 valor só pra exibição
-        restante = max(0, restante)
 
         pct = max(0, min(1, 1 - (restante / total)))
 
         mins = int(restante // 60)
         segundos = int(restante % 60)
-
-        # ================= FINALIZAÇÃO =================
-        if restante_real <= 0:
-
-            try:
-                polvora = prod.get("polvora", 400)
-                capsulas = int(polvora * 1.5)
-
-                segunda = prod.get("segunda_task_confirmada")
-
-                extra = ""
-                if segunda:
-                    extra = "\n\n✅ 2ª Task confirmada"
-
-                async with db.acquire() as conn:
-                    await conn.execute(
-                        """
-                        INSERT INTO producoes_finalizadas
-                        (user_id, capsulas, data)
-                        VALUES ($1,$2,$3)
-                        """,
-                        str(prod["autor"]),
-                        capsulas,
-                        agora_dt
-                    )
-
-                await msg.edit(
-                    embed=discord.Embed(
-                        title="✅ Produção Finalizada",
-                        description=(
-                            f"**Galpão:** {prod['galpao']}\n"
-                            f"**Responsável:** <@{prod['autor']}>\n\n"
-                            f"💊 Produzido: **{capsulas} cápsulas**"
-                            f"{extra}"
-                        ),
-                        color=0x2ecc71
-                    ),
-                    view=None
-                )
-
-            except Exception as e:
-                print("ERRO FINALIZAR PRODUÇÃO:", e)
-
-            await deletar_producao(pid)
-            producoes_ativas.discard(pid)
-            return
-
-        # ================= UPDATE NORMAL =================
-
-        segunda = prod.get("segunda_task_confirmada")
 
         desc = (
             f"**Galpão:** {prod['galpao']}\n"
@@ -1980,15 +1935,69 @@ async def acompanhar_producao(pid):
         if prod.get("obs"):
             desc += f"📝 **Obs:** {prod['obs']}\n"
 
-        if segunda:
-            desc += f"✅ 2ª Task: <@{segunda['user']}>\n"
-
         desc += (
             f"Início: <t:{int(inicio.timestamp())}:t>\n"
             f"Término: <t:{int(fim.timestamp())}:t>\n\n"
             f"⏳ **Restante:** {mins}m {segundos}s\n"
             f"{barra(pct)}"
         )
+
+        if prod.get("segunda_task_confirmada"):
+            uid = prod["segunda_task_confirmada"]["user"]
+            desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
+
+        # ================= FINALIZAÇÃO =================
+
+        if restante_real <= 0:
+
+            polvora = prod.get("polvora", 400)
+            segunda = prod.get("segunda_task_confirmada")
+
+            base = 0
+
+            if prod["galpao"] == "GALPÕES NORTE":
+                base = 1777 if segunda else 1688
+
+            if prod["galpao"] == "GALPÕES SUL":
+                base = 1618 if segunda else 1608
+
+            if prod["galpao"] == "BAHAMAS":
+                base = 1777 if segunda else 1688
+
+            capsulas = (base * polvora) // 400
+            peso = capsulas * 0.05
+
+            desc += (
+                "\n\n🔵 **Produção Finalizada**"
+                f"\n\n🧪 Produziu **{capsulas} cápsulas**"
+                f"\n⚖️ Peso total: **{peso:.2f} kg**"
+                f"\n💣 Pólvora utilizada: **{polvora}**"
+            )
+
+            try:
+                await msg.edit(
+                    embed=discord.Embed(
+                        title="🏭 Produção",
+                        description=desc,
+                        color=0x34495e
+                    ),
+                    view=None
+                )
+            except Exception as e:
+                print("Erro editar finalização:", e)
+
+            await deletar_producao(pid)
+
+            galpoes_ativos.discard(prod["galpao"])
+
+            if pid in producoes_tasks:
+                producoes_tasks.pop(pid)
+
+            print(f"🗑️ Produção removida: {pid}")
+
+            return
+
+        # ================= ATUALIZA EMBED =================
 
         try:
             await msg.edit(
@@ -1999,9 +2008,9 @@ async def acompanhar_producao(pid):
                 )
             )
         except Exception as e:
-            print("ERRO EDIT:", e)
+            print("Erro atualizar embed:", e)
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(5)
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
