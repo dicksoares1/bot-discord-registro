@@ -4141,7 +4141,7 @@ class ResultadoModal(discord.ui.Modal):
 
         async with db.acquire() as conn:
             await conn.execute(
-                "UPDATE acoes_semana SET valor=$1 WHERE id=$2",
+                "UPDATE acoes_semana SET dinheiro=$1 WHERE id=$2",
                 valor,
                 self.acao_id
             )
