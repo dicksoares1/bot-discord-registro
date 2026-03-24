@@ -1824,7 +1824,7 @@ class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary, custom_id="fabricacao_norte")
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         async with db.acquire() as conn:
@@ -1844,26 +1844,27 @@ class FabricacaoView(discord.ui.View):
             PolvoraProducaoModal("GALPÕES NORTE", 65)
         )
 
-    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.secondary, custom_id="fabricacao_sul")
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         await interaction.response.send_modal(
             PolvoraProducaoModal("GALPÕES SUL", 130)
         )
 
-    @discord.ui.button(label="🏭 Bahamas", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="🏭 Bahamas", style=discord.ButtonStyle.primary, custom_id="fabricacao_bahamas")
     async def bahamas(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         await interaction.response.send_modal(
             PolvoraProducaoModal("BAHAMAS", 65)
         )
 
-    @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.success, custom_id="fabricacao_relatorio")
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         await interaction.response.send_modal(
             RelatorioProducaoModal()
         )
+
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
 # =========================================================
@@ -1945,6 +1946,7 @@ async def acompanhar_producao(pid):
             pass
 
         await asyncio.sleep(60)
+
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
