@@ -1864,7 +1864,87 @@ class FabricacaoView(discord.ui.View):
         await interaction.response.send_modal(
             RelatorioProducaoModal()
         )
+# =========================================================
+# ================= LOOP DE ACOMPANHAMENTO =================
+# =========================================================
 
+async def acompanhar_producao(pid):
+
+    if pid in producoes_ativas:
+        return
+
+    producoes_ativas.add(pid)
+
+    msg = None
+
+    while not bot.is_closed():
+
+        prod = await carregar_producao(pid)
+
+        if not prod:
+            producoes_ativas.discard(pid)
+            return
+
+        canal = pegar_canal(prod["canal_id"])
+
+        if not canal:
+            await asyncio.sleep(10)
+            continue
+
+        if msg is None:
+            try:
+                msg = await canal.fetch_message(int(prod["msg_id"]))
+            except:
+                await asyncio.sleep(5)
+                continue
+
+        inicio = datetime.fromisoformat(prod["inicio"])
+        fim = datetime.fromisoformat(prod["fim"])
+
+        total = (fim - inicio).total_seconds()
+        restante = max(0, (fim - agora()).total_seconds())
+
+        if total <= 0:
+            total = 1
+
+        pct = max(0, min(1, 1 - (restante / total)))
+        mins = int(restante // 60)
+
+        desc = (
+            f"**Galpão:** {prod['galpao']}\n"
+            f"**Iniciado por:** <@{prod['autor']}>\n"
+        )
+
+        if prod.get("obs"):
+            desc += f"📝 **Obs:** {prod['obs']}\n"
+
+        desc += (
+            f"Início: <t:{int(inicio.timestamp())}:t>\n"
+            f"Término: <t:{int(fim.timestamp())}:t>\n\n"
+            f"⏳ **Restante:** {mins} min\n"
+            f"{barra(pct)}"
+        )
+
+        if restante <= 0:
+
+            await deletar_producao(pid)
+
+            producoes_ativas.discard(pid)
+
+            return
+
+        try:
+            await msg.edit(
+                embed=discord.Embed(
+                    title="🏭 Produção",
+                    description=desc,
+                    color=0x34495e
+                )
+            )
+        except:
+            pass
+
+        await asyncio.sleep(60)
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
