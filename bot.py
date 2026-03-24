@@ -4518,7 +4518,6 @@ async def on_ready():
         FabricacaoView,
         CalculadoraView,
         StatusView,
-        HelicrashPainel,
         PainelAcoesView        
     ]
 
@@ -4683,11 +4682,7 @@ async def on_ready():
         except:
             pass
 
-        try:
-            painel_tasks.append(enviar_painel_helicrash())
-        except:
-            pass
-
+        
         results = await asyncio.gather(*painel_tasks, return_exceptions=True)
 
         for r in results:
