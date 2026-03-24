@@ -1923,6 +1923,12 @@ async def acompanhar_producao(pid):
                 polvora = prod.get("polvora", 400)
                 capsulas = int(polvora * 1.5)
 
+                segunda = prod.get("segunda_task_confirmada")
+
+                extra = ""
+                if segunda:
+                    extra = "\n\n✅ 2ª Task confirmada"
+
                 async with db.acquire() as conn:
                     await conn.execute(
                         """
@@ -1942,6 +1948,7 @@ async def acompanhar_producao(pid):
                             f"**Galpão:** {prod['galpao']}\n"
                             f"**Responsável:** <@{prod['autor']}>\n\n"
                             f"💊 Produzido: **{capsulas} cápsulas**"
+                            f"{extra}"
                         ),
                         color=0x2ecc71
                     ),
@@ -1955,7 +1962,9 @@ async def acompanhar_producao(pid):
             producoes_ativas.discard(pid)
             return
 
-        # ================= UPDATE =================
+        # ================= UPDATE NORMAL =================
+
+        segunda = prod.get("segunda_task_confirmada")
 
         desc = (
             f"**Galpão:** {prod['galpao']}\n"
@@ -1964,6 +1973,9 @@ async def acompanhar_producao(pid):
 
         if prod.get("obs"):
             desc += f"📝 **Obs:** {prod['obs']}\n"
+
+        if segunda:
+            desc += f"✅ 2ª Task: <@{segunda['user']}>\n"
 
         desc += (
             f"Início: <t:{int(inicio.timestamp())}:t>\n"
@@ -1980,10 +1992,10 @@ async def acompanhar_producao(pid):
                     color=0x34495e
                 )
             )
-        except:
-            pass
+        except Exception as e:
+            print("ERRO EDIT:", e)
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(1)
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
