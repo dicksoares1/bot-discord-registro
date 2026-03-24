@@ -1900,10 +1900,10 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(5)
                 continue
 
-        inicio = datetime.fromisoformat(prod["inicio"])
-        fim = datetime.fromisoformat(prod["fim"])
+        inicio = datetime.fromisoformat(prod["inicio"]).replace(tzinfo=None)
+        fim = datetime.fromisoformat(prod["fim"]).replace(tzinfo=None)
 
-        agora_dt = agora()
+        agora_dt
 
         restante = (fim - agora_dt).total_seconds()
         total = (fim - inicio).total_seconds()
