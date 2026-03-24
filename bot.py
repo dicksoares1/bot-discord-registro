@@ -4210,24 +4210,31 @@ RESETADOR_ID = 1337383495743569941  # SEU ID
 
 class ResetAcoesView(discord.ui.View):
 
-    @discord.ui.button(label="♻️ Resetar Ações", style=discord.ButtonStyle.danger)
-    async def resetar(self, interaction, button):
+    def __init__(self):
+        super().__init__(timeout=None)  # ✅ OBRIGATÓRIO
 
-        if interaction.user.id != RESETADOR_ID:
-            await interaction.response.send_message(
-                "❌ Você não tem permissão.",
+    @discord.ui.button(
+        label="🔄 Resetar Ações",
+        style=discord.ButtonStyle.danger,
+        custom_id="reset_acoes_btn"  # ✅ OBRIGATÓRIO
+    )
+    async def resetar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            async with db.acquire() as conn:
+                await conn.execute("DELETE FROM producoes_finalizadas")
+
+            await atualizar_painel_acoes(interaction.guild)
+
+            await interaction.followup.send(
+                "✅ Ações resetadas com sucesso.",
                 ephemeral=True
             )
-            return
 
-        async with db.acquire() as conn:
-            await conn.execute("DELETE FROM acoes_semana")
-            await conn.execute("DELETE FROM participantes_acoes")
-
-        await interaction.response.send_message(
-            "♻️ Ações resetadas manualmente.",
-            ephemeral=True
-        )
+        except Exception as e:
+            print("Erro ao resetar ações:", e)
 
 # =========================================================
 # ================= HELICRASH =============================
