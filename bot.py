@@ -4140,6 +4140,11 @@ class ResultadoModal(discord.ui.Modal):
         )
 
         async with db.acquire() as conn:
+            await conn.execute(
+                "UPDATE acoes_semana SET valor=$1 WHERE id=$2",
+                valor,
+                self.acao_id
+            )
 
             participantes = await conn.fetch(
                 """
@@ -4329,6 +4334,65 @@ class ResetAcoesView(discord.ui.View):
 
         except Exception as e:
             print("Erro ao resetar ações:", e)
+
+async def gerar_relatorio_periodo(data_inicio, data_fim):
+
+    async with db.acquire() as conn:
+
+        # 💰 TOTAL
+        total = await conn.fetchval(
+            """
+            SELECT COALESCE(SUM(valor), 0)
+            FROM acoes_semana
+            WHERE data >= $1 AND data <= $2
+            """,
+            data_inicio,
+            data_fim
+        )
+
+        # 👥 PARTICIPAÇÕES
+        rows = await conn.fetch(
+            """
+            SELECT p.user_id, COUNT(*) as qtd
+            FROM participantes_acoes p
+            JOIN acoes_semana a ON a.id = p.acao_id
+            WHERE a.data >= $1 AND a.data <= $2
+            GROUP BY p.user_id
+            ORDER BY qtd DESC
+            """,
+            data_inicio,
+            data_fim
+        )
+
+    linhas = []
+
+    for r in rows:
+        linhas.append(f"<@{r['user_id']}> • {r['qtd']} participações")
+
+    embed = discord.Embed(
+        title="📊 Relatório de Ações",
+        color=0x3498db
+    )
+
+    embed.add_field(
+        name="📅 Período",
+        value=f"{data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💰 Total Movimentado",
+        value=f"R$ {formatar_dinheiro(total)}",
+        inline=False
+    )
+
+    embed.add_field(
+        name="👥 Participações",
+        value="\n".join(linhas) if linhas else "Nenhuma",
+        inline=False
+    )
+
+    return embed
 
 # =========================================================
 # ================= HELICRASH =============================
