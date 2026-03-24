@@ -1911,6 +1911,49 @@ async def acompanhar_producao(pid):
         pct = max(0, min(1, 1 - (restante / total)))
         mins = int(restante // 60)
 
+        # ================= FINALIZAÇÃO =================
+        if restante <= 0:
+
+            try:
+                # 🔥 CALCULO DE CAPSULAS
+                polvora = prod.get("polvora", 400)
+
+                capsulas = int(polvora * 1.5)  # ajuste se quiser
+
+                async with db.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO producoes_finalizadas
+                        (user_id, capsulas, data)
+                        VALUES ($1,$2,$3)
+                        """,
+                        str(prod["autor"]),
+                        capsulas,
+                        agora()
+                    )
+
+                # 🔥 EDITA MENSAGEM FINAL
+                await msg.edit(
+                    embed=discord.Embed(
+                        title="✅ Produção Finalizada",
+                        description=(
+                            f"**Galpão:** {prod['galpao']}\n"
+                            f"**Responsável:** <@{prod['autor']}>\n\n"
+                            f"💊 Produzido: **{capsulas} cápsulas**"
+                        ),
+                        color=0x2ecc71
+                    )
+                )
+
+            except Exception as e:
+                print("ERRO FINALIZAR PRODUÇÃO:", e)
+
+            await deletar_producao(pid)
+            producoes_ativas.discard(pid)
+            return
+
+        # ================= UPDATE NORMAL =================
+
         desc = (
             f"**Galpão:** {prod['galpao']}\n"
             f"**Iniciado por:** <@{prod['autor']}>\n"
@@ -1926,14 +1969,6 @@ async def acompanhar_producao(pid):
             f"{barra(pct)}"
         )
 
-        if restante <= 0:
-
-            await deletar_producao(pid)
-
-            producoes_ativas.discard(pid)
-
-            return
-
         try:
             await msg.edit(
                 embed=discord.Embed(
@@ -1946,7 +1981,6 @@ async def acompanhar_producao(pid):
             pass
 
         await asyncio.sleep(60)
-
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
