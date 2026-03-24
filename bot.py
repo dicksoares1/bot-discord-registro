@@ -1912,8 +1912,7 @@ async def acompanhar_producao(pid):
         mins = int(restante // 60)
 
         # ================= FINALIZAÇÃO =================
-        if restante <= 0:
-
+        if agora() >= fim:
             try:
                 # 🔥 CALCULO DE CAPSULAS
                 polvora = prod.get("polvora", 400)
