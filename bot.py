@@ -3826,7 +3826,8 @@ async def criar_helicrash_diario():
 
     agora_br = agora()
 
-    if agora_br.hour == 0 and agora_br.minute == 0:
+    # 🔥 AGORA É ÀS 18H
+    if agora_br.hour == 18 and 0 <= agora_br.minute <= 1:
 
         horarios = ["02:00", "13:00", "15:00", "22:00"]
 
@@ -3840,6 +3841,10 @@ async def criar_helicrash_diario():
                 second=0,
                 microsecond=0
             )
+
+            # 🔥 Se já passou, joga pro próximo dia
+            if horario < agora_br:
+                horario += timedelta(days=1)
 
             canal = bot.get_channel(CANAL_HELICRASH_ID)
 
@@ -3883,7 +3888,9 @@ async def criar_helicrash_diario():
 
             bot.loop.create_task(acompanhar_helicrash(hid))
 
+
 helicrash_cache = {}
+
 
 async def atualizar_embed_helicrash(hid):
 
@@ -3907,7 +3914,6 @@ async def atualizar_embed_helicrash(hid):
     except:
         return
 
-    # 🔥 CACHE
     data = helicrash_cache.get(hid, {"setados": [], "agregados": []})
 
     setados = data["setados"]
@@ -4110,155 +4116,6 @@ async def finalizar_helicrash(hid):
 
     if hid in helicrash_cache:
         del helicrash_cache[hid]
-
-
-# =========================================================
-# ================= MODAL HELICRASH =======================
-# =========================================================
-
-class HelicrashModal(discord.ui.Modal, title="Criar Helicrash"):
-
-    hora = discord.ui.TextInput(
-        label="Hora do helicrash (HH:MM)",
-        placeholder="Ex: 21:30"
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-
-        try:
-
-            h, m = self.hora.value.split(":")
-            h = int(h)
-            m = int(m)
-
-            agora_br = agora()
-
-            horario = agora_br.replace(
-                hour=h,
-                minute=m,
-                second=0,
-                microsecond=0
-            )
-
-            if horario < agora_br:
-                horario += timedelta(days=1)
-
-            canal = interaction.channel
-
-            embed = discord.Embed(
-                title=f"🚁 HELICRASH {horario.strftime('%H:%M')}",
-                description="Selecione seu tipo abaixo.",
-                color=0xe74c3c
-            )
-
-            embed.add_field(name="👑 Setados", value="0/10", inline=True)
-            embed.add_field(name="🟡 Agregados", value="0/10", inline=True)
-            embed.add_field(name="👑 Lista Setados", value="Ninguém", inline=False)
-            embed.add_field(name="🟡 Lista Agregados", value="Ninguém", inline=False)
-
-            msg = await canal.send(
-                content="@everyone 🚁 Helicrash disponível!",
-                embed=embed,
-                allowed_mentions=discord.AllowedMentions(everyone=True)
-            )
-
-            async with db.acquire() as conn:
-
-                hid = await conn.fetchval(
-                    """
-                    INSERT INTO helicrash (horario, canal_id, msg_id, participantes)
-                    VALUES ($1,$2,$3,$4)
-                    RETURNING id
-                    """,
-                    horario.replace(tzinfo=None),
-                    str(canal.id),
-                    str(msg.id),
-                    ""
-                )
-
-            helicrash_cache[hid] = {
-                "setados": [],
-                "agregados": []
-            }
-
-            await msg.edit(view=HelicrashView(hid))
-
-            bot.loop.create_task(
-                acompanhar_helicrash(hid)
-            )
-
-            await interaction.response.send_message(
-                f"Helicrash criado para **{horario.strftime('%H:%M')}**",
-                ephemeral=True
-            )
-
-        except Exception as e:
-
-            print("Erro criar helicrash:", e)
-
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "Erro ao criar helicrash.",
-                    ephemeral=True
-                )
-
-
-# =========================================================
-# ================= BOTÃO HELICRASH =======================
-# =========================================================
-
-class HelicrashPainel(discord.ui.View):
-
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="🚁 Escalar Helicrash",
-        style=discord.ButtonStyle.primary,
-        custom_id="helicrash_criar"
-    )
-    async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        try:
-            await interaction.response.send_modal(
-                HelicrashModal()
-            )
-
-        except Exception as e:
-
-            print("Erro abrir modal helicrash:", e)
-
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "Erro ao abrir o modal.",
-                    ephemeral=True
-                )
-
-
-# =========================================================
-# ================= PAINEL HELICRASH ======================
-# =========================================================
-
-async def enviar_painel_helicrash():
-
-    canal = bot.get_channel(CANAL_HELICRASH_ID)
-
-    if not canal:
-        print("❌ Canal helicrash não encontrado")
-        return
-
-    embed = discord.Embed(
-        title="🚁 Sistema de Helicrash",
-        description="Clique no botão abaixo para escalar um helicrash.",
-        color=0xe74c3c
-    )
-
-    await enviar_ou_atualizar_painel(
-        "painel_helicrash",
-        CANAL_HELICRASH_ID,
-        embed,
-        HelicrashPainel()
-    )
 
 # =========================================================
 # =========================== METAS ========================
