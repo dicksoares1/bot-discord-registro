@@ -3771,7 +3771,6 @@ ACOES_SEMANA = {
 }
 
 def formatar_dinheiro(valor):
-
     try:
         valor = float(valor)
     except:
@@ -3816,22 +3815,10 @@ async def gerar_embed_acoes():
             linhas.append(f"• {nome}: {qtd}/{limite} (restam {restante})")
             total_meta += limite
 
-    embed = discord.Embed(
-        title="📊 Ações da Semana",
-        color=0x2ecc71
-    )
+    embed = discord.Embed(title="📊 Ações da Semana", color=0x2ecc71)
 
-    embed.add_field(
-        name="📌 Progresso",
-        value="\n".join(linhas),
-        inline=False
-    )
-
-    embed.add_field(
-        name="📊 Total",
-        value=f"{total_feitas}/{total_meta} ações",
-        inline=False
-    )
+    embed.add_field(name="📌 Progresso", value="\n".join(linhas), inline=False)
+    embed.add_field(name="📊 Total", value=f"{total_feitas}/{total_meta} ações", inline=False)
 
     return embed
 
@@ -3868,10 +3855,7 @@ async def gerar_relatorio_periodo(data_inicio, data_fim):
 
     linhas = [f"<@{r['user_id']}> • {r['qtd']} participações" for r in rows]
 
-    embed = discord.Embed(
-        title="📊 Relatório de Ações",
-        color=0x3498db
-    )
+    embed = discord.Embed(title="📊 Relatório de Ações", color=0x3498db)
 
     embed.add_field(
         name="📅 Período",
@@ -3910,14 +3894,10 @@ class RelatorioPeriodoModal(discord.ui.Modal, title="📊 Gerar Relatório"):
             inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
             fim = datetime.strptime(self.data_fim.value, "%d/%m/%Y") + timedelta(days=1)
         except:
-            await interaction.response.send_message(
-                "❌ Data inválida. Use DD/MM/AAAA",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ Data inválida.", ephemeral=True)
             return
 
         embed = await gerar_relatorio_periodo(inicio, fim)
-
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # =========================================================
@@ -3961,7 +3941,6 @@ class AcaoSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction):
-
         await interaction.response.send_message(
             "Selecione os participantes:",
             view=SelecionarMembrosView(self.values[0]),
@@ -4053,7 +4032,6 @@ class ResultadoAcaoView(discord.ui.View):
     async def perdeu(self, interaction, button):
         await interaction.response.send_modal(ResultadoModal(self.acao_id, False))
 
-
 class ResultadoModal(discord.ui.Modal):
 
     dinheiro = discord.ui.TextInput(label="Valor ganho")
@@ -4067,11 +4045,7 @@ class ResultadoModal(discord.ui.Modal):
 
         await interaction.response.defer()
 
-        valor = int(
-            (self.dinheiro.value or "0")
-            .replace(".", "")
-            .replace(",", "")
-        )
+        valor = int((self.dinheiro.value or "0").replace(".", "").replace(",", ""))
 
         async with db.acquire() as conn:
             await conn.execute(
@@ -4091,9 +4065,6 @@ class ResultadoModal(discord.ui.Modal):
                 self.acao_id
             )
 
-        if not acao:
-            return
-
         ids = [str(p["user_id"]) for p in participantes]
         lista = "\n".join([f"<@{i}>" for i in ids]) or "Nenhum"
 
@@ -4106,37 +4077,14 @@ class ResultadoModal(discord.ui.Modal):
         )
 
         embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
-
-        embed.add_field(
-            name="🎯 Resultado",
-            value="🟢 GANHOU" if self.venceu else "💀 PERDEU",
-            inline=False
-        )
-
-        embed.add_field(
-            name="💰 Total",
-            value=f"R$ {formatar_dinheiro(valor)}",
-            inline=False
-        )
-
-        embed.add_field(
-            name="👥 Participantes",
-            value=lista,
-            inline=False
-        )
+        embed.add_field(name="🎯 Resultado", value="🟢 GANHOU" if self.venceu else "💀 PERDEU", inline=False)
+        embed.add_field(name="💰 Total", value=f"R$ {formatar_dinheiro(valor)}", inline=False)
+        embed.add_field(name="👥 Participantes", value=lista, inline=False)
 
         if self.venceu:
-            embed.add_field(
-                name="💸 Por pessoa",
-                value=f"R$ {formatar_dinheiro(valor_por_pessoa)}",
-                inline=False
-            )
+            embed.add_field(name="💸 Por pessoa", value=f"R$ {formatar_dinheiro(valor_por_pessoa)}", inline=False)
 
-        await interaction.message.edit(
-            embed=embed,
-            view=None
-        )
-
+        await interaction.message.edit(embed=embed, view=None)
 
 # =========================================================
 # ================= RELATÓRIO AÇÃO ========================
@@ -4156,41 +4104,42 @@ async def registrar_relatorio_acao(guild, acao_id):
             acao_id
         )
 
-    if not acao:
-        return
-
     lista = "\n".join([f"<@{p['user_id']}>" for p in participantes]) or "Nenhum"
 
-    embed = discord.Embed(
-        title="🚨 RELATÓRIO DE AÇÃO",
-        color=0xe74c3c
-    )
+    embed = discord.Embed(title="🚨 RELATÓRIO DE AÇÃO", color=0xe74c3c)
 
-    embed.add_field(
-        name="🏦 Ação",
-        value=acao["tipo"],
-        inline=False
-    )
-
-    embed.add_field(
-        name="👥 Participantes",
-        value=lista,
-        inline=False
-    )
-
-    embed.add_field(
-        name="🎯 Resultado",
-        value="⏳ Aguardando...",
-        inline=False
-    )
+    embed.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
+    embed.add_field(name="👥 Participantes", value=lista, inline=False)
+    embed.add_field(name="🎯 Resultado", value="⏳ Aguardando...", inline=False)
 
     canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
 
     if canal:
-        await canal.send(
-            embed=embed,
-            view=ResultadoAcaoView(acao_id)
-        )
+        await canal.send(embed=embed, view=ResultadoAcaoView(acao_id))
+
+# =========================================================
+# ================= PAINEL ================================
+# =========================================================
+
+async def enviar_painel_acoes(guild):
+
+    canal = guild.get_channel(CANAL_ESCALACOES_ID)
+
+    if not canal:
+        print("❌ Canal ações não encontrado")
+        return
+
+    embed = await gerar_embed_acoes()
+
+    await enviar_ou_atualizar_painel(
+        "painel_acoes",
+        CANAL_ESCALACOES_ID,
+        embed,
+        PainelAcoesView()
+    )
+
+async def atualizar_painel_acoes(guild):
+    await enviar_painel_acoes(guild)
 # =========================================================
 # ================= HELICRASH =============================
 # =========================================================
