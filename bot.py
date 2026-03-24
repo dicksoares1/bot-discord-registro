@@ -24,7 +24,8 @@ import time as time_module
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 
-
+def agora():
+    return datetime.now()
 # =========================================================
 # ================= FILA GLOBAL DE EDIÇÃO =================
 # =========================================================
@@ -1899,13 +1900,13 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(5)
                 continue
 
-        inicio = datetime.fromisoformat(prod["inicio"]).replace(tzinfo=None)
-        fim = datetime.fromisoformat(prod["fim"]).replace(tzinfo=None)
+        inicio = datetime.fromisoformat(prod["inicio"])
+        fim = datetime.fromisoformat(prod["fim"])
 
         agora_dt = agora()
 
-        total = (fim - inicio).total_seconds()
         restante = (fim - agora_dt).total_seconds()
+        total = (fim - inicio).total_seconds()
 
         if total <= 0:
             total = 1
@@ -1954,7 +1955,7 @@ async def acompanhar_producao(pid):
             producoes_ativas.discard(pid)
             return
 
-        # ================= UPDATE NORMAL =================
+        # ================= UPDATE =================
 
         desc = (
             f"**Galpão:** {prod['galpao']}\n"
