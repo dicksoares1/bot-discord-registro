@@ -3789,14 +3789,17 @@ class PainelAcoesView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
+        self.add_item(AcaoSelect())
+
     @discord.ui.button(
         label="📊 Ver Relatório",
         style=discord.ButtonStyle.primary,
         custom_id="acoes_relatorio"
     )
-    
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         embed = await gerar_embed_acoes()
+
         await interaction.response.send_message(
             embed=embed,
             ephemeral=True
@@ -3810,14 +3813,15 @@ class PainelAcoesView(discord.ui.View):
     async def reset(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         async with db.acquire() as conn:
-            await conn.execute("DELETE FROM producoes_finalizadas")
+            await conn.execute("DELETE FROM acoes_semana")
+            await conn.execute("DELETE FROM participantes_acoes")
+
+        await atualizar_painel_acoes(interaction.guild)
 
         await interaction.response.send_message(
             "✅ Ações resetadas com sucesso.",
             ephemeral=True
         )
-
-
 async def gerar_embed_acoes():
 
     async with db.acquire() as conn:
@@ -5129,7 +5133,6 @@ async def on_ready():
 
     if guild:
         await enviar_painel_acoes(guild)
-    bot.add_view(PainelAcoesView())
     criar_helicrash_diario.start()
 
     # =====================================================
