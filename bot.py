@@ -1917,7 +1917,7 @@ async def acompanhar_producao(pid):
         segundos = max(0, int(restante % 60))
 
         # ================= FINALIZAÇÃO =================
-        if restante <= 0:
+        if agora_dt >= fim:
 
             try:
                 polvora = prod.get("polvora", 400)
