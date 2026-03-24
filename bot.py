@@ -1586,8 +1586,6 @@ async def deletar_producao(pid):
         )
 
 # =========================================================
-# ================= BARRA DE PROGRESSO ====================
-# =========================================================
 
 def barra(pct, size=20):
 
@@ -1868,6 +1866,33 @@ class FabricacaoView(discord.ui.View):
         )
 
 # =========================================================
+# ================= PAINEL FABRICAÇÃO =====================
+# =========================================================
+
+async def enviar_painel_fabricacao():
+
+    canal = pegar_canal(CANAL_FABRICACAO_ID)
+
+    if not canal:
+        print("❌ Canal de fabricação não encontrado")
+        return
+
+    embed = discord.Embed(
+        title="🏭 Fabricação",
+        description="Selecione Norte ou Sul para iniciar a produção.",
+        color=0x2c3e50
+    )
+
+    await enviar_ou_atualizar_painel(
+        "painel_fabricacao",
+        CANAL_FABRICACAO_ID,
+        embed,
+        FabricacaoView()
+    )
+
+    print("🏭 Painel de fabricação verificado/atualizado")
+
+# =========================================================
 # ================= RELATÓRIO ==============================
 # =========================================================
 
@@ -1927,7 +1952,6 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 
         except Exception as e:
             print("ERRO RELATORIO:", e)
-
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
