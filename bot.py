@@ -1905,16 +1905,18 @@ async def acompanhar_producao(pid):
         agora_dt = datetime.now()
 
         total = (fim - inicio).total_seconds()
-        restante = max(0, (fim - agora_dt).total_seconds())
+        restante = (fim - agora_dt).total_seconds()
 
         if total <= 0:
             total = 1
 
         pct = max(0, min(1, 1 - (restante / total)))
-        mins = int(restante // 60)
+
+        mins = max(0, int(restante // 60))
+        segundos = max(0, int(restante % 60))
 
         # ================= FINALIZAÇÃO =================
-        if agora_dt >= fim:
+        if restante <= 0:
 
             try:
                 polvora = prod.get("polvora", 400)
@@ -1941,7 +1943,8 @@ async def acompanhar_producao(pid):
                             f"💊 Produzido: **{capsulas} cápsulas**"
                         ),
                         color=0x2ecc71
-                    )
+                    ),
+                    view=None
                 )
 
             except Exception as e:
@@ -1964,7 +1967,7 @@ async def acompanhar_producao(pid):
         desc += (
             f"Início: <t:{int(inicio.timestamp())}:t>\n"
             f"Término: <t:{int(fim.timestamp())}:t>\n\n"
-            f"⏳ **Restante:** {mins} min\n"
+            f"⏳ **Restante:** {mins}m {segundos}s\n"
             f"{barra(pct)}"
         )
 
@@ -1979,7 +1982,7 @@ async def acompanhar_producao(pid):
         except:
             pass
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(5)
 # =========================================================
 # ================= PAINEL FABRICAÇÃO =====================
 # =========================================================
