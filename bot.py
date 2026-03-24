@@ -3984,31 +3984,41 @@ class PainelAcoesView(discord.ui.View):
 
     def __init__(self):
         super().__init__(timeout=None)
+
+        # SELECT
         self.add_item(AcaoSelect())
 
-class ResetAcoesButton(discord.ui.Button):
+    # ================= BOTÃO RELATÓRIO =================
+    @discord.ui.button(
+        label="📊 Ver Relatório",
+        style=discord.ButtonStyle.primary,
+        custom_id="acoes_relatorio"
+    )
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-    def __init__(self):
-        super().__init__(
-            label="♻️ Resetar Ações",
-            style=discord.ButtonStyle.danger
+        embed = await gerar_embed_acoes()
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
         )
 
-    async def callback(self, interaction):
-
-        if interaction.user.id != 123456789:  # COLOCA SEU ID AQUI
-            await interaction.response.send_message(
-                "❌ Sem permissão.",
-                ephemeral=True
-            )
-            return
+    # ================= BOTÃO RESET =================
+    @discord.ui.button(
+        label="♻️ Resetar Ações",
+        style=discord.ButtonStyle.danger,
+        custom_id="acoes_reset"
+    )
+    async def reset(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         async with db.acquire() as conn:
             await conn.execute("DELETE FROM acoes_semana")
             await conn.execute("DELETE FROM participantes_acoes")
 
+        await atualizar_painel_acoes(interaction.guild)
+
         await interaction.response.send_message(
-            "♻️ Ações resetadas manualmente.",
+            "✅ Ações resetadas com sucesso.",
             ephemeral=True
         )
 
