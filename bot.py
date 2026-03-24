@@ -257,7 +257,7 @@ CANAL_RELATORIO_LAVAGEM_ID = 1467150805273546878
 CANAL_SOLICITAR_SALA_ID = 1337374500366450741
 RESULTADOS_METAS_ID = 1341403574483288125
 
-# AÇÕES
+# 
 CANAL_ESCALACOES_ID = 1241406819545514064
 CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 CANAL_HELICRASH_ID = 1478919637260435498
@@ -990,7 +990,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     qtd_sub = discord.ui.TextInput(label="Quantidade SUB")
 
     observacoes = discord.ui.TextInput(
-        label="Observações",
+        label="Observ",
         style=discord.TextStyle.paragraph,
         required=False
     )
@@ -1081,7 +1081,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         if self.observacoes.value:
 
             embed.add_field(
-                name="📝 Observações",
+                name="📝 Observ",
                 value=self.observacoes.value,
                 inline=False
             )
@@ -1339,10 +1339,10 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
                     inline=False
                 )
 
-            if field.name == "📝 Observações" and self.observacao.value:
+            if field.name == "📝 Observ" and self.observacao.value:
                 embed.set_field_at(
                     i,
-                    name="📝 Observações",
+                    name="📝 Observ",
                     value=self.observacao.value.strip(),
                     inline=False
                 )
@@ -1355,7 +1355,7 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
         await self.message.edit(embed=embed)
 
         # ===============================
-        # DETECTAR ALTERAÇÕES
+        # DETECTAR ALTER
         # ===============================
 
         alteracoes = []
@@ -1415,7 +1415,7 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
             )
 
             embed_log.add_field(
-                name="🔧 Alterações",
+                name="🔧 Alter",
                 value=alteracao_texto,
                 inline=False
             )
@@ -2164,7 +2164,7 @@ async def acompanhar_producao(pid):
                 if guild:
                     await atualizar_painel_acoes(guild)
             except Exception as e:
-                print("Erro ao atualizar painel de ações:", e)
+                print("Erro ao atualizar painel de :", e)
 
             desc += (
                 "\n\n🔵 **Produção Finalizada**"
@@ -3750,44 +3750,54 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
 # ======================== AÇÕES ==========================
 # =========================================================
 
-async def enviar_painel_acoes(guild):
+class PainelAcoesView(discord.ui.View):
 
-    canal = guild.get_channel(CANAL_ESCALACOES_ID)
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    if not canal:
-        print("❌ Canal de ações não encontrado")
-        return
-
-    embed = discord.Embed(
-        title="📋 Sistema de Ações",
-        description="Selecione uma ação abaixo.",
-        color=0x2ecc71
+    @discord.ui.button(
+        label="📊 Ver Relatório",
+        style=discord.ButtonStyle.primary,
+        custom_id="acoes_relatorio"
     )
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-    await enviar_ou_atualizar_painel(
-        "painel_acoes",
-        CANAL_ESCALACOES_ID,
-        embed,
-        PainelAcoesView()
+        await interaction.response.send_message(
+            "Sistema de relatório ainda pode ser implementado aqui.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="♻️ Resetar Ações",
+        style=discord.ButtonStyle.danger,
+        custom_id="acoes_reset"
     )
+    async def reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        async with db.acquire() as conn:
+            await conn.execute("DELETE FROM producoes_finalizadas")
+
+        await interaction.response.send_message(
+            "✅ Ações resetadas com sucesso.",
+            ephemeral=True
+        )
+
 
 async def gerar_embed_acoes():
 
     async with db.acquire() as conn:
-        rows = await conn.fetch(
-            """
+
+        rows = await conn.fetch("""
             SELECT user_id, SUM(capsulas) as total
             FROM producoes_finalizadas
             GROUP BY user_id
             ORDER BY total DESC
-            LIMIT 10
-            """
-        )
+        """)
 
     if not rows:
         return discord.Embed(
             title="📊 Ações da Semana",
-            description="Sem dados ainda.",
+            description="Nenhuma ação registrada.",
             color=0x95a5a6
         )
 
@@ -3798,7 +3808,7 @@ async def gerar_embed_acoes():
         total = int(r["total"] or 0)
         total_geral += total
 
-        linhas.append(f"<@{r['user_id']}> — **{total} cápsulas**")
+        linhas.append(f"👤 <@{r['user_id']}> • {total:,} cápsulas".replace(",", "."))
 
     embed = discord.Embed(
         title="📊 Ações da Semana",
@@ -3807,61 +3817,40 @@ async def gerar_embed_acoes():
 
     embed.add_field(
         name="🏆 Ranking",
-        value="\n".join(linhas),
+        value="\n".join(linhas[:20]),
         inline=False
     )
 
     embed.add_field(
         name="💊 Total Geral",
-        value=f"{total_geral} cápsulas",
+        value=f"{total_geral:,} cápsulas".replace(",", "."),
         inline=False
     )
 
     return embed
 
 
-async def atualizar_painel_acoes(guild):
-
-    canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
-
-    if not canal:
-        return
-
-    embed = await gerar_embed_acoes()
-
-    async for msg in canal.history(limit=20):
-
-        if msg.author == bot.user and msg.embeds:
-
-            if msg.embeds[0].title == "📊 Ações da Semana":
-                await msg.edit(embed=embed)
-                return
-
-    await canal.send(embed=embed)
-
-async def atualizar_painel_escalacoes(guild):
+async def enviar_painel_acoes(guild):
 
     canal = guild.get_channel(CANAL_ESCALACOES_ID)
 
     if not canal:
-        print("❌ Canal de ações não encontrado")
+        print("❌ Canal ações não encontrado")
         return
 
-    embed = discord.Embed(
-        title="🚨 Sistema de Ações",
-        description="Selecione a ação abaixo e monte a escalação.",
-        color=0xe74c3c
-    )
-    view = PainelAcoesView()
-    view.add_item(ResetAcoesButton())
+    embed = await gerar_embed_acoes()
+
     await enviar_ou_atualizar_painel(
         "painel_acoes",
         CANAL_ESCALACOES_ID,
         embed,
-        view
+        PainelAcoesView()
     )
 
-    print("🚨 Painel de ações enviado/atualizado")
+
+async def atualizar_painel_acoes(guild):
+
+    await enviar_painel_acoes(guild)
 
 ACOES_SEMANA = {
 
@@ -5045,6 +5034,8 @@ async def on_ready():
 
     print("🔄 Iniciando configuração do bot...")
 
+
+
     # =====================================================
     # ================= HTTP SESSION ======================
     # =====================================================
@@ -5073,6 +5064,11 @@ async def on_ready():
             print("Erro ao carregar membros:", e)
 
     print(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+
+    if guild:
+        await enviar_painel_acoes(guild)
+    bot.add_view(PainelAcoesView())
+    criar_helicrash_diario.start()
 
     # =====================================================
     # ================= CACHE DE METAS ====================
