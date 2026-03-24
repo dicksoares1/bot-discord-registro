@@ -5124,7 +5124,7 @@ async def on_ready():
                 await conn.execute("DELETE FROM acoes_semana")
                 await conn.execute("DELETE FROM participantes_acoes")
 
-            print("♻️ Ações resetadas (segunda)")
+           print("♻️ Ações resetadas (segunda)")
 
     # =====================================================
     # ================= RESTAURAR PRODUÇÕES ===============
