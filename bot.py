@@ -287,7 +287,7 @@ CANAL_CLIPES_ID = 1229526645837271134
 EMOJI_APROVACAO = "✅"
 
 clips_postados = set()
-fila_clipes = asyncio.Queue()
+fila_clipes = None
 
 
 # =========================================================
@@ -4622,10 +4622,14 @@ async def on_ready():
 
     print("🔄 Iniciando configuração do bot...")
 
-    bot.loop.create_task(worker_clipes())
-    print("🎬 Sistema de clips ON")
-    
 
+    global fila_clipes
+    fila_clipes = asyncio.Queue()
+
+    bot.loop.create_task(worker_clipes())
+
+    print(f"Logado como {bot.user}")
+    print("🎬 Sistema de clips ON")
     # =====================================================
     # ================= HTTP SESSION ======================
     # =====================================================
