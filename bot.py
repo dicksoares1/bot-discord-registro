@@ -80,19 +80,19 @@ async def responder_interacao(interaction: discord.Interaction, *, defer=False, 
 # ================= TWITTER =================
 
 auth = tweepy.OAuth1UserHandler(
-    "API_KEY",
-    "API_SECRET",
-    "ACCESS_TOKEN",
-    "ACCESS_SECRET"
+    os.environ.get("API_KEY"),
+    os.environ.get("API_SECRET"),
+    os.environ.get("ACCESS_TOKEN"),
+    os.environ.get("ACCESS_SECRET")
 )
 
 api = tweepy.API(auth)
 
 client = tweepy.Client(
-    consumer_key="API_KEY",
-    consumer_secret="API_SECRET",
-    access_token="ACCESS_TOKEN",
-    access_token_secret="ACCESS_SECRET"
+    consumer_key=os.environ.get("API_KEY"),
+    consumer_secret=os.environ.get("API_SECRET"),
+    access_token=os.environ.get("ACCESS_TOKEN"),
+    access_token_secret=os.environ.get("ACCESS_SECRET")
 )
 # =========================================================
 # ==================== HTTP SESSÃO =========================
@@ -4903,6 +4903,10 @@ async def on_ready():
 
     except Exception as e:
         print("Erro iniciando edit worker:", e)
+    
+
+    bot.loop.create_task(worker_clipes())
+    print("🎬 Sistema de clips ON")
 
     # =====================================================
     # ================= LIMPEZA FINAL =====================
