@@ -4565,7 +4565,25 @@ async def enviar_painel_solicitar_sala():
         embed,
         SolicitarSalaView()
     )
+# ================= WORKER CLIP =================
 
+async def worker_clipes():
+
+    print("🎬 Worker clips iniciado")
+
+    while True:
+
+        message = await fila_clipes.get()
+
+        try:
+            await postar_clipe_x(message)
+
+        except Exception as e:
+            print("Erro worker:", e)
+
+        await asyncio.sleep(5)
+
+        fila_clipes.task_done()
 # ================= REAÇÃO CLIP =================
 
 @bot.event
