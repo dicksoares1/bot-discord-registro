@@ -281,6 +281,8 @@ CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 CANAL_HELICRASH_ID = 1478919637260435498
 CANAL_RELATORIO_HC_ID = 1485666254961512458
 
+CANAL_POSTAGEM_X = 1486353689680547900
+
 # ================= CLIPES =================
 
 CANAL_CLIPES_ID = 1229526645837271134
@@ -407,65 +409,40 @@ async def baixar_video(url, caminho):
 
     return caminho
 
-# ================= POSTAR CLIP (HÍBRIDO) =================
+# ================= ENVIO PARA POSTAGEM =================
 
 async def postar_clipe_x(message):
 
     try:
 
-        texto_base = message.content or "🔥 Novo clipe!"
-        texto_final = f"{texto_base}\n\n#clips #fivem #gaming"
+        canal = bot.get_channel(CANAL_POSTAGEM_X)
 
-        # ================= TEM VÍDEO =================
-        if message.attachments:
-
-            att = message.attachments[0]
-
-            if att.filename.endswith((".mp4", ".mov")):
-
-                try:
-
-                    nome_arquivo = f"/mnt/data/clip_{message.id}.mp4"
-
-                    await baixar_video(att.url, nome_arquivo)
-
-                    media = api.media_upload(nome_arquivo)
-
-                    client.create_tweet(
-                        text=texto_final[:280],
-                        media_ids=[media.media_id]
-                    )
-
-                    if os.path.exists(nome_arquivo):
-                        os.remove(nome_arquivo)
-
-                    await message.reply("🎬 Postado no X com vídeo!")
-                    return
-
-                except Exception as e:
-
-                    print("⚠️ Erro ao postar vídeo, tentando link:", e)
-
-        # ================= FALLBACK LINK =================
-
-        if message.content:
-
-            client.create_tweet(
-                text=texto_final[:280]
-            )
-
-            await message.reply("🔗 Postado no X com link!")
+        if not canal:
+            await message.reply("❌ Canal de postagem não encontrado.")
             return
 
-        # ================= NADA =================
+        link = message.content if message.content else "Sem link"
 
-        await message.reply("❌ Sem vídeo ou link válido.")
+        texto = (
+            f"🚀 **CLIPE APROVADO**\n\n"
+            f"👤 Autor: {message.author.mention}\n"
+            f"🔗 Link: {link}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 **COPIAR E POSTAR NO X:**\n\n"
+            f"🔥 Olha esse clipe!\n\n"
+            f"{link}\n\n"
+            f"#fivem #clips #gaming\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━"
+        )
+
+        await canal.send(texto)
+
+        await message.reply("📤 Enviado para canal de postagem!")
 
     except Exception as e:
 
-        print("ERRO CLIP GERAL:", e)
-        await message.reply("❌ Erro ao postar no X.")
-
+        print("ERRO CLIP:", e)
+        await message.reply("❌ Erro ao enviar.")
 # =========================================================
 # ======================= REGISTRO =========================
 # =========================================================
