@@ -2886,41 +2886,32 @@ async def checar_tiktok(username):
 
     try:
 
-        url = f"https://www.tiktok.com/api/live/detail/?aid=1988&uniqueId={username}"
+        url = f"https://www.tiktok.com/@{username}/live"
 
         headers = {
             "User-Agent": "Mozilla/5.0"
+            "Referer": "https://www.tiktok.com/"
         }
 
         async with http_session.get(url, headers=headers) as r:
 
-            if r.status != 200:
-                return False, None, None, None
+            html = await r.text()
 
-            data = await r.json()
-
-        live_data = data.get("data", {})
-
-        if not live_data:
+        # Se estiver offline
+        if "LIVE now" not in html and "isLiveBroadcast" not in html:
             return False, None, None, None
 
-        status = live_data.get("status", 0)
+        # Título (nem sempre vem)
+        titulo = "Live no TikTok"
 
-        if status != 2:
-            return False, None, None, None
-
-        titulo = live_data.get("title") or "Live no TikTok"
-
+        # Thumbnail (opcional)
         thumb = None
-
-        if "cover" in live_data:
-            thumb = live_data["cover"]
 
         return True, titulo, None, thumb
 
     except Exception as e:
 
-        print("Erro TikTok API:", e)
+        print("Erro TikTok:", e)
         return False, None, None, None
 
 # =========================================================
@@ -3969,7 +3960,7 @@ async def atualizar_embed_helicrash(hid):
     setados = data["setados"]
     agregados = data["agregados"]
 
-    horario = row["horario"].replace(tzinfo=BRASIL)
+    horario = BRASIL.localize(row["horario"])
 
     restante = horario - agora()
     segundos = int(restante.total_seconds())
@@ -4113,7 +4104,7 @@ async def acompanhar_helicrash(hid):
         if not row:
             return
 
-        horario = row["horario"].replace(tzinfo=BRASIL)
+        horario = BRASIL.localize(row["horario"])
 
         if agora() >= horario:
             await finalizar_helicrash(hid)
