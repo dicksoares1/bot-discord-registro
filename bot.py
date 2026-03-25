@@ -82,7 +82,7 @@ async def responder_interacao(interaction: discord.Interaction, *, defer=False, 
 
 http_session = None
 
-helicrash_cache = {}
+_cache = {}
 
 helicrash_criado_hoje = False
 # =========================================================
@@ -3824,18 +3824,47 @@ async def atualizar_painel_acoes(guild):
 # =========================================================
 
 helicrash_cache = {}
-helicrash_criado_hoje = False
+
+
+# =========================================================
+# ================= VERIFICAR DUPLICAÇÃO ==================
+# =========================================================
+
+async def helicrash_ja_criado_hoje():
+
+    hoje = agora().date()
+
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT 1 FROM helicrash
+            WHERE DATE(horario) = $1
+            LIMIT 1
+            """,
+            hoje
+        )
+
+    return bool(row)
 
 
 # =========================================================
 # ================= CRIAR HELICRASH =======================
 # =========================================================
 
-async def criar_helicrash_agora():
+async def criar_helicrash_dia():
+
+    if await helicrash_ja_criado_hoje():
+        return False
 
     agora_br = agora()
 
     horarios = ["02:00", "13:00", "15:00", "22:00"]
+
+    canal = bot.get_channel(CANAL_HELICRASH_ID)
+
+    if not canal:
+        print("❌ Canal helicrash não encontrado")
+        return False
 
     for h in horarios:
 
@@ -3850,12 +3879,6 @@ async def criar_helicrash_agora():
 
         if horario < agora_br:
             horario += timedelta(days=1)
-
-        canal = bot.get_channel(CANAL_HELICRASH_ID)
-
-        if not canal:
-            print("❌ Canal helicrash não encontrado")
-            continue
 
         embed = discord.Embed(
             title=f"🚁 HELICRASH {h}",
@@ -3893,6 +3916,8 @@ async def criar_helicrash_agora():
 
         bot.loop.create_task(acompanhar_helicrash(hid))
 
+    return True
+
 
 # =========================================================
 # ================= LOOP AUTOMÁTICO =======================
@@ -3903,32 +3928,14 @@ async def criar_helicrash_diario():
 
     agora_br = agora()
 
-    global helicrash_criado_hoje
-
-    # 🔥 EXECUTA ÀS 18H
     if agora_br.hour == 18 and 0 <= agora_br.minute <= 1:
 
-        if helicrash_criado_hoje:
-            return
+        criado = await criar_helicrash_dia()
 
-        helicrash_criado_hoje = True
-
-        await criar_helicrash_agora()
-
-
-# =========================================================
-# ================= RESET DIÁRIO ==========================
-# =========================================================
-
-@tasks.loop(minutes=1)
-async def reset_helicrash_diario():
-
-    agora_br = agora()
-
-    global helicrash_criado_hoje
-
-    if agora_br.hour == 0 and 0 <= agora_br.minute <= 1:
-        helicrash_criado_hoje = False
+        if criado:
+            print("✅ Helicrash criado automaticamente")
+        else:
+            print("⚠️ Já existia helicrash hoje")
 
 
 # =========================================================
@@ -3938,6 +3945,7 @@ async def reset_helicrash_diario():
 async def atualizar_embed_helicrash(hid):
 
     async with db.acquire() as conn:
+
         row = await conn.fetchrow(
             "SELECT * FROM helicrash WHERE id=$1",
             hid
@@ -3962,9 +3970,8 @@ async def atualizar_embed_helicrash(hid):
     agregados = data["agregados"]
 
     horario = row["horario"].replace(tzinfo=BRASIL)
-    agora_br = agora()
 
-    restante = horario - agora_br
+    restante = horario - agora()
     segundos = int(restante.total_seconds())
 
     if segundos < 0:
@@ -4011,7 +4018,7 @@ class HelicrashView(discord.ui.View):
         data = helicrash_cache[self.hid]
 
         if uid not in data["setados"] and len(data["setados"]) >= 10:
-            await interaction.response.send_message("❌ Limite atingido.", ephemeral=True)
+            await interaction.response.send_message("❌ Limite de setados atingido.", ephemeral=True)
             return
 
         if uid not in data["setados"]:
@@ -4034,7 +4041,7 @@ class HelicrashView(discord.ui.View):
         data = helicrash_cache[self.hid]
 
         if uid not in data["agregados"] and len(data["agregados"]) >= 10:
-            await interaction.response.send_message("❌ Limite atingido.", ephemeral=True)
+            await interaction.response.send_message("❌ Limite de agregados atingido.", ephemeral=True)
             return
 
         if uid not in data["agregados"]:
@@ -4048,28 +4055,43 @@ class HelicrashView(discord.ui.View):
 
 
 # =========================================================
-# ================= TESTE MANUAL ==========================
+# ================= BOTÃO MANUAL ==========================
 # =========================================================
 
-class HelicrashTesteView(discord.ui.View):
+class HelicrashManualView(discord.ui.View):
 
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🚁 Criar Helicrash (TESTE)", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="🚁 Criar Helicrash", style=discord.ButtonStyle.primary)
     async def criar(self, interaction: discord.Interaction, button):
 
-        global helicrash_criado_hoje
+        criado = await criar_helicrash_dia()
 
-        if helicrash_criado_hoje:
-            await interaction.response.send_message("❌ Já foi criado hoje.", ephemeral=True)
+        if not criado:
+            await interaction.response.send_message(
+                "❌ Já existe helicrash hoje.",
+                ephemeral=True
+            )
             return
 
-        helicrash_criado_hoje = True
+        await interaction.response.send_message(
+            "✅ Helicrash criado manualmente.",
+            ephemeral=True
+        )
 
-        await interaction.response.send_message("✅ Criando agora...", ephemeral=True)
 
-        await criar_helicrash_agora()
+# =========================================================
+# ================= COMANDO ===============================
+# =========================================================
+
+@bot.command()
+async def helicrash(ctx):
+
+    await ctx.send(
+        "🚁 Painel de Helicrash:",
+        view=HelicrashManualView()
+    )
 
 
 # =========================================================
@@ -4083,7 +4105,10 @@ async def acompanhar_helicrash(hid):
         await asyncio.sleep(10)
 
         async with db.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM helicrash WHERE id=$1", hid)
+            row = await conn.fetchrow(
+                "SELECT * FROM helicrash WHERE id=$1",
+                hid
+            )
 
         if not row:
             return
@@ -4104,7 +4129,10 @@ async def acompanhar_helicrash(hid):
 async def finalizar_helicrash(hid):
 
     async with db.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM helicrash WHERE id=$1", hid)
+        row = await conn.fetchrow(
+            "SELECT * FROM helicrash WHERE id=$1",
+            hid
+        )
 
     if not row:
         return
@@ -4113,18 +4141,34 @@ async def finalizar_helicrash(hid):
 
     canal = bot.get_channel(CANAL_RELATORIO_HC_ID)
 
+    lista_setados = "\n".join(f"<@{uid}>" for uid in data["setados"]) or "Nenhum"
+    lista_agregados = "\n".join(f"<@{uid}>" for uid in data["agregados"]) or "Nenhum"
+
     embed = discord.Embed(
         title=f"🚁 HELICRASH {row['horario'].strftime('%H:%M')}",
         color=0xe74c3c
     )
 
-    embed.add_field(name="👑 Setados", value="\n".join(data["setados"]) or "Nenhum", inline=False)
-    embed.add_field(name="🟡 Agregados", value="\n".join(data["agregados"]) or "Nenhum", inline=False)
+    embed.add_field(name="👑 Setados", value=lista_setados, inline=False)
+    embed.add_field(name="🟡 Agregados", value=lista_agregados, inline=False)
 
     if canal:
         await canal.send(embed=embed)
 
-    await db.execute("DELETE FROM helicrash WHERE id=$1", hid)
+    canal_evento = bot.get_channel(int(row["canal_id"]))
+
+    if canal_evento:
+        try:
+            msg = await canal_evento.fetch_message(int(row["msg_id"]))
+            await msg.delete()
+        except:
+            pass
+
+    async with db.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM helicrash WHERE id=$1",
+            hid
+        )
 
     helicrash_cache.pop(hid, None)
 # =========================================================
