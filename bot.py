@@ -6,6 +6,7 @@
 import os
 import json
 import gc
+import re
 
 # ================= ASYNC =================
 import asyncio
@@ -2894,20 +2895,24 @@ async def checar_tiktok(username):
         }
 
         async with http_session.get(url, headers=headers) as r:
-
             html = await r.text()
 
-        # Se estiver offline
-        if "LIVE now" not in html and "isLiveBroadcast" not in html:
+        # 🔍 procura status REAL no JSON interno da página
+        match = re.search(r'"isLiveBroadcast":(true|false)', html)
+
+        if not match:
             return False, None, None, None
 
-        # Título (nem sempre vem)
-        titulo = "Live no TikTok"
+        is_live = match.group(1) == "true"
 
-        # Thumbnail (opcional)
-        thumb = None
+        if not is_live:
+            return False, None, None, None
 
-        return True, titulo, None, thumb
+        # título (opcional)
+        titulo_match = re.search(r'"title":"([^"]+)"', html)
+        titulo = titulo_match.group(1) if titulo_match else "Live no TikTok"
+
+        return True, titulo, None, None
 
     except Exception as e:
 
