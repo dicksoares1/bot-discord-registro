@@ -408,43 +408,64 @@ async def baixar_video(url, caminho):
 
     return caminho
 
-# ================= POSTAR CLIP =================
+# ================= POSTAR CLIP (HÍBRIDO) =================
 
 async def postar_clipe_x(message):
 
     try:
 
-        if not message.attachments:
+        texto_base = message.content or "🔥 Novo clipe!"
+        texto_final = f"{texto_base}\n\n#clips #fivem #gaming"
+
+        # ================= TEM VÍDEO =================
+        if message.attachments:
+
+            att = message.attachments[0]
+
+            if att.filename.endswith((".mp4", ".mov")):
+
+                try:
+
+                    nome_arquivo = f"/mnt/data/clip_{message.id}.mp4"
+
+                    await baixar_video(att.url, nome_arquivo)
+
+                    media = api.media_upload(nome_arquivo)
+
+                    client.create_tweet(
+                        text=texto_final[:280],
+                        media_ids=[media.media_id]
+                    )
+
+                    if os.path.exists(nome_arquivo):
+                        os.remove(nome_arquivo)
+
+                    await message.reply("🎬 Postado no X com vídeo!")
+                    return
+
+                except Exception as e:
+
+                    print("⚠️ Erro ao postar vídeo, tentando link:", e)
+
+        # ================= FALLBACK LINK =================
+
+        if message.content:
+
+            client.create_tweet(
+                text=texto_final[:280]
+            )
+
+            await message.reply("🔗 Postado no X com link!")
             return
 
-        att = message.attachments[0]
+        # ================= NADA =================
 
-        if not att.filename.endswith((".mp4", ".mov")):
-            return
-
-        nome_arquivo = f"/mnt/data/clip_{message.id}.mp4"
-
-        await baixar_video(att.url, nome_arquivo)
-
-        texto = message.content if message.content else "🔥 Novo clipe!"
-
-        media = api.media_upload(nome_arquivo)
-
-        client.create_tweet(
-            text=texto[:280],
-            media_ids=[media.media_id]
-        )
-
-        if os.path.exists(nome_arquivo):
-            os.remove(nome_arquivo)
-
-        await message.reply("✅ Postado no X!")
+        await message.reply("❌ Sem vídeo ou link válido.")
 
     except Exception as e:
 
-        print("ERRO CLIP:", e)
-        await message.reply("❌ Erro ao postar.")
-        
+        print("ERRO CLIP GERAL:", e)
+        await message.reply("❌ Erro ao postar no X.")
 
 # =========================================================
 # ======================= REGISTRO =========================
