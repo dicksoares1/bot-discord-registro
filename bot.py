@@ -2889,7 +2889,7 @@ async def checar_tiktok(username):
         url = f"https://www.tiktok.com/@{username}/live"
 
         headers = {
-            "User-Agent": "Mozilla/5.0"
+            "User-Agent": "Mozilla/5.0",
             "Referer": "https://www.tiktok.com/"
         }
 
