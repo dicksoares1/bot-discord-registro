@@ -7,6 +7,7 @@ import os
 import json
 import gc
 import re
+import tweepy
 
 # ================= ASYNC =================
 import asyncio
@@ -76,7 +77,23 @@ async def responder_interacao(interaction: discord.Interaction, *, defer=False, 
     except Exception as e:
         print("Erro responder_interacao:", e)
 
+# ================= TWITTER =================
 
+auth = tweepy.OAuth1UserHandler(
+    "API_KEY",
+    "API_SECRET",
+    "ACCESS_TOKEN",
+    "ACCESS_SECRET"
+)
+
+api = tweepy.API(auth)
+
+client = tweepy.Client(
+    consumer_key="API_KEY",
+    consumer_secret="API_SECRET",
+    access_token="ACCESS_TOKEN",
+    access_token_secret="ACCESS_SECRET"
+)
 # =========================================================
 # ==================== HTTP SESSÃO =========================
 # =========================================================
@@ -264,6 +281,14 @@ CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 CANAL_HELICRASH_ID = 1478919637260435498
 CANAL_RELATORIO_HC_ID = 1485666254961512458
 
+# ================= CLIPES =================
+
+CANAL_CLIPES_ID = 1229526645837271134
+EMOJI_APROVACAO = "✅"
+
+clips_postados = set()
+fila_clipes = asyncio.Queue()
+
 
 # =========================================================
 # ======================== CARGOS ==========================
@@ -365,6 +390,61 @@ async def obter_token_twitch():
         twitch_token_expira = agora_ts + data["expires_in"] - 100
 
         return twitch_token
+
+# ================= DOWNLOAD CLIP =================
+
+async def baixar_video(url, caminho):
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+
+            if resp.status != 200:
+                return None
+
+            data = await resp.read()
+
+            with open(caminho, "wb") as f:
+                f.write(data)
+
+    return caminho
+
+# ================= POSTAR CLIP =================
+
+async def postar_clipe_x(message):
+
+    try:
+
+        if not message.attachments:
+            return
+
+        att = message.attachments[0]
+
+        if not att.filename.endswith((".mp4", ".mov")):
+            return
+
+        nome_arquivo = f"/mnt/data/clip_{message.id}.mp4"
+
+        await baixar_video(att.url, nome_arquivo)
+
+        texto = message.content if message.content else "🔥 Novo clipe!"
+
+        media = api.media_upload(nome_arquivo)
+
+        client.create_tweet(
+            text=texto[:280],
+            media_ids=[media.media_id]
+        )
+
+        if os.path.exists(nome_arquivo):
+            os.remove(nome_arquivo)
+
+        await message.reply("✅ Postado no X!")
+
+    except Exception as e:
+
+        print("ERRO CLIP:", e)
+        await message.reply("❌ Erro ao postar.")
+        
 
 # =========================================================
 # ======================= REGISTRO =========================
@@ -4486,6 +4566,44 @@ async def enviar_painel_solicitar_sala():
         SolicitarSalaView()
     )
 
+# ================= REAÇÃO CLIP =================
+
+@bot.event
+async def on_reaction_add(reaction, user):
+
+    try:
+
+        if user.bot:
+            return
+
+        message = reaction.message
+
+        if message.channel.id != CANAL_CLIPES_ID:
+            return
+
+        if str(reaction.emoji) != EMOJI_APROVACAO:
+            return
+
+        if message.id in clips_postados:
+            return
+
+        if not message.attachments:
+            return
+
+        att = message.attachments[0]
+
+        if not att.filename.endswith((".mp4", ".mov")):
+            return
+
+        clips_postados.add(message.id)
+
+        await fila_clipes.put(message)
+
+        await message.reply("🚀 Vai pro X!")
+
+    except Exception as e:
+        print("Erro reação clip:", e)
+
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
@@ -4503,6 +4621,9 @@ async def on_ready():
     global http_session
 
     print("🔄 Iniciando configuração do bot...")
+
+    bot.loop.create_task(worker_clipes())
+    print("🎬 Sistema de clips ON")
     
 
     # =====================================================
