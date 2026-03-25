@@ -342,10 +342,9 @@ CATEGORIA_META_AGREGADO_ID = 1461335748870541323
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
-
-# garante cache completo
 intents.guilds = True
 intents.presences = True
+intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -4609,7 +4608,7 @@ async def worker_clipes():
 
 @bot.event
 async def on_reaction_add(reaction, user):
-
+    print("REAÇÃO DETECTADA")  # DEBUG
     try:
 
         if user.bot:
