@@ -4608,8 +4608,10 @@ async def worker_clipes():
 
 @bot.event
 async def on_reaction_add(reaction, user):
-    print("REAÇÃO DETECTADA")  # DEBUG
+
     try:
+
+        print("REAÇÃO DETECTADA")
 
         if user.bot:
             return
@@ -4625,13 +4627,24 @@ async def on_reaction_add(reaction, user):
         if message.id in clips_postados:
             return
 
-        if not message.attachments:
+        # ================= NOVO =================
+
+        tem_video = False
+        tem_link = False
+
+        if message.attachments:
+            att = message.attachments[0]
+            if att.filename.endswith((".mp4", ".mov")):
+                tem_video = True
+
+        if message.content and "http" in message.content:
+            tem_link = True
+
+        if not tem_video and not tem_link:
+            await message.reply("❌ Precisa ter vídeo ou link.")
             return
 
-        att = message.attachments[0]
-
-        if not att.filename.endswith((".mp4", ".mov")):
-            return
+        # ================= ENVIA =================
 
         clips_postados.add(message.id)
 
