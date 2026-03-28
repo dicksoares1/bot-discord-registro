@@ -3711,14 +3711,25 @@ class SelecionarMembros(discord.ui.UserSelect):
 
     async def callback(self, interaction):
 
-        membros = [m for m in self.values if any(role.id in CARGOS_ACAO for role in m.roles)]
+        membros_validos = []
+        membros_invalidos = []
 
-        self.view_ref.membros = membros
+        for m in self.values:
 
-        await interaction.response.send_message(
-            f"{len(membros)} participantes selecionados",
-            ephemeral=True
-        )
+            if any(role.id in CARGOS_PERMITIDOS_ESCALACAO for role in m.roles):
+                membros_validos.append(m)
+            else:
+                membros_invalidos.append(m)
+
+        self.view_ref.membros = membros_validos
+
+        msg = f"✅ {len(membros_validos)} participantes válidos selecionados"
+
+        if membros_invalidos:
+            nomes = ", ".join(m.display_name for m in membros_invalidos)
+            msg += f"\n⚠️ Ignorados: {nomes}"
+
+        await interaction.response.send_message(msg, ephemeral=True)
 
 class SelecionarMembrosView(discord.ui.View):
 
