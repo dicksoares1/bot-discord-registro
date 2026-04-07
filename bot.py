@@ -147,13 +147,22 @@ async def pegar_usuario(uid):
 
 BRASIL = ZoneInfo("America/Sao_Paulo")
 
-def agora_db():
-    return agora().replace(tzinfo=None)
-
 def agora():
-    return datetime.utcnow()
+    """Retorna data/hora atual no horário do Brasil"""
+    return datetime.now(BRASIL)
 
+def agora_db():
+    """Retorna data/hora sem fuso horário para salvar no banco"""
+    return datetime.now(BRASIL).replace(tzinfo=None)
 
+def str_para_datetime(data_str):
+    """Converte string do banco para datetime com timezone"""
+    if not data_str:
+        return None
+    dt = datetime.fromisoformat(data_str)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=BRASIL)
+    return dt
 # =========================================================
 # ======================== CONFIG ==========================
 # =========================================================
@@ -1957,20 +1966,18 @@ class FabricacaoView(discord.ui.View):
 # =========================================================
 
 async def acompanhar_producao(pid):
-
-    print(f"▶ Produção retomada: {pid}")
-
+    print(f"▶ Produção iniciada: {pid}")
     msg = None
 
     while not bot.is_closed():
-
         prod = await carregar_producao(pid)
-
+        
         if not prod:
+            print(f"❌ Produção {pid} não encontrada")
             return
 
         canal = pegar_canal(prod["canal_id"])
-
+        
         if not canal:
             await asyncio.sleep(10)
             continue
@@ -1978,27 +1985,36 @@ async def acompanhar_producao(pid):
         if msg is None:
             try:
                 msg = await canal.fetch_message(int(prod["msg_id"]))
-            except:
+            except Exception as e:
+                print(f"Erro buscar mensagem {pid}:", e)
                 await asyncio.sleep(5)
                 continue
 
-        inicio = datetime.fromisoformat(prod["inicio"])
-        fim = datetime.fromisoformat(prod["fim"])
-
+        # USANDO A FUNÇÃO CORRIGIDA
+        inicio = str_para_datetime(prod["inicio"])
+        fim = str_para_datetime(prod["fim"])
         agora_dt = agora()
 
-        total = (fim - inicio).total_seconds()
-        restante_real = (fim - agora_dt).total_seconds()
-        restante = max(0, restante_real)
+        # Se já passou do fim, finaliza
+        if agora_dt >= fim:
+            await finalizar_producao(pid, msg, prod)
+            return
 
+        # Calcula tempo restante
+        total = (fim - inicio).total_seconds()
+        restante = (fim - agora_dt).total_seconds()
+        restante = max(0, restante)
+        
         if total <= 0:
             total = 1
 
-        pct = max(0, min(1, 1 - (restante / total)))
+        pct = 1 - (restante / total)
+        pct = max(0, min(1, pct))
 
         mins = int(restante // 60)
         segundos = int(restante % 60)
 
+        # Monta a mensagem
         desc = (
             f"**Galpão:** {prod['galpao']}\n"
             f"**Iniciado por:** <@{prod['autor']}>\n"
@@ -2018,76 +2034,78 @@ async def acompanhar_producao(pid):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
-        if agora_dt >= fim:
-
-            polvora = prod.get("polvora", 400)
-            segunda = prod.get("segunda_task_confirmada")
-
-            base = 0
-
-            if prod["galpao"] == "GALPÕES NORTE":
-                base = 1777 if segunda else 1688
-
-            if prod["galpao"] == "GALPÕES SUL":
-                base = 1618 if segunda else 1608
-
-            if prod["galpao"] == "BAHAMAS":
-                base = 1777 if segunda else 1688
-
-            capsulas = (base * polvora) // 400
-            peso = capsulas * 0.05
-
-            async with db.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO producoes_finalizadas
-                    (user_id, capsulas, data)
-                    VALUES ($1,$2,$3)
-                    """,
-                    str(prod["autor"]),
-                    capsulas,
-                    agora()
-                )
-
-            desc += (
-                "\n\n🔵 **Produção Finalizada**"
-                f"\n\n🧪 Produziu **{capsulas} cápsulas**"
-                f"\n⚖️ Peso total: **{peso:.2f} kg**"
-                f"\n💣 Pólvora utilizada: **{polvora}**"
-            )
-
-            await edit_queue.put(
-                msg.edit(
-                    embed=discord.Embed(
-                        title="🏭 Produção",
-                        description=desc,
-                        color=0x34495e
-                    ),
-                    view=None
-                )
-            )
-
-            await deletar_producao(pid)
-
-            galpoes_ativos.discard(prod["galpao"])
-
-            if pid in producoes_tasks:
-                producoes_tasks.pop(pid)
-
-            return
-
-        await edit_queue.put(
-            msg.edit(
+        # Atualiza a mensagem
+        try:
+            await msg.edit(
                 embed=discord.Embed(
                     title="🏭 Produção",
                     description=desc,
                     color=0x34495e
                 )
             )
+        except Exception as e:
+            print(f"Erro ao editar mensagem {pid}:", e)
+
+        await asyncio.sleep(5)  # Espera 5 segundos antes de atualizar novamente
+
+async def finalizar_producao(pid, msg, prod):
+    """Finaliza a produção e registra no banco"""
+    
+    polvora = prod.get("polvora", 400)
+    segunda = prod.get("segunda_task_confirmada")
+    
+    # Calcula produção baseada no galpão
+    base = 0
+    if prod["galpao"] == "GALPÕES NORTE":
+        base = 1777 if segunda else 1688
+    elif prod["galpao"] == "GALPÕES SUL":
+        base = 1618 if segunda else 1608
+    elif prod["galpao"] == "BAHAMAS":
+        base = 1777 if segunda else 1688
+    
+    capsulas = (base * polvora) // 400
+    peso = capsulas * 0.05
+    
+    # Salva no banco
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO producoes_finalizadas
+            (user_id, capsulas, data)
+            VALUES ($1,$2,$3)
+            """,
+            str(prod["autor"]),
+            capsulas,
+            agora_db()
         )
-
-        await asyncio.sleep(5)
-
+    
+    # Pega a descrição atual e adiciona o final
+    desc = msg.embeds[0].description if msg.embeds else ""
+    desc += (
+        f"\n\n🔵 **Produção Finalizada**"
+        f"\n\n🧪 Produziu **{capsulas} cápsulas**"
+        f"\n⚖️ Peso total: **{peso:.2f} kg**"
+        f"\n💣 Pólvora utilizada: **{polvora}**"
+    )
+    
+    # Atualiza a mensagem final
+    await msg.edit(
+        embed=discord.Embed(
+            title="🏭 Produção",
+            description=desc,
+            color=0x34495e
+        ),
+        view=None
+    )
+    
+    # Remove do banco
+    await deletar_producao(pid)
+    
+    # Remove da lista de tarefas ativas
+    if pid in producoes_tasks:
+        del producoes_tasks[pid]
+    
+    print(f"✅ Produção {pid} finalizada com {capsulas} cápsulas")
 # =========================================================
 # ================= RELATÓRIO ==============================
 # =========================================================
@@ -3920,6 +3938,47 @@ async def atualizar_painel_acoes(guild):
 
 helicrash_cache = {}
 
+# =========================================================
+# ================= FUNÇÕES PARTICIPANTES =================
+# =========================================================
+
+async def salvar_participante_helicrash(hid, user_id, tipo):
+    """Salva um participante no banco"""
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO helicrash_participantes (helicrash_id, user_id, tipo)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (helicrash_id, user_id) 
+            DO UPDATE SET tipo = $3
+            """,
+            hid, str(user_id), tipo
+        )
+
+async def carregar_participantes_helicrash(hid):
+    """Carrega os participantes do banco"""
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id, tipo FROM helicrash_participantes WHERE helicrash_id = $1",
+            hid
+        )
+    
+    participantes = {"setados": [], "agregados": []}
+    for row in rows:
+        if row["tipo"] == "setado":
+            participantes["setados"].append(row["user_id"])
+        else:
+            participantes["agregados"].append(row["user_id"])
+    
+    return participantes
+
+async def remover_participante_helicrash(hid, user_id):
+    """Remove um participante do banco"""
+    async with db.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM helicrash_participantes WHERE helicrash_id=$1 AND user_id=$2",
+            hid, str(user_id)
+        )
 
 # =========================================================
 # ================= VERIFICAR DUPLICAÇÃO ==================
@@ -3947,7 +4006,6 @@ async def helicrash_ja_criado_hoje():
 # =========================================================
 
 async def criar_helicrash_dia():
-
     if await helicrash_ja_criado_hoje():
         return False
 
@@ -4002,13 +4060,7 @@ async def criar_helicrash_dia():
                 ""
             )
 
-        helicrash_cache[hid] = {
-            "setados": [],
-            "agregados": []
-        }
-
-        await msg.edit(view=HelicrashView(hid))
-
+        # Não usa mais cache em memória, vai direto ao banco
         bot.loop.create_task(acompanhar_helicrash(hid))
 
     return True
@@ -4020,13 +4072,11 @@ async def criar_helicrash_dia():
 
 @tasks.loop(minutes=1)
 async def criar_helicrash_diario():
-
     agora_br = agora()
 
+    # Executa às 18:00 (ou outro horário que você quiser)
     if agora_br.hour == 18 and 0 <= agora_br.minute <= 1:
-
         criado = await criar_helicrash_dia()
-
         if criado:
             print("✅ Helicrash criado automaticamente")
         else:
@@ -4038,9 +4088,7 @@ async def criar_helicrash_diario():
 # =========================================================
 
 async def atualizar_embed_helicrash(hid):
-
     async with db.acquire() as conn:
-
         row = await conn.fetchrow(
             "SELECT * FROM helicrash WHERE id=$1",
             hid
@@ -4048,6 +4096,12 @@ async def atualizar_embed_helicrash(hid):
 
     if not row:
         return
+
+    # Carrega participantes do banco
+    participantes = await carregar_participantes_helicrash(hid)
+    
+    setados = participantes["setados"]
+    agregados = participantes["agregados"]
 
     canal = bot.get_channel(int(row["canal_id"]))
 
@@ -4058,11 +4112,6 @@ async def atualizar_embed_helicrash(hid):
         msg = await canal.fetch_message(int(row["msg_id"]))
     except:
         return
-
-    data = helicrash_cache.get(hid, {"setados": [], "agregados": []})
-
-    setados = data["setados"]
-    agregados = data["agregados"]
 
     horario = BRASIL.localize(row["horario"])
 
@@ -4103,25 +4152,48 @@ class HelicrashView(discord.ui.View):
         self.hid = hid
 
     @discord.ui.button(label="🟢 Setado", style=discord.ButtonStyle.success)
-    async def setado(self, interaction, button):
-
+    async def setado(self, interaction: discord.Interaction, button):
         uid = str(interaction.user.id)
-
-        if self.hid not in helicrash_cache:
-            helicrash_cache[self.hid] = {"setados": [], "agregados": []}
-
-        data = helicrash_cache[self.hid]
-
-        if uid not in data["setados"] and len(data["setados"]) >= 10:
+        
+        # Carrega participantes atuais
+        participantes = await carregar_participantes_helicrash(self.hid)
+        
+        # Verifica limite
+        if uid not in participantes["setados"] and len(participantes["setados"]) >= 10:
             await interaction.response.send_message("❌ Limite de setados atingido.", ephemeral=True)
             return
+        
+        # Salva como setado
+        await salvar_participante_helicrash(self.hid, uid, "setado")
+        
+        # Se estava como agregado, remove e salva como setado
+        if uid in participantes["agregados"]:
+            await remover_participante_helicrash(self.hid, uid)
+            await salvar_participante_helicrash(self.hid, uid, "setado")
+        
+        await interaction.response.defer()
+        await atualizar_embed_helicrash(self.hid)
 
-        if uid not in data["setados"]:
-            data["setados"].append(uid)
-
-        if uid in data["agregados"]:
-            data["agregados"].remove(uid)
-
+    @discord.ui.button(label="🟡 Agregado", style=discord.ButtonStyle.secondary)
+    async def agregado(self, interaction: discord.Interaction, button):
+        uid = str(interaction.user.id)
+        
+        # Carrega participantes atuais
+        participantes = await carregar_participantes_helicrash(self.hid)
+        
+        # Verifica limite
+        if uid not in participantes["agregados"] and len(participantes["agregados"]) >= 10:
+            await interaction.response.send_message("❌ Limite de agregados atingido.", ephemeral=True)
+            return
+        
+        # Salva como agregado
+        await salvar_participante_helicrash(self.hid, uid, "agregado")
+        
+        # Se estava como setado, remove e salva como agregado
+        if uid in participantes["setados"]:
+            await remover_participante_helicrash(self.hid, uid)
+            await salvar_participante_helicrash(self.hid, uid, "agregado")
+        
         await interaction.response.defer()
         await atualizar_embed_helicrash(self.hid)
 
@@ -4194,9 +4266,7 @@ async def helicrash(ctx):
 # =========================================================
 
 async def acompanhar_helicrash(hid):
-
     while True:
-
         await asyncio.sleep(10)
 
         async with db.acquire() as conn:
@@ -4222,7 +4292,6 @@ async def acompanhar_helicrash(hid):
 # =========================================================
 
 async def finalizar_helicrash(hid):
-
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM helicrash WHERE id=$1",
@@ -4232,12 +4301,16 @@ async def finalizar_helicrash(hid):
     if not row:
         return
 
-    data = helicrash_cache.get(hid, {"setados": [], "agregados": []})
+    # Carrega participantes do banco
+    participantes = await carregar_participantes_helicrash(hid)
+    
+    setados = participantes["setados"]
+    agregados = participantes["agregados"]
 
-    canal = bot.get_channel(CANAL_RELATORIO_HC_ID)
+    canal_relatorio = bot.get_channel(CANAL_RELATORIO_HC_ID)
 
-    lista_setados = "\n".join(f"<@{uid}>" for uid in data["setados"]) or "Nenhum"
-    lista_agregados = "\n".join(f"<@{uid}>" for uid in data["agregados"]) or "Nenhum"
+    lista_setados = "\n".join(f"<@{uid}>" for uid in setados) or "Nenhum"
+    lista_agregados = "\n".join(f"<@{uid}>" for uid in agregados) or "Nenhum"
 
     embed = discord.Embed(
         title=f"🚁 HELICRASH {row['horario'].strftime('%H:%M')}",
@@ -4247,8 +4320,8 @@ async def finalizar_helicrash(hid):
     embed.add_field(name="👑 Setados", value=lista_setados, inline=False)
     embed.add_field(name="🟡 Agregados", value=lista_agregados, inline=False)
 
-    if canal:
-        await canal.send(embed=embed)
+    if canal_relatorio:
+        await canal_relatorio.send(embed=embed)
 
     canal_evento = bot.get_channel(int(row["canal_id"]))
 
@@ -4259,13 +4332,18 @@ async def finalizar_helicrash(hid):
         except:
             pass
 
+    # Remove do banco
     async with db.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM helicrash_participantes WHERE helicrash_id=$1",
+            hid
+        )
         await conn.execute(
             "DELETE FROM helicrash WHERE id=$1",
             hid
         )
-
-    helicrash_cache.pop(hid, None)
+    
+    print(f"✅ Helicrash {hid} finalizado")
 # =========================================================
 # =========================== METAS ========================
 # =========================================================
@@ -4766,9 +4844,7 @@ async def on_ready():
         if not criar_helicrash_diario.is_running():
             criar_helicrash_diario.start()
 
-        if not reset_helicrash_diario.is_running():
-            reset_helicrash_diario.start()
-
+        
     except Exception as e:
         print(f"✅ Bot online como {bot.user}")
 
