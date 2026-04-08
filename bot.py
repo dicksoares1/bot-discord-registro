@@ -2990,39 +2990,85 @@ async def checar_kick(canal):
 # =========================================================
 
 async def checar_tiktok(username):
-
+    """Verifica se um usuário do TikTok está ao vivo"""
     try:
-
-        url = f"https://www.tiktok.com/@{username}/live"
-
+        # Limpa o username
+        username = username.lower().replace("@", "").strip()
+        
+        # URL do perfil
+        url = f"https://www.tiktok.com/@{username}"
+        
         headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://www.tiktok.com/"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+            "Referer": "https://www.tiktok.com/",
         }
-
-        async with http_session.get(url, headers=headers) as r:
-            html = await r.text()
-
-        # 🔍 procura status REAL no JSON interno da página
-        match = re.search(r'"isLiveBroadcast":(true|false)', html)
-
-        if not match:
-            return False, None, None, None
-
-        is_live = match.group(1) == "true"
-
+        
+        async with http_session.get(url, headers=headers, timeout=10) as response:
+            html = await response.text()
+        
+        # Procura pelo status da live no HTML
+        # Método 1: Verificar no JSON embutido
+        import re
+        
+        # Procura pelo padrão "isLive":true no HTML
+        live_patterns = [
+            r'"isLive":\s*true',
+            r'"liveStatus":\s*1',
+            r'"liveRoom":\s*\{',
+            r'"status":\s*"live"',
+            r'livePageProps.*?liveStatus.*?1',
+        ]
+        
+        is_live = False
+        for pattern in live_patterns:
+            if re.search(pattern, html, re.IGNORECASE):
+                is_live = True
+                break
+        
+        # Método 2: Verificar se tem URL de live
+        if not is_live:
+            live_url_pattern = r'https://www\.tiktok\.com/@' + re.escape(username) + r'/live'
+            if re.search(live_url_pattern, html):
+                is_live = True
+        
         if not is_live:
             return False, None, None, None
-
-        # título (opcional)
-        titulo_match = re.search(r'"title":"([^"]+)"', html)
-        titulo = titulo_match.group(1) if titulo_match else "Live no TikTok"
-
-        return True, titulo, None, None
-
+        
+        # Tenta extrair título da live
+        titulo = f"Live no TikTok - @{username}"
+        
+        title_patterns = [
+            r'"title":"([^"]+)"',
+            r'"roomId":"[^"]+","title":"([^"]+)"',
+            r'"liveTitle":"([^"]+)"',
+        ]
+        
+        for pattern in title_patterns:
+            match = re.search(pattern, html)
+            if match:
+                titulo = match.group(1)
+                break
+        
+        # Tenta extrair thumbnail
+        thumbnail = None
+        thumb_patterns = [
+            r'"coverUrl":"([^"]+)"',
+            r'"thumbnailUrl":"([^"]+)"',
+            r'"liveCover":"([^"]+)"',
+        ]
+        
+        for pattern in thumb_patterns:
+            match = re.search(pattern, html)
+            if match:
+                thumbnail = match.group(1).replace("\\/", "/")
+                break
+        
+        return True, titulo, "TikTok", thumbnail
+        
     except Exception as e:
-
-        print("Erro TikTok:", e)
+        print(f"Erro ao verificar TikTok para {username}: {e}")
         return False, None, None, None
 
 # =========================================================
@@ -3030,15 +3076,21 @@ async def checar_tiktok(username):
 # =========================================================
 
 async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
-
+    """Divulga a live no canal designado"""
     try:
-
         canal = bot.get_channel(CANAL_DIVULGACAO_LIVE_ID)
+        if not canal:
+            print(f"❌ Canal de divulgação não encontrado: {CANAL_DIVULGACAO_LIVE_ID}")
+            return
 
         user = await pegar_usuario(int(user_id))
+        if not user:
+            print(f"❌ Usuário {user_id} não encontrado")
+            return
 
         plataforma = detectar_plataforma(link)
 
+        # Cores e nomes das plataformas
         cores = {
             "twitch": 0x9146FF,
             "kick": 0x53FC18,
@@ -3051,32 +3103,55 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
             "tiktok": "TikTok"
         }
 
+        # Ícones para cada plataforma
+        icones = {
+            "twitch": "🟣",
+            "kick": "🟢",
+            "tiktok": "📱"
+        }
+
         embed = discord.Embed(
-            title="🔴 LIVE AO VIVO!",
-            color=cores.get(plataforma, 0xffffff)
+            title=f"{icones.get(plataforma, '🔴')} LIVE AO VIVO!",
+            color=cores.get(plataforma, 0xff0000)
         )
 
         embed.description = (
             f"👤 **Streamer:** {user.mention}\n"
-            f"📺 **Plataforma:** {nomes.get(plataforma)}\n"
-            f"🎮 **Jogo:** {jogo or 'Não informado'}\n"
-            f"📝 **Título:** {titulo or 'Sem título'}\n\n"
-            f"🔗 {link}"
+            f"📺 **Plataforma:** {nomes.get(plataforma, plataforma)}\n"
         )
+        
+        if jogo and jogo != "TikTok":
+            embed.description += f"🎮 **Jogo:** {jogo}\n"
+            
+        embed.description += f"📝 **Título:** {titulo or 'Sem título'}\n\n"
+        embed.description += f"🔗 **Assistir:** {link}"
 
         if thumbnail:
             embed.set_image(url=thumbnail)
+        elif plataforma == "tiktok":
+            # Thumbnail padrão para TikTok se não tiver
+            embed.set_thumbnail(url="https://cdn-icons-png.flaticon.com/512/3046/3046126.png")
 
-        await canal.send(
-            content="@everyone 🔴 Live iniciada!",
-            embed=embed,
-            allowed_mentions=discord.AllowedMentions(everyone=True)
-        )
+        embed.set_footer(text=f"Live iniciada • {agora().strftime('%H:%M')}")
+
+        # Para TikTok, não marcar @everyone para evitar spam
+        if plataforma == "tiktok":
+            await canal.send(
+                content=f"🔴 {user.mention} está ao vivo no TikTok!",
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(users=True)
+            )
+        else:
+            await canal.send(
+                content="@everyone 🔴 Live iniciada!",
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(everyone=True)
+            )
+
+        print(f"✅ Live divulgada: {plataforma} - {user.name}")
 
     except Exception as e:
-
-        print("Erro divulgar live:", e)
-
+        print(f"❌ Erro ao divulgar live: {e}")
 # =========================================================
 # ================= DETECTAR PLATAFORMA ===================
 # =========================================================
@@ -3129,60 +3204,69 @@ def extrair_canal(link):
 
 @tasks.loop(minutes=2)
 async def verificar_lives():
-
+    """Verifica todas as lives cadastradas"""
+    
     print("🔄 Verificando lives...")
-
+    
     try:
-
         lives = await carregar_lives()
-
+        
+        if not lives:
+            return
+        
         for user_id, lista_lives in lives.items():
-
             for data in lista_lives:
-
                 link = data.get("link", "")
                 divulgado = data.get("divulgado", False)
-
+                
                 plataforma = detectar_plataforma(link)
-                canal = extrair_canal(link)
-
-                if not plataforma or not canal:
+                canal_name = extrair_canal(link)
+                
+                if not plataforma or not canal_name:
+                    print(f"⚠️ Link inválido: {link}")
                     continue
-
-                if plataforma == "twitch":
-                    ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal)
-
-                elif plataforma == "kick":
-                    ao_vivo, titulo, jogo, thumbnail = await checar_kick(canal)
-
-                elif plataforma == "tiktok":
-                    ao_vivo, titulo, jogo, thumbnail = await checar_tiktok(canal)
-
-                else:
+                
+                ao_vivo = False
+                titulo = None
+                jogo = None
+                thumbnail = None
+                
+                try:
+                    if plataforma == "twitch":
+                        ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal_name)
+                    elif plataforma == "kick":
+                        ao_vivo, titulo, jogo, thumbnail = await checar_kick(canal_name)
+                    elif plataforma == "tiktok":
+                        ao_vivo, titulo, jogo, thumbnail = await checar_tiktok(canal_name)
+                    else:
+                        continue
+                        
+                except Exception as e:
+                    print(f"Erro ao verificar {plataforma}/{canal_name}: {e}")
                     continue
-
+                
+                # Se não está ao vivo mas estava marcado como divulgado, reseta
                 if not ao_vivo and divulgado:
                     await atualizar_divulgado(link, False)
-
-                if ao_vivo:
-
-                    if not divulgado:
-
-                        print(f"🔴 LIVE detectada ({plataforma}): {link}")
-
-                        await divulgar_live(
-                            user_id,
-                            link,
-                            titulo,
-                            jogo,
-                            thumbnail
-                        )
-
-                        await atualizar_divulgado(link, True)
-
+                    print(f"📴 Live encerrada: {plataforma}/{canal_name}")
+                
+                # Se está ao vivo e não foi divulgado ainda
+                if ao_vivo and not divulgado:
+                    print(f"🔴 LIVE detectada ({plataforma}): {canal_name}")
+                    
+                    await divulgar_live(
+                        user_id,
+                        link,
+                        titulo,
+                        jogo,
+                        thumbnail
+                    )
+                    
+                    await atualizar_divulgado(link, True)
+                    print(f"✅ Live divulgada: {plataforma}/{canal_name}")
+                    
     except Exception as e:
-
-        print("Erro no loop de lives:", e)
+        print(f"❌ Erro no loop de lives: {e}")
 
 # =========================================================
 # ================= CADASTRO DE LIVE ======================
