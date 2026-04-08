@@ -5298,11 +5298,6 @@ async def on_reaction_add(reaction, user):
 # ================= SISTEMA DE AUSÊNCIA ===================
 # =========================================================
 
-# ================= CONFIGURAÇÕES =================
-CANAL_BOTAO_AUSENCIA_ID = 1491427870277374162    # Canal #ausencias (só o botão)
-CANAL_REGISTRO_AUSENCIA_ID = 1491427870277374163  # Canal #ausencias-registradas (os embeds)
-CARGO_AUSENTE_ID = 1313854772545196033            # ⚠️ CRIE O CARGO "Ausente" E COLOQUE O ID AQUI
-
 # ================= FUNÇÕES DE BANCO =================
 
 async def salvar_ausencia_db(user_id, nome, motivo, data_inicio, data_fim):
@@ -5374,7 +5369,7 @@ async def remover_ausencias_expiradas():
         
         return [row["user_id"] for row in rows]
 
-# ================= MODAL DE AUSÊNCIA =================
+# ================= MODAL DE AUSÊNCIA (CAMPOS SEPARADOS) =================
 
 class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
     
@@ -5384,9 +5379,15 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         required=True
     )
     
-    periodo = discord.ui.TextInput(
-        label="Período de ausência",
-        placeholder="Ex: 10/04/2026 a 15/04/2026",
+    data_inicio = discord.ui.TextInput(
+        label="Data de INÍCIO da ausência",
+        placeholder="Ex: 10/04/2026",
+        required=True
+    )
+    
+    data_fim = discord.ui.TextInput(
+        label="Data de RETORNO",
+        placeholder="Ex: 15/04/2026",
         required=True
     )
     
@@ -5401,43 +5402,31 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         
         await interaction.response.defer(ephemeral=True)
         
-        # Extrair as datas do período (formato "10/04/2026 a 15/04/2026")
-        import re
-        match = re.search(r'(\d{1,2}/\d{1,2}/\d{4})\s+[aA]\s+(\d{1,2}/\d{1,2}/\d{4})', self.periodo.value)
-        
-        if not match:
-            await interaction.followup.send(
-                "❌ Formato de período inválido!\n"
-                "Use: `10/04/2026 a 15/04/2026`",
-                ephemeral=True
-            )
-            return
-        
-        data_inicio_str = match.group(1)
-        data_fim_str = match.group(2)
-        
         # Converter as datas
         try:
-            data_inicio_dt = datetime.strptime(data_inicio_str, "%d/%m/%Y")
-            data_fim_dt = datetime.strptime(data_fim_str, "%d/%m/%Y")
+            data_inicio_dt = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
+            data_fim_dt = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
             
             # Adicionar timezone do Brasil
             data_inicio_dt = data_inicio_dt.replace(tzinfo=BRASIL, hour=0, minute=0, second=0)
             data_fim_dt = data_fim_dt.replace(tzinfo=BRASIL, hour=23, minute=59, second=59)
             
-        except:
+        except ValueError:
             await interaction.followup.send(
-                "❌ Datas inválidas! Use o formato: `10/04/2026 a 15/04/2026`",
+                "❌ Formato de data inválido!\nUse o formato: `10/04/2026` (DIA/MÊS/ANO)",
                 ephemeral=True
             )
             return
         
         agora_dt = agora()
+        hoje_meia_noite = agora_dt.replace(hour=0, minute=0, second=0, microsecond=0)
         
         # Verificar se data de início é hoje ou no futuro
-        if data_inicio_dt < agora_dt.replace(hour=0, minute=0, second=0):
+        if data_inicio_dt < hoje_meia_noite:
             await interaction.followup.send(
-                "❌ A data de INÍCIO deve ser hoje ou no futuro!",
+                "❌ A data de INÍCIO deve ser **hoje** ou **no futuro**!\n"
+                f"Data informada: {self.data_inicio.value}\n"
+                f"Data atual: {hoje_meia_noite.strftime('%d/%m/%Y')}",
                 ephemeral=True
             )
             return
@@ -5445,7 +5434,9 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         # Verificar se data de fim é depois da data de início
         if data_fim_dt <= data_inicio_dt:
             await interaction.followup.send(
-                "❌ A data de RETORNO deve ser depois da data de INÍCIO!",
+                "❌ A data de RETORNO deve ser **depois** da data de INÍCIO!\n"
+                f"Início: {self.data_inicio.value}\n"
+                f"Retorno: {self.data_fim.value}",
                 ephemeral=True
             )
             return
@@ -5455,7 +5446,8 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         
         if ausencia_existente:
             await interaction.followup.send(
-                "❌ Você já possui uma ausência ativa!",
+                "❌ Você já possui uma ausência ativa!\n"
+                "Espere ela terminar ou peça para um admin cancelar.",
                 ephemeral=True
             )
             return
@@ -5478,11 +5470,11 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         # Calcular dias de ausência
         dias_ausencia = (data_fim_dt - data_inicio_dt).days + 1
         
-        # Formatar período bonito
-        periodo_formatado = f"{data_inicio_str} a {data_fim_str}"
+        # Formatar período
+        periodo_formatado = f"{self.data_inicio.value} a {self.data_fim.value}"
         
         # =============================================
-        # ENVIAR EMBED NO CANAL DE REGISTRO (#ausencias-registradas)
+        # ENVIAR EMBED NO CANAL DE REGISTRO
         # =============================================
         
         canal_registro = interaction.guild.get_channel(CANAL_REGISTRO_AUSENCIA_ID)
@@ -5535,7 +5527,7 @@ class AusenciaBotaoView(discord.ui.View):
     async def solicitar(self, interaction: discord.Interaction, button):
         await interaction.response.send_modal(AusenciaModal())
 
-# ================= PAINEL DO BOTÃO (CANAL #ausencias) =================
+# ================= PAINEL DO BOTÃO =================
 
 async def enviar_painel_botao_ausencia():
     """Envia o painel com o botão no canal #ausencias"""
@@ -5551,7 +5543,8 @@ async def enviar_painel_botao_ausencia():
         description="Clique no botão abaixo para solicitar sua ausência.\n\n"
                     "📌 **Como usar:**\n"
                     "• Digite seu nome completo\n"
-                    "• Informe o período (ex: `10/04/2026 a 15/04/2026`)\n"
+                    "• Informe a **data de INÍCIO** (ex: `10/04/2026`)\n"
+                    "• Informe a **data de RETORNO** (ex: `15/04/2026`)\n"
                     "• Digite o motivo\n\n"
                     "✅ Você receberá o cargo **Ausente**\n"
                     "✅ Quando o período acabar, o cargo será removido",
@@ -5559,8 +5552,8 @@ async def enviar_painel_botao_ausencia():
     )
     
     embed.add_field(
-        name="📅 Exemplo de período",
-        value="`10/04/2026 a 15/04/2026`\n(contando todos os dias entre 10 e 15)",
+        name="📅 Exemplo",
+        value="• Data INÍCIO: `10/04/2026`\n• Data RETORNO: `15/04/2026`\n(contando todos os dias entre 10 e 15)",
         inline=False
     )
     
