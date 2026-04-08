@@ -5298,7 +5298,6 @@ async def on_reaction_add(reaction, user):
 # ================= SISTEMA DE AUSÊNCIA ===================
 # =========================================================
 
-
 # ================= FUNÇÕES DE BANCO =================
 
 async def salvar_ausencia_db(user_id, nome, motivo, data_inicio, data_fim):
@@ -5462,7 +5461,7 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         periodo_formatado = f"{self.data_inicio.value} a {self.data_fim.value}"
         
         # =============================================
-        # ENVIAR EMBED NO CANAL DE REGISTRO
+        # ENVIAR EMBED NO CANAL DE REGISTRO (ID: 1313854772545196032)
         # =============================================
         
         canal_registro = interaction.guild.get_channel(CANAL_REGISTRO_AUSENCIA_ID)
@@ -5481,7 +5480,7 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             embed_ausencia.set_footer(text=f"Solicitado em {agora().strftime('%d/%m/%Y às %H:%M')}")
             
             await canal_registro.send(embed=embed_ausencia)
-            print(f"✅ Embed enviado para {CANAL_REGISTRO_AUSENCIA_ID}")
+            print(f"✅ Embed enviado para o canal {CANAL_REGISTRO_AUSENCIA_ID}")
         else:
             print(f"❌ Canal de registro não encontrado! ID: {CANAL_REGISTRO_AUSENCIA_ID}")
         
@@ -5518,12 +5517,12 @@ class AusenciaBotaoView(discord.ui.View):
 # ================= PAINEL DO BOTÃO =================
 
 async def enviar_painel_botao_ausencia():
-    """Envia o painel com o botão no canal #ausencias"""
+    """Envia o painel com o botão no canal #solicitar-ausencia"""
     
-    canal = bot.get_channel(CANAL_AUSENCIA_ID)
+    canal = bot.get_channel(CANAL_BOTAO_AUSENCIA_ID)
     
     if not canal:
-        print(f"❌ Canal do botão NÃO ENCONTRADO! ID: {CANAL_AUSENCIA_ID}")
+        print(f"❌ Canal do botão NÃO ENCONTRADO! ID: {CANAL_BOTAO_AUSENCIA_ID}")
         return
     
     embed = discord.Embed(
@@ -5547,12 +5546,12 @@ async def enviar_painel_botao_ausencia():
     
     await enviar_ou_atualizar_painel(
         "painel_botao_ausencia",
-        CANAL_AUSENCIA_ID,
+        CANAL_BOTAO_AUSENCIA_ID,
         embed,
         AusenciaBotaoView()
     )
     
-    print(f"✅ Painel do botão enviado para {CANAL_AUSENCIA_ID}")
+    print(f"✅ Painel do botão enviado para {CANAL_BOTAO_AUSENCIA_ID}")
 
 # ================= LOOP DE VERIFICAÇÃO =================
 
