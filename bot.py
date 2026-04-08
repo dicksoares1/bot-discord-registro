@@ -5311,8 +5311,8 @@ async def salvar_ausencia_db(user_id, nome, motivo, data_inicio, data_fim):
             str(user_id),
             nome,
             motivo,
-            data_inicio,
-            data_fim
+            data_inicio,  # Já vem sem timezone
+            data_fim      # Já vem sem timezone
         )
 
 async def buscar_ausencias_ativas():
@@ -5402,14 +5402,15 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         
         await interaction.response.defer(ephemeral=True)
         
-        # Converter as datas
+        # Converter as datas (sem timezone para salvar no banco)
         try:
             data_inicio_dt = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
             data_fim_dt = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
             
-            # Adicionar timezone do Brasil
-            data_inicio_dt = data_inicio_dt.replace(tzinfo=BRASIL, hour=0, minute=0, second=0)
-            data_fim_dt = data_fim_dt.replace(tzinfo=BRASIL, hour=23, minute=59, second=59)
+            # NÃO adicionar timezone aqui! O banco espera datetime naive
+            # Apenas ajustar hora para início e fim do dia
+            data_inicio_naive = data_inicio_dt.replace(hour=0, minute=0, second=0)
+            data_fim_naive = data_fim_dt.replace(hour=23, minute=59, second=59)
             
         except ValueError:
             await interaction.followup.send(
@@ -5418,13 +5419,23 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             )
             return
         
-        agora_dt = agora()
-        hoje_meia_noite = agora_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Para comparação com data atual, usar timezone do Brasil
+        agora_com_tz = agora()
+        hoje_meia_noite = agora_com_tz.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Converter data_inicio para datetime com timezone para comparação
+        data_inicio_com_tz = datetime(
+            data_inicio_dt.year,
+            data_inicio_dt.month,
+            data_inicio_dt.day,
+            0, 0, 0,
+            tzinfo=BRASIL
+        )
         
         # Verificar se data de início é hoje ou no futuro
-        if data_inicio_dt < hoje_meia_noite:
+        if data_inicio_com_tz < hoje_meia_noite:
             await interaction.followup.send(
-                "❌ A data de INÍCIO deve ser **hoje** ou **no futuro**!\n"
+                f"❌ A data de INÍCIO deve ser **hoje** ou **no futuro**!\n"
                 f"Data informada: {self.data_inicio.value}\n"
                 f"Data atual: {hoje_meia_noite.strftime('%d/%m/%Y')}",
                 ephemeral=True
@@ -5432,9 +5443,9 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             return
         
         # Verificar se data de fim é depois da data de início
-        if data_fim_dt <= data_inicio_dt:
+        if data_fim_naive <= data_inicio_naive:
             await interaction.followup.send(
-                "❌ A data de RETORNO deve ser **depois** da data de INÍCIO!\n"
+                f"❌ A data de RETORNO deve ser **depois** da data de INÍCIO!\n"
                 f"Início: {self.data_inicio.value}\n"
                 f"Retorno: {self.data_fim.value}",
                 ephemeral=True
@@ -5452,13 +5463,13 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             )
             return
         
-        # Salvar no banco
+        # Salvar no banco (com datas sem timezone)
         await salvar_ausencia_db(
             interaction.user.id,
             self.nome.value,
             self.motivo.value,
-            data_inicio_dt,
-            data_fim_dt
+            data_inicio_naive,
+            data_fim_naive
         )
         
         # Adicionar cargo de ausente
@@ -5468,7 +5479,7 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             print(f"✅ Cargo ausente adicionado para {interaction.user.display_name}")
         
         # Calcular dias de ausência
-        dias_ausencia = (data_fim_dt - data_inicio_dt).days + 1
+        dias_ausencia = (data_fim_naive - data_inicio_naive).days + 1
         
         # Formatar período
         periodo_formatado = f"{self.data_inicio.value} a {self.data_fim.value}"
@@ -5616,12 +5627,7 @@ async def listar_ausentes(ctx):
     
     for ausencia in ausencias:
         data_fim = ausencia["data_fim"]
-        if data_fim.tzinfo is None:
-            data_fim = data_fim.replace(tzinfo=BRASIL)
-        
         data_inicio = ausencia["data_inicio"]
-        if data_inicio.tzinfo is None:
-            data_inicio = data_inicio.replace(tzinfo=BRASIL)
         
         embed.add_field(
             name=f"👤 {ausencia['nome']}",
