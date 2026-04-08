@@ -291,6 +291,8 @@ CANAL_HELICRASH_ID = 1478919637260435498
 CANAL_RELATORIO_HC_ID = 1485666254961512458
 
 CANAL_POSTAGEM_X = 1486353689680547900
+CANAL_AUSENCIA_ID = 1491427870277374162  # Canal onde fica o botão
+CANAL_REGISTRO_AUSENCIA_ID = 1491427870277374162  # Mesmo canal (para registrar)
 
 # ================= CLIPES =================
 
@@ -324,6 +326,7 @@ CARGO_SOLDADO_ID = 1422845498863259700
 CARGO_MEMBRO_ID = 1422847198789369926
 CARGO_AGREGADO_ID = 1422847202937536532
 CARGO_MECANICO_ID = 1448526080645398641
+CARGO_AUSENTE_ID = 1337420032212336823
 
 CARGOS_ACAO = [
     CARGO_GERENTE_ID,
@@ -2450,6 +2453,8 @@ async def enviar_painel_polvoras():
     )
 
     print("💣 Painel de pólvora verificado/atualizado")
+
+
 
 # =========================================================
 # ======================== LAVAGEM =========================
@@ -5288,6 +5293,403 @@ async def on_reaction_add(reaction, user):
     except Exception as e:
         print("Erro reação clip:", e)
 
+
+# =========================================================
+# ================= SISTEMA DE AUSÊNCIA ===================
+# =========================================================
+# CANAIS E CARGOS
+CANAL_BOTAO_AUSENCIA_ID = 1491427870277374162    # Canal onde fica SOMENTE o botão
+CANAL_REGISTRO_AUSENCIA_ID = 1491427870277374163  # ⚠️ Canal onde vão os embeds (crie um canal novo e coloque o ID)
+CARGO_AUSENTE_ID = 1313854772545196033            # ⚠️ MUDE PARA O ID DO CARGO "Ausente" NO SEU SERVIDOR
+
+# ================= FUNÇÕES DE BANCO =================
+
+async def salvar_ausencia_db(user_id, nome, motivo, data_inicio, data_fim):
+    """Salva uma ausência no banco"""
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO ausencias (user_id, nome, motivo, data_inicio, data_fim, ativo)
+            VALUES ($1, $2, $3, $4, $5, true)
+            """,
+            str(user_id),
+            nome,
+            motivo,
+            data_inicio,
+            data_fim
+        )
+
+async def buscar_ausencias_ativas():
+    """Busca todas as ausências ativas"""
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM ausencias 
+            WHERE ativo = true AND data_fim > NOW()
+            ORDER BY data_fim ASC
+            """
+        )
+        return rows
+
+async def buscar_ausencia_por_user(user_id):
+    """Busca ausência ativa de um usuário específico"""
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT * FROM ausencias 
+            WHERE user_id = $1 AND ativo = true AND data_fim > NOW()
+            """,
+            str(user_id)
+        )
+        return row
+
+async def desativar_ausencia(user_id):
+    """Desativa uma ausência (remove o cargo)"""
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE ausencias 
+            SET ativo = false 
+            WHERE user_id = $1 AND ativo = true
+            """,
+            str(user_id)
+        )
+
+async def remover_ausencias_expiradas():
+    """Remove cargos de ausências que expiraram"""
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT user_id FROM ausencias 
+            WHERE ativo = true AND data_fim <= NOW()
+            """
+        )
+        
+        for row in rows:
+            await conn.execute(
+                "UPDATE ausencias SET ativo = false WHERE user_id = $1",
+                row["user_id"]
+            )
+        
+        return [row["user_id"] for row in rows]
+
+# ================= MODAL DE AUSÊNCIA =================
+
+class AusenciaModal(discord.ui.Modal, title="📝 Registrar Ausência"):
+    
+    nome = discord.ui.TextInput(
+        label="Seu nome",
+        placeholder="Digite seu nome completo",
+        required=True
+    )
+    
+    tempo = discord.ui.TextInput(
+        label="Tempo de ausência",
+        placeholder="Ex: 2 dias, 5 horas, 1 semana, 15/04/2026",
+        required=True
+    )
+    
+    motivo = discord.ui.TextInput(
+        label="Motivo da ausência",
+        placeholder="Ex: Viagem, Problemas de saúde, etc",
+        style=discord.TextStyle.paragraph,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        # Converter o tempo informado para data/hora
+        data_fim = await self.interpretar_tempo(self.tempo.value)
+        
+        if not data_fim:
+            await interaction.followup.send(
+                "❌ Formato de tempo inválido!\n"
+                "Use: `2 dias`, `5 horas`, `1 semana`, `3 meses` ou uma data `15/04/2026 14:30`",
+                ephemeral=True
+            )
+            return
+        
+        agora_dt = agora()
+        
+        if data_fim <= agora_dt:
+            await interaction.followup.send(
+                "❌ A data de retorno deve ser no futuro!",
+                ephemeral=True
+            )
+            return
+        
+        # Verificar se já tem ausência ativa
+        ausencia_existente = await buscar_ausencia_por_user(interaction.user.id)
+        
+        if ausencia_existente:
+            await interaction.followup.send(
+                "❌ Você já possui uma ausência ativa! Espere ela terminar ou peça para um admin cancelar.",
+                ephemeral=True
+            )
+            return
+        
+        # Salvar no banco
+        await salvar_ausencia_db(
+            interaction.user.id,
+            self.nome.value,
+            self.motivo.value,
+            agora_dt,
+            data_fim
+        )
+        
+        # Adicionar cargo de ausente
+        cargo = interaction.guild.get_role(CARGO_AUSENTE_ID)
+        if cargo:
+            await interaction.user.add_roles(cargo)
+        
+        # Calcular tempo restante
+        dias = (data_fim - agora_dt).days
+        horas = (data_fim - agora_dt).seconds // 3600
+        
+        tempo_texto = ""
+        if dias > 0:
+            tempo_texto = f"{dias} dia(s)"
+            if horas > 0:
+                tempo_texto += f" e {horas} hora(s)"
+        else:
+            tempo_texto = f"{horas} hora(s)"
+        
+        # =============================================
+        # ENVIAR EMBED NO CANAL DE REGISTRO (ONDE FICAM AS AUSÊNCIAS)
+        # =============================================
+        
+        canal_registro = interaction.guild.get_channel(CANAL_REGISTRO_AUSENCIA_ID)
+        
+        if canal_registro:
+            embed_ausencia = discord.Embed(
+                title="📋 AUSÊNCIA REGISTRADA",
+                description=f"{interaction.user.mention} está ausente!",
+                color=0xe67e22
+            )
+            
+            embed_ausencia.add_field(name="👤 Nome", value=self.nome.value, inline=True)
+            embed_ausencia.add_field(name="📅 Retorno", value=f"<t:{int(data_fim.timestamp())}:F>", inline=True)
+            embed_ausencia.add_field(name="⏳ Tempo", value=tempo_texto, inline=True)
+            embed_ausencia.add_field(name="📝 Motivo", value=self.motivo.value, inline=False)
+            embed_ausencia.add_field(name="🏷️ Status", value="✅ Cargo **Ausente** aplicado", inline=False)
+            embed_ausencia.set_footer(text="Quando retornar, o cargo será removido automaticamente!")
+            
+            await canal_registro.send(embed=embed_ausencia)
+        
+        # =============================================
+        # ENVIAR CONFIRMAÇÃO PRIVADA PARA O USUÁRIO
+        # =============================================
+        
+        embed_privado = discord.Embed(
+            title="✅ Ausência Registrada com Sucesso!",
+            color=0x2ecc71
+        )
+        
+        embed_privado.add_field(name="👤 Nome", value=self.nome.value, inline=True)
+        embed_privado.add_field(name="📅 Retorno", value=f"<t:{int(data_fim.timestamp())}:F>", inline=True)
+        embed_privado.add_field(name="⏳ Tempo", value=tempo_texto, inline=True)
+        embed_privado.add_field(name="📝 Motivo", value=self.motivo.value[:100], inline=False)
+        
+        embed_privado.set_footer(text="Quando retornar, seu cargo será removido automaticamente!")
+        
+        await interaction.followup.send(embed=embed_privado, ephemeral=True)
+    
+    async def interpretar_tempo(self, texto):
+        """Converte texto como '2 dias', '5 horas' em datetime"""
+        
+        texto = texto.lower().strip()
+        agora_dt = agora()
+        
+        # Tentar interpretar como data específica
+        import re
+        data_pattern = r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?'
+        match = re.search(data_pattern, texto)
+        
+        if match:
+            dia = int(match.group(1))
+            mes = int(match.group(2))
+            ano = int(match.group(3))
+            if ano < 100:
+                ano += 2000
+            
+            hora = int(match.group(4)) if match.group(4) else 0
+            minuto = int(match.group(5)) if match.group(5) else 0
+            
+            try:
+                return agora_dt.replace(year=ano, month=mes, day=dia, hour=hora, minute=minuto)
+            except:
+                pass
+        
+        # Interpretar texto como "X dias", "X horas", etc
+        import re
+        match = re.search(r'(\d+)\s*(dias?|dia|d|horas?|hora|h|semanas?|semana|sem|meses?|mês|mes|minutos?|min)', texto)
+        
+        if match:
+            numero = int(match.group(1))
+            unidade = match.group(2)
+            
+            if unidade in ['dias', 'dia', 'd']:
+                return agora_dt + timedelta(days=numero)
+            elif unidade in ['horas', 'hora', 'h']:
+                return agora_dt + timedelta(hours=numero)
+            elif unidade in ['semanas', 'semana', 'sem']:
+                return agora_dt + timedelta(weeks=numero)
+            elif unidade in ['meses', 'mês', 'mes']:
+                return agora_dt + timedelta(days=30 * numero)
+            elif unidade in ['minutos', 'min']:
+                return agora_dt + timedelta(minutes=numero)
+        
+        return None
+
+# ================= VIEW DE AUSÊNCIA (BOTÃO) =================
+
+class AusenciaView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="📝 Solicitar Ausência",
+        style=discord.ButtonStyle.primary,
+        custom_id="ausencia_solicitar"
+    )
+    async def solicitar(self, interaction: discord.Interaction, button):
+        await interaction.response.send_modal(AusenciaModal())
+
+# ================= PAINEL DO BOTÃO (CANAL DO BOTÃO) =================
+
+async def enviar_painel_botao_ausencia():
+    """Envia o painel com o botão no canal do botão"""
+    
+    canal = bot.get_channel(CANAL_BOTAO_AUSENCIA_ID)
+    
+    if not canal:
+        print("❌ Canal do botão de ausência não encontrado")
+        return
+    
+    embed = discord.Embed(
+        title="📋 Solicitar Ausência",
+        description="Clique no botão abaixo para solicitar sua ausência.\n\n"
+                    "📌 **Como usar:**\n"
+                    "• Digite seu nome completo\n"
+                    "• Informe o tempo (ex: `2 dias`, `5 horas`, `1 semana`)\n"
+                    "• Digite o motivo\n\n"
+                    "✅ Após solicitar, você receberá o cargo **Ausente**\n"
+                    "✅ Sua ausência será registrada no canal de registros\n"
+                    "✅ Quando o tempo acabar, o cargo será removido automaticamente",
+        color=0xe67e22
+    )
+    
+    embed.add_field(
+        name="📅 Exemplos de tempo",
+        value="• `2 dias`\n• `5 horas`\n• `1 semana`\n• `3 meses`\n• `15/04/2026 14:30`",
+        inline=False
+    )
+    
+    await enviar_ou_atualizar_painel(
+        "painel_botao_ausencia",
+        CANAL_BOTAO_AUSENCIA_ID,
+        embed,
+        AusenciaView()
+    )
+    
+    print("📋 Painel do botão de ausência verificado/atualizado")
+
+# ================= LOOP DE VERIFICAÇÃO =================
+
+@tasks.loop(minutes=5)
+async def verificar_ausencias_expiradas():
+    """Verifica a cada 5 minutos se alguma ausência expirou"""
+    
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+    
+    cargo_ausente = guild.get_role(CARGO_AUSENTE_ID)
+    if not cargo_ausente:
+        return
+    
+    users_para_remover = await remover_ausencias_expiradas()
+    
+    for user_id in users_para_remover:
+        member = guild.get_member(int(user_id))
+        if member and cargo_ausente in member.roles:
+            await member.remove_roles(cargo_ausente)
+            print(f"✅ Cargo ausente removido de {member.display_name}")
+            
+            # Enviar mensagem de retorno no canal de registros
+            canal_registro = guild.get_channel(CANAL_REGISTRO_AUSENCIA_ID)
+            if canal_registro:
+                embed_retorno = discord.Embed(
+                    title="🎉 RETORNO REGISTRADO",
+                    description=f"{member.mention} **retornou!**",
+                    color=0x2ecc71
+                )
+                embed_retorno.add_field(name="📝 Status", value="O cargo de ausente foi removido automaticamente.", inline=False)
+                await canal_registro.send(embed=embed_retorno)
+
+# ================= COMANDOS ADMIN =================
+
+@bot.command(name="ausentes")
+@commands.has_permissions(administrator=True)
+async def listar_ausentes(ctx):
+    """Lista todos os membros ausentes (apenas admin)"""
+    
+    ausencias = await buscar_ausencias_ativas()
+    
+    if not ausencias:
+        await ctx.send("📭 Nenhum membro ausente no momento.")
+        return
+    
+    embed = discord.Embed(
+        title="📋 Membros Ausentes",
+        color=0xe67e22
+    )
+    
+    for ausencia in ausencias:
+        data_fim = ausencia["data_fim"]
+        if data_fim.tzinfo is None:
+            data_fim = data_fim.replace(tzinfo=BRASIL)
+        
+        embed.add_field(
+            name=f"👤 {ausencia['nome']}",
+            value=f"📅 Retorno: <t:{int(data_fim.timestamp())}:R>\n📝 Motivo: {ausencia['motivo'][:50]}",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="cancelar_ausencia")
+@commands.has_permissions(administrator=True)
+async def cancelar_ausencia(ctx, member: discord.Member):
+    """Cancela a ausência de um membro (apenas admin)"""
+    
+    ausencia = await buscar_ausencia_por_user(member.id)
+    
+    if not ausencia:
+        await ctx.send(f"❌ {member.mention} não possui ausência ativa.")
+        return
+    
+    await desativar_ausencia(member.id)
+    
+    cargo = ctx.guild.get_role(CARGO_AUSENTE_ID)
+    if cargo and cargo in member.roles:
+        await member.remove_roles(cargo)
+    
+    embed = discord.Embed(
+        title="✅ Ausência Cancelada",
+        description=f"A ausência de {member.mention} foi cancelada!",
+        color=0x2ecc71
+    )
+    embed.add_field(name="📝 Motivo original", value=ausencia["motivo"][:100], inline=False)
+    
+    await ctx.send(embed=embed)
+
+# =========================================================
+# ================= FIM DO SISTEMA DE AUSÊNCIA ============
+# =========================================================
+
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
@@ -5434,6 +5836,12 @@ async def on_ready():
 
            print("♻️ Ações resetadas (segunda)")
 
+    try:
+        if not verificar_ausencias_expiradas.is_running():
+            verificar_ausencias_expiradas.start()
+    except Exception as e:
+        print("Erro loop ausência:", e)
+
     # =====================================================
     # ================= RESTAURAR PRODUÇÕES ===============
     # =====================================================
@@ -5573,6 +5981,11 @@ async def on_ready():
 
         except Exception as e:
             print("Erro botão reset ações:", e)
+
+        try:
+            painel_tasks.append(enviar_painel_botao_ausencia())
+        except Exception as e:
+            print("Erro painel botão ausência:", e)
 
     # =====================================================
     # ================= INICIAR EDIT WORKER ===============
