@@ -3593,13 +3593,34 @@ async def gerar_embed_acoes():
             linhas.append(f"• {nome}: {qtd}")
         else:
             restante = max(limite - qtd, 0)
-            linhas.append(f"• {nome}: {qtd}/{limite} (restam {restante})")
+            # Mostra o progresso
+            if qtd >= limite:
+                linhas.append(f"• {nome}: ✅ {qtd}/{limite} (COMPLETO)")
+            else:
+                linhas.append(f"• {nome}: {qtd}/{limite} (restam {restante})")
             total_meta += limite
+
+    # Calcula porcentagem
+    if total_meta > 0:
+        porcentagem = int((total_feitas / total_meta) * 100)
+        barra_progresso = "▓" * (porcentagem // 5) + "░" * (20 - (porcentagem // 5))
+        status_texto = f"📊 Progresso: {porcentagem}% {barra_progresso}\n"
+    else:
+        status_texto = ""
 
     embed = discord.Embed(title="📊 Ações da Semana", color=0x2ecc71)
 
-    embed.add_field(name="📌 Progresso", value="\n".join(linhas), inline=False)
-    embed.add_field(name="📊 Total", value=f"{total_feitas}/{total_meta} ações", inline=False)
+    embed.add_field(
+        name="📌 Progresso", 
+        value=f"{status_texto}\n" + "\n".join(linhas), 
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📊 Total", 
+        value=f"{total_feitas}/{total_meta} ações realizadas", 
+        inline=False
+    )
 
     return embed
 
@@ -3802,10 +3823,14 @@ class EnviarEscalacaoButton(discord.ui.Button):
                     str(m.id)
                 )
 
+        # ✅ REGISTRAR RELATÓRIO DA AÇÃO
         await registrar_relatorio_acao(interaction.guild, acao_id)
+        
+        # ✅ ATUALIZAR O PAINEL PRINCIPAL (AQUI ESTAVA FALTANDO!)
+        await atualizar_painel_acoes(interaction.guild)
 
         await interaction.followup.send("✅ Escalação registrada!", ephemeral=True)
-
+        
 # =========================================================
 # ================= RESULTADO =============================
 # =========================================================
@@ -3931,6 +3956,7 @@ async def enviar_painel_acoes(guild):
     )
 
 async def atualizar_painel_acoes(guild):
+    """Atualiza o painel de ações com os dados mais recentes"""
     await enviar_painel_acoes(guild)
 # =========================================================
 # ================= HELICRASH =============================
