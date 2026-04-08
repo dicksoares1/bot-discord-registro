@@ -2046,10 +2046,12 @@ async def acompanhar_producao(pid):
         except Exception as e:
             print(f"Erro ao editar mensagem {pid}:", e)
 
-        await asyncio.sleep(5)  # Espera 5 segundos antes de atualizar novamente
+        await asyncio.sleep(5)
 
 async def finalizar_producao(pid, msg, prod):
     """Finaliza a produção e registra no banco"""
+    
+    print(f"🔵 FINALIZANDO produção {pid}")
     
     polvora = prod.get("polvora", 400)
     segunda = prod.get("segunda_task_confirmada")
@@ -2066,6 +2068,8 @@ async def finalizar_producao(pid, msg, prod):
     capsulas = (base * polvora) // 400
     peso = capsulas * 0.05
     
+    print(f"📊 {prod['galpao']}: {capsulas} cápsulas, {peso}kg")
+    
     # Salva no banco
     async with db.acquire() as conn:
         await conn.execute(
@@ -2079,8 +2083,23 @@ async def finalizar_producao(pid, msg, prod):
             agora_db()
         )
     
-    # Pega a descrição atual e adiciona o final
+    # Pega a descrição atual
     desc = msg.embeds[0].description if msg.embeds else ""
+    
+    # 🔥 REMOVE a linha do timer e da barra
+    linhas = desc.split("\n")
+    novas_linhas = []
+    
+    for linha in linhas:
+        # Pula linhas que contém timer ou barra de progresso
+        if not linha.startswith("⏳ **Restante:**") and not "▓" in linha and not "░" in linha:
+            # Também pula linhas vazias que sobraram
+            if linha.strip():
+                novas_linhas.append(linha)
+    
+    desc = "\n".join(novas_linhas)
+    
+    # Adiciona as informações finais
     desc += (
         f"\n\n🔵 **Produção Finalizada**"
         f"\n\n🧪 Produziu **{capsulas} cápsulas**"
