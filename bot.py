@@ -4262,12 +4262,6 @@ async def helicrash(ctx):
         "🚁 Painel de Helicrash:",
         view=HelicrashManualView()
     )
-@bot.command()
-async def helicrash(ctx):
-    await ctx.send(
-        "🚁 Painel de Helicrash:",
-        view=HelicrashManualView()
-    )
 
 # 👇 COLOQUE AQUI O COMANDO DE TESTE
 @bot.command(name="testar_hc")
