@@ -5298,6 +5298,7 @@ async def on_reaction_add(reaction, user):
 # ================= SISTEMA DE AUSÊNCIA ===================
 # =========================================================
 
+
 # ================= FUNÇÕES DE BANCO =================
 
 async def salvar_ausencia_db(user_id, nome, motivo, data_inicio, data_fim):
@@ -5311,8 +5312,8 @@ async def salvar_ausencia_db(user_id, nome, motivo, data_inicio, data_fim):
             str(user_id),
             nome,
             motivo,
-            data_inicio,  # Já vem sem timezone
-            data_fim      # Já vem sem timezone
+            data_inicio,
+            data_fim
         )
 
 async def buscar_ausencias_ativas():
@@ -5369,7 +5370,7 @@ async def remover_ausencias_expiradas():
         
         return [row["user_id"] for row in rows]
 
-# ================= MODAL DE AUSÊNCIA (CAMPOS SEPARADOS) =================
+# ================= MODAL DE AUSÊNCIA =================
 
 class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
     
@@ -5402,42 +5403,18 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         
         await interaction.response.defer(ephemeral=True)
         
-        # Converter as datas (sem timezone para salvar no banco)
+        # Converter as datas
         try:
             data_inicio_dt = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
             data_fim_dt = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
             
-            # NÃO adicionar timezone aqui! O banco espera datetime naive
-            # Apenas ajustar hora para início e fim do dia
+            # Ajustar hora para início e fim do dia
             data_inicio_naive = data_inicio_dt.replace(hour=0, minute=0, second=0)
             data_fim_naive = data_fim_dt.replace(hour=23, minute=59, second=59)
             
         except ValueError:
             await interaction.followup.send(
                 "❌ Formato de data inválido!\nUse o formato: `10/04/2026` (DIA/MÊS/ANO)",
-                ephemeral=True
-            )
-            return
-        
-        # Para comparação com data atual, usar timezone do Brasil
-        agora_com_tz = agora()
-        hoje_meia_noite = agora_com_tz.replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        # Converter data_inicio para datetime com timezone para comparação
-        data_inicio_com_tz = datetime(
-            data_inicio_dt.year,
-            data_inicio_dt.month,
-            data_inicio_dt.day,
-            0, 0, 0,
-            tzinfo=BRASIL
-        )
-        
-        # Verificar se data de início é hoje ou no futuro
-        if data_inicio_com_tz < hoje_meia_noite:
-            await interaction.followup.send(
-                f"❌ A data de INÍCIO deve ser **hoje** ou **no futuro**!\n"
-                f"Data informada: {self.data_inicio.value}\n"
-                f"Data atual: {hoje_meia_noite.strftime('%d/%m/%Y')}",
                 ephemeral=True
             )
             return
@@ -5463,7 +5440,7 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             )
             return
         
-        # Salvar no banco (com datas sem timezone)
+        # Salvar no banco
         await salvar_ausencia_db(
             interaction.user.id,
             self.nome.value,
