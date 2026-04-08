@@ -4140,7 +4140,11 @@ async def atualizar_embed_helicrash(hid):
     except:
         return
 
-    horario = BRASIL.localize(row["horario"])
+    # ✅ CORRIGIDO: Adicionar timezone corretamente
+    if row["horario"].tzinfo is None:
+        horario = row["horario"].replace(tzinfo=BRASIL)
+    else:
+        horario = row["horario"]
 
     restante = horario - agora()
     segundos = int(restante.total_seconds())
@@ -4167,6 +4171,92 @@ async def atualizar_embed_helicrash(hid):
 
     await msg.edit(embed=embed, view=HelicrashView(hid))
 
+
+async def acompanhar_helicrash(hid):
+    while True:
+        await asyncio.sleep(10)
+
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM helicrash WHERE id=$1",
+                hid
+            )
+
+        if not row:
+            return
+
+        # ✅ CORRIGIDO: Adicionar timezone corretamente
+        if row["horario"].tzinfo is None:
+            horario = row["horario"].replace(tzinfo=BRASIL)
+        else:
+            horario = row["horario"]
+
+        if agora() >= horario:
+            await finalizar_helicrash(hid)
+            return
+
+        await atualizar_embed_helicrash(hid)
+
+
+async def finalizar_helicrash(hid):
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM helicrash WHERE id=$1",
+            hid
+        )
+
+    if not row:
+        return
+
+    # Carrega participantes do banco
+    participantes = await carregar_participantes_helicrash(hid)
+    
+    setados = participantes["setados"]
+    agregados = participantes["agregados"]
+
+    canal_relatorio = bot.get_channel(CANAL_RELATORIO_HC_ID)
+
+    lista_setados = "\n".join(f"<@{uid}>" for uid in setados) or "Nenhum"
+    lista_agregados = "\n".join(f"<@{uid}>" for uid in agregados) or "Nenhum"
+
+    # ✅ CORRIGIDO: Adicionar timezone corretamente
+    if row["horario"].tzinfo is None:
+        horario = row["horario"].replace(tzinfo=BRASIL)
+    else:
+        horario = row["horario"]
+
+    embed = discord.Embed(
+        title=f"🚁 HELICRASH {horario.strftime('%H:%M')}",
+        color=0xe74c3c
+    )
+
+    embed.add_field(name="👑 Setados", value=lista_setados, inline=False)
+    embed.add_field(name="🟡 Agregados", value=lista_agregados, inline=False)
+
+    if canal_relatorio:
+        await canal_relatorio.send(embed=embed)
+
+    canal_evento = bot.get_channel(int(row["canal_id"]))
+
+    if canal_evento:
+        try:
+            msg = await canal_evento.fetch_message(int(row["msg_id"]))
+            await msg.delete()
+        except:
+            pass
+
+    # Remove do banco
+    async with db.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM helicrash_participantes WHERE helicrash_id=$1",
+            hid
+        )
+        await conn.execute(
+            "DELETE FROM helicrash WHERE id=$1",
+            hid
+        )
+    
+    print(f"✅ Helicrash {hid} finalizado")
 
 # =========================================================
 # ================= BOTÕES ================================
