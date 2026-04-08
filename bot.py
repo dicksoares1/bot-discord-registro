@@ -3832,7 +3832,159 @@ class EnviarEscalacaoButton(discord.ui.Button):
         await interaction.followup.send("✅ Escalação registrada!", ephemeral=True)
         
 # =========================================================
-# ================= RESULTADO =============================
+# ================= MODAL DE RESULTADO ====================
+# =========================================================
+
+class ResultadoModal(discord.ui.Modal):
+    """Modal para inserir o valor ganho na ação"""
+
+    dinheiro = discord.ui.TextInput(
+        label="Valor total ganho (em reais)",
+        placeholder="Ex: 50000",
+        required=True
+    )
+
+    def __init__(self, acao_id, venceu):
+        super().__init__(title="Resultado da Ação")
+        self.acao_id = acao_id
+        self.venceu = venceu
+
+    async def on_submit(self, interaction):
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            valor_total = int(self.dinheiro.value.replace(".", "").replace(",", ""))
+        except:
+            await interaction.followup.send("❌ Valor inválido!", ephemeral=True)
+            return
+
+        if valor_total <= 0:
+            await interaction.followup.send("❌ Valor deve ser maior que zero!", ephemeral=True)
+            return
+
+        async with db.acquire() as conn:
+            # Atualiza a ação com o valor
+            await conn.execute(
+                "UPDATE acoes_semana SET valor=$1, resultado=$2 WHERE id=$3",
+                valor_total,
+                "ganhou" if self.venceu else "perdeu",
+                self.acao_id
+            )
+
+            # Busca todos os participantes da ação
+            participantes = await conn.fetch(
+                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+                self.acao_id
+            )
+
+            acao = await conn.fetchrow(
+                "SELECT tipo FROM acoes_semana WHERE id=$1",
+                self.acao_id
+            )
+
+        # Se perdeu, não distribui dinheiro
+        if not self.venceu:
+            embed = discord.Embed(
+                title="📊 RESULTADO DA AÇÃO",
+                color=0xe74c3c
+            )
+            embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
+            embed.add_field(name="🎯 Resultado", value="💀 PERDEU", inline=False)
+            embed.add_field(name="💰 Total", value=f"R$ {formatar_dinheiro(valor_total)}", inline=False)
+            
+            await interaction.message.edit(embed=embed, view=None)
+            await atualizar_painel_acoes(interaction.guild)
+            await interaction.followup.send("❌ Ação perdida! Nenhum valor foi distribuído.", ephemeral=True)
+            return
+
+        # =============================================
+        # ✅ GANHOU - DISTRIBUIR PARA OS PARTICIPANTES
+        # =============================================
+        
+        ids_participantes = [str(p["user_id"]) for p in participantes]
+        qtd_participantes = len(ids_participantes)
+        
+        if qtd_participantes == 0:
+            await interaction.followup.send("⚠️ Nenhum participante registrado!", ephemeral=True)
+            return
+        
+        # Calcula valor por pessoa (divisão igual)
+        valor_por_pessoa = valor_total // qtd_participantes
+        resto = valor_total % qtd_participantes
+        
+        lista_depositos = []
+        depositos_ok = 0
+        depositos_falha = 0
+        
+        # Distribui para cada participante
+        for uid in ids_participantes:
+            user_id_int = int(uid)
+            
+            sucesso = await depositar_na_meta(
+                user_id_int, 
+                valor_por_pessoa,
+                f"Ação: {acao['tipo']} (Ganhou)"
+            )
+            
+            if sucesso:
+                depositos_ok += 1
+                lista_depositos.append(f"✅ <@{uid}> - R$ {formatar_dinheiro(valor_por_pessoa)}")
+            else:
+                depositos_falha += 1
+                lista_depositos.append(f"❌ <@{uid}> - FALHA AO DEPOSITAR")
+        
+        # Se tiver resto, adiciona no primeiro participante
+        if resto > 0 and ids_participantes:
+            primeiro_uid = ids_participantes[0]
+            await depositar_na_meta(
+                int(primeiro_uid),
+                resto,
+                f"Ação: {acao['tipo']} (Restante da divisão)"
+            )
+            lista_depositos.append(f"➕ <@{primeiro_uid}> - Restante: R$ {formatar_dinheiro(resto)}")
+        
+        # Cria embed do resultado
+        embed = discord.Embed(
+            title="🎉 RESULTADO DA AÇÃO - GANHOU!",
+            color=0x2ecc71
+        )
+        
+        embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
+        embed.add_field(name="💰 Total Ganho", value=f"R$ {formatar_dinheiro(valor_total)}", inline=False)
+        embed.add_field(name="👥 Participantes", value=str(qtd_participantes), inline=True)
+        embed.add_field(name="💸 Valor por pessoa", value=f"R$ {formatar_dinheiro(valor_por_pessoa)}", inline=True)
+        
+        if resto > 0:
+            embed.add_field(name="📦 Restante", value=f"R$ {formatar_dinheiro(resto)} (adicionado ao primeiro)", inline=True)
+        
+        lista_texto = "\n".join(lista_depositos[:15])
+        if len(lista_depositos) > 15:
+            lista_texto += f"\n... e mais {len(lista_depositos) - 15} participantes"
+        
+        embed.add_field(name="📋 Distribuição", value=lista_texto, inline=False)
+        
+        if depositos_falha > 0:
+            embed.add_field(
+                name="⚠️ Atenção", 
+                value=f"{depositos_falha} participantes não tinham sala de meta.",
+                inline=False
+            )
+        
+        embed.set_footer(text=f"✅ {depositos_ok} depósitos realizados")
+        
+        await interaction.message.edit(embed=embed, view=None)
+        await atualizar_painel_acoes(interaction.guild)
+        
+        await interaction.followup.send(
+            f"✅ **{depositos_ok} depósitos realizados!**\n"
+            f"💰 Total distribuído: R$ {formatar_dinheiro(valor_por_pessoa * qtd_participantes)}",
+            ephemeral=True
+        )
+
+
+# =========================================================
+# ================= VIEW DO RESULTADO =====================
 # =========================================================
 
 class ResultadoAcaoView(discord.ui.View):
@@ -3847,14 +3999,12 @@ class ResultadoAcaoView(discord.ui.View):
         custom_id="resultado_ganhou"
     )
     async def ganhou(self, interaction: discord.Interaction, button):
-        # Verifica se quem está clicando é o criador da ação ou um gerente
         async with db.acquire() as conn:
             acao = await conn.fetchrow(
                 "SELECT autor FROM acoes_semana WHERE id=$1",
                 self.acao_id
             )
         
-        # Permite o criador da ação ou quem tem cargo de gerente
         is_autor = str(interaction.user.id) == acao["autor"]
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
@@ -3873,7 +4023,6 @@ class ResultadoAcaoView(discord.ui.View):
         custom_id="resultado_perdeu"
     )
     async def perdeu(self, interaction: discord.Interaction, button):
-        # Mesma verificação de permissão
         async with db.acquire() as conn:
             acao = await conn.fetchrow(
                 "SELECT autor FROM acoes_semana WHERE id=$1",
