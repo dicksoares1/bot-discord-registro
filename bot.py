@@ -5519,10 +5519,10 @@ class AusenciaBotaoView(discord.ui.View):
 async def enviar_painel_botao_ausencia():
     """Envia o painel com o botão no canal #solicitar-ausencia"""
     
-    canal = bot.get_channel(CANAL_BOTAO_AUSENCIA_ID)
+    canal = bot.get_channel(CANAL_AUSENCIA_ID)
     
     if not canal:
-        print(f"❌ Canal do botão NÃO ENCONTRADO! ID: {CANAL_BOTAO_AUSENCIA_ID}")
+        print(f"❌ Canal do botão NÃO ENCONTRADO! ID: {CANAL_AUSENCIA_ID}")
         return
     
     embed = discord.Embed(
@@ -5546,12 +5546,12 @@ async def enviar_painel_botao_ausencia():
     
     await enviar_ou_atualizar_painel(
         "painel_botao_ausencia",
-        CANAL_BOTAO_AUSENCIA_ID,
+        CANAL_AUSENCIA_ID,
         embed,
         AusenciaBotaoView()
     )
     
-    print(f"✅ Painel do botão enviado para {CANAL_BOTAO_AUSENCIA_ID}")
+    print(f"✅ Painel do botão enviado para {CANAL_AUSENCIA_ID}")
 
 # ================= LOOP DE VERIFICAÇÃO =================
 
