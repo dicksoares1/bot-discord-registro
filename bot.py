@@ -5298,6 +5298,10 @@ async def on_reaction_add(reaction, user):
 # ================= SISTEMA DE AUSÊNCIA ===================
 # =========================================================
 
+# ================= CONFIGURAÇÕES =================
+CANAL_BOTAO_AUSENCIA_ID = 1491427870277374162    # Canal #ausencias (só o botão)
+CANAL_REGISTRO_AUSENCIA_ID = 1491427870277374163  # Canal #ausencias-registradas (os embeds)
+CARGO_AUSENTE_ID = 1313854772545196033            # ⚠️ CRIE O CARGO "Ausente" E COLOQUE O ID AQUI
 
 # ================= FUNÇÕES DE BANCO =================
 
@@ -5380,9 +5384,9 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         required=True
     )
     
-    tempo = discord.ui.TextInput(
-        label="Tempo de ausência",
-        placeholder="Ex: 2 dias, 5 horas, 1 semana, 15/04/2026",
+    periodo = discord.ui.TextInput(
+        label="Período de ausência",
+        placeholder="Ex: 10/04/2026 a 15/04/2026",
         required=True
     )
     
@@ -5397,22 +5401,51 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         
         await interaction.response.defer(ephemeral=True)
         
-        # Converter o tempo informado para data/hora
-        data_fim = await self.interpretar_tempo(self.tempo.value)
+        # Extrair as datas do período (formato "10/04/2026 a 15/04/2026")
+        import re
+        match = re.search(r'(\d{1,2}/\d{1,2}/\d{4})\s+[aA]\s+(\d{1,2}/\d{1,2}/\d{4})', self.periodo.value)
         
-        if not data_fim:
+        if not match:
             await interaction.followup.send(
-                "❌ Formato de tempo inválido!\n"
-                "Use: `2 dias`, `5 horas`, `1 semana`, `3 meses` ou `15/04/2026 14:30`",
+                "❌ Formato de período inválido!\n"
+                "Use: `10/04/2026 a 15/04/2026`",
+                ephemeral=True
+            )
+            return
+        
+        data_inicio_str = match.group(1)
+        data_fim_str = match.group(2)
+        
+        # Converter as datas
+        try:
+            data_inicio_dt = datetime.strptime(data_inicio_str, "%d/%m/%Y")
+            data_fim_dt = datetime.strptime(data_fim_str, "%d/%m/%Y")
+            
+            # Adicionar timezone do Brasil
+            data_inicio_dt = data_inicio_dt.replace(tzinfo=BRASIL, hour=0, minute=0, second=0)
+            data_fim_dt = data_fim_dt.replace(tzinfo=BRASIL, hour=23, minute=59, second=59)
+            
+        except:
+            await interaction.followup.send(
+                "❌ Datas inválidas! Use o formato: `10/04/2026 a 15/04/2026`",
                 ephemeral=True
             )
             return
         
         agora_dt = agora()
         
-        if data_fim <= agora_dt:
+        # Verificar se data de início é hoje ou no futuro
+        if data_inicio_dt < agora_dt.replace(hour=0, minute=0, second=0):
             await interaction.followup.send(
-                "❌ A data de retorno deve ser no futuro!",
+                "❌ A data de INÍCIO deve ser hoje ou no futuro!",
+                ephemeral=True
+            )
+            return
+        
+        # Verificar se data de fim é depois da data de início
+        if data_fim_dt <= data_inicio_dt:
+            await interaction.followup.send(
+                "❌ A data de RETORNO deve ser depois da data de INÍCIO!",
                 ephemeral=True
             )
             return
@@ -5432,8 +5465,8 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             interaction.user.id,
             self.nome.value,
             self.motivo.value,
-            agora_dt,
-            data_fim
+            data_inicio_dt,
+            data_fim_dt
         )
         
         # Adicionar cargo de ausente
@@ -5442,14 +5475,14 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             await interaction.user.add_roles(cargo)
             print(f"✅ Cargo ausente adicionado para {interaction.user.display_name}")
         
-        # Calcular tempo restante
-        dias = (data_fim - agora_dt).days
-        horas = (data_fim - agora_dt).seconds // 3600
+        # Calcular dias de ausência
+        dias_ausencia = (data_fim_dt - data_inicio_dt).days + 1
         
-        tempo_texto = f"{dias} dia(s) e {horas} hora(s)" if dias > 0 else f"{horas} hora(s)"
+        # Formatar período bonito
+        periodo_formatado = f"{data_inicio_str} a {data_fim_str}"
         
         # =============================================
-        # ENVIAR EMBED NO CANAL DE REGISTRO
+        # ENVIAR EMBED NO CANAL DE REGISTRO (#ausencias-registradas)
         # =============================================
         
         canal_registro = interaction.guild.get_channel(CANAL_REGISTRO_AUSENCIA_ID)
@@ -5462,12 +5495,13 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             )
             
             embed_ausencia.add_field(name="👤 Nome", value=self.nome.value, inline=True)
-            embed_ausencia.add_field(name="📅 Retorno", value=f"<t:{int(data_fim.timestamp())}:F>", inline=True)
-            embed_ausencia.add_field(name="⏳ Tempo", value=tempo_texto, inline=True)
+            embed_ausencia.add_field(name="📅 Período", value=periodo_formatado, inline=True)
+            embed_ausencia.add_field(name="⏳ Total de dias", value=f"{dias_ausencia} dia(s)", inline=True)
             embed_ausencia.add_field(name="📝 Motivo", value=self.motivo.value, inline=False)
+            embed_ausencia.set_footer(text=f"Solicitado em {agora().strftime('%d/%m/%Y às %H:%M')}")
             
             await canal_registro.send(embed=embed_ausencia)
-            print(f"✅ Embed de ausência enviado para o canal {CANAL_REGISTRO_AUSENCIA_ID}")
+            print(f"✅ Embed enviado para {CANAL_REGISTRO_AUSENCIA_ID}")
         else:
             print(f"❌ Canal de registro não encontrado! ID: {CANAL_REGISTRO_AUSENCIA_ID}")
         
@@ -5477,61 +5511,15 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         
         embed_privado = discord.Embed(
             title="✅ Ausência Registrada!",
-            description=f"Sua ausência foi registrada com sucesso.",
             color=0x2ecc71
         )
         
         embed_privado.add_field(name="👤 Nome", value=self.nome.value, inline=True)
-        embed_privado.add_field(name="📅 Retorno", value=f"<t:{int(data_fim.timestamp())}:F>", inline=True)
+        embed_privado.add_field(name="📅 Período", value=periodo_formatado, inline=True)
         embed_privado.add_field(name="📝 Motivo", value=self.motivo.value[:100], inline=False)
+        embed_privado.set_footer(text="Quando retornar, seu cargo será removido automaticamente!")
         
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
-    
-    async def interpretar_tempo(self, texto):
-        """Converte texto como '2 dias', '5 horas' em datetime"""
-        
-        texto = texto.lower().strip()
-        agora_dt = agora()
-        
-        # Tentar interpretar como data específica
-        import re
-        data_pattern = r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?'
-        match = re.search(data_pattern, texto)
-        
-        if match:
-            dia = int(match.group(1))
-            mes = int(match.group(2))
-            ano = int(match.group(3))
-            if ano < 100:
-                ano += 2000
-            
-            hora = int(match.group(4)) if match.group(4) else 0
-            minuto = int(match.group(5)) if match.group(5) else 0
-            
-            try:
-                return agora_dt.replace(year=ano, month=mes, day=dia, hour=hora, minute=minuto)
-            except:
-                pass
-        
-        # Interpretar texto como "X dias", "X horas", etc
-        match = re.search(r'(\d+)\s*(dias?|dia|d|horas?|hora|h|semanas?|semana|sem|meses?|mês|mes|minutos?|min)', texto)
-        
-        if match:
-            numero = int(match.group(1))
-            unidade = match.group(2)
-            
-            if unidade in ['dias', 'dia', 'd']:
-                return agora_dt + timedelta(days=numero)
-            elif unidade in ['horas', 'hora', 'h']:
-                return agora_dt + timedelta(hours=numero)
-            elif unidade in ['semanas', 'semana', 'sem']:
-                return agora_dt + timedelta(weeks=numero)
-            elif unidade in ['meses', 'mês', 'mes']:
-                return agora_dt + timedelta(days=30 * numero)
-            elif unidade in ['minutos', 'min']:
-                return agora_dt + timedelta(minutes=numero)
-        
-        return None
 
 # ================= VIEW DO BOTÃO =================
 
@@ -5547,15 +5535,15 @@ class AusenciaBotaoView(discord.ui.View):
     async def solicitar(self, interaction: discord.Interaction, button):
         await interaction.response.send_modal(AusenciaModal())
 
-# ================= PAINEL DO BOTÃO =================
+# ================= PAINEL DO BOTÃO (CANAL #ausencias) =================
 
 async def enviar_painel_botao_ausencia():
-    """Envia o painel com o botão no canal do botão"""
+    """Envia o painel com o botão no canal #ausencias"""
     
-    canal = bot.get_channel(CANAL_AUSENCIA_ID)
+    canal = bot.get_channel(CANAL_BOTAO_AUSENCIA_ID)
     
     if not canal:
-        print(f"❌ Canal do botão de ausência NÃO ENCONTRADO! ID: {CANAL_AUSENCIA_ID}")
+        print(f"❌ Canal do botão NÃO ENCONTRADO! ID: {CANAL_BOTAO_AUSENCIA_ID}")
         return
     
     embed = discord.Embed(
@@ -5563,27 +5551,33 @@ async def enviar_painel_botao_ausencia():
         description="Clique no botão abaixo para solicitar sua ausência.\n\n"
                     "📌 **Como usar:**\n"
                     "• Digite seu nome completo\n"
-                    "• Informe o tempo (ex: `2 dias`, `5 horas`)\n"
+                    "• Informe o período (ex: `10/04/2026 a 15/04/2026`)\n"
                     "• Digite o motivo\n\n"
                     "✅ Você receberá o cargo **Ausente**\n"
-                    "✅ Quando o tempo acabar, o cargo será removido",
+                    "✅ Quando o período acabar, o cargo será removido",
         color=0xe67e22
+    )
+    
+    embed.add_field(
+        name="📅 Exemplo de período",
+        value="`10/04/2026 a 15/04/2026`\n(contando todos os dias entre 10 e 15)",
+        inline=False
     )
     
     await enviar_ou_atualizar_painel(
         "painel_botao_ausencia",
-        CANAL_AUSENCIA_ID,
+        CANAL_BOTAO_AUSENCIA_ID,
         embed,
         AusenciaBotaoView()
     )
     
-    print(f"✅ Painel do botão de ausência enviado para o canal {CANAL_AUSENCIA_ID}")
+    print(f"✅ Painel do botão enviado para {CANAL_BOTAO_AUSENCIA_ID}")
 
 # ================= LOOP DE VERIFICAÇÃO =================
 
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=60)
 async def verificar_ausencias_expiradas():
-    """Verifica a cada 5 minutos se alguma ausência expirou"""
+    """Verifica se alguma ausência já passou da data de retorno"""
     
     guild = bot.get_guild(GUILD_ID)
     if not guild:
@@ -5606,7 +5600,7 @@ async def verificar_ausencias_expiradas():
             canal_registro = guild.get_channel(CANAL_REGISTRO_AUSENCIA_ID)
             if canal_registro:
                 embed_retorno = discord.Embed(
-                    title="🎉 RETORNO",
+                    title="🎉 RETORNO REGISTRADO",
                     description=f"{member.mention} retornou! O cargo ausente foi removido.",
                     color=0x2ecc71
                 )
@@ -5632,9 +5626,13 @@ async def listar_ausentes(ctx):
         if data_fim.tzinfo is None:
             data_fim = data_fim.replace(tzinfo=BRASIL)
         
+        data_inicio = ausencia["data_inicio"]
+        if data_inicio.tzinfo is None:
+            data_inicio = data_inicio.replace(tzinfo=BRASIL)
+        
         embed.add_field(
             name=f"👤 {ausencia['nome']}",
-            value=f"📅 Retorno: <t:{int(data_fim.timestamp())}:R>\n📝 {ausencia['motivo'][:50]}",
+            value=f"📅 {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}\n📝 {ausencia['motivo'][:50]}",
             inline=False
         )
     
