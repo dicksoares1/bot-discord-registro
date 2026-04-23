@@ -5556,7 +5556,7 @@ async def enviar_painel_alugueis():
     else:
         embed.add_field(
             name="🏭 Galpões Norte",
-            value="🟢 **DISPONÍVEL PARA ALUGAR**\n💰 Valor: R$ 50.000,00 por 15 dias",
+            value="🟢 **DISPONÍVEL PARA ALUGAR**\n💰 Valor: R$ 250.000,00 por 15 dias",
             inline=False
         )
     
@@ -5576,7 +5576,7 @@ async def enviar_painel_alugueis():
     else:
         embed.add_field(
             name="🏭 Galpões Sul",
-            value="🟢 **DISPONÍVEL PARA ALUGAR**\n💰 Valor: R$ 50.000,00 por 15 dias",
+            value="🟢 **DISPONÍVEL PARA ALUGAR**\n💰 Valor: R$ 150.000,00 por 15 dias",
             inline=False
         )
     
@@ -5596,7 +5596,7 @@ async def enviar_painel_alugueis():
     else:
         embed.add_field(
             name="🏝️ Bahamas",
-            value="🟢 **DISPONÍVEL PARA ALUGAR**\n💰 Valor: R$ 75.000,00 por 15 dias",
+            value="🟢 **DISPONÍVEL PARA ALUGAR**\n💰 Valor: R$ 250.000,00 por 15 dias",
             inline=False
         )
     
