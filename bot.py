@@ -1947,8 +1947,8 @@ class FabricacaoView(discord.ui.View):
             PolvoraProducaoModal("GALPÕES SUL", 130)
         )
 
-    @discord.ui.button(label="🏭 ", style=discord.ButtonStyle.primary, custom_id="fabricacao_")
-    async def (self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🏭 Galpão Bahamas", style=discord.ButtonStyle.primary, custom_id="fabricacao_bahamas")
+    async def bahamas(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         await interaction.response.send_modal(
             PolvoraProducaoModal("", 65)
