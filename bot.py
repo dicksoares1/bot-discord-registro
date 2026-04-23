@@ -1947,11 +1947,11 @@ class FabricacaoView(discord.ui.View):
             PolvoraProducaoModal("GALPÕES SUL", 130)
         )
 
-    @discord.ui.button(label="🏭 Bahamas", style=discord.ButtonStyle.primary, custom_id="fabricacao_bahamas")
-    async def bahamas(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🏭 ", style=discord.ButtonStyle.primary, custom_id="fabricacao_")
+    async def (self, interaction: discord.Interaction, button: discord.ui.Button):
 
         await interaction.response.send_modal(
-            PolvoraProducaoModal("BAHAMAS", 65)
+            PolvoraProducaoModal("", 65)
         )
 
     @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.success, custom_id="fabricacao_relatorio")
@@ -2062,7 +2062,7 @@ async def finalizar_producao(pid, msg, prod):
         base = 1777 if segunda else 1688
     elif prod["galpao"] == "GALPÕES SUL":
         base = 1618 if segunda else 1608
-    elif prod["galpao"] == "BAHAMAS":
+    elif prod["galpao"] == "":
         base = 1777 if segunda else 1688
     
     capsulas = (base * polvora) // 400
@@ -3648,6 +3648,7 @@ ACOES_SEMANA = {
     
     "Loja de Armas (Ammunation)": None,
     "Loja de Bebidas": None,
+    "Lan House - (Bahamas)": None,
     "Loja de Departamento": None,
     "Mergulhador": None,
     "Grapeseed": None,
