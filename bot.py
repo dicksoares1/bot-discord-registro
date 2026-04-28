@@ -2051,36 +2051,41 @@ async def finalizar_producao(pid, msg, prod):
     
     polvora = prod.get("polvora", 400)
     segunda = prod.get("segunda_task_confirmada")
+    galpao = prod["galpao"]
     
+    # Calcula produção baseada no galpão
     base = 0
-    if prod["galpao"] == "GALPÕES NORTE":
+    if galpao == "GALPÕES NORTE":
         base = 1777 if segunda else 1688
-    elif prod["galpao"] == "GALPÕES SUL":
+    elif galpao == "GALPÕES SUL":
         base = 1618 if segunda else 1608
-    elif prod["galpao"] == "":
+    elif galpao == "BAHAMAS":
         base = 1777 if segunda else 1688
     
     capsulas = (base * polvora) // 400
     peso = capsulas * 0.05
     
-    print(f"📊 {prod['galpao']}: {capsulas} cápsulas, {peso}kg, pólvora: {polvora}")
+    print(f"📊 {galpao}: {capsulas} cápsulas, {peso}kg, pólvora: {polvora}")
     
-    # 🔥 SALVA COM A PÓLVORA TAMBÉM
+    # Salva no banco com galpao e polvora
     async with db.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO producoes_finalizadas
-            (user_id, capsulas, data, polvora)
-            VALUES ($1, $2, $3, $4)
+            (user_id, capsulas, data, polvora, galpao)
+            VALUES ($1, $2, $3, $4, $5)
             """,
             str(prod["autor"]),
             capsulas,
             agora_db(),
-            polvora
+            polvora,
+            galpao
         )
     
+    # Pega a descrição atual
     desc = msg.embeds[0].description if msg.embeds else ""
     
+    # Remove a linha do timer e da barra
     linhas = desc.split("\n")
     novas_linhas = []
     
@@ -2091,6 +2096,7 @@ async def finalizar_producao(pid, msg, prod):
     
     desc = "\n".join(novas_linhas)
     
+    # Adiciona as informações finais
     desc += (
         f"\n\n🔵 **Produção Finalizada**"
         f"\n\n🧪 Produziu **{capsulas} cápsulas**"
@@ -2098,6 +2104,7 @@ async def finalizar_producao(pid, msg, prod):
         f"\n💣 Pólvora utilizada: **{polvora}**"
     )
     
+    # Atualiza a mensagem final
     await msg.edit(
         embed=discord.Embed(
             title="🏭 Produção",
@@ -2107,14 +2114,14 @@ async def finalizar_producao(pid, msg, prod):
         view=None
     )
     
+    # Remove do banco
     await deletar_producao(pid)
     
+    # Remove da lista de tarefas ativas
     if pid in producoes_tasks:
         del producoes_tasks[pid]
     
     print(f"✅ Produção {pid} finalizada com {capsulas} cápsulas")
-
-
 # =========================================================
 # ================= RELATÓRIO BONITO E RESUMIDO ===========
 # =========================================================
