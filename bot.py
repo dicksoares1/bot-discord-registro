@@ -5874,6 +5874,12 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
         required=True
     )
     
+    incluir_compras = discord.ui.TextInput(
+        label="📦 Incluir compras registradas?",
+        placeholder="Digite SIM ou NAO (padrão é SIM)",
+        required=False
+    )
+    
     embalagens = discord.ui.TextInput(
         label="📦 Embalagens compradas (opcional)",
         placeholder="Ex: 25000 (deixe em branco se não quiser)",
@@ -5891,6 +5897,9 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
             
             inicio_dt = inicio.replace(hour=0, minute=0, second=0)
             fim_dt = fim.replace(hour=23, minute=59, second=59)
+            
+            # Verifica se deve incluir compras
+            incluir_compras = self.incluir_compras.value.strip().upper() != "NAO"
             
             # Processa embalagens (opcional)
             total_embalagens = 0
@@ -5938,6 +5947,26 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
                     """,
                     inicio, fim
                 )
+                
+                # 4. 🔥 TOTAL DE COMPRAS REGISTRADAS (nova tabela)
+                compras_row = None
+                total_gasto_compras = 0
+                lista_compras = []
+                
+                if incluir_compras:
+                    compras_row = await conn.fetch(
+                        """
+                        SELECT produto, valor, comprado_por, data
+                        FROM compras
+                        WHERE data >= $1 AND data <= $2
+                        ORDER BY data DESC
+                        """,
+                        inicio_dt, fim_dt
+                    )
+                    
+                    for compra in compras_row:
+                        total_gasto_compras += compra["valor"] or 0
+                        lista_compras.append(compra)
             
             # =====================================================
             # ================= CÁLCULOS ==========================
@@ -5951,8 +5980,8 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
             total_polvora_comprada = polvora_comprada_row["total_quantidade"] or 0
             total_gasto_polvora_comprada = polvora_comprada_row["total_valor"] or 0
             
-            # Saldo (vendas - gastos)
-            total_gastos = total_gasto_polvora + total_gasto_embalagens
+            # Total de gastos (pólvora + embalagens + compras registradas)
+            total_gastos = total_gasto_polvora + total_gasto_embalagens + total_gasto_compras
             saldo = total_vendas - total_gastos
             
             # =====================================================
@@ -5999,6 +6028,37 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
                     inline=False
                 )
             
+            # 🛒 COMPRAS REGISTRADAS (se tiver)
+            if incluir_compras and lista_compras:
+                total_gasto_compras_fmt = fmt(total_gasto_compras)
+                
+                # Lista as compras (máximo 10 para não ficar muito grande)
+                compras_texto = ""
+                for compra in lista_compras[:10]:
+                    data = compra["data"]
+                    if data.tzinfo is None:
+                        data = data.replace(tzinfo=BRASIL)
+                    compras_texto += f"• {compra['produto']} - {fmt(compra['valor'])} - {data.strftime('%d/%m')}\n"
+                
+                if len(lista_compras) > 10:
+                    compras_texto += f"\n*... e mais {len(lista_compras) - 10} compras*"
+                
+                embed.add_field(
+                    name="📦 OUTRAS COMPRAS",
+                    value=(
+                        f"**Total gasto em outras compras:** {total_gasto_compras_fmt}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{compras_texto}"
+                    ),
+                    inline=False
+                )
+            elif incluir_compras:
+                embed.add_field(
+                    name="📦 OUTRAS COMPRAS",
+                    value="Nenhuma compra registrada no período.",
+                    inline=False
+                )
+            
             # 🛒 VENDAS
             embed.add_field(
                 name="🛒 VENDAS",
@@ -6016,28 +6076,26 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
                 inline=False
             )
             
+            # Monta detalhamento dos gastos
+            detalhe_gastos = f"• Pólvora: {fmt(total_gasto_polvora)}"
+            if total_gasto_embalagens > 0:
+                detalhe_gastos += f"\n• Embalagens: {fmt(total_gasto_embalagens)}"
+            if incluir_compras and total_gasto_compras > 0:
+                detalhe_gastos += f"\n• Outras compras: {fmt(total_gasto_compras)}"
+            detalhe_gastos += f"\n• **TOTAL:** {fmt(total_gastos)}"
+            
             embed.add_field(
                 name="📊 RESUMO FINANCEIRO",
                 value=(
                     f"**💰 Total de Vendas:** {fmt(total_vendas)}\n"
                     f"**💸 Total de Gastos:** {fmt(total_gastos)}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"{emoji_saldo} **SALDO:** {fmt(saldo)}"
+                    f"{emoji_saldo} **SALDO:** {fmt(saldo)}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"**📋 DETALHAMENTO DOS GASTOS:**\n{detalhe_gastos}"
                 ),
                 inline=False
             )
-            
-            # Gastos detalhados (se tiver embalagens)
-            if total_embalagens > 0:
-                embed.add_field(
-                    name="📋 DETALHAMENTO DOS GASTOS",
-                    value=(
-                        f"• Pólvora: {fmt(total_gasto_polvora)}\n"
-                        f"• Embalagens: {fmt(total_gasto_embalagens)}\n"
-                        f"• **TOTAL:** {fmt(total_gastos)}"
-                    ),
-                    inline=False
-                )
             
             embed.set_footer(text=f"Relatório gerado em {agora().strftime('%d/%m/%Y às %H:%M')}")
             
@@ -6063,8 +6121,6 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
         except Exception as e:
             print("ERRO RELATORIO FINANCEIRO:", e)
             await interaction.followup.send(f"❌ Erro ao gerar relatório: {str(e)}", ephemeral=True)
-
-
 # =========================================================
 # ================= VIEW DO PAINEL ========================
 # =========================================================
@@ -6081,7 +6137,6 @@ class RelatorioFinanceiroView(discord.ui.View):
     )
     async def gerar_relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioFinanceiroModal())
-
 
 # =========================================================
 # ================= PAINEL RELATÓRIO FINANCEIRO ===========
@@ -6105,10 +6160,12 @@ async def enviar_painel_relatorio_financeiro():
             "• 💰 Gasto total com pólvora\n"
             "• 🛒 Total de vendas no período\n"
             "• 📦 Gasto com embalagens (opcional)\n"
+            "• 📦 Outras compras registradas\n"
             "• 📊 Saldo final (vendas - gastos)\n\n"
             "📅 **Você pode escolher:**\n"
             "• Data inicial e final\n"
-            "• Quantidade de embalagens (opcional)"
+            "• Incluir ou não outras compras (SIM/NAO)\n"
+            
         ),
         color=0x1abc9c
     )
@@ -6118,7 +6175,8 @@ async def enviar_painel_relatorio_financeiro():
         value=(
             "**Data inicial:** `01/04/2026`\n"
             "**Data final:** `30/04/2026`\n"
-            "**Embalagens:** `25000` (opcional)"
+            "**Incluir compras:** `SIM` (ou `NAO`)\n"
+            
         ),
         inline=False
     )
@@ -6133,7 +6191,6 @@ async def enviar_painel_relatorio_financeiro():
     )
     
     print("💰 Painel de relatório financeiro enviado/atualizado")
-
 # =========================================================
 # ================= SISTEMA DE REGISTRO DE COMPRAS ========
 # =========================================================
