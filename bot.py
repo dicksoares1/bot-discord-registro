@@ -2126,13 +2126,19 @@ async def finalizar_producao(pid, msg, prod):
     
     print(f"✅ Produção {pid} finalizada com {capsulas} cápsulas")
 # =========================================================
-# ================= RELATÓRIO DETALHADO ===================
+# ================= RELATÓRIO BONITO E RESUMIDO ===========
 # =========================================================
 
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
 
-    data_inicio = discord.ui.TextInput(label="Data inicial (DD/MM/AAAA)")
-    data_fim = discord.ui.TextInput(label="Data final (DD/MM/AAAA)")
+    data_inicio = discord.ui.TextInput(
+        label="Data inicial (DD/MM/AAAA)", 
+        placeholder="Ex: 01/04/2026"
+    )
+    data_fim = discord.ui.TextInput(
+        label="Data final (DD/MM/AAAA)", 
+        placeholder="Ex: 30/04/2026"
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
 
@@ -2146,81 +2152,83 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
             fim_dt = fim.replace(hour=23, minute=59, second=59)
 
             async with db.acquire() as conn:
-                # 🔥 RELATÓRIO DETALHADO (por data e usuário)
                 rows = await conn.fetch(
                     """
-                    SELECT 
-                        DATE(data) as data_producao,
-                        user_id,
-                        SUM(capsulas) as total
+                    SELECT user_id, SUM(capsulas) as total
                     FROM producoes_finalizadas
                     WHERE data >= $1 AND data <= $2
-                    GROUP BY DATE(data), user_id
-                    ORDER BY data_producao ASC, total DESC
+                    GROUP BY user_id
+                    ORDER BY total DESC
                     """,
                     inicio_dt, fim_dt
                 )
 
             if not rows:
-                await interaction.followup.send(f"📭 Nenhuma produção no período.", ephemeral=True)
+                await interaction.followup.send(
+                    f"📭 Nenhuma produção no período **{self.data_inicio.value}** a **{self.data_fim.value}**.",
+                    ephemeral=True
+                )
                 return
 
-            total_geral = sum(int(r["total"] or 0) for r in rows)
-            total_fmt = f"{total_geral:,.0f}".replace(",", ".")
+            total_capsulas = sum(r["total"] or 0 for r in rows)
+            total_fmt = f"{total_capsulas:,.0f}".replace(",", ".")
 
-            # Agrupa por data
-            producoes_por_dia = {}
+            # Monta o ranking
+            linhas = []
             for r in rows:
-                data = r["data_producao"].strftime("%d/%m/%Y")
-                if data not in producoes_por_dia:
-                    producoes_por_dia[data] = []
-                
-                nome = await pegar_nome_formatado(interaction.guild, int(r["user_id"]))
+                uid = r["user_id"]
                 total = int(r["total"])
-                producoes_por_dia[data].append(f"  • {nome}: {total:,.0f}".replace(",", "."))
+                total_fmt_user = f"{total:,.0f}".replace(",", ".")
+                
+                nome = await pegar_apelido(interacao.guild, int(uid))
+                linhas.append(f"**{nome}** — {total_fmt_user}")
 
-            # Monta o embed
+            # Embed bonito e resumido
             embed = discord.Embed(
-                title="📊 RELATÓRIO DE PRODUÇÃO DETALHADO",
+                title="📊 RELATÓRIO DE PRODUÇÃO",
                 description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n"
-                           f"💰 **TOTAL GERAL:** `{total_fmt}` cápsulas\n"
-                           f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                           f"💰 **Total produzido:** `{total_fmt}` cápsulas",
                 color=0x2ecc71
             )
+            
+            embed.add_field(
+                name="🏆 RANKING", 
+                value="\n".join(linhas) if linhas else "Nenhum", 
+                inline=False
+            )
 
-            for data, linhas in producoes_por_dia.items():
-                total_dia = sum(int(l.split(":")[1].replace(".", "").strip()) for l in linhas if ":" in l)
-                total_dia_fmt = f"{total_dia:,.0f}".replace(",", ".")
-                
-                valor = f"**Total do dia:** {total_dia_fmt} cápsulas\n" + "\n".join(linhas[:10])
-                if len(linhas) > 10:
-                    valor += f"\n  ... e mais {len(linhas) - 10} produções"
-                
-                embed.add_field(name=f"📆 {data}", value=valor, inline=False)
-
+            # Envia no canal específico
             canal = interaction.guild.get_channel(1422853066541109338)
             if canal:
                 await canal.send(embed=embed)
-                await interaction.followup.send(f"✅ Relatório enviado! Total: {total_fmt} cápsulas", ephemeral=True)
+                await interaction.followup.send(
+                    f"✅ Relatório enviado!\n📅 {self.data_inicio.value} a {self.data_fim.value}\n💰 Total: {total_fmt} cápsulas",
+                    ephemeral=True
+                )
             else:
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
+        except ValueError:
+            await interaction.followup.send(
+                "❌ **Formato de data inválido!**\nUse o formato: `DD/MM/AAAA`",
+                ephemeral=True
+            )
         except Exception as e:
-            print("ERRO:", e)
-            await interaction.followup.send(f"❌ Erro: {str(e)}", ephemeral=True)
+            print("ERRO RELATORIO:", e)
+            await interaction.followup.send("❌ Erro ao gerar relatório.", ephemeral=True)
 
 
-async def pegar_nome_formatado(guild, user_id):
-    """Pega o nome formatado do usuário"""
+async def pegar_apelido(guild, user_id):
+    """Pega o nickname do usuário"""
     try:
         member = guild.get_member(user_id)
         if member:
             if member.nick:
                 return member.nick
             return member.display_name
-        return f"ID:{user_id}"
+        return str(user_id)
     except:
-        return f"ID:{user_id}"
+        return str(user_id)
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
