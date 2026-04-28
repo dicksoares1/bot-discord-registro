@@ -1990,17 +1990,14 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(5)
                 continue
 
-        # USANDO A FUNÇÃO CORRIGIDA
         inicio = str_para_datetime(prod["inicio"])
         fim = str_para_datetime(prod["fim"])
         agora_dt = agora()
 
-        # Se já passou do fim, finaliza
         if agora_dt >= fim:
             await finalizar_producao(pid, msg, prod)
             return
 
-        # Calcula tempo restante
         total = (fim - inicio).total_seconds()
         restante = (fim - agora_dt).total_seconds()
         restante = max(0, restante)
@@ -2014,7 +2011,6 @@ async def acompanhar_producao(pid):
         mins = int(restante // 60)
         segundos = int(restante % 60)
 
-        # Monta a mensagem
         desc = (
             f"**Galpão:** {prod['galpao']}\n"
             f"**Iniciado por:** <@{prod['autor']}>\n"
@@ -2034,7 +2030,6 @@ async def acompanhar_producao(pid):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
-        # Atualiza a mensagem
         try:
             await msg.edit(
                 embed=discord.Embed(
@@ -2048,6 +2043,7 @@ async def acompanhar_producao(pid):
 
         await asyncio.sleep(5)
 
+
 async def finalizar_producao(pid, msg, prod):
     """Finaliza a produção e registra no banco"""
     
@@ -2056,7 +2052,6 @@ async def finalizar_producao(pid, msg, prod):
     polvora = prod.get("polvora", 400)
     segunda = prod.get("segunda_task_confirmada")
     
-    # Calcula produção baseada no galpão
     base = 0
     if prod["galpao"] == "GALPÕES NORTE":
         base = 1777 if segunda else 1688
@@ -2068,38 +2063,34 @@ async def finalizar_producao(pid, msg, prod):
     capsulas = (base * polvora) // 400
     peso = capsulas * 0.05
     
-    print(f"📊 {prod['galpao']}: {capsulas} cápsulas, {peso}kg")
+    print(f"📊 {prod['galpao']}: {capsulas} cápsulas, {peso}kg, pólvora: {polvora}")
     
-    # Salva no banco
+    # 🔥 SALVA COM A PÓLVORA TAMBÉM
     async with db.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO producoes_finalizadas
-            (user_id, capsulas, data)
-            VALUES ($1,$2,$3)
+            (user_id, capsulas, data, polvora)
+            VALUES ($1, $2, $3, $4)
             """,
             str(prod["autor"]),
             capsulas,
-            agora_db()
+            agora_db(),
+            polvora
         )
     
-    # Pega a descrição atual
     desc = msg.embeds[0].description if msg.embeds else ""
     
-    # 🔥 REMOVE a linha do timer e da barra
     linhas = desc.split("\n")
     novas_linhas = []
     
     for linha in linhas:
-        # Pula linhas que contém timer ou barra de progresso
         if not linha.startswith("⏳ **Restante:**") and not "▓" in linha and not "░" in linha:
-            # Também pula linhas vazias que sobraram
             if linha.strip():
                 novas_linhas.append(linha)
     
     desc = "\n".join(novas_linhas)
     
-    # Adiciona as informações finais
     desc += (
         f"\n\n🔵 **Produção Finalizada**"
         f"\n\n🧪 Produziu **{capsulas} cápsulas**"
@@ -2107,7 +2098,6 @@ async def finalizar_producao(pid, msg, prod):
         f"\n💣 Pólvora utilizada: **{polvora}**"
     )
     
-    # Atualiza a mensagem final
     await msg.edit(
         embed=discord.Embed(
             title="🏭 Produção",
@@ -2117,14 +2107,14 @@ async def finalizar_producao(pid, msg, prod):
         view=None
     )
     
-    # Remove do banco
     await deletar_producao(pid)
     
-    # Remove da lista de tarefas ativas
     if pid in producoes_tasks:
         del producoes_tasks[pid]
     
     print(f"✅ Produção {pid} finalizada com {capsulas} cápsulas")
+
+
 # =========================================================
 # ================= RELATÓRIO BONITO E RESUMIDO ===========
 # =========================================================
@@ -2154,11 +2144,14 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
             async with db.acquire() as conn:
                 rows = await conn.fetch(
                     """
-                    SELECT user_id, SUM(capsulas) as total
+                    SELECT 
+                        user_id, 
+                        SUM(capsulas) as total_capsulas,
+                        SUM(polvora) as total_polvora
                     FROM producoes_finalizadas
                     WHERE data >= $1 AND data <= $2
                     GROUP BY user_id
-                    ORDER BY total DESC
+                    ORDER BY total_capsulas DESC
                     """,
                     inicio_dt, fim_dt
                 )
@@ -2170,24 +2163,31 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
                 )
                 return
 
-            total_capsulas = sum(r["total"] or 0 for r in rows)
-            total_fmt = f"{total_capsulas:,.0f}".replace(",", ".")
+            total_capsulas = sum(r["total_capsulas"] or 0 for r in rows)
+            total_polvora = sum(r["total_polvora"] or 0 for r in rows)
+            
+            total_capsulas_fmt = f"{total_capsulas:,.0f}".replace(",", ".")
+            total_polvora_fmt = f"{total_polvora:,.0f}".replace(",", ".")
 
-            # Monta o ranking
             linhas = []
             for r in rows:
                 uid = r["user_id"]
-                total = int(r["total"])
-                total_fmt_user = f"{total:,.0f}".replace(",", ".")
+                capsulas = int(r["total_capsulas"] or 0)
+                polvora = int(r["total_polvora"] or 0)
                 
-                nome = await pegar_apelido(interacao.guild, int(uid))
-                linhas.append(f"**{nome}** — {total_fmt_user}")
+                capsulas_fmt = f"{capsulas:,.0f}".replace(",", ".")
+                polvora_fmt = f"{polvora:,.0f}".replace(",", ".")
+                
+                nome = await pegar_apelido(interaction.guild, int(uid))
+                linhas.append(f"**{nome}** — {capsulas_fmt} cápsulas | 💣 {polvora_fmt} pólvora")
 
-            # Embed bonito e resumido
             embed = discord.Embed(
                 title="📊 RELATÓRIO DE PRODUÇÃO",
-                description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n"
-                           f"💰 **Total produzido:** `{total_fmt}` cápsulas",
+                description=(
+                    f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n"
+                    f"💰 **Total produzido:** `{total_capsulas_fmt}` cápsulas\n"
+                    f"💣 **Total pólvora gasto:** `{total_polvora_fmt}`"
+                ),
                 color=0x2ecc71
             )
             
@@ -2197,12 +2197,11 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
                 inline=False
             )
 
-            # Envia no canal específico
             canal = interaction.guild.get_channel(1422853066541109338)
             if canal:
                 await canal.send(embed=embed)
                 await interaction.followup.send(
-                    f"✅ Relatório enviado!\n📅 {self.data_inicio.value} a {self.data_fim.value}\n💰 Total: {total_fmt} cápsulas",
+                    f"✅ Relatório enviado!\n📅 {self.data_inicio.value} a {self.data_fim.value}\n💰 Total: {total_capsulas_fmt} cápsulas\n💣 Pólvora: {total_polvora_fmt}",
                     ephemeral=True
                 )
             else:
