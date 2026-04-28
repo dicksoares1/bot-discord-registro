@@ -2126,54 +2126,79 @@ async def finalizar_producao(pid, msg, prod):
     
     print(f"✅ Produção {pid} finalizada com {capsulas} cápsulas")
 # =========================================================
-# ================= RELATÓRIO ==============================
+# ================= RELATÓRIO CORRIGIDO ===================
 # =========================================================
 
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
 
-    data_inicio = discord.ui.TextInput(label="Data inicial (DD/MM/AAAA)")
-    data_fim = discord.ui.TextInput(label="Data final (DD/MM/AAAA)")
+    data_inicio = discord.ui.TextInput(
+        label="Data inicial (DD/MM/AAAA)", 
+        placeholder="Ex: 01/04/2026"
+    )
+    data_fim = discord.ui.TextInput(
+        label="Data final (DD/MM/AAAA)", 
+        placeholder="Ex: 30/04/2026"
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
 
         try:
             await interaction.response.defer(ephemeral=True)
 
+            # Converte as strings para datetime
             inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
             fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
 
-            # 🔥 CONVERTE para string no formato que o banco espera
-            inicio_str = inicio.strftime("%Y-%m-%d")
-            fim_str = fim.strftime("%Y-%m-%d")
+            # 🔥 CRIA OBJETOS DATETIME (não strings!)
+            inicio_dt = inicio.replace(hour=0, minute=0, second=0, microsecond=0)
+            fim_dt = fim.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+            print(f"🔍 Buscando produções de {inicio_dt} até {fim_dt}")
 
             async with db.acquire() as conn:
                 rows = await conn.fetch(
                     """
                     SELECT user_id, SUM(capsulas) as total
                     FROM producoes_finalizadas
-                    WHERE data::date >= $1::date AND data::date <= $2::date
+                    WHERE data >= $1 AND data <= $2
                     GROUP BY user_id
                     ORDER BY total DESC
                     """,
-                    inicio_str, fim_str
+                    inicio_dt,  # 👈 Passa datetime, não string!
+                    fim_dt      # 👈 Passa datetime, não string!
                 )
 
+            print(f"📊 Encontrados {len(rows)} registros")
+
             if not rows:
-                await interaction.followup.send(f"📭 Nenhuma produção de {self.data_inicio.value} até {self.data_fim.value}.", ephemeral=True)
+                await interaction.followup.send(
+                    f"📭 Nenhuma produção encontrada entre **{self.data_inicio.value}** e **{self.data_fim.value}**.\n\n"
+                    f"💡 **Motivos possíveis:**\n"
+                    f"• Nenhuma produção foi finalizada neste período\n"
+                    f"• A tabela `producoes_finalizadas` está vazia\n"
+                    f"• As produções ainda não foram finalizadas (estão ativas)",
+                    ephemeral=True
+                )
                 return
 
             total_capsulas = sum(r["total"] or 0 for r in rows)
 
+            # Monta ranking
             linhas = []
             for r in rows[:20]:
                 uid = r["user_id"]
                 total = r["total"]
                 total_fmt = f"{total:,}".replace(",", ".")
                 
-                # Tenta pegar o nome
+                # Tenta pegar o nick do usuário
                 try:
-                    user = await bot.fetch_user(int(uid))
-                    nome = user.display_name
+                    guild = interaction.guild
+                    member = guild.get_member(int(uid))
+                    if member and member.nick:
+                        nome = member.nick
+                    else:
+                        user = await bot.fetch_user(int(uid))
+                        nome = user.display_name
                 except:
                     nome = f"ID:{uid}"
                 
@@ -2181,22 +2206,40 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 
             embed = discord.Embed(
                 title="📊 RELATÓRIO DE PRODUÇÃO",
-                description=f"📅 {self.data_inicio.value} até {self.data_fim.value}\n💰 Total: **{total_capsulas:,}** cápsulas".replace(",", "."),
+                description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n"
+                           f"💰 **Total produzido:** `{total_capsulas:,}` cápsulas".replace(",", "."),
                 color=0x2ecc71
             )
-            embed.add_field(name="🏆 RANKING", value="\n".join(linhas) if linhas else "Nenhum", inline=False)
 
+            if linhas:
+                embed.add_field(name="🏆 RANKING", value="\n".join(linhas), inline=False)
+            else:
+                embed.add_field(name="🏆 RANKING", value="Nenhum dado no período", inline=False)
+
+            # Envia no canal específico ou na interação
             canal = interaction.guild.get_channel(1422853066541109338)
             if canal:
                 await canal.send(embed=embed)
-
-            await interaction.followup.send("✅ Relatório enviado!", ephemeral=True)
+                await interaction.followup.send(
+                    f"✅ Relatório enviado no canal <#{1422853066541109338}>!",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
         except ValueError:
-            await interaction.followup.send("❌ Formato de data inválido! Use DD/MM/AAAA", ephemeral=True)
+            await interaction.followup.send(
+                "❌ **Formato de data inválido!**\n"
+                "Use o formato: `DD/MM/AAAA`\n"
+                "Exemplo: `01/04/2026`",
+                ephemeral=True
+            )
         except Exception as e:
             print("ERRO RELATORIO:", e)
-            await interaction.followup.send(f"❌ Erro: {str(e)}", ephemeral=True)
+            await interaction.followup.send(
+                f"❌ Erro ao gerar relatório: {str(e)}",
+                ephemeral=True
+            )
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
