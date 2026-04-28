@@ -2131,8 +2131,8 @@ async def finalizar_producao(pid, msg, prod):
 
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
 
-    data_inicio = discord.ui.TextInput(label="Data inicial")
-    data_fim = discord.ui.TextInput(label="Data final")
+    data_inicio = discord.ui.TextInput(label="Data inicial (DD/MM/AAAA)")
+    data_fim = discord.ui.TextInput(label="Data final (DD/MM/AAAA)")
 
     async def on_submit(self, interaction: discord.Interaction):
 
@@ -2140,51 +2140,63 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
             await interaction.response.defer(ephemeral=True)
 
             inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
-            fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y") + timedelta(days=1)
+            fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
+
+            # 🔥 CONVERTE para string no formato que o banco espera
+            inicio_str = inicio.strftime("%Y-%m-%d")
+            fim_str = fim.strftime("%Y-%m-%d")
 
             async with db.acquire() as conn:
                 rows = await conn.fetch(
                     """
                     SELECT user_id, SUM(capsulas) as total
                     FROM producoes_finalizadas
-                    WHERE data >= $1 AND data < $2
+                    WHERE data::date >= $1::date AND data::date <= $2::date
                     GROUP BY user_id
+                    ORDER BY total DESC
                     """,
-                    inicio, fim
+                    inicio_str, fim_str
                 )
 
             if not rows:
-                await interaction.followup.send("Sem dados.", ephemeral=True)
+                await interaction.followup.send(f"📭 Nenhuma produção de {self.data_inicio.value} até {self.data_fim.value}.", ephemeral=True)
                 return
 
-            total_capsulas = sum(int(r["total"] or 0) for r in rows)
+            total_capsulas = sum(r["total"] or 0 for r in rows)
 
-            ranking = sorted(
-                [(str(r["user_id"]), int(r["total"])) for r in rows],
-                key=lambda x: x[1],
-                reverse=True
-            )
-
-            linhas = [
-                f"<@{uid}> — {total:,}".replace(",", ".")
-                for uid, total in ranking[:20]
-            ]
+            linhas = []
+            for r in rows[:20]:
+                uid = r["user_id"]
+                total = r["total"]
+                total_fmt = f"{total:,}".replace(",", ".")
+                
+                # Tenta pegar o nome
+                try:
+                    user = await bot.fetch_user(int(uid))
+                    nome = user.display_name
+                except:
+                    nome = f"ID:{uid}"
+                
+                linhas.append(f"**{nome}** — {total_fmt}")
 
             embed = discord.Embed(
-                title="📊 RELATÓRIO",
-                description=f"Total: {total_capsulas:,}".replace(",", ".")
+                title="📊 RELATÓRIO DE PRODUÇÃO",
+                description=f"📅 {self.data_inicio.value} até {self.data_fim.value}\n💰 Total: **{total_capsulas:,}** cápsulas".replace(",", "."),
+                color=0x2ecc71
             )
-
-            embed.add_field(name="Ranking", value="\n".join(linhas))
+            embed.add_field(name="🏆 RANKING", value="\n".join(linhas) if linhas else "Nenhum", inline=False)
 
             canal = interaction.guild.get_channel(1422853066541109338)
             if canal:
                 await canal.send(embed=embed)
 
-            await interaction.followup.send("Enviado.", ephemeral=True)
+            await interaction.followup.send("✅ Relatório enviado!", ephemeral=True)
 
+        except ValueError:
+            await interaction.followup.send("❌ Formato de data inválido! Use DD/MM/AAAA", ephemeral=True)
         except Exception as e:
             print("ERRO RELATORIO:", e)
+            await interaction.followup.send(f"❌ Erro: {str(e)}", ephemeral=True)
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
