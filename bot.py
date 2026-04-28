@@ -5661,7 +5661,7 @@ async def enviar_painel_alugueis():
             value=(
                 f"**STATUS:** 🔵 ALUGADO\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"**👤 Dono:** <@{dados['user_id']}>\n"
+                f"**👤 Alugado Por:** <@{dados['user_id']}>\n"
                 f"**📅 Dias alugados:** {dados['dias']} dia(s)\n"
                 f"**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n"
                 f"**🕐 TEMPO RESTANTE:**\n"
@@ -5695,7 +5695,7 @@ async def enviar_painel_alugueis():
             value=(
                 f"**STATUS:** 🔵 ALUGADO\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"**👤 Dono:** <@{dados['user_id']}>\n"
+                f"**👤 Alugado Por:** <@{dados['user_id']}>\n"
                 f"**📅 Dias alugados:** {dados['dias']} dia(s)\n"
                 f"**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n"
                 f"**🕐 TEMPO RESTANTE:**\n"
@@ -5729,7 +5729,7 @@ async def enviar_painel_alugueis():
             value=(
                 f"**STATUS:** 🔵 ALUGADO\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"**👤 Dono:** <@{dados['user_id']}>\n"
+                f"**👤 Alugado Por:** <@{dados['user_id']}>\n"
                 f"**📅 Dias alugados:** {dados['dias']} dia(s)\n"
                 f"**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n"
                 f"**🕐 TEMPO RESTANTE:**\n"
@@ -5847,6 +5847,293 @@ async def testar_aluguel(ctx):
     """Testa a atualização do painel de aluguéis"""
     await enviar_painel_alugueis()
     await ctx.send("✅ Painel atualizado manualmente!", ephemeral=True)
+
+
+# =========================================================
+# ================= RELATÓRIO FINANCEIRO ==================
+# =========================================================
+
+# Preço da pólvora por unidade
+PRECO_POLVORA = 80  # R$ 80,00 por pólvora
+
+# Preço das embalagens (25.000 unidades = R$ 2.000.000)
+PRECO_EMBALAGEM_POR_UNIDADE = 2000000 / 25000  # R$ 80 por embalagem
+
+
+class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEIRO"):
+    
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data INÍCIO",
+        placeholder="Ex: 01/04/2026",
+        required=True
+    )
+    
+    data_fim = discord.ui.TextInput(
+        label="📅 Data FIM",
+        placeholder="Ex: 30/04/2026",
+        required=True
+    )
+    
+    embalagens = discord.ui.TextInput(
+        label="📦 Embalagens compradas (opcional)",
+        placeholder="Ex: 25000 (deixe em branco se não quiser)",
+        required=False
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Converte as datas
+            inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
+            
+            inicio_dt = inicio.replace(hour=0, minute=0, second=0)
+            fim_dt = fim.replace(hour=23, minute=59, second=59)
+            
+            # Processa embalagens (opcional)
+            total_embalagens = 0
+            total_gasto_embalagens = 0
+            
+            if self.embalagens.value and self.embalagens.value.strip():
+                try:
+                    total_embalagens = int(self.embalagens.value.replace(".", "").replace(",", ""))
+                    total_gasto_embalagens = int(total_embalagens * PRECO_EMBALAGEM_POR_UNIDADE)
+                except:
+                    pass
+            
+            # =====================================================
+            # ================= BUSCA DADOS =======================
+            # =====================================================
+            
+            async with db.acquire() as conn:
+                # 1. Total de pólvora usada na produção
+                polvora_row = await conn.fetchrow(
+                    """
+                    SELECT COALESCE(SUM(polvora), 0) as total_polvora
+                    FROM producoes_finalizadas
+                    WHERE data >= $1 AND data <= $2
+                    """,
+                    inicio_dt, fim_dt
+                )
+                
+                # 2. Total de vendas
+                vendas_row = await conn.fetchrow(
+                    """
+                    SELECT COALESCE(SUM(valor), 0) as total_vendas
+                    FROM vendas
+                    WHERE TO_DATE(data, 'DD/MM/YYYY') BETWEEN $1 AND $2
+                    """,
+                    inicio.date(), fim.date()
+                )
+                
+                # 3. Total de pólvora comprada (da tabela polvoras)
+                polvora_comprada_row = await conn.fetchrow(
+                    """
+                    SELECT COALESCE(SUM(quantidade), 0) as total_quantidade,
+                           COALESCE(SUM(valor), 0) as total_valor
+                    FROM polvoras
+                    WHERE data::date BETWEEN $1::date AND $2::date
+                    """,
+                    inicio, fim
+                )
+            
+            # =====================================================
+            # ================= CÁLCULOS ==========================
+            # =====================================================
+            
+            total_polvora_gasta = polvora_row["total_polvora"] or 0
+            total_gasto_polvora = total_polvora_gasta * PRECO_POLVORA
+            
+            total_vendas = vendas_row["total_vendas"] or 0
+            
+            total_polvora_comprada = polvora_comprada_row["total_quantidade"] or 0
+            total_gasto_polvora_comprada = polvora_comprada_row["total_valor"] or 0
+            
+            # Saldo (vendas - gastos)
+            total_gastos = total_gasto_polvora + total_gasto_embalagens
+            saldo = total_vendas - total_gastos
+            
+            # =====================================================
+            # ================= FORMATAR VALORES ==================
+            # =====================================================
+            
+            def fmt(valor):
+                return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            
+            def fmt_num(valor):
+                return f"{valor:,.0f}".replace(",", ".")
+            
+            # =====================================================
+            # ================= CRIAR EMBED =======================
+            # =====================================================
+            
+            embed = discord.Embed(
+                title="📊 RELATÓRIO FINANCEIRO",
+                description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}",
+                color=0x1abc9c
+            )
+            
+            # 💣 PÓLVORA
+            embed.add_field(
+                name="💣 PÓLVORA",
+                value=(
+                    f"**Utilizada na produção:** {fmt_num(total_polvora_gasta)} unidades\n"
+                    f"**💰 Gasto com pólvora:** {fmt(total_gasto_polvora)}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"**Comprada no período:** {fmt_num(total_polvora_comprada)} unidades\n"
+                    f"**💰 Gasto na compra:** {fmt(total_gasto_polvora_comprada)}"
+                ),
+                inline=False
+            )
+            
+            # 📦 EMBALAGENS (se tiver)
+            if total_embalagens > 0:
+                embed.add_field(
+                    name="📦 EMBALAGENS",
+                    value=(
+                        f"**Quantidade comprada:** {fmt_num(total_embalagens)} unidades\n"
+                        f"**💰 Gasto com embalagens:** {fmt(total_gasto_embalagens)}"
+                    ),
+                    inline=False
+                )
+            
+            # 🛒 VENDAS
+            embed.add_field(
+                name="🛒 VENDAS",
+                value=f"**💰 Total de vendas:** {fmt(total_vendas)}",
+                inline=False
+            )
+            
+            # 📊 RESUMO
+            cor_saldo = 0x2ecc71 if saldo >= 0 else 0xe74c3c
+            emoji_saldo = "🟢" if saldo >= 0 else "🔴"
+            
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📊 RESUMO FINANCEIRO",
+                value=(
+                    f"**💰 Total de Vendas:** {fmt(total_vendas)}\n"
+                    f"**💸 Total de Gastos:** {fmt(total_gastos)}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{emoji_saldo} **SALDO:** {fmt(saldo)}"
+                ),
+                inline=False
+            )
+            
+            # Gastos detalhados (se tiver embalagens)
+            if total_embalagens > 0:
+                embed.add_field(
+                    name="📋 DETALHAMENTO DOS GASTOS",
+                    value=(
+                        f"• Pólvora: {fmt(total_gasto_polvora)}\n"
+                        f"• Embalagens: {fmt(total_gasto_embalagens)}\n"
+                        f"• **TOTAL:** {fmt(total_gastos)}"
+                    ),
+                    inline=False
+                )
+            
+            embed.set_footer(text=f"Relatório gerado em {agora().strftime('%d/%m/%Y às %H:%M')}")
+            
+            # =====================================================
+            # ================= ENVIAR RELATÓRIO ===================
+            # =====================================================
+            
+            canal = interaction.guild.get_channel(1498664038559776768)
+            if canal:
+                await canal.send(embed=embed)
+                await interaction.followup.send(
+                    f"✅ Relatório financeiro enviado no canal <#{1498664038559776768}>!",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                
+        except ValueError:
+            await interaction.followup.send(
+                "❌ **Formato de data inválido!**\nUse o formato: `DD/MM/AAAA`\nExemplo: `01/04/2026`",
+                ephemeral=True
+            )
+        except Exception as e:
+            print("ERRO RELATORIO FINANCEIRO:", e)
+            await interaction.followup.send(f"❌ Erro ao gerar relatório: {str(e)}", ephemeral=True)
+
+
+# =========================================================
+# ================= VIEW DO PAINEL ========================
+# =========================================================
+
+class RelatorioFinanceiroView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(
+        label="📊 Gerar Relatório Financeiro",
+        style=discord.ButtonStyle.success,
+        custom_id="relatorio_financeiro_btn",
+        emoji="💰"
+    )
+    async def gerar_relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RelatorioFinanceiroModal())
+
+
+# =========================================================
+# ================= PAINEL RELATÓRIO FINANCEIRO ===========
+# =========================================================
+
+async def enviar_painel_relatorio_financeiro():
+    """Envia o painel para gerar relatório financeiro"""
+    
+    canal = bot.get_channel(1498664038559776768)
+    
+    if not canal:
+        print("❌ Canal de relatório financeiro não encontrado")
+        return
+    
+    embed = discord.Embed(
+        title="💰 RELATÓRIO FINANCEIRO",
+        description=(
+            "Clique no botão abaixo para gerar um relatório financeiro completo.\n\n"
+            "📋 **O relatório inclui:**\n"
+            "• 💣 Pólvora utilizada na produção\n"
+            "• 💰 Gasto total com pólvora\n"
+            "• 🛒 Total de vendas no período\n"
+            "• 📦 Gasto com embalagens (opcional)\n"
+            "• 📊 Saldo final (vendas - gastos)\n\n"
+            "📅 **Você pode escolher:**\n"
+            "• Data inicial e final\n"
+            "• Quantidade de embalagens (opcional)"
+        ),
+        color=0x1abc9c
+    )
+    
+    embed.add_field(
+        name="📌 EXEMPLO DE PREENCHIMENTO",
+        value=(
+            "**Data inicial:** `01/04/2026`\n"
+            "**Data final:** `30/04/2026`\n"
+            "**Embalagens:** `25000` (opcional)"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="Os valores são calculados automaticamente com base no banco de dados")
+    
+    await enviar_ou_atualizar_painel(
+        "painel_relatorio_financeiro",
+        1498664038559776768,
+        embed,
+        RelatorioFinanceiroView()
+    )
+    
+    print("💰 Painel de relatório financeiro enviado/atualizado")
+    
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
@@ -6119,6 +6406,15 @@ async def on_ready():
             painel_tasks.append(enviar_painel_remover_ausencia())
         except Exception as e:
             print("Erro painel remover ausência:", e)
+
+        # =====================================================
+        # ================= PAINEL RELATÓRIO FINANCEIRO =======
+        # =====================================================
+
+        try:
+            await enviar_painel_relatorio_financeiro()
+        except Exception as e:
+            print("Erro painel relatório financeiro:", e)
 
        # 🔥 PAINEL AÇÕES (CORRETO)
         try:
