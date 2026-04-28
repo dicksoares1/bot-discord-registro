@@ -2126,7 +2126,7 @@ async def finalizar_producao(pid, msg, prod):
     
     print(f"✅ Produção {pid} finalizada com {capsulas} cápsulas")
 # =========================================================
-# ================= RELATÓRIO CORRIGIDO ===================
+# ================= RELATÓRIO CORRIGIDO (FINAL) ===========
 # =========================================================
 
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
@@ -2149,97 +2149,93 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
             inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
             fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
 
-            # 🔥 CRIA OBJETOS DATETIME (não strings!)
+            # 🔥 CRIA DATAS COM HORA FIXA
             inicio_dt = inicio.replace(hour=0, minute=0, second=0, microsecond=0)
             fim_dt = fim.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-            print(f"🔍 Buscando produções de {inicio_dt} até {fim_dt}")
+            print(f"🔍 Buscando: {inicio_dt} até {fim_dt}")
 
             async with db.acquire() as conn:
+                # 🔥 USANDO BETWEEN para garantir o intervalo correto
                 rows = await conn.fetch(
                     """
                     SELECT user_id, SUM(capsulas) as total
                     FROM producoes_finalizadas
-                    WHERE data >= $1 AND data <= $2
+                    WHERE data::date BETWEEN $1::date AND $2::date
                     GROUP BY user_id
                     ORDER BY total DESC
                     """,
-                    inicio_dt,  # 👈 Passa datetime, não string!
-                    fim_dt      # 👈 Passa datetime, não string!
+                    inicio_dt, fim_dt
                 )
 
-            print(f"📊 Encontrados {len(rows)} registros")
+            print(f"📊 Encontrados {len(rows)} usuários")
 
             if not rows:
                 await interaction.followup.send(
-                    f"📭 Nenhuma produção encontrada entre **{self.data_inicio.value}** e **{self.data_fim.value}**.\n\n"
-                    f"💡 **Motivos possíveis:**\n"
-                    f"• Nenhuma produção foi finalizada neste período\n"
-                    f"• A tabela `producoes_finalizadas` está vazia\n"
-                    f"• As produções ainda não foram finalizadas (estão ativas)",
+                    f"📭 Nenhuma produção entre {self.data_inicio.value} e {self.data_fim.value}.",
                     ephemeral=True
                 )
                 return
 
-            total_capsulas = sum(r["total"] or 0 for r in rows)
+            total_capsulas = sum(int(r["total"] or 0) for r in rows)
+
+            # 🔥 CORRIGE A FORMATAÇÃO DO TOTAL
+            total_fmt = f"{total_capsulas:,.0f}".replace(",", ".")
 
             # Monta ranking
             linhas = []
             for r in rows[:20]:
                 uid = r["user_id"]
-                total = r["total"]
-                total_fmt = f"{total:,}".replace(",", ".")
+                total = int(r["total"])
+                total_fmt_rank = f"{total:,.0f}".replace(",", ".")
                 
-                # Tenta pegar o nick do usuário
-                try:
-                    guild = interaction.guild
-                    member = guild.get_member(int(uid))
-                    if member and member.nick:
-                        nome = member.nick
-                    else:
-                        user = await bot.fetch_user(int(uid))
-                        nome = user.display_name
-                except:
-                    nome = f"ID:{uid}"
+                # Pega o nome do usuário
+                nome = await pegar_nome_formatado(interaction.guild, int(uid))
                 
-                linhas.append(f"**{nome}** — {total_fmt}")
+                linhas.append(f"**{nome}** — {total_fmt_rank}")
 
             embed = discord.Embed(
                 title="📊 RELATÓRIO DE PRODUÇÃO",
                 description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n"
-                           f"💰 **Total produzido:** `{total_capsulas:,}` cápsulas".replace(",", "."),
+                           f"💰 **Total produzido:** `{total_fmt}` cápsulas",
                 color=0x2ecc71
             )
 
             if linhas:
                 embed.add_field(name="🏆 RANKING", value="\n".join(linhas), inline=False)
-            else:
-                embed.add_field(name="🏆 RANKING", value="Nenhum dado no período", inline=False)
 
-            # Envia no canal específico ou na interação
+            # Envia no canal específico
             canal = interaction.guild.get_channel(1422853066541109338)
             if canal:
                 await canal.send(embed=embed)
-                await interaction.followup.send(
-                    f"✅ Relatório enviado no canal <#{1422853066541109338}>!",
-                    ephemeral=True
-                )
+                await interaction.followup.send(f"✅ Relatório enviado! Período: {self.data_inicio.value} a {self.data_fim.value}", ephemeral=True)
             else:
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
         except ValueError:
             await interaction.followup.send(
-                "❌ **Formato de data inválido!**\n"
-                "Use o formato: `DD/MM/AAAA`\n"
-                "Exemplo: `01/04/2026`",
+                "❌ **Formato de data inválido!**\nUse o formato: `DD/MM/AAAA`\nExemplo: `01/04/2026`",
                 ephemeral=True
             )
         except Exception as e:
             print("ERRO RELATORIO:", e)
-            await interaction.followup.send(
-                f"❌ Erro ao gerar relatório: {str(e)}",
-                ephemeral=True
-            )
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(f"❌ Erro: {str(e)}", ephemeral=True)
+
+
+async def pegar_nome_formatado(guild, user_id):
+    """Pega o nome formatado do usuário"""
+    try:
+        member = guild.get_member(user_id)
+        if member:
+            if member.nick:
+                return member.nick
+            return member.display_name
+        user = await bot.fetch_user(user_id)
+        return user.display_name
+    except:
+        return f"ID:{user_id}"
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
