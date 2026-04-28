@@ -5390,10 +5390,19 @@ async def remover_ausencia_cmd(ctx, member: discord.Member):
 # =========================================================
 
 # =========================================================
-# ================= SISTEMA DE ALUGUEL (CORRIGIDO) ========
+# ================= SISTEMA DE ALUGUEL ====================
 # =========================================================
 
 alugueis_ativos = {}
+
+
+def formatar_dinheiro(valor):
+    """Formata valor para reais"""
+    try:
+        valor = float(valor)
+    except:
+        valor = 0
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 async def salvar_aluguel_db(galpao, user_id, data_fim, dias):
@@ -5411,7 +5420,7 @@ async def salvar_aluguel_db(galpao, user_id, data_fim, dias):
                 ativo = true
             """,
             galpao,
-            str(user_id),  # Salva como string sem o Q
+            str(user_id),
             agora_db(),
             data_fim,
             dias
@@ -5427,11 +5436,26 @@ async def carregar_alugueis_db():
     
     alugueis_ativos.clear()
     for row in rows:
+        data_fim = row["data_fim"]
+        if data_fim.tzinfo is None:
+            data_fim = data_fim.replace(tzinfo=BRASIL)
+        
         alugueis_ativos[row["galpao"]] = {
-            "user_id": int(row["user_id"]),  # Converte para int
-            "fim": row["data_fim"].replace(tzinfo=BRASIL) if row["data_fim"].tzinfo is None else row["data_fim"],
+            "user_id": int(row["user_id"]),
+            "fim": data_fim,
             "dias": row["dias"]
         }
+
+
+async def desativar_aluguel_db(galpao):
+    """Desativa um aluguel"""
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE alugueis SET ativo = false WHERE galpao = $1",
+            galpao
+        )
+    if galpao in alugueis_ativos:
+        del alugueis_ativos[galpao]
 
 
 def formatar_tempo_detalhado(data_fim):
@@ -5454,25 +5478,21 @@ def formatar_tempo_detalhado(data_fim):
 
 
 def calcular_barra_progresso(data_fim, dias_totais):
-    """Calcula a barra de progresso baseada no tempo decorrido"""
+    """Calcula a barra de progresso baseada no tempo restante"""
     agora_br = agora()
     if not data_fim or agora_br >= data_fim:
         return "❌ EXPIRADO"
     
-    # Calcula quanto tempo já passou desde o início
+    # Calcula porcentagem restante
     data_inicio = data_fim - timedelta(days=dias_totais)
     tempo_total = (data_fim - data_inicio).total_seconds()
-    tempo_passado = (agora_br - data_inicio).total_seconds()
+    tempo_restante = (data_fim - agora_br).total_seconds()
     
-    # Calcula porcentagem
     if tempo_total <= 0:
-        porcentagem = 0
+        porcentagem_restante = 0
     else:
-        porcentagem = (tempo_passado / tempo_total) * 100
-        porcentagem = max(0, min(100, porcentagem))  # Limita entre 0 e 100
-    
-    # Inverte para mostrar quanto FALTA (não quanto já passou)
-    porcentagem_restante = 100 - porcentagem
+        porcentagem_restante = (tempo_restante / tempo_total) * 100
+        porcentagem_restante = max(0, min(100, porcentagem_restante))
     
     # Define a barra (20 caracteres)
     tamanho_barra = 20
@@ -5557,7 +5577,7 @@ class AluguelModal(discord.ui.Modal, title="💰 Alugar Galpão"):
             f"👤 **Alugado por:** {interaction.user.mention}\n"
             f"📅 **Dias:** {dias_aluguel} dia(s)\n"
             f"⏰ **Vence em:** {data_fim.strftime('%d/%m/%Y às %H:%M')}\n"
-            f"💰 **Valor pago:** R$ {formatar_dinheiro(valor_pago)}",
+            f"💰 **Valor pago:** {formatar_dinheiro(valor_pago)}",
             ephemeral=True
         )
 
@@ -5645,7 +5665,7 @@ async def enviar_painel_alugueis():
                 f"**📅 Dias alugados:** {dados['dias']} dia(s)\n"
                 f"**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n"
                 f"**🕐 TEMPO RESTANTE:**\n"
-                f"**{formatar_tempo_detalhado(data_fim)}**\n"
+                f"{formatar_tempo_detalhado(data_fim)}\n"
                 f"{barra}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             ),
@@ -5679,7 +5699,7 @@ async def enviar_painel_alugueis():
                 f"**📅 Dias alugados:** {dados['dias']} dia(s)\n"
                 f"**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n"
                 f"**🕐 TEMPO RESTANTE:**\n"
-                f"**{formatar_tempo_detalhado(data_fim)}**\n"
+                f"{formatar_tempo_detalhado(data_fim)}\n"
                 f"{barra}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             ),
@@ -5713,7 +5733,7 @@ async def enviar_painel_alugueis():
                 f"**📅 Dias alugados:** {dados['dias']} dia(s)\n"
                 f"**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n"
                 f"**🕐 TEMPO RESTANTE:**\n"
-                f"**{formatar_tempo_detalhado(data_fim)}**\n"
+                f"{formatar_tempo_detalhado(data_fim)}\n"
                 f"{barra}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             ),
@@ -5732,7 +5752,7 @@ async def enviar_painel_alugueis():
             inline=False
         )
     
-    embed.set_footer(text="⏱️ Atualiza automaticamente a cada minuto | Use /alugueis para ver novamente")
+    embed.set_footer(text="⏱️ Atualiza automaticamente a cada minuto")
     
     await enviar_ou_atualizar_painel(
         "painel_alugueis",
@@ -5748,7 +5768,7 @@ async def atualizar_painel_alugueis():
 
 
 # =========================================================
-# ================= LOOP DE ATUALIZAÇÃO ===================
+# ================= LOOPS DE ATUALIZAÇÃO ==================
 # =========================================================
 
 @tasks.loop(minutes=1)
@@ -5756,6 +5776,7 @@ async def atualizar_contagem_alugueis():
     """Atualiza a contagem regressiva a cada minuto"""
     if alugueis_ativos:
         await atualizar_painel_alugueis()
+        print("🔄 Contagem de aluguéis atualizada")
 
 
 @tasks.loop(minutes=5)
@@ -5773,7 +5794,7 @@ async def verificar_alugueis_expirados():
             canal = bot.get_channel(CANAL_FABRICACAO_ID)
             if canal:
                 await canal.send(
-                    f"⚠️ **{galpao}** - O aluguel EXPIREDU!\n"
+                    f"⚠️ **{galpao}** - O aluguel EXPIRou!\n"
                     f"👤 Dono: <@{dados['user_id']}>\n"
                     f"📅 Venceu em: {dados['fim'].strftime('%d/%m/%Y às %H:%M')}\n\n"
                     f"💰 O galpão está disponível para um novo aluguel!"
@@ -5791,6 +5812,7 @@ async def verificar_alugueis_expirados():
 async def cmd_ver_alugueis(ctx):
     """Ver status dos aluguéis com contagem regressiva"""
     await enviar_painel_alugueis()
+    await ctx.send("📊 Painel de aluguéis atualizado!", ephemeral=True)
 
 
 @bot.command(name="renovar")
@@ -5818,6 +5840,13 @@ async def cmd_renovar_aluguel(ctx, galpao: str, dias: int, valor: int):
     
     await atualizar_painel_alugueis()
     await ctx.send(f"✅ **{nome_galpao}** renovado por {dias} dias!")
+
+
+@bot.command(name="testar_aluguel")
+async def testar_aluguel(ctx):
+    """Testa a atualização do painel de aluguéis"""
+    await enviar_painel_alugueis()
+    await ctx.send("✅ Painel atualizado manualmente!", ephemeral=True)
 # =========================================================
 # ========================= ON_READY ======================
 # =========================================================
