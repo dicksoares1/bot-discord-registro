@@ -6133,6 +6133,199 @@ async def enviar_painel_relatorio_financeiro():
     )
     
     print("💰 Painel de relatório financeiro enviado/atualizado")
+
+# =========================================================
+# ================= SISTEMA DE REGISTRO DE COMPRAS ========
+# =========================================================
+
+# IDs dos canais
+CANAL_REGISTRAR_COMPRA_ID = 1498668853465448560  # Canal para registrar compra
+CANAL_COMPRAS_REGISTRADAS_ID = 1270467793363669053  # Canal onde vai aparecer a compra registrada
+
+
+async def salvar_compra_db(produto, valor, comprado_por):
+    """Salva uma compra no banco de dados"""
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO compras (produto, valor, comprado_por, data)
+            VALUES ($1, $2, $3, $4)
+            """,
+            produto,
+            valor,
+            str(comprado_por),
+            agora_db()
+        )
+
+
+async def carregar_compras_db(data_inicio=None, data_fim=None):
+    """Carrega compras do banco de dados"""
+    async with db.acquire() as conn:
+        if data_inicio and data_fim:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM compras
+                WHERE data >= $1 AND data <= $2
+                ORDER BY data DESC
+                """,
+                data_inicio, data_fim
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM compras
+                ORDER BY data DESC
+                LIMIT 50
+                """
+            )
+        return rows
+
+
+# =========================================================
+# ================= MODAL DE REGISTRO DE COMPRA ===========
+# =========================================================
+
+class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
+    
+    produto = discord.ui.TextInput(
+        label="📦 Nome do produto",
+        placeholder="Ex: Pólvora, Embalagens, Munição, etc",
+        required=True,
+        max_length=100
+    )
+    
+    valor = discord.ui.TextInput(
+        label="💰 Valor da compra",
+        placeholder="Ex: 50000",
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        # Validar valor
+        try:
+            valor_compra = int(self.valor.value.replace(".", "").replace(",", ""))
+            if valor_compra <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send(
+                "❌ **Valor inválido!**\nDigite apenas números (ex: 50000, 1.500, 2.000,50)",
+                ephemeral=True
+            )
+            return
+        
+        # Validar produto
+        produto = self.produto.value.strip()
+        if not produto:
+            await interaction.followup.send("❌ **Produto inválido!**", ephemeral=True)
+            return
+        
+        # Salvar no banco
+        await salvar_compra_db(produto, valor_compra, interaction.user.id)
+        
+        # Formatar valores
+        def fmt(valor):
+            return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        
+        data_atual = agora()
+        
+        # Criar embed para enviar no canal de compras registradas
+        embed = discord.Embed(
+            title="📦 NOVA COMPRA REGISTRADA",
+            color=0x3498db
+        )
+        
+        embed.add_field(name="📦 Produto", value=produto, inline=True)
+        embed.add_field(name="💰 Valor", value=fmt(valor_compra), inline=True)
+        embed.add_field(name="👤 Comprado por", value=interaction.user.mention, inline=True)
+        embed.add_field(name="📅 Data da compra", value=f"<t:{int(data_atual.timestamp())}:F>", inline=False)
+        
+        embed.set_footer(text=f"ID da compra registrada no sistema")
+        
+        # Enviar no canal de compras registradas
+        canal_destino = interaction.guild.get_channel(CANAL_COMPRAS_REGISTRADAS_ID)
+        
+        if canal_destino:
+            await canal_destino.send(embed=embed)
+            await interaction.followup.send(
+                f"✅ **Compra registrada com sucesso!**\n"
+                f"📦 Produto: {produto}\n"
+                f"💰 Valor: {fmt(valor_compra)}\n"
+                f"📅 Data: {data_atual.strftime('%d/%m/%Y às %H:%M')}\n\n"
+                f"📨 A compra foi registrada no canal <#{CANAL_COMPRAS_REGISTRADAS_ID}>",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                f"✅ **Compra registrada com sucesso!**\n"
+                f"📦 Produto: {produto}\n"
+                f"💰 Valor: {fmt(valor_compra)}",
+                ephemeral=True
+            )
+            print(f"❌ Canal {CANAL_COMPRAS_REGISTRADAS_ID} não encontrado!")
+
+
+# =========================================================
+# ================= VIEW DO BOTÃO =========================
+# =========================================================
+
+class RegistrarCompraView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(
+        label="📝 Registrar Nova Compra",
+        style=discord.ButtonStyle.success,
+        custom_id="registrar_compra_btn",
+        emoji="💰"
+    )
+    async def registrar_compra(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RegistrarCompraModal())
+
+
+# =========================================================
+# ================= PAINEL DE REGISTRO DE COMPRA ==========
+# =========================================================
+
+async def enviar_painel_registrar_compra():
+    """Envia o painel para registrar compras"""
+    
+    canal = bot.get_channel(CANAL_REGISTRAR_COMPRA_ID)
+    
+    if not canal:
+        print(f"❌ Canal de registrar compra não encontrado: {CANAL_REGISTRAR_COMPRA_ID}")
+        return
+    
+    embed = discord.Embed(
+        title="💰 REGISTRAR COMPRA",
+        description=(
+            "Clique no botão abaixo para registrar uma nova compra.\n\n"
+            "📋 **Informações necessárias:**\n"
+            "• 📦 Nome do produto\n"
+            "• 💰 Valor da compra\n\n"
+            "Após registrar, a compra aparecerá automaticamente no canal de registros."
+        ),
+        color=0x3498db
+    )
+    
+    embed.add_field(
+        name="📌 EXEMPLO",
+        value="**Produto:** Pólvora\n**Valor:** 50000",
+        inline=False
+    )
+    
+    embed.set_footer(text="Todas as compras ficam salvas no banco de dados para relatórios futuros")
+    
+    await enviar_ou_atualizar_painel(
+        "painel_registrar_compra",
+        CANAL_REGISTRAR_COMPRA_ID,
+        embed,
+        RegistrarCompraView()
+    )
+    
+    print(f"💰 Painel de registrar compra enviado/atualizado para o canal {CANAL_REGISTRAR_COMPRA_ID}")
     
 # =========================================================
 # ========================= ON_READY ======================
@@ -6415,6 +6608,15 @@ async def on_ready():
             await enviar_painel_relatorio_financeiro()
         except Exception as e:
             print("Erro painel relatório financeiro:", e)
+
+        # =====================================================
+        # ================= PAINEL REGISTRAR COMPRA ===========
+        # =====================================================
+
+        try:
+            await enviar_painel_registrar_compra()
+        except Exception as e:
+            print("Erro painel registrar compra:", e)
 
        # 🔥 PAINEL AÇÕES (CORRETO)
         try:
