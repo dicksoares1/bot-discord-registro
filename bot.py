@@ -3772,11 +3772,14 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
 # =========================================================
 
 ACOES_SEMANA = {
+    # Ações com limite
     "Joalheria": 5,
     "Banco Fleeca": 4,
     "Banco de Paleto": 1,
     "Banco Central": 1,
     "Nióbio": 1,
+    
+    # Ações sem limite (None)
     "Loja de Armas (Ammunation)": None,
     "Loja de Bebidas": None,
     "Lan House - (Bahamas)": None,
@@ -3788,6 +3791,12 @@ ACOES_SEMANA = {
     "Aeroporto de Sucata": None,
     "Carro Forte": None,
     "Banco Bahamas": None,
+    
+    # 🚁 HELICRASH (Ilimitado - horários específicos)
+    "🚁 Helicrash (13h)": None,
+    "🚁 Helicrash (15h)": None,
+    "🚁 Helicrash (22h)": None,
+    "🚁 Helicrash (02h)": None,
 }
 
 CARGOS_PERMITIDOS_ESCALACAO = [
@@ -3831,7 +3840,7 @@ async def gerar_embed_acoes():
         total_feitas += qtd
 
         if limite is None:
-            # Ações sem limite (podem fazer quantas quiser)
+            # Ações sem limite
             linhas.append(f"• {nome}: {qtd}")
         else:
             restante = max(limite - qtd, 0)
@@ -3914,13 +3923,27 @@ class SelecionarAcaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
         
-        # Criar select com as ações
+        # Criar select com as ações (organizado)
+        options = []
+        
+        # Adiciona ações com limite primeiro
+        for nome, limite in ACOES_SEMANA.items():
+            if limite is not None:
+                descricao = f"Limite: {limite}/semana"
+                options.append(discord.SelectOption(label=nome, description=descricao, emoji="🎯"))
+        
+        # Adiciona ações sem limite
+        for nome, limite in ACOES_SEMANA.items():
+            if limite is None:
+                if "Helicrash" in nome:
+                    options.append(discord.SelectOption(label=nome, description="Ilimitado • Horário fixo", emoji="🚁"))
+                else:
+                    options.append(discord.SelectOption(label=nome, description="Ilimitado", emoji="🏪"))
+        
         select = discord.ui.Select(
             placeholder="📋 Escolha a ação",
-            options=[
-                discord.SelectOption(label=nome, description=f"Limite: {limite if limite else 'Ilimitado'}")
-                for nome, limite in ACOES_SEMANA.items()
-            ]
+            options=options,
+            max_values=1
         )
         select.callback = self.select_callback
         self.add_item(select)
@@ -3931,10 +3954,10 @@ class SelecionarAcaoView(discord.ui.View):
         
         await interaction.response.defer(ephemeral=True)
         
-        # Verificar se já atingiu o limite semanal
+        # Verificar se já atingiu o limite semanal (apenas para ações COM limite)
         limite = ACOES_SEMANA.get(acao_tipo)
         
-        if limite:
+        if limite and limite is not None:
             async with db.acquire() as conn:
                 qtd = await conn.fetchval(
                     "SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND status='concluida' AND (resultado='ganhou' OR resultado='perdeu')",
@@ -3957,17 +3980,30 @@ class SelecionarAcaoView(discord.ui.View):
                 str(interaction.user.id)
             )
         
+        # Escolher cor e emoji baseado no tipo de ação
+        if "Helicrash" in acao_tipo:
+            cor = 0xe67e22  # Laranja
+            emoji = "🚁"
+        else:
+            cor = 0x3498db  # Azul
+            emoji = "🎯"
+        
         # Criar embed de check-in
         embed = discord.Embed(
-            title=f"🎯 {acao_tipo}",
+            title=f"{emoji} {acao_tipo}",
             description="**Clique no botão ✅ PARTICIPAR para se inscrever nesta ação!**\n\n"
                        "📌 Quem participar será registrado automaticamente.\n"
                        "👤 Quando terminar a escalação, o criador clica em 📤 Concluir.",
-            color=0x3498db
+            color=cor
         )
         
+        # Informação de horário para Helicrash
+        if "Helicrash" in acao_tipo:
+            horario = acao_tipo.split("(")[1].replace(")", "")
+            embed.description += f"\n\n⏰ **Horário:** {horario} (horário de Brasília)"
+        
         # Mostrar limite se houver
-        if limite:
+        if limite and limite is not None:
             async with db.acquire() as conn:
                 qtd_feita = await conn.fetchval(
                     "SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND status='concluida' AND (resultado='ganhou' OR resultado='perdeu')",
@@ -4129,10 +4165,10 @@ class AcaoCheckinView(discord.ui.View):
             msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
             await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
             
-            # 🔥 EXCLUIR a mensagem original (não apenas editar)
+            # Excluir a mensagem original
             await interaction.message.delete()
             
-            # Confirmação ephemeral (só quem clicou vê)
+            # Confirmação ephemeral
             await interaction.response.send_message(
                 f"✅ Escalação concluída! Relatório enviado para <#{CANAL_RELATORIO_ACOES_ID}>.", 
                 ephemeral=True
@@ -4168,11 +4204,11 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
             return
 
         async with db.acquire() as conn:
-            # Verificar limite semanal antes de finalizar
+            # Verificar limite semanal (apenas para ações COM limite)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
             limite = ACOES_SEMANA.get(acao["tipo"])
             
-            if limite:
+            if limite and limite is not None:
                 qtd_feita = await conn.fetchval(
                     "SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND resultado='ganhou' AND id != $2",
                     acao["tipo"], self.acao_id
