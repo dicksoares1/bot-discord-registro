@@ -4070,7 +4070,7 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
 
 
 # =========================================================
-# ================= VIEW DO RESULTADO (COM 2 BOTÕES) ======
+# ================= VIEW DO RESULTADO (COM 3 BOTÕES) ======
 # =========================================================
 
 class ResultadoAcaoView(discord.ui.View):
@@ -4107,13 +4107,162 @@ class ResultadoAcaoView(discord.ui.View):
         
         await interaction.response.send_modal(ResultadoPerdeuModal(self.acao_id, self.mensagem_original))
 
+    # ✅ BOTÃO DE EDITAR PARTICIPANTES
+    @discord.ui.button(label="✏️ Editar Participantes", style=discord.ButtonStyle.secondary, custom_id="editar_participantes", emoji="👥")
+    async def editar_participantes(self, interaction: discord.Interaction, button):
+        # Verificar se a ação já foi finalizada
+        async with db.acquire() as conn:
+            acao = await conn.fetchrow("SELECT resultado FROM acoes_semana WHERE id=$1", self.acao_id)
+            
+            if acao["resultado"]:
+                await interaction.response.send_message("❌ Esta ação já foi finalizada e não pode ser editada!", ephemeral=True)
+                return
+        
+        # Buscar participantes atuais
+        async with db.acquire() as conn:
+            participantes = await conn.fetch(
+                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+                self.acao_id
+            )
+        
+        participantes_ids = [int(p["user_id"]) for p in participantes]
+        
+        # Criar view de seleção para edição
+        view = EditarParticipantesView(self.acao_id, participantes_ids, self.mensagem_original)
+        
+        await interaction.response.send_message(
+            "📋 **Editar Participantes da Ação**\n\n"
+            "• Selecione os participantes (pode escolher vários)\n"
+            "• Membros já selecionados aparecerão marcados\n"
+            "• Membros NÃO selecionados serão removidos\n"
+            "• Novos membros selecionados serão adicionados\n\n"
+            "⚠️ **ATENÇÃO:** A lista será COMPLETAMENTE SUBSTITUÍDA pelos novos selecionados!",
+            view=view,
+            ephemeral=True
+        )
+
+
+# =========================================================
+# ================= EDITAR PARTICIPANTES ==================
+# =========================================================
+
+class SelecionarMembrosEdicao(discord.ui.UserSelect):
+    def __init__(self, acao_id, participantes_atuais, mensagem_original):
+        super().__init__(
+            min_values=0, 
+            max_values=25, 
+            placeholder="Selecione os novos participantes da ação"
+        )
+        self.acao_id = acao_id
+        self.participantes_atuais = participantes_atuais
+        self.mensagem_original = mensagem_original
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        # IDs dos participantes selecionados agora
+        novos_ids = [str(u.id) for u in self.values]
+        
+        # IDs atuais (string)
+        ids_atuais = [str(pid) for pid in self.participantes_atuais]
+        
+        # Calcular o que mudou
+        adicionados = [uid for uid in novos_ids if uid not in ids_atuais]
+        removidos = [uid for uid in ids_atuais if uid not in novos_ids]
+        
+        if not adicionados and not removidos:
+            await interaction.followup.send("ℹ️ Nenhuma alteração feita.", ephemeral=True)
+            return
+        
+        # Atualizar no banco de dados
+        async with db.acquire() as conn:
+            # Primeiro, remove todos os participantes atuais
+            await conn.execute(
+                "DELETE FROM participantes_acoes WHERE acao_id = $1",
+                self.acao_id
+            )
+            
+            # Depois, insere os novos participantes
+            for uid in novos_ids:
+                await conn.execute(
+                    "INSERT INTO participantes_acoes (acao_id, user_id) VALUES ($1, $2)",
+                    self.acao_id,
+                    uid
+                )
+            
+            # Buscar dados atualizados para o embed
+            acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
+            participantes = await conn.fetch(
+                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+                self.acao_id
+            )
+        
+        # Atualizar a mensagem original do relatório
+        lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum participante"
+        
+        embed = self.mensagem_original.embeds[0]
+        
+        # Atualizar o campo de participantes
+        for i, field in enumerate(embed.fields):
+            if field.name == "👥 Participantes":
+                embed.set_field_at(
+                    i,
+                    name="👥 Participantes",
+                    value=lista_participantes,
+                    inline=False
+                )
+                break
+        
+        await self.mensagem_original.edit(embed=embed)
+        
+        # Criar mensagem de resumo das alterações
+        resumo = []
+        if adicionados:
+            nomes_adicionados = []
+            for uid in adicionados:
+                user = interaction.guild.get_member(int(uid))
+                nomes_adicionados.append(user.display_name if user else uid)
+            resumo.append(f"✅ **Adicionados:** {', '.join(nomes_adicionados)}")
+        
+        if removidos:
+            nomes_removidos = []
+            for uid in removidos:
+                user = interaction.guild.get_member(int(uid))
+                nomes_removidos.append(user.display_name if user else uid)
+            resumo.append(f"❌ **Removidos:** {', '.join(nomes_removidos)}")
+        
+        resumo.append(f"\n📊 **Total agora:** {len(participantes)} participante(s)")
+        
+        embed_resumo = discord.Embed(
+            title="✏️ Participantes Atualizados com Sucesso!",
+            description="\n".join(resumo),
+            color=0x2ecc71
+        )
+        
+        await interaction.followup.send(embed=embed_resumo, ephemeral=True)
+
+
+class EditarParticipantesView(discord.ui.View):
+    def __init__(self, acao_id, participantes_atuais, mensagem_original):
+        super().__init__(timeout=120)  # Timeout de 2 minutos
+        self.add_item(SelecionarMembrosEdicao(acao_id, participantes_atuais, mensagem_original))
+        self.add_item(FecharButtonEdicao())
+
+
+class FecharButtonEdicao(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger)
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.message.delete()
+
 
 # =========================================================
 # ================= FUNÇÃO REGISTRAR RELATÓRIO ============
 # =========================================================
 
 async def registrar_relatorio_acao(guild, acao_id):
-    """Registra o relatório da ação com botões (Ganhou/Perdeu)"""
+    """Registra o relatório da ação com botões (Ganhou/Perdeu/Editar)"""
     
     async with db.acquire() as conn:
         acao = await conn.fetchrow("SELECT * FROM acoes_semana WHERE id=$1", acao_id)
@@ -4125,13 +4274,13 @@ async def registrar_relatorio_acao(guild, acao_id):
     embed.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
     embed.add_field(name="👥 Participantes", value=lista, inline=False)
     embed.add_field(name="🎯 Resultado", value="⏳ Aguardando...", inline=False)
-    embed.set_footer(text=f"ID: {acao_id}")
+    embed.set_footer(text=f"ID: {acao_id} • Para editar participantes, clique no botão 👥")
     
     canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
     
     if canal:
         msg = await canal.send(embed=embed, view=None)
-        # Agora edita a mensagem com a view que tem os botões
+        # Agora a view tem 3 botões: Ganhou, Perdeu, Editar
         await msg.edit(view=ResultadoAcaoView(acao_id, msg))
 
 
@@ -4187,6 +4336,7 @@ class RelatorioPeriodoModal(discord.ui.Modal, title="📊 Gerar Relatório"):
         embed.add_field(name="👥 Participações", value="\n".join(linhas) if linhas else "Nenhuma", inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        
 # =========================================================
 # =========================== METAS ========================
 # =========================================================
