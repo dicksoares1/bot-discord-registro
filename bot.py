@@ -3825,7 +3825,7 @@ async def gerar_embed_acoes():
         rows = await conn.fetch("""
             SELECT tipo, COUNT(*) as qtd
             FROM acoes_semana
-            WHERE status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu')
+            WHERE status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu' OR resultado = 'concluida')
             GROUP BY tipo
         """)
 
@@ -3892,23 +3892,27 @@ class PainelAcoesView(discord.ui.View):
     @discord.ui.button(label="🎯 Criar Nova Ação", style=discord.ButtonStyle.success, custom_id="criar_acao", emoji="🎯")
     async def criar_acao(self, interaction: discord.Interaction, button):
         """Abre o seletor de ações para criar uma nova"""
+        await interaction.response.defer(ephemeral=True)
+        
         view = SelecionarAcaoView()
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "**Selecione o tipo de ação:**",
             view=view,
             ephemeral=True
         )
 
     @discord.ui.button(label="📊 Ver Relatório", style=discord.ButtonStyle.primary, custom_id="acoes_relatorio", emoji="📊")
-    async def relatorio(self, interaction, button):
+    async def relatorio(self, interaction: discord.Interaction, button):
         await interaction.response.send_modal(RelatorioPeriodoModal())
 
     @discord.ui.button(label="♻️ Resetar Ações", style=discord.ButtonStyle.danger, custom_id="acoes_reset", emoji="♻️")
-    async def reset(self, interaction, button):
+    async def reset(self, interaction: discord.Interaction, button):
+        await interaction.response.defer(ephemeral=True)
+        
         # Verificar permissão (apenas gerentes/ADM)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         if not is_gerente and not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Apenas gerentes podem resetar as ações!", ephemeral=True)
+            await interaction.followup.send("❌ Apenas gerentes podem resetar as ações!", ephemeral=True)
             return
         
         async with db.acquire() as conn:
@@ -3916,7 +3920,7 @@ class PainelAcoesView(discord.ui.View):
             await conn.execute("DELETE FROM participantes_acoes")
         
         await atualizar_painel_acoes(interaction.guild)
-        await interaction.response.send_message("✅ Todas as ações foram resetadas!", ephemeral=True)
+        await interaction.followup.send("✅ Todas as ações foram resetadas!", ephemeral=True)
 
 
 class SelecionarAcaoView(discord.ui.View):
@@ -4032,7 +4036,7 @@ class SelecionarAcaoView(discord.ui.View):
         canal = interaction.guild.get_channel(CANAL_ESCALACOES_ID)
         
         if canal:
-            msg = await canal.send(embed=embed, view=AcaoCheckinView(acao_id, interaction.user.id))
+            await canal.send(embed=embed, view=AcaoCheckinView(acao_id, interaction.user.id))
             await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada! Os membros podem clicar em **✅ Participar** para se inscrever.", ephemeral=True)
         else:
             await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
@@ -4210,6 +4214,7 @@ class AcaoCheckinView(discord.ui.View):
             await atualizar_painel_acoes(interaction.guild)
         else:
             await interaction.response.send_message("❌ Canal de relatório não encontrado!", ephemeral=True)
+
 
 # =========================================================
 # ================= MODAL DE RESULTADO (GANHOU) ===========
