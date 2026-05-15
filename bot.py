@@ -3034,27 +3034,107 @@ async def checar_twitch(canal):
 # =========================================================
 
 async def checar_kick(canal):
-
+    """Verifica se um canal da Kick está ao vivo (versão melhorada)"""
     try:
-
-        url = f"https://kick.com/api/v2/channels/{canal}"
-
-        async with http_session.get(url) as r:
-
-            data = await r.json()
-
-        if data.get("livestream"):
-
-            titulo = data["livestream"]["session_title"]
-            thumb = data["livestream"]["thumbnail"]["url"]
-
-            return True, titulo, None, thumb
-
+        # Primeiro tenta a API v2
+        url_api = f"https://kick.com/api/v2/channels/{canal}"
+        
+        async with http_session.get(url_api, timeout=10) as r:
+            if r.status == 200:
+                data = await r.json()
+                
+                if data.get("livestream"):
+                    titulo = data["livestream"].get("session_title", "Live na Kick")
+                    
+                    # Pega a thumbnail
+                    thumbnail = data["livestream"].get("thumbnail", {}).get("url")
+                    if not thumbnail:
+                        thumbnail = f"https://kick.com/og-images/{canal}.png"
+                    
+                    # Pega o jogo/categoria
+                    categoria = data.get("category", {}).get("name") if data.get("category") else None
+                    
+                    return True, titulo, categoria, thumbnail
+                
+                return False, None, None, None
+        
+        # Fallback: tenta a página HTML
+        url_page = f"https://kick.com/{canal}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        
+        async with http_session.get(url_page, headers=headers, timeout=10) as r:
+            if r.status == 200:
+                html = await r.text()
+                
+                # Procura por indicadores de live
+                if "isLive:true" in html or '"livestream":{' in html:
+                    # Tenta extrair título
+                    import re
+                    titulo_match = re.search(r'"sessionTitle":"([^"]+)"', html)
+                    titulo = titulo_match.group(1) if titulo_match else f"Live na Kick - {canal}"
+                    
+                    thumbnail = f"https://kick.com/og-images/{canal}.png"
+                    
+                    return True, titulo, None, thumbnail
+        
+        return False, None, None, None
+        
+    except Exception as e:
+        print(f"Erro ao verificar Kick para {canal}: {e}")
         return False, None, None, None
 
-    except:
-        return False, None, None, None
 
+# Função melhorada para detectar plataforma
+def detectar_plataforma(link):
+    link = link.lower()
+    
+    if "twitch.tv" in link:
+        return "twitch"
+    
+    if "kick.com" in link:
+        return "kick"
+    
+    if "tiktok.com" in link:
+        return "tiktok"
+    
+    # Para links sem http
+    if "kick.com" in link or "kick" in link:
+        return "kick"
+    
+    return None
+
+
+# Função melhorada para extrair canal
+def extrair_canal(link):
+    link = link.lower().strip()
+    
+    # Remove protocolos
+    link = link.replace("https://", "")
+    link = link.replace("http://", "")
+    link = link.replace("www.", "")
+    
+    partes = link.split("/")
+    
+    if "twitch.tv" in link:
+        return partes[1] if len(partes) > 1 else None
+    
+    if "kick.com" in link:
+        # Pode ser kick.com/canal ou kick.com/canal/live
+        canal = partes[1] if len(partes) > 1 else None
+        if canal and canal != "live":
+            return canal
+        return None
+    
+    if "tiktok.com" in link:
+        user = partes[1].replace("@", "") if len(partes) > 1 else None
+        if user:
+            user = user.split("?")[0]
+            return user
+        return None
+    
+    return None
 
 # =========================================================
 # ================= CHECAR TIKTOK =========================
@@ -3275,7 +3355,7 @@ def extrair_canal(link):
 
 @tasks.loop(minutes=2)
 async def verificar_lives():
-    """Verifica todas as lives cadastradas"""
+    """Verifica todas as lives cadastradas (Twitch, Kick e TikTok)"""
     
     print("🔄 Verificando lives...")
     
@@ -3289,6 +3369,9 @@ async def verificar_lives():
             for data in lista_lives:
                 link = data.get("link", "")
                 divulgado = data.get("divulgado", False)
+                
+                if not link:
+                    continue
                 
                 plataforma = detectar_plataforma(link)
                 canal_name = extrair_canal(link)
@@ -3305,13 +3388,16 @@ async def verificar_lives():
                 try:
                     if plataforma == "twitch":
                         ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal_name)
+                        print(f"📺 Twitch {canal_name}: ao_vivo={ao_vivo}")
+                    
                     elif plataforma == "kick":
                         ao_vivo, titulo, jogo, thumbnail = await checar_kick(canal_name)
+                        print(f"🟢 Kick {canal_name}: ao_vivo={ao_vivo}, titulo={titulo}")
+                    
                     elif plataforma == "tiktok":
                         ao_vivo, titulo, jogo, thumbnail = await checar_tiktok(canal_name)
-                    else:
-                        continue
-                        
+                        print(f"📱 TikTok {canal_name}: ao_vivo={ao_vivo}")
+                    
                 except Exception as e:
                     print(f"Erro ao verificar {plataforma}/{canal_name}: {e}")
                     continue
@@ -3338,7 +3424,6 @@ async def verificar_lives():
                     
     except Exception as e:
         print(f"❌ Erro no loop de lives: {e}")
-
 # =========================================================
 # ================= CADASTRO DE LIVE ======================
 # =========================================================
@@ -4241,6 +4326,180 @@ class ResultadoAcaoView(discord.ui.View):
         
         await interaction.response.send_modal(ResultadoPerdeuModal(self.acao_id))
 
+# =========================================================
+# ================= BOTÃO EDITAR MEMBROS ==================
+# =========================================================
+
+class EditarMembrosAcaoView(discord.ui.View):
+    def __init__(self, acao_id):
+        super().__init__(timeout=None)
+        self.acao_id = acao_id
+    
+    @discord.ui.button(
+        label="✏️ Editar Participantes",
+        style=discord.ButtonStyle.secondary,
+        custom_id="editar_membros_acao_btn",
+        emoji="👥"
+    )
+    async def editar_membros(self, interaction: discord.Interaction, button):
+        # Verificar permissão
+        async with db.acquire() as conn:
+            acao = await conn.fetchrow(
+                "SELECT autor FROM acoes_semana WHERE id=$1 AND resultado IS NULL",
+                self.acao_id
+            )
+        
+        if not acao:
+            await interaction.response.send_message(
+                "❌ Esta ação já foi finalizada e não pode mais ser editada.",
+                ephemeral=True
+            )
+            return
+        
+        is_autor = str(interaction.user.id) == acao["autor"]
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_autor and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas o criador da ação ou gerentes podem editar os participantes!",
+                ephemeral=True
+            )
+            return
+        
+        # Buscar participantes atuais
+        async with db.acquire() as conn:
+            participantes = await conn.fetch(
+                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+                self.acao_id
+            )
+        
+        participantes_ids = [int(p["user_id"]) for p in participantes]
+        
+        # Criar view de seleção
+        view = SelecionarMembrosEditView(self.acao_id, participantes_ids)
+        
+        await interaction.response.send_message(
+            "📋 **Selecione os novos participantes da ação:**\n"
+            "• Você pode adicionar novos membros\n"
+            "• Membros já selecionados aparecerão marcados\n"
+            "• Os membros removidos serão retirados da ação",
+            view=view,
+            ephemeral=True
+        )
+
+
+class SelecionarMembrosEdit(discord.ui.UserSelect):
+    def __init__(self, acao_id, participantes_atual):
+        super().__init__(
+            min_values=0, 
+            max_values=25,
+            placeholder="Selecione os participantes da ação"
+        )
+        self.acao_id = acao_id
+        self.participantes_atual = participantes_atual
+    
+    async def callback(self, interaction: discord.Interaction):
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        novos_ids = [str(u.id) for u in self.values]
+        ids_atual = self.participantes_atual
+        
+        # Adicionar novos participantes
+        adicionados = []
+        for uid in novos_ids:
+            if uid not in ids_atual:
+                adicionados.append(uid)
+        
+        # Remover participantes que não estão mais na lista
+        removidos = []
+        for uid in ids_atual:
+            if uid not in novos_ids:
+                removidos.append(uid)
+        
+        async with db.acquire() as conn:
+            # Adicionar novos
+            for uid in adicionados:
+                await conn.execute(
+                    "INSERT INTO participantes_acoes (acao_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    self.acao_id,
+                    uid
+                )
+            
+            # Remover os que saíram
+            for uid in removidos:
+                await conn.execute(
+                    "DELETE FROM participantes_acoes WHERE acao_id=$1 AND user_id=$2",
+                    self.acao_id,
+                    uid
+                )
+        
+        # Buscar dados atualizados
+        async with db.acquire() as conn:
+            participantes = await conn.fetch(
+                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+                self.acao_id
+            )
+            acao = await conn.fetchrow(
+                "SELECT tipo FROM acoes_semana WHERE id=$1",
+                self.acao_id
+            )
+        
+        # Atualizar a mensagem original
+        mensagem_original = interaction.message
+        if mensagem_original and mensagem_original.embeds:
+            embed = mensagem_original.embeds[0]
+            
+            # Atualizar o campo de participantes
+            lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum"
+            
+            for i, field in enumerate(embed.fields):
+                if field.name == "👥 Participantes":
+                    embed.set_field_at(
+                        i,
+                        name="👥 Participantes",
+                        value=lista_participantes,
+                        inline=False
+                    )
+                    break
+            
+            await mensagem_original.edit(embed=embed)
+        
+        # Criar mensagem de resumo
+        resumo = []
+        if adicionados:
+            resumo.append(f"✅ **Adicionados:** {', '.join([f'<@{uid}>' for uid in adicionados])}")
+        if removidos:
+            resumo.append(f"❌ **Removidos:** {', '.join([f'<@{uid}>' for uid in removidos])}")
+        
+        if not resumo:
+            resumo.append("ℹ️ Nenhuma alteração feita.")
+        
+        resumo.append(f"\n📊 **Total atual:** {len(participantes)} participantes")
+        
+        embed_resumo = discord.Embed(
+            title="✏️ Participantes Atualizados",
+            description="\n".join(resumo),
+            color=0x2ecc71 if (adicionados or removidos) else 0x3498db
+        )
+        
+        await interaction.followup.send(embed=embed_resumo, ephemeral=True)
+
+
+class SelecionarMembrosEditView(discord.ui.View):
+    def __init__(self, acao_id, participantes_atual):
+        super().__init__(timeout=300)
+        self.add_item(SelecionarMembrosEdit(acao_id, participantes_atual))
+        self.add_item(FecharButton())
+
+
+class FecharButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger)
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.message.delete()
+
         # =============================================
         # ✅ GANHOU - DISTRIBUIR PARA OS PARTICIPANTES
         # =============================================
@@ -4342,31 +4601,36 @@ class ResultadoAcaoView(discord.ui.View):
 # =========================================================
 
 async def registrar_relatorio_acao(guild, acao_id):
-
+    """Registra o relatório da ação com botão para editar participantes"""
+    
     async with db.acquire() as conn:
-
         acao = await conn.fetchrow(
             "SELECT * FROM acoes_semana WHERE id=$1",
             acao_id
         )
-
+        
         participantes = await conn.fetch(
             "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
             acao_id
         )
-
-    lista = "\n".join([f"<@{p['user_id']}>" for p in participantes]) or "Nenhum"
-
-    embed = discord.Embed(title="🚨 RELATÓRIO DE AÇÃO", color=0xe74c3c)
-
+    
+    lista = "\n".join([f"<@{p['user_id']}>" for p in participantes]) or "Nenhum participante"
+    
+    embed = discord.Embed(
+        title="🚨 RELATÓRIO DE AÇÃO", 
+        color=0xe74c3c
+    )
+    
     embed.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
     embed.add_field(name="👥 Participantes", value=lista, inline=False)
     embed.add_field(name="🎯 Resultado", value="⏳ Aguardando...", inline=False)
-
+    embed.set_footer(text=f"ID: {acao_id} • Para editar participantes, clique no botão abaixo")
+    
     canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
-
+    
     if canal:
-        await canal.send(embed=embed, view=ResultadoAcaoView(acao_id))
+        # Envia com a view que tem o botão de editar
+        await canal.send(embed=embed, view=EditarMembrosAcaoView(acao_id))
 
 # =========================================================
 # ================= PAINEL ================================
