@@ -4095,7 +4095,7 @@ class AcaoCheckinView(discord.ui.View):
                 await interaction.response.send_message("❌ Esta ação já foi concluída!", ephemeral=True)
                 return
             
-            # Marcar como concluída (não finalizada ainda, só escalação encerrada)
+            # Marcar como concluída
             await conn.execute("UPDATE acoes_semana SET status='concluida' WHERE id=$1", self.acao_id)
             
             participantes = await conn.fetch(
@@ -4127,25 +4127,12 @@ class AcaoCheckinView(discord.ui.View):
         
         if canal_relatorio:
             msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
-            # Editar com a view de resultado
             await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
             
-            # Atualizar mensagem original informando que foi concluída
-            embed_concluida = interaction.message.embeds[0]
-            embed_concluida.color = 0x2ecc71
-            embed_concluida.title = f"✅ AÇÃO CONCLUÍDA - {embed_concluida.title}"
+            # 🔥 EXCLUIR a mensagem original (não apenas editar)
+            await interaction.message.delete()
             
-            for i, field in enumerate(embed_concluida.fields):
-                if field.name.startswith("👥 Participantes"):
-                    embed_concluida.set_field_at(
-                        i,
-                        name=f"✅ {field.name}",
-                        value=field.value + "\n\n✅ **Escalação finalizada!** O relatório foi enviado para resultados.",
-                        inline=False
-                    )
-                    break
-            
-            await interaction.message.edit(embed=embed_concluida, view=None)
+            # Confirmação ephemeral (só quem clicou vê)
             await interaction.response.send_message(
                 f"✅ Escalação concluída! Relatório enviado para <#{CANAL_RELATORIO_ACOES_ID}>.", 
                 ephemeral=True
