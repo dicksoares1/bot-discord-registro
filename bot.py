@@ -3879,87 +3879,177 @@ class AcaoSelect(discord.ui.Select):
         super().__init__(placeholder="Escolha a ação", options=options, custom_id="acao_select_menu")
 
     async def callback(self, interaction):
-        await interaction.response.send_message(
-            "Selecione os participantes:",
-            view=SelecionarMembrosView(self.values[0]),
-            ephemeral=True
-        )
-
-
-# =========================================================
-# ================= SELECIONAR MEMBROS ====================
-# =========================================================
-
-class SelecionarMembros(discord.ui.UserSelect):
-    def __init__(self, view_ref):
-        super().__init__(min_values=1, max_values=25, placeholder="Selecione os participantes")
-        self.view_ref = view_ref
-
-    async def callback(self, interaction):
-        membros_validos = []
-        membros_invalidos = []
-
-        for m in self.values:
-            if any(role.id in CARGOS_PERMITIDOS_ESCALACAO for role in m.roles):
-                membros_validos.append(m)
-            else:
-                membros_invalidos.append(m)
-
-        self.view_ref.membros = membros_validos
-
-        msg = f"✅ {len(membros_validos)} participantes válidos selecionados"
-        if membros_invalidos:
-            nomes = ", ".join(m.display_name for m in membros_invalidos)
-            msg += f"\n⚠️ Ignorados: {nomes}"
-
-        await interaction.response.send_message(msg, ephemeral=True)
-
-
-class SelecionarMembrosView(discord.ui.View):
-    def __init__(self, acao):
-        super().__init__(timeout=300)
-        self.acao = acao
-        self.membros = []
-        self.add_item(SelecionarMembros(self))
-        self.add_item(EnviarEscalacaoButton(self))
-
-
-class EnviarEscalacaoButton(discord.ui.Button):
-    def __init__(self, view):
-        super().__init__(label="📤 Enviar", style=discord.ButtonStyle.success)
-        self.view_ref = view
-
-    async def callback(self, interaction):
+        # Criar a ação imediatamente e gerar embed de check-in
         await interaction.response.defer(ephemeral=True)
-
-        membros = self.view_ref.membros
-
-        if not membros:
-            await interaction.followup.send("⚠️ Selecione participantes.", ephemeral=True)
-            return
-
+        
+        acao_tipo = self.values[0]
+        
+        # Salvar ação no banco (sem participantes ainda)
         async with db.acquire() as conn:
             acao_id = await conn.fetchval(
-                "INSERT INTO acoes_semana (tipo, data, autor) VALUES ($1, $2, $3) RETURNING id",
-                self.view_ref.acao,
+                "INSERT INTO acoes_semana (tipo, data, autor, status) VALUES ($1, $2, $3, 'aberta') RETURNING id",
+                acao_tipo,
                 agora_db(),
                 str(interaction.user.id)
             )
-
-            for m in membros:
-                await conn.execute(
-                    "INSERT INTO participantes_acoes (acao_id, user_id) VALUES ($1, $2)",
-                    acao_id,
-                    str(m.id)
-                )
-
-        # ✅ REGISTRAR RELATÓRIO DA AÇÃO
-        await registrar_relatorio_acao(interaction.guild, acao_id)
         
-        # ✅ ATUALIZAR O PAINEL PRINCIPAL
-        await atualizar_painel_acoes(interaction.guild)
+        # Criar embed de check-in
+        embed = discord.Embed(
+            title=f"🎯 {acao_tipo}",
+            description="**Clique no botão ✅ PARTICIPAR para se inscrever nesta ação!**\n\n"
+                       "📌 Quem participar será registrado automaticamente.\n"
+                       "👤 Quando terminar a escalação, o criador clica em 📤 Concluir.\n\n"
+                       f"🕐 Criado por: {interaction.user.mention}\n"
+                       f"📅 Data: {agora().strftime('%d/%m/%Y %H:%M')}",
+            color=0x3498db
+        )
+        embed.add_field(name="👥 Participantes (0)", value="Nenhum participante ainda.\nClique no botão abaixo!", inline=False)
+        embed.set_footer(text=f"ID: {acao_id}")
+        
+        # Enviar no canal de escalações
+        canal = interaction.guild.get_channel(CANAL_ESCALACOES_ID)
+        
+        if canal:
+            msg = await canal.send(embed=embed, view=AcaoCheckinView(acao_id, interaction.user.id))
+            await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada! Clique no botão para participar.", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
 
-        await interaction.followup.send("✅ Escalação registrada!", ephemeral=True)
+
+# =========================================================
+# ================= VIEW DE CHECK-IN DA AÇÃO ==============
+# =========================================================
+
+class AcaoCheckinView(discord.ui.View):
+    def __init__(self, acao_id, criador_id):
+        super().__init__(timeout=None)
+        self.acao_id = acao_id
+        self.criador_id = criador_id
+
+    @discord.ui.button(label="✅ Participar", style=discord.ButtonStyle.success, custom_id="acao_participar", emoji="✅")
+    async def participar(self, interaction: discord.Interaction, button):
+        # Verificar se o membro tem cargo permitido
+        if not any(role.id in CARGOS_PERMITIDOS_ESCALACAO for role in interaction.user.roles):
+            await interaction.response.send_message("❌ Você não tem permissão para participar de ações!", ephemeral=True)
+            return
+        
+        # Verificar se a ação ainda está aberta
+        async with db.acquire() as conn:
+            status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
+            
+            if status != "aberta":
+                await interaction.response.send_message("❌ Esta ação já foi concluída e não aceita mais participantes!", ephemeral=True)
+                return
+            
+            # Verificar se já está participando
+            ja_participa = await conn.fetchval(
+                "SELECT 1 FROM participantes_acoes WHERE acao_id=$1 AND user_id=$2",
+                self.acao_id, str(interaction.user.id)
+            )
+            
+            if ja_participa:
+                await interaction.response.send_message("⚠️ Você já está participando desta ação!", ephemeral=True)
+                return
+            
+            # Adicionar participante
+            await conn.execute(
+                "INSERT INTO participantes_acoes (acao_id, user_id) VALUES ($1, $2)",
+                self.acao_id, str(interaction.user.id)
+            )
+            
+            # Buscar todos os participantes atuais
+            participantes = await conn.fetch(
+                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+                self.acao_id
+            )
+            
+            acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
+        
+        # Atualizar o embed
+        embed = interaction.message.embeds[0]
+        lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum participante ainda."
+        
+        # Atualizar campo de participantes
+        for i, field in enumerate(embed.fields):
+            if field.name.startswith("👥 Participantes"):
+                embed.set_field_at(
+                    i,
+                    name=f"👥 Participantes ({len(participantes)})",
+                    value=lista_participantes,
+                    inline=False
+                )
+                break
+        
+        await interaction.message.edit(embed=embed)
+        await interaction.response.send_message(f"✅ Você se inscreveu na ação **{acao['tipo']}**!", ephemeral=True)
+
+    @discord.ui.button(label="📤 Concluir Escalação", style=discord.ButtonStyle.primary, custom_id="acao_concluir", emoji="📤")
+    async def concluir(self, interaction: discord.Interaction, button):
+        # Verificar se é o criador ou gerente
+        is_criador = interaction.user.id == self.criador_id
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_criador and not is_gerente:
+            await interaction.response.send_message("❌ Apenas o criador da ação ou gerentes podem concluir a escalação!", ephemeral=True)
+            return
+        
+        # Verificar se já foi concluída
+        async with db.acquire() as conn:
+            status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
+            
+            if status != "aberta":
+                await interaction.response.send_message("❌ Esta ação já foi concluída!", ephemeral=True)
+                return
+            
+            # Marcar como concluída
+            await conn.execute("UPDATE acoes_semana SET status='concluida' WHERE id=$1", self.acao_id)
+            
+            participantes = await conn.fetch(
+                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
+                self.acao_id
+            )
+            
+            acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
+        
+        if not participantes:
+            await interaction.response.send_message("⚠️ Nenhum participante se inscreveu! Ação cancelada.", ephemeral=True)
+            await interaction.message.delete()
+            return
+        
+        # Criar relatório
+        lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes])
+        
+        embed_relatorio = discord.Embed(title="🚨 RELATÓRIO DE AÇÃO", color=0xe74c3c)
+        embed_relatorio.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
+        embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
+        embed_relatorio.add_field(name="🎯 Resultado", value="⏳ Aguardando...", inline=False)
+        embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
+        
+        # Enviar relatório no canal de resultados
+        canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+        
+        if canal_relatorio:
+            msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
+            # Editar com a view de resultado
+            await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
+            
+            # Atualizar mensagem original informando que foi concluída
+            embed_concluida = interaction.message.embeds[0]
+            embed_concluida.color = 0x2ecc71
+            for i, field in enumerate(embed_concluida.fields):
+                if field.name.startswith("👥 Participantes"):
+                    embed_concluida.set_field_at(
+                        i,
+                        name=f"✅ AÇÃO CONCLUÍDA - {field.name}",
+                        value=field.value + "\n\n✅ **Escalação finalizada!** O relatório foi enviado.",
+                        inline=False
+                    )
+                    break
+            
+            await interaction.message.edit(embed=embed_concluida, view=None)
+            await interaction.response.send_message(f"✅ Escalação concluída! Relatório enviado para <#{CANAL_RELATORIO_ACOES_ID}>.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Canal de relatório não encontrado!", ephemeral=True)
 
 
 # =========================================================
@@ -4070,7 +4160,7 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
 
 
 # =========================================================
-# ================= VIEW DO RESULTADO (COM 3 BOTÕES) ======
+# ================= VIEW DO RESULTADO =====================
 # =========================================================
 
 class ResultadoAcaoView(discord.ui.View):
@@ -4107,182 +4197,6 @@ class ResultadoAcaoView(discord.ui.View):
         
         await interaction.response.send_modal(ResultadoPerdeuModal(self.acao_id, self.mensagem_original))
 
-    # ✅ BOTÃO DE EDITAR PARTICIPANTES
-    @discord.ui.button(label="✏️ Editar Participantes", style=discord.ButtonStyle.secondary, custom_id="editar_participantes", emoji="👥")
-    async def editar_participantes(self, interaction: discord.Interaction, button):
-        # Verificar se a ação já foi finalizada
-        async with db.acquire() as conn:
-            acao = await conn.fetchrow("SELECT resultado FROM acoes_semana WHERE id=$1", self.acao_id)
-            
-            if acao["resultado"]:
-                await interaction.response.send_message("❌ Esta ação já foi finalizada e não pode ser editada!", ephemeral=True)
-                return
-        
-        # Buscar participantes atuais
-        async with db.acquire() as conn:
-            participantes = await conn.fetch(
-                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
-                self.acao_id
-            )
-        
-        participantes_ids = [int(p["user_id"]) for p in participantes]
-        
-        # Criar view de seleção para edição
-        view = EditarParticipantesView(self.acao_id, participantes_ids, self.mensagem_original)
-        
-        await interaction.response.send_message(
-            "📋 **Editar Participantes da Ação**\n\n"
-            "• Selecione os participantes (pode escolher vários)\n"
-            "• Membros já selecionados aparecerão marcados\n"
-            "• Membros NÃO selecionados serão removidos\n"
-            "• Novos membros selecionados serão adicionados\n\n"
-            "⚠️ **ATENÇÃO:** A lista será COMPLETAMENTE SUBSTITUÍDA pelos novos selecionados!",
-            view=view,
-            ephemeral=True
-        )
-
-
-# =========================================================
-# ================= EDITAR PARTICIPANTES ==================
-# =========================================================
-
-class SelecionarMembrosEdicao(discord.ui.UserSelect):
-    def __init__(self, acao_id, participantes_atuais, mensagem_original):
-        super().__init__(
-            min_values=0, 
-            max_values=25, 
-            placeholder="Selecione os novos participantes da ação"
-        )
-        self.acao_id = acao_id
-        self.participantes_atuais = participantes_atuais
-        self.mensagem_original = mensagem_original
-    
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        # IDs dos participantes selecionados agora
-        novos_ids = [str(u.id) for u in self.values]
-        
-        # IDs atuais (string)
-        ids_atuais = [str(pid) for pid in self.participantes_atuais]
-        
-        # Calcular o que mudou
-        adicionados = [uid for uid in novos_ids if uid not in ids_atuais]
-        removidos = [uid for uid in ids_atuais if uid not in novos_ids]
-        
-        if not adicionados and not removidos:
-            await interaction.followup.send("ℹ️ Nenhuma alteração feita.", ephemeral=True)
-            return
-        
-        # Atualizar no banco de dados
-        async with db.acquire() as conn:
-            # Primeiro, remove todos os participantes atuais
-            await conn.execute(
-                "DELETE FROM participantes_acoes WHERE acao_id = $1",
-                self.acao_id
-            )
-            
-            # Depois, insere os novos participantes
-            for uid in novos_ids:
-                await conn.execute(
-                    "INSERT INTO participantes_acoes (acao_id, user_id) VALUES ($1, $2)",
-                    self.acao_id,
-                    uid
-                )
-            
-            # Buscar dados atualizados para o embed
-            acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
-            participantes = await conn.fetch(
-                "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
-                self.acao_id
-            )
-        
-        # Atualizar a mensagem original do relatório
-        lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum participante"
-        
-        embed = self.mensagem_original.embeds[0]
-        
-        # Atualizar o campo de participantes
-        for i, field in enumerate(embed.fields):
-            if field.name == "👥 Participantes":
-                embed.set_field_at(
-                    i,
-                    name="👥 Participantes",
-                    value=lista_participantes,
-                    inline=False
-                )
-                break
-        
-        await self.mensagem_original.edit(embed=embed)
-        
-        # Criar mensagem de resumo das alterações
-        resumo = []
-        if adicionados:
-            nomes_adicionados = []
-            for uid in adicionados:
-                user = interaction.guild.get_member(int(uid))
-                nomes_adicionados.append(user.display_name if user else uid)
-            resumo.append(f"✅ **Adicionados:** {', '.join(nomes_adicionados)}")
-        
-        if removidos:
-            nomes_removidos = []
-            for uid in removidos:
-                user = interaction.guild.get_member(int(uid))
-                nomes_removidos.append(user.display_name if user else uid)
-            resumo.append(f"❌ **Removidos:** {', '.join(nomes_removidos)}")
-        
-        resumo.append(f"\n📊 **Total agora:** {len(participantes)} participante(s)")
-        
-        embed_resumo = discord.Embed(
-            title="✏️ Participantes Atualizados com Sucesso!",
-            description="\n".join(resumo),
-            color=0x2ecc71
-        )
-        
-        await interaction.followup.send(embed=embed_resumo, ephemeral=True)
-
-
-class EditarParticipantesView(discord.ui.View):
-    def __init__(self, acao_id, participantes_atuais, mensagem_original):
-        super().__init__(timeout=120)  # Timeout de 2 minutos
-        self.add_item(SelecionarMembrosEdicao(acao_id, participantes_atuais, mensagem_original))
-        self.add_item(FecharButtonEdicao())
-
-
-class FecharButtonEdicao(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger)
-    
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.message.delete()
-
-
-# =========================================================
-# ================= FUNÇÃO REGISTRAR RELATÓRIO ============
-# =========================================================
-
-async def registrar_relatorio_acao(guild, acao_id):
-    """Registra o relatório da ação com botões (Ganhou/Perdeu/Editar)"""
-    
-    async with db.acquire() as conn:
-        acao = await conn.fetchrow("SELECT * FROM acoes_semana WHERE id=$1", acao_id)
-        participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", acao_id)
-    
-    lista = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum participante"
-    
-    embed = discord.Embed(title="🚨 RELATÓRIO DE AÇÃO", color=0xe74c3c)
-    embed.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
-    embed.add_field(name="👥 Participantes", value=lista, inline=False)
-    embed.add_field(name="🎯 Resultado", value="⏳ Aguardando...", inline=False)
-    embed.set_footer(text=f"ID: {acao_id} • Para editar participantes, clique no botão 👥")
-    
-    canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
-    
-    if canal:
-        msg = await canal.send(embed=embed, view=None)
-        # Agora a view tem 3 botões: Ganhou, Perdeu, Editar
-        await msg.edit(view=ResultadoAcaoView(acao_id, msg))
-
 
 # =========================================================
 # ================= PAINEL ================================
@@ -4294,7 +4208,19 @@ async def enviar_painel_acoes(guild):
         print("❌ Canal ações não encontrado")
         return
 
-    embed = await gerar_embed_acoes()
+    embed = discord.Embed(
+        title="🎯 PAINEL DE AÇÕES",
+        description="**Selecione uma ação abaixo para criar uma nova escalação!**\n\n"
+                   "📌 **Como funciona:**\n"
+                   "1️⃣ Escolha a ação no menu\n"
+                   "2️⃣ Um embed será criado com botão ✅ PARTICIPAR\n"
+                   "3️⃣ Quem quiser participar, clica no botão\n"
+                   "4️⃣ Quando terminar, o criador clica em 📤 CONCLUIR\n"
+                   "5️⃣ O relatório vai para o canal de resultados\n"
+                   "6️⃣ Finalize com GANHOU ou PERDEU",
+        color=0x2ecc71
+    )
+    
     await enviar_ou_atualizar_painel("painel_acoes", CANAL_ESCALACOES_ID, embed, PainelAcoesView())
 
 
@@ -4320,7 +4246,7 @@ class RelatorioPeriodoModal(discord.ui.Modal, title="📊 Gerar Relatório"):
 
         async with db.acquire() as conn:
             total = await conn.fetchval(
-                "SELECT COALESCE(SUM(valor), 0) FROM acoes_semana WHERE DATE(data) BETWEEN DATE($1) AND DATE($2)",
+                "SELECT COALESCE(SUM(valor), 0) FROM acoes_semana WHERE DATE(data) BETWEEN DATE($1) AND DATE($2) AND resultado = 'ganhou'",
                 inicio, fim
             )
             rows = await conn.fetch(
@@ -4332,7 +4258,7 @@ class RelatorioPeriodoModal(discord.ui.Modal, title="📊 Gerar Relatório"):
 
         embed = discord.Embed(title="📊 Relatório de Ações", color=0x3498db)
         embed.add_field(name="📅 Período", value=f"{self.data_inicio.value} até {self.data_fim.value}", inline=False)
-        embed.add_field(name="💰 Total Movimentado", value=f"R$ {formatar_dinheiro(total)}", inline=False)
+        embed.add_field(name="💰 Total Movimentado (vitórias)", value=f"R$ {formatar_dinheiro(total)}", inline=False)
         embed.add_field(name="👥 Participações", value="\n".join(linhas) if linhas else "Nenhuma", inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
