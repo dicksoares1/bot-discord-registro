@@ -4131,24 +4131,63 @@ class AcaoCheckinView(discord.ui.View):
                 await interaction.response.send_message("❌ Esta ação já foi concluída!", ephemeral=True)
                 return
             
-            # Marcar como concluída
-            await conn.execute("UPDATE acoes_semana SET status='concluida' WHERE id=$1", self.acao_id)
-            
+            # Buscar dados da ação
+            acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
             participantes = await conn.fetch(
                 "SELECT user_id FROM participantes_acoes WHERE acao_id=$1",
                 self.acao_id
             )
             
-            acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
-        
-        if not participantes:
-            await interaction.response.send_message("⚠️ Nenhum participante se inscreveu! Ação cancelada.", ephemeral=True)
-            await interaction.message.delete()
-            return
+            # Verificar se é HELICRASH
+            is_helicrash = "Helicrash" in acao["tipo"]
+            
+            if not participantes:
+                await interaction.response.send_message("⚠️ Nenhum participante se inscreveu! Ação cancelada.", ephemeral=True)
+                await interaction.message.delete()
+                return
+            
+            # Marcar como concluída
+            await conn.execute("UPDATE acoes_semana SET status='concluida' WHERE id=$1", self.acao_id)
+            
+            # Se for HELICRASH, já finaliza automaticamente
+            if is_helicrash:
+                await conn.execute("UPDATE acoes_semana SET resultado='concluida', valor=0 WHERE id=$1", self.acao_id)
         
         # Criar relatório
         lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes])
         
+        # =============================================
+        # PARA HELICRASH - Envia direto sem botões
+        # =============================================
+        if is_helicrash:
+            embed_relatorio = discord.Embed(
+                title="🚁 RELATÓRIO DE HELICRASH", 
+                description=f"**{acao['tipo']}**\n\n✅ Evento registrado com sucesso!",
+                color=0xe67e22
+            )
+            embed_relatorio.add_field(name="🏦 Evento", value=acao["tipo"], inline=False)
+            embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
+            embed_relatorio.add_field(name="📅 Data", value=agora().strftime('%d/%m/%Y %H:%M'), inline=False)
+            embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
+            
+            canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+            
+            if canal_relatorio:
+                await canal_relatorio.send(embed=embed_relatorio)
+                await interaction.message.delete()
+                await interaction.response.send_message(
+                    f"✅ Helicrash **{acao['tipo']}** registrado! Participantes: {len(participantes)}", 
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("❌ Canal de relatório não encontrado!", ephemeral=True)
+            
+            await atualizar_painel_acoes(interaction.guild)
+            return
+        
+        # =============================================
+        # PARA AÇÕES NORMAIS - Com botões Ganhou/Perdeu
+        # =============================================
         embed_relatorio = discord.Embed(
             title="🚨 RELATÓRIO DE AÇÃO", 
             color=0xe74c3c
@@ -4158,27 +4197,19 @@ class AcaoCheckinView(discord.ui.View):
         embed_relatorio.add_field(name="🎯 Resultado", value="⏳ Aguardando finalização...", inline=False)
         embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
         
-        # Enviar relatório no canal de resultados
         canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
         
         if canal_relatorio:
             msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
             await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
-            
-            # Excluir a mensagem original
             await interaction.message.delete()
-            
-            # Confirmação ephemeral
             await interaction.response.send_message(
                 f"✅ Escalação concluída! Relatório enviado para <#{CANAL_RELATORIO_ACOES_ID}>.", 
                 ephemeral=True
             )
-            
-            # Atualizar o painel principal com a nova contagem
             await atualizar_painel_acoes(interaction.guild)
         else:
             await interaction.response.send_message("❌ Canal de relatório não encontrado!", ephemeral=True)
-
 
 # =========================================================
 # ================= MODAL DE RESULTADO (GANHOU) ===========
