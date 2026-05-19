@@ -3469,10 +3469,11 @@ class CadastrarLiveView(discord.ui.View):
 # =========================================================
 
 class ConfirmarRemoverView(discord.ui.View):
-    def __init__(self, user_id, nome):
+    def __init__(self, user_id, nome, message):
         super().__init__(timeout=30)
         self.user_id = user_id
         self.nome = nome
+        self.message = message
     
     @discord.ui.button(label="✅ Sim, remover", style=discord.ButtonStyle.danger, emoji="✅")
     async def confirmar(self, interaction: discord.Interaction, button):
@@ -3480,17 +3481,22 @@ class ConfirmarRemoverView(discord.ui.View):
             await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
             return
         
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         
+        # Remover do banco
         await remover_live_db(self.user_id)
         
+        # Enviar confirmação
         await interaction.followup.send(
-            f"✅ **Lives removidas com sucesso!**\n"
-            f"Usuário: {self.nome}",
+            f"✅ **Lives removidas com sucesso!**\nUsuário: {self.nome}",
             ephemeral=True
         )
         
-        await interaction.message.delete()
+        # Tentar deletar a mensagem original
+        try:
+            await self.message.delete()
+        except:
+            pass
         
         # Atualizar painéis
         await enviar_painel_lives()
@@ -3502,8 +3508,15 @@ class ConfirmarRemoverView(discord.ui.View):
             await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
             return
         
-        await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
-        await interaction.message.delete()
+        await interaction.response.defer(ephemeral=True)
+        
+        await interaction.followup.send("❌ Operação cancelada.", ephemeral=True)
+        
+        # Tentar deletar a mensagem original
+        try:
+            await self.message.delete()
+        except:
+            pass
 
 
 class RemoverLiveSelect(discord.ui.Select):
@@ -3533,7 +3546,10 @@ class RemoverLiveSelect(discord.ui.Select):
         user = bot.get_user(int(user_id))
         nome = user.display_name if user else user_id
         
-        view = ConfirmarRemoverView(user_id, nome)
+        # Guardar a mensagem original
+        original_message = interaction.message
+        
+        view = ConfirmarRemoverView(user_id, nome, original_message)
         await interaction.response.edit_message(
             content=f"⚠️ **Remover todas as lives de {nome}?**\nEsta ação é irreversível!",
             view=view
@@ -3605,7 +3621,10 @@ class FecharButtonRemover(discord.ui.Button):
         super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger, emoji="❌")
     
     async def callback(self, interaction: discord.Interaction):
-        await interaction.message.delete()
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 
 
 class PainelLivesAdmin(discord.ui.View):
@@ -3626,7 +3645,6 @@ class PainelLivesAdmin(discord.ui.View):
             view=view,
             ephemeral=True
         )
-
 
 # =========================================================
 # ================= PAINÉIS ===============================
