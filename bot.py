@@ -3465,135 +3465,154 @@ class CadastrarLiveView(discord.ui.View):
 
 
 # =========================================================
-# ================= SELECT REMOVER LIVE ===================
+# ================= REMOVER LIVE ==========================
 # =========================================================
 
-class SelectRemoverLive(discord.ui.Select):
-    def __init__(self):
-        super().__init__(placeholder="Carregando...", options=[])
+class ConfirmarRemoverView(discord.ui.View):
+    def __init__(self, user_id, nome):
+        super().__init__(timeout=30)
+        self.user_id = user_id
+        self.nome = nome
     
-    async def refresh_options(self):
-        lives = await carregar_lives()
-        options = []
+    @discord.ui.button(label="✅ Sim, remover", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirmar(self, interaction: discord.Interaction, button):
+        if interaction.user.id != ADM_ID:
+            await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
+            return
         
-        for uid, lista_lives in lives.items():
-            for live in lista_lives:
-                link = live.get("link", "Sem link")
-                user = await pegar_usuario(int(uid))
-                nome = user.display_name if user else f"ID: {uid}"
-                
-                options.append(
-                    discord.SelectOption(
-                        label=f"{nome} - {link[:50]}",
-                        description=f"Plataforma: {detectar_plataforma(link)}",
-                        value=f"{uid}|{link}"
-                    )
-                )
+        await interaction.response.defer()
+        
+        await remover_live_db(self.user_id)
+        
+        await interaction.followup.send(
+            f"✅ **Lives removidas com sucesso!**\n"
+            f"Usuário: {self.nome}",
+            ephemeral=True
+        )
+        
+        await interaction.message.delete()
+        
+        # Atualizar painéis
+        await enviar_painel_lives()
+        await enviar_painel_admin_lives()
+    
+    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancelar(self, interaction: discord.Interaction, button):
+        if interaction.user.id != ADM_ID:
+            await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
+        await interaction.message.delete()
+
+
+class RemoverLiveSelect(discord.ui.Select):
+    def __init__(self, lives):
+        options = []
+        for uid in lives.keys():
+            user = bot.get_user(int(uid))
+            nome = user.display_name if user else f"ID: {uid}"
+            options.append(discord.SelectOption(label=nome, value=uid, emoji="🎥"))
         
         if not options:
-            options = [discord.SelectOption(label="Nenhuma live cadastrada", value="none")]
+            options = [discord.SelectOption(label="Nenhuma live", value="none", emoji="📭")]
         
-        self.options = options
+        super().__init__(placeholder="Selecione o usuário", options=options)
+        self.lives = lives
     
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != ADM_ID:
             await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
             return
         
-        if self.values[0] == "none":
-            await interaction.response.send_message("📭 Nenhuma live para remover.", ephemeral=True)
+        user_id = self.values[0]
+        if user_id == "none":
+            await interaction.response.send_message("📭 Nenhuma live cadastrada.", ephemeral=True)
             return
         
-        user_id = self.values[0].split("|")[0]
+        user = bot.get_user(int(user_id))
+        nome = user.display_name if user else user_id
         
-        await remover_live_db(user_id)
-        await interaction.response.send_message("✅ Live removida com sucesso!", ephemeral=True)
-        
-        await enviar_painel_lives()
+        view = ConfirmarRemoverView(user_id, nome)
+        await interaction.response.edit_message(
+            content=f"⚠️ **Remover todas as lives de {nome}?**\nEsta ação é irreversível!",
+            view=view
+        )
 
-
-class FecharButtonRemover(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger)
-    
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.message.delete()
-
-
-class RemoverLiveView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=60)
-    
-    async def setup(self):
-        select = SelectRemoverLive()
-        await select.refresh_options()
-        self.add_item(select)
-        self.add_item(FecharButtonRemover())
-    
-    async def on_timeout(self):
-        self.clear_items()
-
-
-# =========================================================
-# ================= ADMIN LIVES ===========================
-# =========================================================
 
 class GerenciarLivesView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=900)
+        super().__init__(timeout=60)
 
-    @discord.ui.button(label="📋 Ver Lives", style=discord.ButtonStyle.secondary, custom_id="ver_lives_admin_btn")
+    @discord.ui.button(label="📋 Ver Lives", style=discord.ButtonStyle.secondary, emoji="📋")
     async def ver(self, interaction: discord.Interaction, button):
         if interaction.user.id != ADM_ID:
             await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
             return
         
+        await interaction.response.defer()
+        
         lives = await carregar_lives()
         
         if not lives:
-            await interaction.response.send_message("📭 Nenhuma live cadastrada.", ephemeral=True)
+            await interaction.followup.send("📭 Nenhuma live cadastrada.", ephemeral=True)
             return
         
-        texto = ""
+        texto = "**📡 LIVES CADASTRADAS:**\n\n"
         for uid, lista_lives in lives.items():
-            user = await pegar_usuario(int(uid))
-            nome = user.display_name if user else f"ID: {uid}"
+            user = bot.get_user(int(uid))
+            nome = user.display_name if user else uid
+            texto += f"👤 **{nome}** (ID: {uid})\n"
             for live in lista_lives:
                 link = live["link"]
                 divulgado = "✅ Divulgado" if live["divulgado"] else "⏳ Pendente"
                 plataforma = detectar_plataforma(link)
-                texto += f"👤 **{nome}**\n📺 {plataforma.upper()}\n🔗 {link}\n📌 {divulgado}\n\n"
+                texto += f"   📺 {plataforma.upper()}: {link} - {divulgado}\n"
+            texto += "\n"
         
-        embed = discord.Embed(title="📡 LIVES CADASTRADAS", description=texto[:4000] or "Nenhuma live.", color=0x3498db)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if len(texto) > 2000:
+            partes = [texto[i:i+1900] for i in range(0, len(texto), 1900)]
+            for parte in partes:
+                await interaction.followup.send(parte, ephemeral=True)
+        else:
+            await interaction.followup.send(texto, ephemeral=True)
 
-    @discord.ui.button(label="🗑️ Remover Live", style=discord.ButtonStyle.danger, custom_id="remover_live_admin_btn")
+    @discord.ui.button(label="🗑️ Remover Live", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def remover(self, interaction: discord.Interaction, button):
         if interaction.user.id != ADM_ID:
             await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
             return
         
         lives = await carregar_lives()
+        
         if not lives:
             await interaction.response.send_message("📭 Nenhuma live cadastrada para remover.", ephemeral=True)
             return
         
-        view = RemoverLiveView()
-        await view.setup()
+        view = discord.ui.View(timeout=60)
+        view.add_item(RemoverLiveSelect(lives))
+        view.add_item(FecharButtonRemover())
         
         await interaction.response.send_message(
-            "📋 **Selecione a live que deseja remover:**\n"
-            "⚠️ Isso removerá TODAS as lives do usuário selecionado.",
+            "📋 **Selecione o usuário para remover as lives:**",
             view=view,
             ephemeral=True
         )
+
+
+class FecharButtonRemover(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger, emoji="❌")
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.message.delete()
 
 
 class PainelLivesAdmin(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="⚙️ Gerenciar Lives (ADM)", style=discord.ButtonStyle.danger, custom_id="abrir_painel_admin_lives_btn")
+    @discord.ui.button(label="⚙️ Gerenciar Lives (ADM)", style=discord.ButtonStyle.danger, custom_id="abrir_painel_admin_lives_btn", emoji="⚙️")
     async def abrir(self, interaction: discord.Interaction, button):
         if interaction.user.id != ADM_ID:
             await interaction.response.send_message("❌ Apenas ADM.", ephemeral=True)
@@ -3603,7 +3622,7 @@ class PainelLivesAdmin(discord.ui.View):
         await interaction.response.send_message(
             "**⚙️ PAINEL DE GERENCIAMENTO DE LIVES**\n\n"
             "📋 **Ver Lives** - Lista todas as lives cadastradas\n"
-            "🗑️ **Remover Live** - Remove um usuário e suas lives",
+            "🗑️ **Remover Live** - Remove um usuário e todas as suas lives",
             view=view,
             ephemeral=True
         )
@@ -3647,7 +3666,7 @@ async def enviar_painel_lives():
 
 
 # =========================================================
-# ================= COMANDOS DE TESTE =====================
+# ================= COMANDOS ==============================
 # =========================================================
 
 @bot.command(name="testar_kick")
@@ -3746,6 +3765,36 @@ async def forcar_verificacao_lives(ctx):
     await ctx.send("🔄 **Forçando verificação de todas as lives...**")
     await verificar_lives()
     await ctx.send("✅ **Verificação concluída!** Confira o canal de divulgação.")
+
+
+@bot.command(name="remover_live")
+async def cmd_remover_live(ctx, user_id: int = None):
+    """Remove todas as lives de um usuário (ADM apenas)"""
+    
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    if not user_id:
+        await ctx.send("❌ Use: `!remover_live ID_DO_USUARIO`")
+        return
+    
+    lives = await carregar_lives()
+    
+    if str(user_id) not in lives:
+        await ctx.send(f"❌ Usuário ID `{user_id}` não possui lives cadastradas.")
+        return
+    
+    user = await pegar_usuario(user_id)
+    nome = user.display_name if user else str(user_id)
+    
+    await remover_live_db(str(user_id))
+    
+    await ctx.send(f"✅ **Todas as lives de {nome} foram removidas com sucesso!**")
+    
+    await enviar_painel_lives()
+    await enviar_painel_admin_lives()
+    
 # =========================================================
 # ========== FUNÇÃO GLOBAL DE PAINEL (OBRIGATÓRIA) =========
 # =========================================================
