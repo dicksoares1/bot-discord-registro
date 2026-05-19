@@ -653,6 +653,188 @@ async def enviar_painel_registro():
     print("✅ Painel de registro criado")
 
 # =========================================================
+# ================= SISTEMA DE SAÍDA (VERSÃO COMPLETA) ====
+# =========================================================
+
+# Canal de log da gerência
+CANAL_GERENCIA_ID = 1237393478414241854
+
+# Cargos que o usuário tinha (precisamos salvar antes de sair)
+# Infelizmente o Discord não permite pegar os cargos após a saída
+# Mas podemos logar outras informações
+
+MENSAGEM_SAIDA = {
+    "titulo": "📤 NOTIFICAÇÃO DE SAÍDA",
+    "mensagem": (
+        "Olá **{nome}**, tudo bom?\n\n"
+        "Devido à sua saída do servidor **Vida Rasa**, "
+        "pedimos que procure algum **gerente in game** "
+        "para tomar seu **PD da facção**.\n\n"
+        "⚠️ **Caso já tenha tomado seu PD, ignore este aviso.**\n\n"
+        "——————————————————\n"
+        "_Se saiu por engano, você pode voltar a qualquer momento._"
+    ),
+    "cor": 0xe74c3c,
+    "footer": "Vida Rasa • Sistema Automático"
+}
+
+
+@bot.event
+async def on_member_remove(member):
+    """Quando um membro sai do servidor, envia mensagem no DM e log na gerência"""
+    
+    # Ignorar bots
+    if member.bot:
+        return
+    
+    # Aguardar um pouco
+    await asyncio.sleep(2)
+    
+    # Coletar informações detalhadas
+    nome_servidor = member.display_name
+    nome_usuario = member.name
+    nome_global = member.global_name or nome_usuario
+    
+    # Verificar diferença entre apelido e nome
+    if nome_servidor != nome_usuario and nome_servidor != nome_global:
+        status_apelido = "✅ **Diferente do nome de usuário**"
+        apelido_detalhe = f"**Apelido no servidor:** {nome_servidor}\n**Nome de usuário:** {nome_usuario}"
+    else:
+        status_apelido = "ℹ️ **Mesmo nome de usuário**"
+        apelido_detalhe = f"**Nome usado:** {nome_servidor}"
+    
+    # Tentar enviar DM
+    status_dm = ""
+    dm_sucesso = False
+    
+    try:
+        embed_msg = discord.Embed(
+            title=MENSAGEM_SAIDA["titulo"],
+            description=MENSAGEM_SAIDA["mensagem"].format(nome=member.display_name),
+            color=MENSAGEM_SAIDA["cor"]
+        )
+        
+        if member.display_avatar:
+            embed_msg.set_thumbnail(url=member.display_avatar.url)
+        
+        embed_msg.set_footer(text=f"{MENSAGEM_SAIDA['footer']} • ID: {member.id}")
+        
+        await member.send(embed=embed_msg)
+        
+        status_dm = "✅ **MENSAGEM ENVIADA COM SUCESSO**"
+        dm_sucesso = True
+        cor_log = 0xe74c3c
+        print(f"✅ [SAÍDA] DM enviada para {member.name} (ID: {member.id})")
+        
+    except discord.Forbidden:
+        status_dm = "❌ **MENSAGEM NÃO ENVIADA**\nMotivo: Usuário bloqueou o bot ou tem DM fechada"
+        dm_sucesso = False
+        cor_log = 0xf1c40f
+        print(f"❌ [SAÍDA] DM bloqueada para {member.name}")
+        
+    except discord.HTTPException as e:
+        status_dm = f"❌ **MENSAGEM NÃO ENVIADA**\nMotivo: Erro HTTP - {e}"
+        dm_sucesso = False
+        cor_log = 0xf1c40f
+        print(f"❌ [SAÍDA] Erro HTTP para {member.name}: {e}")
+        
+    except Exception as e:
+        status_dm = f"❌ **MENSAGEM NÃO ENVIADA**\nMotivo: Erro inesperado - {str(e)[:100]}"
+        dm_sucesso = False
+        cor_log = 0xf1c40f
+        print(f"❌ [SAÍDA] Erro para {member.name}: {e}")
+    
+    # =============================================
+    # LOG COMPLETO NO CANAL DA GERÊNCIA
+    # =============================================
+    canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
+    
+    if canal_gerencia:
+        
+        # Calcular tempo de permanência no servidor
+        tempo_permanencia = "Desconhecido"
+        if member.joined_at:
+            dias = (agora() - member.joined_at.replace(tzinfo=BRASIL)).days
+            if dias > 0:
+                tempo_permanencia = f"{dias} dia(s)"
+            else:
+                horas = (agora() - member.joined_at.replace(tzinfo=BRASIL)).seconds // 3600
+                tempo_permanencia = f"{horas} hora(s)"
+        
+        embed_log = discord.Embed(
+            title="📤 USUÁRIO SAIU DO SERVIDOR",
+            color=cor_log,
+            timestamp=agora()
+        )
+        
+        # Seção 1: Informações do usuário
+        embed_log.add_field(
+            name="👤 INFORMAÇÕES DO USUÁRIO",
+            value=(
+                f"```\n"
+                f"Mencão: {member.mention}\n"
+                f"ID: {member.id}\n"
+                f"Nome de usuário: {member.name}\n"
+                f"Alias global: {member.global_name or 'Nenhum'}\n"
+                f"```"
+            ),
+            inline=False
+        )
+        
+        # Seção 2: Informações do apelido
+        embed_log.add_field(
+            name="🏷️ APELIDO NO SERVIDOR",
+            value=(
+                f"```\n"
+                f"Apelido: {nome_servidor}\n"
+                f"Status: {status_apelido}\n"
+                f"```"
+            ),
+            inline=False
+        )
+        
+        # Seção 3: Tempo de permanência
+        embed_log.add_field(
+            name="⏱️ TEMPO NO SERVIDOR",
+            value=(
+                f"```\n"
+                f"Entrou em: {member.joined_at.strftime('%d/%m/%Y %H:%M') if member.joined_at else 'Desconhecido'}\n"
+                f"Permanência: {tempo_permanencia}\n"
+                f"Conta criada: {member.created_at.strftime('%d/%m/%Y')}\n"
+                f"```"
+            ),
+            inline=False
+        )
+        
+        # Seção 4: Status da DM
+        if dm_sucesso:
+            icon_dm = "✅"
+        else:
+            icon_dm = "❌"
+        
+        embed_log.add_field(
+            name=f"{icon_dm} STATUS DA MENSAGEM",
+            value=status_dm,
+            inline=False
+        )
+        
+        # Adicionar avatar se disponível
+        if member.display_avatar:
+            embed_log.set_thumbnail(url=member.display_avatar.url)
+        
+        # Adicionar rodapé
+        data_saida = agora().strftime('%d/%m/%Y às %H:%M:%S')
+        embed_log.set_footer(text=f"Sistema Automático • Saída em {data_saida}")
+        
+        # Enviar no canal da gerência
+        await canal_gerencia.send(embed=embed_log)
+        
+        print(f"📋 [SAÍDA] Log enviado para gerência: {member.name} (DM: {'OK' if dm_sucesso else 'FALHA'})")
+        
+    else:
+        print(f"❌ [SAÍDA] Canal da gerência NÃO ENCONTRADO! ID: {CANAL_GERENCIA_ID}")
+
+# =========================================================
 # ======================== VENDAS ==========================
 # =========================================================
 
@@ -5430,6 +5612,63 @@ async def remover_ausencia_cmd(ctx, member: discord.Member):
         color=0x2ecc71
     )
     await ctx.send(embed=embed)
+
+# ================== TESTES DE SISTEMA ====================
+
+@bot.command(name="testar_saida")
+async def testar_saida(ctx, usuario: discord.User = None):
+    """Testa o envio da mensagem de saída (APENAS ADM)"""
+    
+    # Verificar permissão
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    if not usuario:
+        usuario = ctx.author
+    
+    await ctx.send(f"📤 Simulando saída para {usuario.mention}...")
+    
+    # Simular a mensagem que seria enviada
+    try:
+        embed = discord.Embed(
+            title="📤 NOTIFICAÇÃO DE SAÍDA (TESTE)",
+            description=(
+                "Olá, tudo bom?\n\n"
+                "**⚠️ ISSO É UM TESTE**\n\n"
+                "Devido à sua saída do servidor **Vida Rasa** (MENSAGEM DE TESTE), "
+                "pedimos que procure algum **gerente in game** "
+                "para tomar seu **PD da fac**.\n\n"
+                "⚠️ **Caso já tenha tomado seu PD, ignore este aviso.**"
+            ),
+            color=0xe74c3c
+        )
+        
+        embed.set_footer(text="TESTE • Sistema Automático")
+        
+        await usuario.send(embed=embed)
+        await ctx.send(f"✅ Mensagem de teste enviada para {usuario.name}!")
+        
+        # Também enviar log de teste no canal da gerência
+        canal_gerencia = ctx.guild.get_channel(CANAL_GERENCIA_ID)
+        if canal_gerencia:
+            embed_log = discord.Embed(
+                title="🧪 TESTE - SIMULAÇÃO DE SAÍDA",
+                description=f"**Usuário:** {usuario.mention}\n**Nome:** {usuario.name}\n**ID:** {usuario.id}",
+                color=0x3498db
+            )
+            embed_log.add_field(
+                name="📨 Resultado",
+                value="✅ Mensagem de teste enviada com sucesso!",
+                inline=False
+            )
+            embed_log.set_footer(text="TESTE • Sistema de Saída")
+            await canal_gerencia.send(embed=embed_log)
+        
+    except discord.Forbidden:
+        await ctx.send(f"❌ Não foi possível enviar DM para {usuario.name} (DM fechada)")
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
 
 # =========================================================
 # ================= FIM DO SISTEMA ========================
