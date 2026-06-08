@@ -265,6 +265,7 @@ CANAL_VENDAS_ID = CANAL_CALCULADORA_ID
 CANAL_FABRICACAO_ID = 1466421612566810634
 CANAL_REGISTRO_GALPAO_ID = 1356174712337862819
 CANAL_BAU_GALPAO_SUL_ID = 1356174937764794521
+CANAL_BAU_GALPAO_ID = 1448561598384963747
 
 # POLVORA
 CANAL_CALCULO_POLVORA_ID = 1462834441968943157
@@ -1863,7 +1864,7 @@ async def atualizar_estoque(tipo, quantidade, operacao="adicionar"):
 
 
 async def registrar_producao_municao(tipo, pacotes, produzido_por, obs=""):
-    """Registra a produção de munição no histórico"""
+    """Registra a produção de munição no histórico e envia relatório para o Baú"""
     municoes = pacotes * 50
     async with db.acquire() as conn:
         await conn.execute(
@@ -1874,7 +1875,6 @@ async def registrar_producao_municao(tipo, pacotes, produzido_por, obs=""):
             tipo, pacotes, municoes, str(produzido_por), obs
         )
         await atualizar_estoque(tipo, pacotes, "adicionar")
-
 
 async def registrar_saida_estoque(pedido_numero, tipo, pacotes, retirado_por):
     """Registra a saída de estoque por venda"""
@@ -2278,42 +2278,67 @@ class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
         def fmt_num(valor):
             return f"{valor:,.0f}".replace(",", ".")
         
-        # Criar embed de confirmação
-        embed = discord.Embed(
-            title="✅ PRODUÇÃO REGISTRADA",
+        # =========================================================
+        # ENVIAR RELATÓRIO NO CANAL DO BAÚ (GALPÃO)
+        # =========================================================
+        
+        CANAL_BAU_GALPAO_ID = 1448561598384963747  # ID do canal do baú
+        
+        canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_ID)
+        
+        if canal_bau:
+            # Criar embed para o baú
+            embed_bau = discord.Embed(
+                title="📦 PRODUÇÃO DE MUNIÇÃO REGISTRADA",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            
+            embed_bau.add_field(name="🔫 Tipo", value=f"**{tipo}**", inline=True)
+            embed_bau.add_field(name="📦 Pacotes", value=f"**{fmt_num(pacotes)}** pacotes", inline=True)
+            embed_bau.add_field(name="🔫 Munições", value=f"**{fmt_num(municoes)}** unidades", inline=True)
+            embed_bau.add_field(name="👤 Produzido por", value=interaction.user.mention, inline=True)
+            
+            if self.observacao.value:
+                embed_bau.add_field(name="📝 Observação", value=self.observacao.value, inline=False)
+            
+            embed_bau.add_field(
+                name="📊 ESTOQUE ATUAL",
+                value=f"🔫 PT: **{fmt_num(estoque['PT'])}** pacotes\n🔫 SUB: **{fmt_num(estoque['SUB'])}** pacotes",
+                inline=False
+            )
+            
+            embed_bau.set_footer(text=f"Registrado em {agora().strftime('%d/%m/%Y às %H:%M')}")
+            
+            await canal_bau.send(embed=embed_bau)
+            print(f"✅ Relatório de produção enviado para o Baú (Canal {CANAL_BAU_GALPAO_ID})")
+        else:
+            print(f"❌ Canal do Baú não encontrado! ID: {CANAL_BAU_GALPAO_ID}")
+        
+        # =========================================================
+        # ENVIAR CONFIRMAÇÃO PRIVADA PARA O USUÁRIO
+        # =========================================================
+        
+        embed_privado = discord.Embed(
+            title="✅ PRODUÇÃO REGISTRADA COM SUCESSO!",
             color=0x2ecc71
         )
         
-        embed.add_field(name="🔫 Tipo", value=f"**{tipo}**", inline=True)
-        embed.add_field(name="📦 Pacotes", value=f"**{fmt_num(pacotes)}** pacotes", inline=True)
-        embed.add_field(name="🔫 Munições", value=f"**{fmt_num(municoes)}** unidades", inline=True)
-        embed.add_field(name="👤 Produzido por", value=interaction.user.mention, inline=True)
-        
-        if self.observacao.value:
-            embed.add_field(name="📝 Observação", value=self.observacao.value, inline=False)
-        
-        embed.add_field(
-            name="📊 ESTOQUE ATUALIZADO",
+        embed_privado.add_field(name="🔫 Tipo", value=f"**{tipo}**", inline=True)
+        embed_privado.add_field(name="📦 Pacotes", value=f"**{fmt_num(pacotes)}** pacotes", inline=True)
+        embed_privado.add_field(name="🔫 Munições", value=f"**{fmt_num(municoes)}** unidades", inline=True)
+        embed_privado.add_field(
+            name="📊 Estoque atualizado",
             value=f"🔫 PT: **{fmt_num(estoque['PT'])}** pacotes\n🔫 SUB: **{fmt_num(estoque['SUB'])}** pacotes",
             inline=False
         )
         
-        embed.set_footer(text=f"Registrado em {agora().strftime('%d/%m/%Y às %H:%M')}")
-        
-        # Enviar no canal do galpão
-        canal_galpao = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
-        
-        if canal_galpao:
-            await canal_galpao.send(embed=embed)
+        embed_privado.set_footer(text=f"Registrado em {agora().strftime('%d/%m/%Y às %H:%M')}")
         
         await interaction.followup.send(
-            f"✅ **Produção registrada com sucesso!**\n"
-            f"🔫 {tipo}: {fmt_num(pacotes)} pacotes ({fmt_num(municoes)} munições)\n"
-            f"📊 Estoque atual de {tipo}: {fmt_num(estoque[tipo])} pacotes",
+            embed=embed_privado,
             ephemeral=True
         )
-
-
 # =========================================================
 # ================= VIEW FABRICAÇÃO ========================
 # =========================================================
