@@ -848,7 +848,7 @@ ORGANIZACOES_CONFIG = {
 
 
 # =========================================================
-# ===================== BANCO DE DADOS =====================
+# ================= BANCO DE DADOS =====================
 # =========================================================
 
 async def proximo_pedido():
@@ -915,6 +915,7 @@ async def carregar_vendas_db():
         )
 
         return rows
+
 
 # =========================================================
 # ================= STATUS DOS BOTÕES =====================
@@ -1071,6 +1072,82 @@ class StatusView(discord.ui.View):
             )
             return
 
+        # ===============================
+        # VERIFICAR ESTOQUE ANTES DE ENTREGAR
+        # ===============================
+        
+        pacotes_pt = 0
+        pacotes_sub = 0
+        
+        for field in embed.fields:
+            if field.name == "🔫 PT":
+                try:
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_pt = int(
+                                l.replace("📦", "")
+                                .replace("pacotes", "")
+                                .strip()
+                            )
+                except:
+                    pass
+            
+            if field.name == "🔫 SUB":
+                try:
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_sub = int(
+                                l.replace("📦", "")
+                                .replace("pacotes", "")
+                                .strip()
+                            )
+                except:
+                    pass
+        
+        # Verificar estoque PT
+        if pacotes_pt > 0:
+            estoque_suficiente_pt = await verificar_estoque_suficiente("PT", pacotes_pt)
+            if not estoque_suficiente_pt:
+                estoque_atual = await carregar_estoque()
+                await interaction.response.send_message(
+                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n"
+                    f"🔫 PT: {pacotes_pt} pacotes necessários\n"
+                    f"📦 Estoque atual: {estoque_atual['PT']} pacotes\n\n"
+                    f"⚠️ **ATENÇÃO!** Antes de entregar, você PRECISA produzir mais munição PT!\n"
+                    f"Use o botão **🎯 PRODUZIR MUNIÇÃO** no painel de Fabricação.",
+                    ephemeral=True
+                )
+                return
+        
+        # Verificar estoque SUB
+        if pacotes_sub > 0:
+            estoque_suficiente_sub = await verificar_estoque_suficiente("SUB", pacotes_sub)
+            if not estoque_suficiente_sub:
+                estoque_atual = await carregar_estoque()
+                await interaction.response.send_message(
+                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n"
+                    f"🔫 SUB: {pacotes_sub} pacotes necessários\n"
+                    f"📦 Estoque atual: {estoque_atual['SUB']} pacotes\n\n"
+                    f"⚠️ **ATENÇÃO!** Antes de entregar, você PRECISA produzir mais munição SUB!\n"
+                    f"Use o botão **🎯 PRODUZIR MUNIÇÃO** no painel de Fabricação.",
+                    ephemeral=True
+                )
+                return
+        
+        # Registrar saída do estoque
+        titulo = embed.title
+        pedido_numero = int(titulo.split("#")[1]) if "#" in titulo else 0
+        
+        if pacotes_pt > 0:
+            await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
+            print(f"📦 Saída de estoque PT: {pacotes_pt} pacotes (Pedido #{pedido_numero})")
+        
+        if pacotes_sub > 0:
+            await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
+            print(f"📦 Saída de estoque SUB: {pacotes_sub} pacotes (Pedido #{pedido_numero})")
+        
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user
 
@@ -1101,7 +1178,7 @@ class StatusView(discord.ui.View):
 
             embed.add_field(
                 name="✅ VENDA FINALIZADA COM SUCESSO",
-                value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**",
+                value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**\n📊 **Estoque atualizado**",
                 inline=False
             )
 
@@ -1126,65 +1203,26 @@ class StatusView(discord.ui.View):
         await responder_interacao(interaction, defer=True)
 
         # ===============================
-        # PEGAR PACOTES DO EMBED
+        # ENVIAR NO BAÚ (SE TIVER PACOTES)
         # ===============================
 
-        pacotes_pt = 0
-        pacotes_sub = 0
+        if pacotes_pt > 0 or pacotes_sub > 0:
+            canal_bau = interaction.guild.get_channel(
+                CANAL_BAU_GALPAO_SUL_ID
+            )
 
-        for field in embed.fields:
-
-            if field.name == "🔫 PT":
+            if canal_bau:
                 try:
-                    linhas = field.value.split("\n")
-                    for l in linhas:
-                        if "📦" in l:
-                            pacotes_pt = int(
-                                l.replace("📦", "")
-                                .replace("pacotes", "")
-                                .strip()
-                            )
-                except:
-                    pass
+                    texto = f"📦 **Retirada do Baú**\n\n"
+                    texto += f"👤 Retirado por: {interaction.user.mention}\n"
+                    if pacotes_pt > 0:
+                        texto += f"🔫 PT: {pacotes_pt} pacotes\n"
+                    if pacotes_sub > 0:
+                        texto += f"🔫 SUB: {pacotes_sub} pacotes"
 
-            if field.name == "🔫 SUB":
-                try:
-                    linhas = field.value.split("\n")
-                    for l in linhas:
-                        if "📦" in l:
-                            pacotes_sub = int(
-                                l.replace("📦", "")
-                                .replace("pacotes", "")
-                                .strip()
-                            )
-                except:
-                    pass
-
-
-        # ===============================
-        # ENVIAR NO BAÚ
-        # ===============================
-
-        canal_bau = interaction.guild.get_channel(
-            CANAL_BAU_GALPAO_SUL_ID
-        )
-
-        if canal_bau:
-
-            try:
-
-                await canal_bau.send(
-                    f"📦 **Retirada do Baú**\n\n"
-                    f"👤 Retirado por: {interaction.user.mention}\n"
-                    f"🔫 PT: {pacotes_pt} pacotes\n"
-                    f"🔫 SUB: {pacotes_sub} pacotes"
-                )
-
-            except Exception as e:
-                print("Erro envio baú:", e)
-
-        else:
-            print("Canal do baú não encontrado.")
+                    await canal_bau.send(texto)
+                except Exception as e:
+                    print("Erro envio baú:", e)
 
 
     # =====================================================
@@ -1258,6 +1296,7 @@ class StatusView(discord.ui.View):
         await interaction.response.send_modal(
             EditarVendaModal(interaction.message)
         )
+
 
 # =========================================================
 # ================= MODAL DE VENDA ========================
@@ -1492,6 +1531,7 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
             ephemeral=True
         )
 
+
 # =========================================================
 # ================= EDITAR VENDA ===========================
 # =========================================================
@@ -1707,6 +1747,7 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
             ephemeral=True
         )
 
+
 # =========================================================
 # ================= VIEW CALCULADORA ======================
 # =========================================================
@@ -1753,8 +1794,20 @@ async def enviar_painel_vendas():
 
     embed = discord.Embed(
         title="🛒 Painel de Vendas",
-        description="Escolha uma opção abaixo.",
+        description="Escolha uma opção abaixo.\n\n⚠️ **ATENÇÃO:** Antes de entregar um pedido, verifique se há ESTOQUE disponível!",
         color=0x2ecc71
+    )
+    
+    # Mostrar estoque atual no painel
+    estoque = await carregar_estoque()
+    
+    def fmt_num(valor):
+        return f"{valor:,.0f}".replace(",", ".")
+    
+    embed.add_field(
+        name="📦 ESTOQUE DISPONÍVEL",
+        value=f"🔫 PT: **{fmt_num(estoque['PT'])}** pacotes\n🔫 SUB: **{fmt_num(estoque['SUB'])}** pacotes",
+        inline=False
     )
 
     await enviar_ou_atualizar_painel(
@@ -1766,7 +1819,6 @@ async def enviar_painel_vendas():
 
     print("🛒 Painel de vendas verificado/atualizado")
 
-
 # =========================================================
 # ======================== PRODUÇÃO ========================
 # =========================================================
@@ -1774,6 +1826,74 @@ async def enviar_painel_vendas():
 producoes_tasks = {}
 galpoes_ativos = set()
 producoes_ativas = set()
+
+# =========================================================
+# ================= FUNÇÕES DE ESTOQUE ====================
+# =========================================================
+
+async def carregar_estoque():
+    """Carrega o estoque atual do banco"""
+    async with db.acquire() as conn:
+        rows = await conn.fetch("SELECT tipo, quantidade FROM estoque_municoes")
+    
+    estoque = {"PT": 0, "SUB": 0}
+    for row in rows:
+        estoque[row["tipo"]] = row["quantidade"]
+    return estoque
+
+
+async def atualizar_estoque(tipo, quantidade, operacao="adicionar"):
+    """
+    Atualiza o estoque
+    tipo: 'PT' ou 'SUB'
+    quantidade: número de PACOTES
+    operacao: 'adicionar' ou 'remover'
+    """
+    async with db.acquire() as conn:
+        if operacao == "adicionar":
+            await conn.execute(
+                "UPDATE estoque_municoes SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE tipo = $2",
+                quantidade, tipo
+            )
+        else:
+            await conn.execute(
+                "UPDATE estoque_municoes SET quantidade = quantidade - $1, ultima_atualizacao = NOW() WHERE tipo = $2 AND quantidade >= $1",
+                quantidade, tipo
+            )
+
+
+async def registrar_producao_municao(tipo, pacotes, produzido_por, obs=""):
+    """Registra a produção de munição no histórico"""
+    municoes = pacotes * 50
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO producao_municao (tipo, pacotes, municoes, produzido_por, obs)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            tipo, pacotes, municoes, str(produzido_por), obs
+        )
+        await atualizar_estoque(tipo, pacotes, "adicionar")
+
+
+async def registrar_saida_estoque(pedido_numero, tipo, pacotes, retirado_por):
+    """Registra a saída de estoque por venda"""
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO saida_estoque (pedido_numero, tipo, pacotes, retirado_por, data)
+            VALUES ($1, $2, $3, $4, NOW())
+            """,
+            pedido_numero, tipo, pacotes, str(retirado_por)
+        )
+        await atualizar_estoque(tipo, pacotes, "remover")
+
+
+async def verificar_estoque_suficiente(tipo, pacotes_necessarios):
+    """Verifica se há estoque suficiente para a venda"""
+    estoque = await carregar_estoque()
+    return estoque.get(tipo, 0) >= pacotes_necessarios
+
 
 # =========================================================
 # ================= FUNÇÕES DE PRODUÇÃO ===================
@@ -1864,7 +1984,6 @@ async def deletar_producao(pid):
             pid
         )
 
-# =========================================================
 
 def barra(pct, size=20):
 
@@ -1880,6 +1999,7 @@ def barra(pct, size=20):
         cor = "🔵"
 
     return cor + " " + ("▓" * cheio) + ("░" * (size - cheio))
+
 
 # =========================================================
 # ================= MODAL OBSERVAÇÃO ======================
@@ -1956,6 +2076,7 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
             producoes_tasks[pid] = task
 
+
 # =========================================================
 # ================= 2ª TASK ===============================
 # =========================================================
@@ -1994,6 +2115,7 @@ class SegundaTaskView(discord.ui.View):
 
         except Exception as e:
             print("Erro segunda task:", e)
+
 
 # =========================================================
 # ================= MODAL PÓLVORA =========================
@@ -2093,6 +2215,105 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
         except Exception as e:
             print("ERRO PRODUÇÃO:", e)
 
+
+# =========================================================
+# ================= MODAL PRODUÇÃO MUNIÇÃO =================
+# =========================================================
+
+class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
+    
+    tipo_municao = discord.ui.TextInput(
+        label="Tipo de munição",
+        placeholder="Digite PT ou SUB",
+        required=True,
+        max_length=3
+    )
+    
+    quantidade_pacotes = discord.ui.TextInput(
+        label="Quantidade de PACOTES produzidos",
+        placeholder="Ex: 100 (cada pacote = 50 munições)",
+        required=True
+    )
+    
+    observacao = discord.ui.TextInput(
+        label="Observação (opcional)",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        # Validar tipo de munição
+        tipo = self.tipo_municao.value.strip().upper()
+        if tipo not in ["PT", "SUB"]:
+            await interaction.followup.send(
+                "❌ **Tipo de munição inválido!**\nUse `PT` para pistola ou `SUB` para submetralhadora.",
+                ephemeral=True
+            )
+            return
+        
+        # Validar quantidade
+        try:
+            pacotes = int(self.quantidade_pacotes.value.replace(".", "").replace(",", ""))
+            if pacotes <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send(
+                "❌ **Quantidade inválida!**\nDigite um número positivo de pacotes.",
+                ephemeral=True
+            )
+            return
+        
+        municoes = pacotes * 50
+        
+        # Registrar produção
+        await registrar_producao_municao(tipo, pacotes, interaction.user.id, self.observacao.value)
+        
+        # Buscar estoque atualizado
+        estoque = await carregar_estoque()
+        
+        # Formatar valores
+        def fmt_num(valor):
+            return f"{valor:,.0f}".replace(",", ".")
+        
+        # Criar embed de confirmação
+        embed = discord.Embed(
+            title="✅ PRODUÇÃO REGISTRADA",
+            color=0x2ecc71
+        )
+        
+        embed.add_field(name="🔫 Tipo", value=f"**{tipo}**", inline=True)
+        embed.add_field(name="📦 Pacotes", value=f"**{fmt_num(pacotes)}** pacotes", inline=True)
+        embed.add_field(name="🔫 Munições", value=f"**{fmt_num(municoes)}** unidades", inline=True)
+        embed.add_field(name="👤 Produzido por", value=interaction.user.mention, inline=True)
+        
+        if self.observacao.value:
+            embed.add_field(name="📝 Observação", value=self.observacao.value, inline=False)
+        
+        embed.add_field(
+            name="📊 ESTOQUE ATUALIZADO",
+            value=f"🔫 PT: **{fmt_num(estoque['PT'])}** pacotes\n🔫 SUB: **{fmt_num(estoque['SUB'])}** pacotes",
+            inline=False
+        )
+        
+        embed.set_footer(text=f"Registrado em {agora().strftime('%d/%m/%Y às %H:%M')}")
+        
+        # Enviar no canal do galpão
+        canal_galpao = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
+        
+        if canal_galpao:
+            await canal_galpao.send(embed=embed)
+        
+        await interaction.followup.send(
+            f"✅ **Produção registrada com sucesso!**\n"
+            f"🔫 {tipo}: {fmt_num(pacotes)} pacotes ({fmt_num(municoes)} munições)\n"
+            f"📊 Estoque atual de {tipo}: {fmt_num(estoque[tipo])} pacotes",
+            ephemeral=True
+        )
+
+
 # =========================================================
 # ================= VIEW FABRICAÇÃO ========================
 # =========================================================
@@ -2115,7 +2336,7 @@ class FabricacaoView(discord.ui.View):
             )
 
         if ativo:
-            await interaction.response.send_message("Já em produção.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Galpões Norte já está em produção.", ephemeral=True)
             return
 
         await interaction.response.send_modal(
@@ -2124,24 +2345,65 @@ class FabricacaoView(discord.ui.View):
 
     @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.secondary, custom_id="fabricacao_sul")
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
+        
+        async with db.acquire() as conn:
+            ativo = await conn.fetchval(
+                """
+                SELECT 1 FROM producoes
+                WHERE galpao=$1 AND CAST(fim AS timestamp) > NOW()
+                """,
+                "GALPÕES SUL"
+            )
+
+        if ativo:
+            await interaction.response.send_message("⚠️ Galpões Sul já está em produção.", ephemeral=True)
+            return
 
         await interaction.response.send_modal(
             PolvoraProducaoModal("GALPÕES SUL", 130)
         )
 
-    @discord.ui.button(label="🏭 Galpão Bahamas", style=discord.ButtonStyle.primary, custom_id="fabricacao_bahamas")
-    async def bahamas(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🔫 Produzir Munição", style=discord.ButtonStyle.success, custom_id="fabricacao_municao", emoji="🎯")
+    async def produzir_municao(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Abre o modal para registrar produção de munição"""
+        await interaction.response.send_modal(ProducaoMunicaoModal())
 
-        await interaction.response.send_modal(
-            PolvoraProducaoModal("", 65)
+    @discord.ui.button(label="📊 Estoque", style=discord.ButtonStyle.primary, custom_id="fabricacao_estoque", emoji="📦")
+    async def ver_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Mostra o estoque atual"""
+        await interaction.response.defer(ephemeral=True)
+        
+        estoque = await carregar_estoque()
+        
+        def fmt_num(valor):
+            return f"{valor:,.0f}".replace(",", ".")
+        
+        embed = discord.Embed(
+            title="📦 ESTOQUE DE MUNIÇÕES",
+            color=0x3498db
         )
+        
+        embed.add_field(
+            name="🔫 PT (Pistola)",
+            value=f"**{fmt_num(estoque['PT'])}** pacotes\n({fmt_num(estoque['PT'] * 50)} munições)",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🔫 SUB",
+            value=f"**{fmt_num(estoque['SUB'])}** pacotes\n({fmt_num(estoque['SUB'] * 50)} munições)",
+            inline=True
+        )
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.success, custom_id="fabricacao_relatorio")
+    @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.secondary, custom_id="fabricacao_relatorio")
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
-
+        """Relatório de produção de cápsulas"""
         await interaction.response.send_modal(
             RelatorioProducaoModal()
         )
+
 
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
@@ -2241,7 +2503,7 @@ async def finalizar_producao(pid, msg, prod):
         base = 1777 if segunda else 1688
     elif galpao == "GALPÕES SUL":
         base = 1618 if segunda else 1608
-    elif galpao == "BAHAMAS":
+    else:
         base = 1777 if segunda else 1688
     
     capsulas = (base * polvora) // 400
@@ -2304,8 +2566,10 @@ async def finalizar_producao(pid, msg, prod):
         del producoes_tasks[pid]
     
     print(f"✅ Produção {pid} finalizada com {capsulas} cápsulas")
+
+
 # =========================================================
-# ================= RELATÓRIO BONITO E RESUMIDO ===========
+# ================= RELATÓRIO PRODUÇÃO ====================
 # =========================================================
 
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
@@ -2406,17 +2670,168 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
             await interaction.followup.send("❌ Erro ao gerar relatório.", ephemeral=True)
 
 
-async def pegar_apelido(guild, user_id):
-    """Pega o nickname do usuário"""
-    try:
-        member = guild.get_member(user_id)
-        if member:
-            if member.nick:
-                return member.nick
-            return member.display_name
-        return str(user_id)
-    except:
-        return str(user_id)
+# =========================================================
+# ================= PAINEL FABRICAÇÃO =====================
+# =========================================================
+
+async def enviar_painel_fabricacao():
+    """Envia o painel de fabricação com os botões atualizados"""
+    
+    canal = pegar_canal(CANAL_FABRICACAO_ID)
+    
+    if not canal:
+        print("❌ Canal de fabricação não encontrado")
+        return
+    
+    estoque = await carregar_estoque()
+    
+    def fmt_num(valor):
+        return f"{valor:,.0f}".replace(",", ".")
+    
+    embed = discord.Embed(
+        title="🏭 PAINEL DE FABRICAÇÃO",
+        description="**Escolha uma opção abaixo:**",
+        color=0x2ecc71
+    )
+    
+    embed.add_field(
+        name="📦 ESTOQUE ATUAL",
+        value=f"🔫 **PT:** {fmt_num(estoque['PT'])} pacotes\n🔫 **SUB:** {fmt_num(estoque['SUB'])} pacotes",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🏭 PRODUÇÃO DE CÁPSULAS",
+        value="• **Galpões Norte:** 65 minutos\n• **Galpões Sul:** 130 minutos\n\n💡 **Use pólvora para reduzir o tempo!**",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎯 PRODUÇÃO DE MUNIÇÃO",
+        value="Clique em **Produzir Munição** para registrar pacotes produzidos\n(1 pacote = 50 munições)",
+        inline=False
+    )
+    
+    embed.set_footer(text="⚠️ Lembre-se: Vendas só podem ser entregues se houver estoque!")
+    
+    await enviar_ou_atualizar_painel(
+        "painel_fabricacao",
+        CANAL_FABRICACAO_ID,
+        embed,
+        FabricacaoView()
+    )
+    
+    print("🏭 Painel de fabricação atualizado")
+
+
+# =========================================================
+# ================= COMANDOS DE ESTOQUE ====================
+# =========================================================
+
+@bot.command(name="estoque")
+async def cmd_ver_estoque(ctx):
+    """Ver o estoque atual de munições"""
+    estoque = await carregar_estoque()
+    
+    def fmt_num(valor):
+        return f"{valor:,.0f}".replace(",", ".")
+    
+    embed = discord.Embed(
+        title="📦 ESTOQUE DE MUNIÇÕES",
+        color=0x3498db
+    )
+    
+    embed.add_field(
+        name="🔫 PT (Pistola)",
+        value=f"**{fmt_num(estoque['PT'])}** pacotes\n**( {fmt_num(estoque['PT'] * 50)} munições )**",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🔫 SUB (Submetralhadora)",
+        value=f"**{fmt_num(estoque['SUB'])}** pacotes\n**( {fmt_num(estoque['SUB'] * 50)} munições )**",
+        inline=True
+    )
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="historico_producao")
+async def cmd_historico_producao(ctx, limite: int = 10):
+    """Ver histórico de produção de munição"""
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM producao_municao 
+            ORDER BY data DESC 
+            LIMIT $1
+            """,
+            limite
+        )
+    
+    if not rows:
+        await ctx.send("📭 Nenhuma produção registrada ainda.")
+        return
+    
+    def fmt_num(valor):
+        return f"{valor:,.0f}".replace(",", ".")
+    
+    embed = discord.Embed(
+        title="📋 HISTÓRICO DE PRODUÇÃO DE MUNIÇÃO",
+        color=0x2ecc71
+    )
+    
+    for row in rows:
+        data = row["data"]
+        if data.tzinfo is None:
+            data = data.replace(tzinfo=BRASIL)
+        
+        embed.add_field(
+            name=f"{data.strftime('%d/%m/%Y %H:%M')}",
+            value=f"🔫 **{row['tipo']}** • {fmt_num(row['pacotes'])} pacotes ({fmt_num(row['munições'])} munições)\n👤 <@{row['produzido_por']}>",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="historico_vendas_estoque")
+async def cmd_historico_vendas_estoque(ctx, limite: int = 10):
+    """Ver histórico de saída de estoque por vendas"""
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM saida_estoque 
+            ORDER BY data DESC 
+            LIMIT $1
+            """,
+            limite
+        )
+    
+    if not rows:
+        await ctx.send("📭 Nenhuma venda registrada ainda.")
+        return
+    
+    def fmt_num(valor):
+        return f"{valor:,.0f}".replace(",", ".")
+    
+    embed = discord.Embed(
+        title="📋 HISTÓRICO DE VENDAS (ESTOQUE)",
+        color=0xe74c3c
+    )
+    
+    for row in rows:
+        data = row["data"]
+        if data.tzinfo is None:
+            data = data.replace(tzinfo=BRASIL)
+        
+        embed.add_field(
+            name=f"Pedido #{row['pedido_numero']} - {data.strftime('%d/%m/%Y %H:%M')}",
+            value=f"🔫 **{row['tipo']}** • {fmt_num(row['pacotes'])} pacotes\n👤 Retirado por: <@{row['retirado_por']}>",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
