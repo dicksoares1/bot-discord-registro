@@ -162,6 +162,22 @@ def str_para_datetime(data_str):
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=BRASIL)
     return dt
+
+# =========================================================
+# ================= FUNÇÃO PEGAR APELIDO ==================
+# =========================================================
+
+async def pegar_apelido(guild, user_id):
+    """Pega o apelido/nickname do usuário no servidor"""
+    try:
+        member = guild.get_member(int(user_id))
+        if member:
+            if member.nick:
+                return member.nick
+            return member.display_name
+        return str(user_id)
+    except:
+        return str(user_id)
 # =========================================================
 # ======================== CONFIG ==========================
 # =========================================================
