@@ -2712,6 +2712,12 @@ class FabricacaoView(discord.ui.View):
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioProducaoModal())
 
+    # 🔥 NOVO BOTÃO DE ATUALIZAR - Adicione este no FINAL da classe
+    @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="atualizar_painel_btn", emoji="🔄")
+    async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await atualizar_painel_fabricacao()
+        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
 
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
@@ -2999,7 +3005,7 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 # =========================================================
 
 async def enviar_painel_fabricacao():
-    """Envia o painel de fabricação com os botões atualizados"""
+    """Envia o painel de fabricação - SEMPRE CRIA UMA NOVA MENSAGEM"""
     
     canal = pegar_canal(CANAL_FABRICACAO_ID)
     
@@ -3039,15 +3045,23 @@ async def enviar_painel_fabricacao():
     
     embed.set_footer(text="Utilize os botões abaixo para gerenciar o estoque")
     
-    await enviar_ou_atualizar_painel(
-        "painel_fabricacao",
-        CANAL_FABRICACAO_ID,
-        embed,
-        FabricacaoView()
-    )
+    # 🔥 FORÇAR LIMPEZA DAS MENSAGENS ANTIGAS
+    async for msg in canal.history(limit=10):
+        if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "🏭 PAINEL DE FABRICAÇÃO":
+            try:
+                await msg.delete()
+                print(f"🗑️ Mensagem antiga do painel deletada: {msg.id}")
+            except:
+                pass
     
-    print("🏭 Painel de fabricação atualizado")
+    # Criar nova mensagem
+    await canal.send(embed=embed, view=FabricacaoView())
+    print("🏭 Novo painel de fabricação enviado")
 
+
+async def atualizar_painel_fabricacao():
+    """Atualiza o painel de fabricação (força recriação)"""
+    await enviar_painel_fabricacao()
 # =========================================================
 # ================= COMANDOS DE ESTOQUE ====================
 # =========================================================
