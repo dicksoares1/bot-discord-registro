@@ -3023,25 +3023,11 @@ async def enviar_painel_fabricacao():
     
     embed.add_field(
         name="🏭 PRODUÇÃO DE CÁPSULAS",
-        value="• **Galpões Norte:** 65 minutos\n• **Galpões Sul:** 130 minutos\n\n💡 Use pólvora para reduzir o tempo!\n⚠️ As cápsulas produzidas vão direto para o estoque de insumos!",
+        value="• **Galpões Norte:** 65 minutos\n• **Galpões Sul:** 130 minutos",
         inline=False
     )
     
-    embed.add_field(
-        name="📋 TABELA DE CONSUMO",
-        value=(
-            "**Para produzir 1 PACOTE (50 munições):**\n"
-            "┌─────────────┬──────────┬─────────────┐\n"
-            "│    Tipo     │ Cápsulas │ Embalagens  │\n"
-            "├─────────────┼──────────┼─────────────┤\n"
-            "│     PT      │    25    │      5      │\n"
-            "│     SUB     │    65    │     25      │\n"
-            "└─────────────┴──────────┴─────────────┘"
-        ),
-        inline=False
-    )
-    
-    embed.set_footer(text="⚠️ Antes de produzir munição, registre cápsulas e embalagens!")
+    embed.set_footer(text="Utilize os botões abaixo para gerenciar o estoque")
     
     await enviar_ou_atualizar_painel(
         "painel_fabricacao",
@@ -3051,7 +3037,6 @@ async def enviar_painel_fabricacao():
     )
     
     print("🏭 Painel de fabricação atualizado")
-
 
 # =========================================================
 # ================= COMANDOS DE ESTOQUE ====================
@@ -6642,7 +6627,7 @@ class AluguelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         
-        # Botões de alugar (linha 0)
+        # Botões de alugar (apenas Galpões Norte e Sul)
         self.add_item(AlugarButton(
             galpao="GALPÕES NORTE",
             label="💰 Alugar Galpões Norte",
@@ -6653,12 +6638,6 @@ class AluguelView(discord.ui.View):
             galpao="GALPÕES SUL",
             label="💰 Alugar Galpões Sul",
             custom_id="aluguel_sul_btn"
-        ))
-        
-        self.add_item(AlugarButton(
-            galpao="BAHAMAS",
-            label="💰 Alugar Bahamas",
-            custom_id="aluguel_bahamas_btn"
         ))
     
     def adicionar_botoes_edicao(self, galpao, user_id, dias_atuais):
@@ -6759,39 +6738,6 @@ async def enviar_painel_alugueis():
             inline=False
         )
     
-    # ===== BAHAMAS =====
-    if "BAHAMAS" in alugueis_ativos:
-        dados = alugueis_ativos["BAHAMAS"]
-        data_fim = dados["fim"]
-        barra = calcular_barra_progresso(data_fim, dados["dias"])
-        
-        embed.add_field(
-            name="🏝️ BAHAMAS",
-            value=(
-                f"**STATUS:** 🔵 ALUGADO\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"**👤 Alugado Por:** <@{dados['user_id']}>\n"
-                f"**📅 Dias alugados:** {dados['dias']} dia(s)\n"
-                f"**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n"
-                f"**🕐 TEMPO RESTANTE:**\n"
-                f"{formatar_tempo_detalhado(data_fim)}\n"
-                f"{barra}"
-            ),
-            inline=False
-        )
-        view.adicionar_botoes_edicao("BAHAMAS", dados['user_id'], dados['dias'])
-    else:
-        embed.add_field(
-            name="🏝️ BAHAMAS",
-            value=(
-                f"**STATUS:** 🟢 DISPONÍVEL\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"**💰 Clique no botão abaixo para alugar**\n"
-                f"**📅 Aluguel mínimo:** 1 dia"
-            ),
-            inline=False
-        )
-    
     embed.set_footer(text="⏱️ Atualiza automaticamente a cada minuto")
     
     # Usar a função que evita duplicação
@@ -6866,7 +6812,7 @@ async def cmd_editar_aluguel(ctx, galpao: str = None, dias: int = None):
         return
     
     if not galpao or not dias:
-        await ctx.send("❌ Uso: `!editar_aluguel NORTE 30`\nOpções: NORTE, SUL, BAHAMAS")
+        await ctx.send("❌ Uso: `!editar_aluguel NORTE 30`\nOpções: NORTE, SUL")
         return
     
     galpao = galpao.upper()
@@ -6874,10 +6820,8 @@ async def cmd_editar_aluguel(ctx, galpao: str = None, dias: int = None):
         nome_galpao = "GALPÕES NORTE"
     elif galpao == "SUL":
         nome_galpao = "GALPÕES SUL"
-    elif galpao == "BAHAMAS":
-        nome_galpao = "BAHAMAS"
     else:
-        await ctx.send("❌ Galpões válidos: NORTE, SUL, BAHAMAS")
+        await ctx.send("❌ Galpões válidos: NORTE, SUL")
         return
     
     if nome_galpao not in alugueis_ativos:
@@ -6913,10 +6857,8 @@ async def cmd_renovar_aluguel(ctx, galpao: str, dias: int):
         nome_galpao = "GALPÕES NORTE"
     elif galpao == "SUL":
         nome_galpao = "GALPÕES SUL"
-    elif galpao == "BAHAMAS":
-        nome_galpao = "BAHAMAS"
     else:
-        await ctx.send("❌ Galpões válidos: NORTE, SUL, BAHAMAS")
+        await ctx.send("❌ Galpões válidos: NORTE, SUL")
         return
     
     data_fim = agora() + timedelta(days=dias)
