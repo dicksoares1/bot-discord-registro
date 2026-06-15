@@ -2025,7 +2025,6 @@ async def verificar_estoque_suficiente(tipo, pacotes_necessarios):
 async def carregar_producao(pid):
 
     async with db.acquire() as conn:
-
         r = await conn.fetchrow(
             "SELECT * FROM producoes WHERE pid=$1",
             pid
@@ -2042,7 +2041,9 @@ async def carregar_producao(pid):
         "obs": r["obs"],
         "msg_id": int(r["msg_id"]),
         "canal_id": int(r["canal_id"]),
-        "polvora": r["polvora"] or 400
+        "polvora": r["polvora"] or 400,
+        "qtd_galpoes": r.get("qtd_galpoes", 1) if r.get("qtd_galpoes") else 1,
+        "polvora_por_galpao": r.get("polvora_por_galpao", 400) if r.get("polvora_por_galpao") else 400
     }
 
     if r["segunda_task_user"]:
@@ -2055,22 +2056,21 @@ async def carregar_producao(pid):
 
 
 async def salvar_producao(pid, dados):
-
     segunda_user = None
     segunda_time = None
+    qtd_galpoes = dados.get("qtd_galpoes", 1)
+    polvora_por_galpao = dados.get("polvora_por_galpao", dados.get("polvora", 400) // qtd_galpoes if qtd_galpoes > 0 else 400)
 
     if "segunda_task_confirmada" in dados:
-
         segunda_user = str(dados["segunda_task_confirmada"]["user"])
         segunda_time = dados["segunda_task_confirmada"]["time"]
 
     async with db.acquire() as conn:
-
         await conn.execute(
             """
             INSERT INTO producoes 
-            (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, segunda_task_user, segunda_task_time, polvora)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, segunda_task_user, segunda_task_time, polvora, qtd_galpoes, polvora_por_galpao)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
             ON CONFLICT (pid)
             DO UPDATE SET
             galpao=$2,
@@ -2082,7 +2082,9 @@ async def salvar_producao(pid, dados):
             canal_id=$8,
             segunda_task_user=$9,
             segunda_task_time=$10,
-            polvora=$11
+            polvora=$11,
+            qtd_galpoes=$12,
+            polvora_por_galpao=$13
             """,
             pid,
             dados["galpao"],
@@ -2094,24 +2096,19 @@ async def salvar_producao(pid, dados):
             str(dados["canal_id"]),
             segunda_user,
             segunda_time,
-            dados.get("polvora", 400)
+            dados.get("polvora", 400),
+            qtd_galpoes,
+            polvora_por_galpao
         )
 
 
 async def deletar_producao(pid):
-
     async with db.acquire() as conn:
-
-        await conn.execute(
-            "DELETE FROM producoes WHERE pid=$1",
-            pid
-        )
+        await conn.execute("DELETE FROM producoes WHERE pid=$1", pid)
 
 
 def barra(pct, size=20):
-
     cheio = int(pct * size)
-
     if pct <= 0.35:
         cor = "🟢"
     elif pct <= 0.70:
@@ -2120,7 +2117,6 @@ def barra(pct, size=20):
         cor = "🔴"
     else:
         cor = "🔵"
-
     return cor + " " + ("▓" * cheio) + ("░" * (size - cheio))
 
 
@@ -2129,7 +2125,6 @@ def barra(pct, size=20):
 # =========================================================
 
 class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
-
     obs = discord.ui.TextInput(
         label="Observação inicial",
         style=discord.TextStyle.paragraph,
@@ -2142,61 +2137,21 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
         self.tempo = tempo
 
     async def on_submit(self, interaction: discord.Interaction):
-
         await interaction.response.defer(ephemeral=True)
-
         pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
-
         inicio = agora()
         fim = inicio + timedelta(minutes=self.tempo)
-
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
-
-        desc = (
-            f"**Galpão:** {self.galpao}\n"
-            f"**Iniciado por:** {interaction.user.mention}\n"
-        )
-
+        desc = (f"**Galpão:** {self.galpao}\n**Iniciado por:** {interaction.user.mention}\n")
         if self.obs.value:
             desc += f"📝 **Obs:** {self.obs.value}\n"
-
-        desc += (
-            f"Início: <t:{int(inicio.timestamp())}:t>\n"
-            f"Término: <t:{int(fim.timestamp())}:t>\n\n"
-            f"⏳ **Restante:** {self.tempo} min\n"
-            f"{barra(0)}"
-        )
-
-        msg = await canal.send(
-            embed=discord.Embed(
-                title="🏭 Produção",
-                description=desc,
-                color=0x3498db
-            ),
-            view=SegundaTaskView(pid)
-        )
-
-        dados = {
-            "galpao": self.galpao,
-            "autor": interaction.user.id,
-            "inicio": inicio.isoformat(),
-            "fim": fim.isoformat(),
-            "obs": self.obs.value,
-            "polvora": 400,
-            "msg_id": msg.id,
-            "canal_id": CANAL_REGISTRO_GALPAO_ID
-        }
-
+        desc += (f"Início: <t:{int(inicio.timestamp())}:t>\nTérmino: <t:{int(fim.timestamp())}:t>\n\n⏳ **Restante:** {self.tempo} min\n{barra(0)}")
+        msg = await canal.send(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x3498db), view=SegundaTaskView(pid))
+        dados = {"galpao": self.galpao, "autor": interaction.user.id, "inicio": inicio.isoformat(), "fim": fim.isoformat(), "obs": self.obs.value, "polvora": 400, "msg_id": msg.id, "canal_id": CANAL_REGISTRO_GALPAO_ID, "qtd_galpoes": 1, "polvora_por_galpao": 400}
         await salvar_producao(pid, dados)
-
         await asyncio.sleep(1)
-
         if pid not in producoes_tasks:
-
-            task = bot.loop.create_task(
-                acompanhar_producao(pid)
-            )
-
+            task = bot.loop.create_task(acompanhar_producao(pid))
             producoes_tasks[pid] = task
 
 
@@ -2205,39 +2160,62 @@ class ObservacaoProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 # =========================================================
 
 class SegundaTaskView(discord.ui.View):
-
     def __init__(self, pid):
         super().__init__(timeout=None)
         self.pid = pid
 
-    @discord.ui.button(
-        label="✅ Confirmar 2ª Task",
-        style=discord.ButtonStyle.success,
-        custom_id="segunda_task_btn"
-    )
+    @discord.ui.button(label="✅ Confirmar 2ª Task", style=discord.ButtonStyle.success, custom_id="segunda_task_btn")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
-
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
-
         try:
-
             prod = await carregar_producao(self.pid)
-
             if not prod:
                 return
-
-            prod["segunda_task_confirmada"] = {
-                "user": interaction.user.id,
-                "time": agora().isoformat()
-            }
-
+            prod["segunda_task_confirmada"] = {"user": interaction.user.id, "time": agora().isoformat()}
             await salvar_producao(self.pid, prod)
-
             await interaction.message.edit(view=None)
-
         except Exception as e:
             print("Erro segunda task:", e)
+
+
+# =========================================================
+# ================= MODAL SELEÇÃO DE GALPÕES ===============
+# =========================================================
+
+class SelecionarGalpoesModal(discord.ui.Modal, title="🏭 Selecionar Galpões"):
+    
+    quantidade = discord.ui.TextInput(
+        label="Quantos galpões?",
+        placeholder="Digite 1, 2 ou 3",
+        required=True,
+        max_length=1
+    )
+    
+    obs = discord.ui.TextInput(
+        label="Observação (opcional)",
+        style=discord.TextStyle.paragraph,
+        required=False
+    )
+    
+    def __init__(self, galpao, tempo_base):
+        super().__init__()
+        self.galpao = galpao
+        self.tempo_base = tempo_base
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validar quantidade
+        try:
+            qtd = int(self.quantidade.value)
+            if qtd not in [1, 2, 3]:
+                raise ValueError
+        except:
+            await interaction.response.send_message("❌ Quantidade inválida! Digite 1, 2 ou 3.", ephemeral=True)
+            return
+        
+        # Abrir modal de pólvora
+        modal = PolvoraProducaoModal(self.galpao, self.tempo_base, qtd, self.obs.value)
+        await interaction.response.send_modal(modal)
 
 
 # =========================================================
@@ -2247,96 +2225,83 @@ class SegundaTaskView(discord.ui.View):
 class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
     polvora = discord.ui.TextInput(
-        label="Quantas pólvoras foram colocadas?",
-        placeholder="Ex: 400"
+        label="Quantas pólvoras por galpão?",
+        placeholder="Ex: 400",
+        required=True
     )
 
-    obs = discord.ui.TextInput(
-        label="Observação (opcional)",
-        style=discord.TextStyle.paragraph,
-        required=False
-    )
-
-    def __init__(self, galpao, tempo):
+    def __init__(self, galpao, tempo_base, qtd_galpoes=1, obs=""):
         super().__init__()
         self.galpao = galpao
-        self.tempo = tempo
+        self.tempo_base = tempo_base
+        self.qtd_galpoes = qtd_galpoes
+        self.obs_padrao = obs
 
     async def on_submit(self, interaction: discord.Interaction):
 
         await interaction.response.defer(ephemeral=True)
 
         try:
+            polvora_por_galpao = int(self.polvora.value)
+            if polvora_por_galpao <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("Quantidade de pólvora inválida.", ephemeral=True)
+            return
 
-            try:
-                polvora = int(self.polvora.value)
-            except:
-                await interaction.followup.send(
-                    "Quantidade inválida.",
-                    ephemeral=True
-                )
-                return
+        polvora_total = polvora_por_galpao * self.qtd_galpoes
+        tempo_real = max(1, int(self.tempo_base * (polvora_por_galpao / 400)))
+        
+        pid = f"{self.galpao}_{self.qtd_galpoes}g_{interaction.id}_{int(time_module.time())}"
+        inicio = agora()
+        fim = inicio + timedelta(minutes=tempo_real)
+        canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
 
-            pid = f"{self.galpao}_{interaction.id}_{int(time_module.time())}"
+        if not canal:
+            await interaction.followup.send("Canal de produção não encontrado.", ephemeral=True)
+            return
 
-            inicio = agora()
-            tempo_real = max(1, int(self.tempo * (polvora / 400)))
-            fim = inicio + timedelta(minutes=tempo_real)
+        desc = (
+            f"**Galpão:** {self.galpao}\n"
+            f"**Quantidade de galpões:** {self.qtd_galpoes}\n"
+            f"**Iniciado por:** {interaction.user.mention}\n"
+        )
 
-            canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
+        if self.obs_padrao:
+            desc += f"📝 **Obs:** {self.obs_padrao}\n"
 
-            if not canal:
-                await interaction.followup.send(
-                    "Canal de produção não encontrado.",
-                    ephemeral=True
-                )
-                return
+        desc += (
+            f"**Pólvora por galpão:** {polvora_por_galpao}\n"
+            f"**Pólvora total:** {polvora_total}\n"
+            f"Início: <t:{int(inicio.timestamp())}:t>\n"
+            f"Término: <t:{int(fim.timestamp())}:t>\n\n"
+            f"⏳ **Restante:** {tempo_real} min\n"
+            f"{barra(0)}"
+        )
 
-            desc = (
-                f"**Galpão:** {self.galpao}\n"
-                f"**Iniciado por:** {interaction.user.mention}\n"
-            )
+        msg = await canal.send(
+            embed=discord.Embed(title=f"🏭 Produção - {self.qtd_galpoes} Galpão(ões)", description=desc, color=0x3498db),
+            view=SegundaTaskView(pid)
+        )
 
-            if self.obs.value:
-                desc += f"📝 **Obs:** {self.obs.value}\n"
+        dados = {
+            "galpao": f"{self.galpao} ({self.qtd_galpoes} galpões)",
+            "autor": interaction.user.id,
+            "inicio": inicio.isoformat(),
+            "fim": fim.isoformat(),
+            "obs": self.obs_padrao,
+            "polvora": polvora_total,
+            "qtd_galpoes": self.qtd_galpoes,
+            "polvora_por_galpao": polvora_por_galpao,
+            "msg_id": msg.id,
+            "canal_id": CANAL_REGISTRO_GALPAO_ID
+        }
 
-            desc += (
-                f"Início: <t:{int(inicio.timestamp())}:t>\n"
-                f"Término: <t:{int(fim.timestamp())}:t>\n\n"
-                f"⏳ **Restante:** {tempo_real} min\n"
-                f"{barra(0)}"
-            )
+        await salvar_producao(pid, dados)
 
-            msg = await canal.send(
-                embed=discord.Embed(
-                    title="🏭 Produção",
-                    description=desc,
-                    color=0x3498db
-                ),
-                view=SegundaTaskView(pid)
-            )
-
-            dados = {
-                "galpao": self.galpao,
-                "autor": interaction.user.id,
-                "inicio": inicio.isoformat(),
-                "fim": fim.isoformat(),
-                "obs": self.obs.value,
-                "polvora": polvora,
-                "msg_id": msg.id,
-                "canal_id": CANAL_REGISTRO_GALPAO_ID
-            }
-
-            await salvar_producao(pid, dados)
-
-            if pid not in producoes_tasks:
-                task = asyncio.create_task(
-                    acompanhar_producao(pid)
-                )
-                producoes_tasks[pid] = task
-
-        except Exception as e:
-            print("ERRO PRODUÇÃO:", e)
+        if pid not in producoes_tasks:
+            task = asyncio.create_task(acompanhar_producao(pid))
+            producoes_tasks[pid] = task
 
 
 # =========================================================
@@ -2345,21 +2310,11 @@ class PolvoraProducaoModal(discord.ui.Modal, title="Iniciar Produção"):
 
 class RegistrarCapsulasModal(discord.ui.Modal, title="📦 Registrar Cápsulas"):
     
-    quantidade = discord.ui.TextInput(
-        label="Quantidade de CÁPSULAS",
-        placeholder="Ex: 1000",
-        required=True
-    )
-    
-    observacao = discord.ui.TextInput(
-        label="Observação (opcional)",
-        style=discord.TextStyle.paragraph,
-        required=False
-    )
+    quantidade = discord.ui.TextInput(label="Quantidade de CÁPSULAS", placeholder="Ex: 1000", required=True)
+    observacao = discord.ui.TextInput(label="Observação (opcional)", style=discord.TextStyle.paragraph, required=False)
     
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
         try:
             quantidade = int(self.quantidade.value.replace(".", "").replace(",", ""))
             if quantidade <= 0:
@@ -2369,20 +2324,14 @@ class RegistrarCapsulasModal(discord.ui.Modal, title="📦 Registrar Cápsulas")
             return
         
         await registrar_entrada_insumos("capsulas", quantidade, interaction.user.id, self.observacao.value)
-        
         estoque = await carregar_estoque_insumos()
         
         def fmt_num(valor):
             return f"{valor:,.0f}".replace(",", ".")
         
-        # Enviar para o canal do baú
         canal_bau = interaction.guild.get_channel(1448561598384963747)
         if canal_bau:
-            embed_bau = discord.Embed(
-                title="📦 ENTRADA DE CÁPSULAS",
-                color=0x3498db,
-                timestamp=agora()
-            )
+            embed_bau = discord.Embed(title="📦 ENTRADA DE CÁPSULAS", color=0x3498db, timestamp=agora())
             embed_bau.add_field(name="📦 Quantidade", value=f"**{fmt_num(quantidade)}** cápsulas", inline=True)
             embed_bau.add_field(name="👤 Registrado por", value=interaction.user.mention, inline=True)
             if self.observacao.value:
@@ -2390,16 +2339,9 @@ class RegistrarCapsulasModal(discord.ui.Modal, title="📦 Registrar Cápsulas")
             embed_bau.set_footer(text=f"Novo estoque: {fmt_num(estoque['capsulas'])} cápsulas")
             await canal_bau.send(embed=embed_bau)
         
-        embed_privado = discord.Embed(
-            title="✅ CÁPSULAS REGISTRADAS",
-            description=f"**{fmt_num(quantidade)}** cápsulas adicionadas ao estoque!",
-            color=0x2ecc71
-        )
+        embed_privado = discord.Embed(title="✅ CÁPSULAS REGISTRADAS", description=f"**{fmt_num(quantidade)}** cápsulas adicionadas!", color=0x2ecc71)
         embed_privado.add_field(name="📊 Estoque atual", value=f"**{fmt_num(estoque['capsulas'])}** cápsulas", inline=False)
-        
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
-        
-        # ATUALIZAR O PAINEL DE FABRICAÇÃO
         await atualizar_painel_fabricacao()
 
 
@@ -2409,21 +2351,11 @@ class RegistrarCapsulasModal(discord.ui.Modal, title="📦 Registrar Cápsulas")
 
 class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagens"):
     
-    quantidade = discord.ui.TextInput(
-        label="Quantidade de EMBALAGENS",
-        placeholder="Ex: 500",
-        required=True
-    )
-    
-    observacao = discord.ui.TextInput(
-        label="Observação (opcional)",
-        style=discord.TextStyle.paragraph,
-        required=False
-    )
+    quantidade = discord.ui.TextInput(label="Quantidade de EMBALAGENS", placeholder="Ex: 500", required=True)
+    observacao = discord.ui.TextInput(label="Observação (opcional)", style=discord.TextStyle.paragraph, required=False)
     
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
         try:
             quantidade = int(self.quantidade.value.replace(".", "").replace(",", ""))
             if quantidade <= 0:
@@ -2433,20 +2365,14 @@ class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagen
             return
         
         await registrar_entrada_insumos("embalagens", quantidade, interaction.user.id, self.observacao.value)
-        
         estoque = await carregar_estoque_insumos()
         
         def fmt_num(valor):
             return f"{valor:,.0f}".replace(",", ".")
         
-        # Enviar para o canal do baú
         canal_bau = interaction.guild.get_channel(1448561598384963747)
         if canal_bau:
-            embed_bau = discord.Embed(
-                title="📦 ENTRADA DE EMBALAGENS",
-                color=0x3498db,
-                timestamp=agora()
-            )
+            embed_bau = discord.Embed(title="📦 ENTRADA DE EMBALAGENS", color=0x3498db, timestamp=agora())
             embed_bau.add_field(name="📦 Quantidade", value=f"**{fmt_num(quantidade)}** embalagens", inline=True)
             embed_bau.add_field(name="👤 Registrado por", value=interaction.user.mention, inline=True)
             if self.observacao.value:
@@ -2454,57 +2380,31 @@ class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagen
             embed_bau.set_footer(text=f"Novo estoque: {fmt_num(estoque['embalagens'])} embalagens")
             await canal_bau.send(embed=embed_bau)
         
-        embed_privado = discord.Embed(
-            title="✅ EMBALAGENS REGISTRADAS",
-            description=f"**{fmt_num(quantidade)}** embalagens adicionadas ao estoque!",
-            color=0x2ecc71
-        )
+        embed_privado = discord.Embed(title="✅ EMBALAGENS REGISTRADAS", description=f"**{fmt_num(quantidade)}** embalagens adicionadas!", color=0x2ecc71)
         embed_privado.add_field(name="📊 Estoque atual", value=f"**{fmt_num(estoque['embalagens'])}** embalagens", inline=False)
-        
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
-        
-        # ATUALIZAR O PAINEL DE FABRICAÇÃO
         await atualizar_painel_fabricacao()
-        
+
+
 # =========================================================
 # ================= MODAL PRODUÇÃO MUNIÇÃO =================
 # =========================================================
 
 class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
     
-    tipo_municao = discord.ui.TextInput(
-        label="Tipo de munição",
-        placeholder="Digite PT ou SUB",
-        required=True,
-        max_length=3
-    )
-    
-    quantidade_pacotes = discord.ui.TextInput(
-        label="Quantidade de PACOTES",
-        placeholder="Ex: 100 (cada pacote = 50 munições)",
-        required=True
-    )
-    
-    observacao = discord.ui.TextInput(
-        label="Observação (opcional)",
-        style=discord.TextStyle.paragraph,
-        required=False
-    )
+    tipo_municao = discord.ui.TextInput(label="Tipo de munição", placeholder="Digite PT ou SUB", required=True, max_length=3)
+    quantidade_pacotes = discord.ui.TextInput(label="Quantidade de PACOTES", placeholder="Ex: 100 (cada pacote = 50 munições)", required=True)
+    observacao = discord.ui.TextInput(label="Observação (opcional)", style=discord.TextStyle.paragraph, required=False)
     
     async def on_submit(self, interaction: discord.Interaction):
         
         await interaction.response.defer(ephemeral=True)
         
-        # Validar tipo
         tipo = self.tipo_municao.value.strip().upper()
         if tipo not in ["PT", "SUB"]:
-            await interaction.followup.send(
-                "❌ **Tipo inválido!** Use `PT` ou `SUB`.",
-                ephemeral=True
-            )
+            await interaction.followup.send("❌ **Tipo inválido!** Use `PT` ou `SUB`.", ephemeral=True)
             return
         
-        # Validar quantidade
         try:
             pacotes = int(self.quantidade_pacotes.value.replace(".", "").replace(",", ""))
             if pacotes <= 0:
@@ -2513,7 +2413,6 @@ class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
             await interaction.followup.send("❌ **Quantidade inválida!**", ephemeral=True)
             return
         
-        # VERIFICAR INSUMOS DISPONÍVEIS
         verificacao = await verificar_insumos_producao(tipo, pacotes)
         
         def fmt_num(valor):
@@ -2526,88 +2425,42 @@ class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
             if verificacao["embalagens_disponiveis"] < verificacao["embalagens_necessarias"]:
                 faltando.append(f"📦 **Embalagens:** precisa de {fmt_num(verificacao['embalagens_necessarias'])}, tem apenas {fmt_num(verificacao['embalagens_disponiveis'])}")
             
-            await interaction.followup.send(
-                f"❌ **INSUMOS INSUFICIENTES!**\n\n" + "\n".join(faltando) +
-                f"\n\n⚠️ Registre mais insumos antes de produzir!\n"
-                f"Use os botões **💊 Registrar Cápsulas** ou **📦 Registrar Embalagens**",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"❌ **INSUMOS INSUFICIENTES!**\n\n" + "\n".join(faltando) + f"\n\n⚠️ Registre mais insumos antes de produzir!", ephemeral=True)
             return
         
         municoes = pacotes * 50
         capsulas_usadas = verificacao["capsulas_necessarias"]
         embalagens_usadas = verificacao["embalagens_necessarias"]
         
-        # Registrar produção (já consome os insumos)
         await registrar_producao_municao(tipo, pacotes, interaction.user.id, self.observacao.value)
         
-        # Buscar estoque atualizado
         estoque_municoes = await carregar_estoque()
         estoque_insumos = await carregar_estoque_insumos()
         
-        # Enviar relatório para o Baú
         canal_bau = interaction.guild.get_channel(1448561598384963747)
         
         if canal_bau:
-            embed_bau = discord.Embed(
-                title="🔫 PRODUÇÃO DE MUNIÇÃO REALIZADA",
-                color=0x2ecc71,
-                timestamp=agora()
-            )
-            
+            embed_bau = discord.Embed(title="🔫 PRODUÇÃO DE MUNIÇÃO REALIZADA", color=0x2ecc71, timestamp=agora())
             embed_bau.add_field(name="🔫 Tipo", value=f"**{tipo}**", inline=True)
             embed_bau.add_field(name="📦 Pacotes", value=f"**{fmt_num(pacotes)}** pacotes", inline=True)
             embed_bau.add_field(name="🔫 Munições", value=f"**{fmt_num(municoes)}** unidades", inline=True)
             embed_bau.add_field(name="👤 Produzido por", value=interaction.user.mention, inline=True)
-            
-            embed_bau.add_field(
-                name="📦 INSUMOS CONSUMIDOS",
-                value=f"💊 Cápsulas: **{fmt_num(capsulas_usadas)}**\n📦 Embalagens: **{fmt_num(embalagens_usadas)}**",
-                inline=False
-            )
-            
+            embed_bau.add_field(name="📦 INSUMOS CONSUMIDOS", value=f"💊 Cápsulas: **{fmt_num(capsulas_usadas)}**\n📦 Embalagens: **{fmt_num(embalagens_usadas)}**", inline=False)
             if self.observacao.value:
                 embed_bau.add_field(name="📝 Observação", value=self.observacao.value, inline=False)
-            
-            embed_bau.add_field(
-                name="📊 ESTOQUE APÓS PRODUÇÃO",
-                value=(
-                    f"**Munições:**\n"
-                    f"🔫 PT: {fmt_num(estoque_municoes['PT'])} pacotes\n"
-                    f"🔫 SUB: {fmt_num(estoque_municoes['SUB'])} pacotes\n\n"
-                    f"**Insumos restantes:**\n"
-                    f"💊 Cápsulas: {fmt_num(estoque_insumos['capsulas'])}\n"
-                    f"📦 Embalagens: {fmt_num(estoque_insumos['embalagens'])}"
-                ),
-                inline=False
-            )
-            
-            embed_bau.set_footer(text=f"Registrado em {agora().strftime('%d/%m/%Y às %H:%M')}")
+            embed_bau.add_field(name="📊 ESTOQUE APÓS PRODUÇÃO", value=(f"**Munições:**\n🔫 PT: {fmt_num(estoque_municoes['PT'])} pacotes\n🔫 SUB: {fmt_num(estoque_municoes['SUB'])} pacotes\n\n**Insumos restantes:**\n💊 Cápsulas: {fmt_num(estoque_insumos['capsulas'])}\n📦 Embalagens: {fmt_num(estoque_insumos['embalagens'])}"), inline=False)
             await canal_bau.send(embed=embed_bau)
         
-        # Confirmar para o usuário
-        embed_privado = discord.Embed(
-            title="✅ PRODUÇÃO REALIZADA COM SUCESSO!",
-            color=0x2ecc71
-        )
+        embed_privado = discord.Embed(title="✅ PRODUÇÃO REALIZADA COM SUCESSO!", color=0x2ecc71)
         embed_privado.add_field(name="🔫 Tipo", value=f"**{tipo}**", inline=True)
         embed_privado.add_field(name="📦 Pacotes", value=f"**{fmt_num(pacotes)}** pacotes", inline=True)
         embed_privado.add_field(name="🔫 Munições", value=f"**{fmt_num(municoes)}** unidades", inline=True)
-        embed_privado.add_field(
-            name="📦 Insumos consumidos",
-            value=f"💊 {fmt_num(capsulas_usadas)} cápsulas\n📦 {fmt_num(embalagens_usadas)} embalagens",
-            inline=False
-        )
-        embed_privado.add_field(
-            name="📊 Estoque atual de munição",
-            value=f"🔫 PT: **{fmt_num(estoque_municoes['PT'])}** pacotes\n🔫 SUB: **{fmt_num(estoque_municoes['SUB'])}** pacotes",
-            inline=False
-        )
+        embed_privado.add_field(name="📦 Insumos consumidos", value=f"💊 {fmt_num(capsulas_usadas)} cápsulas\n📦 {fmt_num(embalagens_usadas)} embalagens", inline=False)
+        embed_privado.add_field(name="📊 Estoque atual de munição", value=f"🔫 PT: **{fmt_num(estoque_municoes['PT'])}** pacotes\n🔫 SUB: **{fmt_num(estoque_municoes['SUB'])}** pacotes", inline=False)
         
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
-        
-        # ATUALIZAR O PAINEL DE FABRICAÇÃO
         await atualizar_painel_fabricacao()
+
 
 # =========================================================
 # ================= VIEW FABRICAÇÃO ========================
@@ -2620,43 +2473,21 @@ class FabricacaoView(discord.ui.View):
 
     @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary, custom_id="fabricacao_norte")
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
-
         async with db.acquire() as conn:
-            ativo = await conn.fetchval(
-                """
-                SELECT 1 FROM producoes
-                WHERE galpao=$1 AND CAST(fim AS timestamp) > NOW()
-                """,
-                "GALPÕES NORTE"
-            )
-
+            ativo = await conn.fetchval("SELECT 1 FROM producoes WHERE galpao LIKE 'GALPÕES NORTE%' AND CAST(fim AS timestamp) > NOW()")
         if ativo:
             await interaction.response.send_message("⚠️ Galpões Norte já está em produção.", ephemeral=True)
             return
-
-        await interaction.response.send_modal(
-            PolvoraProducaoModal("GALPÕES NORTE", 65)
-        )
+        await interaction.response.send_modal(SelecionarGalpoesModal("GALPÕES NORTE", 65))
 
     @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.secondary, custom_id="fabricacao_sul")
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
-        
         async with db.acquire() as conn:
-            ativo = await conn.fetchval(
-                """
-                SELECT 1 FROM producoes
-                WHERE galpao=$1 AND CAST(fim AS timestamp) > NOW()
-                """,
-                "GALPÕES SUL"
-            )
-
+            ativo = await conn.fetchval("SELECT 1 FROM producoes WHERE galpao LIKE 'GALPÕES SUL%' AND CAST(fim AS timestamp) > NOW()")
         if ativo:
             await interaction.response.send_message("⚠️ Galpões Sul já está em produção.", ephemeral=True)
             return
-
-        await interaction.response.send_modal(
-            PolvoraProducaoModal("GALPÕES SUL", 130)
-        )
+        await interaction.response.send_modal(SelecionarGalpoesModal("GALPÕES SUL", 130))
 
     @discord.ui.button(label="💊 Registrar Cápsulas", style=discord.ButtonStyle.primary, custom_id="registrar_capsulas", emoji="💊")
     async def registrar_capsulas(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2673,51 +2504,26 @@ class FabricacaoView(discord.ui.View):
     @discord.ui.button(label="📊 Estoque", style=discord.ButtonStyle.secondary, custom_id="ver_estoque_completo", emoji="📊")
     async def ver_estoque_completo(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        
         estoque_municoes = await carregar_estoque()
         estoque_insumos = await carregar_estoque_insumos()
-        
         def fmt_num(valor):
             return f"{valor:,.0f}".replace(",", ".")
-        
-        embed = discord.Embed(
-            title="📊 ESTOQUE COMPLETO",
-            color=0x3498db
-        )
-        
-        embed.add_field(
-            name="🔫 MUNIÇÕES",
-            value=f"**PT:** {fmt_num(estoque_municoes['PT'])} pacotes ({fmt_num(estoque_municoes['PT'] * 50)} munições)\n**SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes ({fmt_num(estoque_municoes['SUB'] * 50)} munições)",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="💊 INSUMOS",
-            value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📋 TABELA DE CONSUMO",
-            value=(
-                "**Por pacote PT:**\n• 25 cápsulas\n• 5 embalagens\n\n"
-                "**Por pacote SUB:**\n• 65 cápsulas\n• 25 embalagens"
-            ),
-            inline=False
-        )
-        
+        embed = discord.Embed(title="📊 ESTOQUE COMPLETO", color=0x3498db)
+        embed.add_field(name="🔫 MUNIÇÕES", value=f"**PT:** {fmt_num(estoque_municoes['PT'])} pacotes ({fmt_num(estoque_municoes['PT'] * 50)} munições)\n**SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes ({fmt_num(estoque_municoes['SUB'] * 50)} munições)", inline=False)
+        embed.add_field(name="💊 INSUMOS", value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades", inline=False)
+        embed.add_field(name="📋 TABELA DE CONSUMO", value=("**Por pacote PT:**\n• 25 cápsulas\n• 5 embalagens\n\n**Por pacote SUB:**\n• 65 cápsulas\n• 25 embalagens"), inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.secondary, custom_id="fabricacao_relatorio")
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioProducaoModal())
 
-    # 🔥 NOVO BOTÃO DE ATUALIZAR - Adicione este no FINAL da classe
     @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="atualizar_painel_btn", emoji="🔄")
     async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await atualizar_painel_fabricacao()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+
 
 # =========================================================
 # ================= LOOP DE ACOMPANHAMENTO =================
@@ -2729,13 +2535,11 @@ async def acompanhar_producao(pid):
 
     while not bot.is_closed():
         prod = await carregar_producao(pid)
-        
         if not prod:
             print(f"❌ Produção {pid} não encontrada")
             return
 
         canal = pegar_canal(prod["canal_id"])
-        
         if not canal:
             await asyncio.sleep(10)
             continue
@@ -2769,33 +2573,16 @@ async def acompanhar_producao(pid):
         mins = int(restante // 60)
         segundos = int(restante % 60)
 
-        desc = (
-            f"**Galpão:** {prod['galpao']}\n"
-            f"**Iniciado por:** <@{prod['autor']}>\n"
-        )
-
+        desc = (f"**Galpão:** {prod['galpao']}\n**Iniciado por:** <@{prod['autor']}>\n")
         if prod.get("obs"):
             desc += f"📝 **Obs:** {prod['obs']}\n"
-
-        desc += (
-            f"Início: <t:{int(inicio.timestamp())}:t>\n"
-            f"Término: <t:{int(fim.timestamp())}:t>\n\n"
-            f"⏳ **Restante:** {mins}m {segundos}s\n"
-            f"{barra(pct)}"
-        )
-
+        desc += (f"Início: <t:{int(inicio.timestamp())}:t>\nTérmino: <t:{int(fim.timestamp())}:t>\n\n⏳ **Restante:** {mins}m {segundos}s\n{barra(pct)}")
         if prod.get("segunda_task_confirmada"):
             uid = prod["segunda_task_confirmada"]["user"]
             desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
 
         try:
-            await msg.edit(
-                embed=discord.Embed(
-                    title="🏭 Produção",
-                    description=desc,
-                    color=0x34495e
-                )
-            )
+            await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
         except Exception as e:
             print(f"Erro ao editar mensagem {pid}:", e)
 
@@ -2807,83 +2594,32 @@ async def finalizar_producao(pid, msg, prod):
     
     print(f"🔵 FINALIZANDO produção {pid}")
     
-    polvora = prod.get("polvora", 400)
+    polvora_total = prod.get("polvora", 400)
     segunda = prod.get("segunda_task_confirmada")
     galpao = prod["galpao"]
+    qtd_galpoes = prod.get("qtd_galpoes", 1)
+    polvora_por_galpao = prod.get("polvora_por_galpao", polvora_total // qtd_galpoes if qtd_galpoes > 0 else polvora_total)
     
     # Calcula produção baseada no galpão
-    base = 0
-    if galpao == "GALPÕES NORTE":
-        base = 1777 if segunda else 1688
-    elif galpao == "GALPÕES SUL":
-        base = 1618 if segunda else 1608
+    if "NORTE" in galpao.upper():
+        base_por_galpao = 1777 if segunda else 1688
+    elif "SUL" in galpao.upper():
+        base_por_galpao = 1618 if segunda else 1608
     else:
-        base = 1777 if segunda else 1688
+        base_por_galpao = 1777 if segunda else 1688
     
-    capsulas = (base * polvora) // 400
-    peso = capsulas * 0.05
+    capsulas_por_galpao = (base_por_galpao * polvora_por_galpao) // 400
+    capsulas_total = capsulas_por_galpao * qtd_galpoes
+    peso_total = capsulas_total * 0.05
     
-    print(f"📊 {galpao}: {capsulas} cápsulas, {peso}kg, pólvora: {polvora}")
+    print(f"📊 {galpao}: {qtd_galpoes} galpões, {capsulas_total} cápsulas totais, {polvora_total} pólvora total")
     
     async with db.acquire() as conn:
-        # 1. Salvar produção finalizada
-        await conn.execute(
-            """
-            INSERT INTO producoes_finalizadas
-            (user_id, capsulas, data, polvora, galpao)
-            VALUES ($1, $2, $3, $4, $5)
-            """,
-            str(prod["autor"]),
-            capsulas,
-            agora_db(),
-            polvora,
-            galpao
-        )
-        
-        # 2. ADICIONAR CÁPSULAS AO ESTOQUE (É ISSO QUE VOCÊ QUER)
-        await conn.execute(
-            "UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1",
-            capsulas
-        )
-        
-        # 3. Registrar no histórico de entradas
-        await conn.execute(
-            """
-            INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs)
-            VALUES ($1, $2, $3, $4)
-            """,
-            "capsulas",
-            capsulas,
-            str(prod["autor"]),
-            f"Produção do {galpao}"
-        )
+        await conn.execute("INSERT INTO producoes_finalizadas (user_id, capsulas, data, polvora, galpao) VALUES ($1, $2, $3, $4, $5)", str(prod["autor"]), capsulas_total, agora_db(), polvora_total, f"{galpao} ({qtd_galpoes} galpões)")
+        await conn.execute("UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1", capsulas_total)
+        await conn.execute("INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) VALUES ($1, $2, $3, $4)", "capsulas", capsulas_total, str(prod["autor"]), f"Produção do {galpao} - {qtd_galpoes} galpões - {polvora_total} pólvora")
     
-    # Buscar estoque atualizado
-    estoque_insumos = await carregar_estoque_insumos()
-    
-    def fmt_num(valor):
-        return f"{valor:,.0f}".replace(",", ".")
-    
-    # Enviar relatório para o canal do Baú
-    canal_bau = bot.get_channel(1448561598384963747)
-    if canal_bau:
-        embed_bau = discord.Embed(
-            title="🏭 PRODUÇÃO DE CÁPSULAS FINALIZADA",
-            color=0x2ecc71,
-            timestamp=agora()
-        )
-        embed_bau.add_field(name="🏭 Galpão", value=galpao, inline=True)
-        embed_bau.add_field(name="💊 Cápsulas produzidas", value=f"**{fmt_num(capsulas)}** unidades", inline=True)
-        embed_bau.add_field(name="💣 Pólvora usada", value=f"**{polvora}**", inline=True)
-        embed_bau.add_field(name="👤 Produzido por", value=f"<@{prod['autor']}>", inline=True)
-        embed_bau.add_field(
-            name="📊 ESTOQUE ATUAL DE CÁPSULAS",
-            value=f"**{fmt_num(estoque_insumos['capsulas'])}** unidades",
-            inline=False
-        )
-        await canal_bau.send(embed=embed_bau)
-    
-    # Atualizar a mensagem original
+    # Atualizar mensagem
     desc = msg.embeds[0].description if msg.embeds else ""
     linhas = desc.split("\n")
     novas_linhas = []
@@ -2893,44 +2629,30 @@ async def finalizar_producao(pid, msg, prod):
                 novas_linhas.append(linha)
     
     desc = "\n".join(novas_linhas)
-    desc += f"\n\n🔵 **Produção Finalizada**\n\n🧪 Produziu **{capsulas} cápsulas**\n⚖️ Peso total: **{peso:.2f} kg**\n💣 Pólvora utilizada: **{polvora}**\n\n💊 As cápsulas foram adicionadas ao estoque de insumos!"
+    desc += (f"\n\n🔵 **Produção Finalizada**\n\n🧪 Produziu **{capsulas_total} cápsulas**\n📦 **Por galpão:** {capsulas_por_galpao} cápsulas\n🏭 **Quantidade de galpões:** {qtd_galpoes}\n⚖️ Peso total: **{peso_total:.2f} kg**\n💣 Pólvora total utilizada: **{polvora_total}**\n💣 Pólvora por galpão: **{polvora_por_galpao}**\n\n💊 As cápsulas foram adicionadas ao estoque de insumos!")
     
-    await msg.edit(
-        embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e),
-        view=None
-    )
-    
-    # Limpar produção ativa
+    await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e), view=None)
     await deletar_producao(pid)
     if pid in producoes_tasks:
         del producoes_tasks[pid]
     
-    # Atualizar painel
-    await atualizar_painel_fabricacao()
+    # Enviar relatório para o Baú
+    canal_bau = bot.get_channel(1448561598384963747)
+    if canal_bau:
+        def fmt_num(valor):
+            return f"{valor:,.0f}".replace(",", ".")
+        embed_bau = discord.Embed(title="🏭 PRODUÇÃO DE CÁPSULAS FINALIZADA", color=0x2ecc71, timestamp=agora())
+        embed_bau.add_field(name="🏭 Galpão", value=galpao, inline=True)
+        embed_bau.add_field(name="🏭 Quantidade", value=f"{qtd_galpoes} galpão(ões)", inline=True)
+        embed_bau.add_field(name="💊 Cápsulas produzidas", value=f"**{fmt_num(capsulas_total)}** unidades", inline=True)
+        embed_bau.add_field(name="📦 Por galpão", value=f"{fmt_num(capsulas_por_galpao)} cápsulas", inline=True)
+        embed_bau.add_field(name="💣 Pólvora total", value=f"**{polvora_total}**", inline=True)
+        embed_bau.add_field(name="👤 Produzido por", value=f"<@{prod['autor']}>", inline=True)
+        await canal_bau.send(embed=embed_bau)
     
-    print(f"✅ Produção finalizada: {capsulas} cápsulas adicionadas ao estoque")
+    await atualizar_painel_fabricacao()
+    print(f"✅ Produção {pid} finalizada com {capsulas_total} cápsulas ({qtd_galpoes} galpões)")
 
-# 🔥 ADICIONE O LOOP AQUI 🔥
-@tasks.loop(minutes=1)
-async def verificar_producoes_orfas():
-    """Verifica produções que deveriam estar ativas mas não estão na memória"""
-    try:
-        async with db.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT pid FROM producoes 
-                WHERE CAST(fim AS timestamp) > NOW()
-                """
-            )
-        
-        for r in rows:
-            pid = r["pid"]
-            if pid not in producoes_tasks:
-                print(f"🔧 Produção órfã encontrada: {pid}, restaurando...")
-                task = bot.loop.create_task(acompanhar_producao(pid))
-                producoes_tasks[pid] = task
-    except Exception as e:
-        print(f"Erro no verificar_producoes_orfas: {e}")
 
 # =========================================================
 # ================= RELATÓRIO PRODUÇÃO ====================
@@ -2938,51 +2660,26 @@ async def verificar_producoes_orfas():
 
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
 
-    data_inicio = discord.ui.TextInput(
-        label="Data inicial (DD/MM/AAAA)", 
-        placeholder="Ex: 01/04/2026"
-    )
-    data_fim = discord.ui.TextInput(
-        label="Data final (DD/MM/AAAA)", 
-        placeholder="Ex: 30/04/2026"
-    )
+    data_inicio = discord.ui.TextInput(label="Data inicial (DD/MM/AAAA)", placeholder="Ex: 01/04/2026")
+    data_fim = discord.ui.TextInput(label="Data final (DD/MM/AAAA)", placeholder="Ex: 30/04/2026")
 
     async def on_submit(self, interaction: discord.Interaction):
-
         try:
             await interaction.response.defer(ephemeral=True)
-
             inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
             fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
-
             inicio_dt = inicio.replace(hour=0, minute=0, second=0)
             fim_dt = fim.replace(hour=23, minute=59, second=59)
 
             async with db.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT 
-                        user_id, 
-                        SUM(capsulas) as total_capsulas,
-                        SUM(polvora) as total_polvora
-                    FROM producoes_finalizadas
-                    WHERE data >= $1 AND data <= $2
-                    GROUP BY user_id
-                    ORDER BY total_capsulas DESC
-                    """,
-                    inicio_dt, fim_dt
-                )
+                rows = await conn.fetch("SELECT user_id, SUM(capsulas) as total_capsulas, SUM(polvora) as total_polvora FROM producoes_finalizadas WHERE data >= $1 AND data <= $2 GROUP BY user_id ORDER BY total_capsulas DESC", inicio_dt, fim_dt)
 
             if not rows:
-                await interaction.followup.send(
-                    f"📭 Nenhuma produção no período **{self.data_inicio.value}** a **{self.data_fim.value}**.",
-                    ephemeral=True
-                )
+                await interaction.followup.send(f"📭 Nenhuma produção no período **{self.data_inicio.value}** a **{self.data_fim.value}**.", ephemeral=True)
                 return
 
             total_capsulas = sum(r["total_capsulas"] or 0 for r in rows)
             total_polvora = sum(r["total_polvora"] or 0 for r in rows)
-            
             total_capsulas_fmt = f"{total_capsulas:,.0f}".replace(",", ".")
             total_polvora_fmt = f"{total_polvora:,.0f}".replace(",", ".")
 
@@ -2991,50 +2688,27 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
                 uid = r["user_id"]
                 capsulas = int(r["total_capsulas"] or 0)
                 polvora = int(r["total_polvora"] or 0)
-                
                 capsulas_fmt = f"{capsulas:,.0f}".replace(",", ".")
                 polvora_fmt = f"{polvora:,.0f}".replace(",", ".")
-                
-                # Buscar nome do usuário
                 try:
                     user = await bot.fetch_user(int(uid))
                     nome = user.display_name if user else str(uid)
                 except:
                     nome = str(uid)
-                
                 linhas.append(f"**{nome}** — {capsulas_fmt} cápsulas | 💣 {polvora_fmt} pólvora")
 
-            embed = discord.Embed(
-                title="📊 RELATÓRIO DE PRODUÇÃO DE CÁPSULAS",
-                description=(
-                    f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n"
-                    f"💰 **Total produzido:** `{total_capsulas_fmt}` cápsulas\n"
-                    f"💣 **Total pólvora gasto:** `{total_polvora_fmt}`"
-                ),
-                color=0x2ecc71
-            )
-            
-            embed.add_field(
-                name="🏆 RANKING", 
-                value="\n".join(linhas) if linhas else "Nenhum", 
-                inline=False
-            )
+            embed = discord.Embed(title="📊 RELATÓRIO DE PRODUÇÃO DE CÁPSULAS", description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}\n💰 **Total produzido:** `{total_capsulas_fmt}` cápsulas\n💣 **Total pólvora gasto:** `{total_polvora_fmt}`", color=0x2ecc71)
+            embed.add_field(name="🏆 RANKING", value="\n".join(linhas) if linhas else "Nenhum", inline=False)
 
             canal = interaction.guild.get_channel(1422853066541109338)
             if canal:
                 await canal.send(embed=embed)
-                await interaction.followup.send(
-                    f"✅ Relatório enviado!\n📅 {self.data_inicio.value} a {self.data_fim.value}\n💰 Total: {total_capsulas_fmt} cápsulas\n💣 Pólvora: {total_polvora_fmt}",
-                    ephemeral=True
-                )
+                await interaction.followup.send(f"✅ Relatório enviado!\n📅 {self.data_inicio.value} a {self.data_fim.value}\n💰 Total: {total_capsulas_fmt} cápsulas\n💣 Pólvora: {total_polvora_fmt}", ephemeral=True)
             else:
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
         except ValueError:
-            await interaction.followup.send(
-                "❌ **Formato de data inválido!**\nUse o formato: `DD/MM/AAAA`",
-                ephemeral=True
-            )
+            await interaction.followup.send("❌ **Formato de data inválido!**\nUse o formato: `DD/MM/AAAA`", ephemeral=True)
         except Exception as e:
             print("ERRO RELATORIO:", e)
             await interaction.followup.send("❌ Erro ao gerar relatório.", ephemeral=True)
@@ -3045,7 +2719,7 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 # =========================================================
 
 async def enviar_painel_fabricacao():
-    """Envia o painel de fabricação - SEMPRE CRIA UMA NOVA MENSAGEM"""
+    """Envia o painel de fabricação - DELETA a mensagem antiga e cria nova"""
     
     canal = pegar_canal(CANAL_FABRICACAO_ID)
     
@@ -3079,29 +2753,31 @@ async def enviar_painel_fabricacao():
     
     embed.add_field(
         name="🏭 PRODUÇÃO DE CÁPSULAS",
-        value="• **Galpões Norte:** 65 minutos\n• **Galpões Sul:** 130 minutos",
+        value="• **Galpões Norte:** 65 minutos (3 galpões)\n• **Galpões Sul:** 130 minutos (3 galpões)",
         inline=False
     )
     
-    embed.set_footer(text="Utilize os botões abaixo para gerenciar o estoque")
+    embed.set_footer(text="Ao clicar em Galpões Norte/Sul, escolha 1, 2 ou 3 galpões!")
     
-    # 🔥 FORÇAR LIMPEZA DAS MENSAGENS ANTIGAS
+    # Deletar mensagens antigas
     async for msg in canal.history(limit=10):
-        if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "🏭 PAINEL DE FABRICAÇÃO":
-            try:
-                await msg.delete()
-                print(f"🗑️ Mensagem antiga do painel deletada: {msg.id}")
-            except:
-                pass
+        if msg.author == bot.user and msg.embeds:
+            if msg.embeds[0].title == "🏭 PAINEL DE FABRICAÇÃO":
+                try:
+                    await msg.delete()
+                    print(f"🗑️ Mensagem antiga deletada")
+                except:
+                    pass
     
-    # Criar nova mensagem
     await canal.send(embed=embed, view=FabricacaoView())
     print("🏭 Novo painel de fabricação enviado")
 
 
 async def atualizar_painel_fabricacao():
-    """Atualiza o painel de fabricação (força recriação)"""
+    """Atualiza o painel de fabricação"""
     await enviar_painel_fabricacao()
+
+
 # =========================================================
 # ================= COMANDOS DE ESTOQUE ====================
 # =========================================================
@@ -3115,23 +2791,9 @@ async def cmd_ver_estoque(ctx):
     def fmt_num(valor):
         return f"{valor:,.0f}".replace(",", ".")
     
-    embed = discord.Embed(
-        title="📦 ESTOQUE COMPLETO",
-        color=0x3498db
-    )
-    
-    embed.add_field(
-        name="🔫 MUNIÇÕES",
-        value=f"**PT:** {fmt_num(estoque_municoes['PT'])} pacotes ({fmt_num(estoque_municoes['PT'] * 50)} munições)\n**SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes ({fmt_num(estoque_municoes['SUB'] * 50)} munições)",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="💊 INSUMOS",
-        value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades",
-        inline=False
-    )
-    
+    embed = discord.Embed(title="📦 ESTOQUE COMPLETO", color=0x3498db)
+    embed.add_field(name="🔫 MUNIÇÕES", value=f"**PT:** {fmt_num(estoque_municoes['PT'])} pacotes ({fmt_num(estoque_municoes['PT'] * 50)} munições)\n**SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes ({fmt_num(estoque_municoes['SUB'] * 50)} munições)", inline=False)
+    embed.add_field(name="💊 INSUMOS", value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades", inline=False)
     await ctx.send(embed=embed)
 
 
@@ -3139,14 +2801,7 @@ async def cmd_ver_estoque(ctx):
 async def cmd_historico_producao(ctx, limite: int = 10):
     """Ver histórico de produção de munição"""
     async with db.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT * FROM producao_municao 
-            ORDER BY data DESC 
-            LIMIT $1
-            """,
-            limite
-        )
+        rows = await conn.fetch("SELECT * FROM producao_municao ORDER BY data DESC LIMIT $1", limite)
     
     if not rows:
         await ctx.send("📭 Nenhuma produção registrada ainda.")
@@ -3155,25 +2810,16 @@ async def cmd_historico_producao(ctx, limite: int = 10):
     def fmt_num(valor):
         return f"{valor:,.0f}".replace(",", ".")
     
-    embed = discord.Embed(
-        title="📋 HISTÓRICO DE PRODUÇÃO DE MUNIÇÃO",
-        color=0x2ecc71
-    )
-    
+    embed = discord.Embed(title="📋 HISTÓRICO DE PRODUÇÃO DE MUNIÇÃO", color=0x2ecc71)
     for row in rows:
         data = row["data"]
         if data.tzinfo is None:
             data = data.replace(tzinfo=BRASIL)
-        
-        embed.add_field(
-            name=f"{data.strftime('%d/%m/%Y %H:%M')}",
-            value=f"🔫 **{row['tipo']}** • {fmt_num(row['pacotes'])} pacotes ({fmt_num(row['municoes'])} munições)\n"
-                  f"💊 Consumiu: {fmt_num(row['capsulas_consumidas'])} cápsulas + {fmt_num(row['embalagens_consumidas'])} embalagens\n"
-                  f"👤 <@{row['produzido_por']}>",
-            inline=False
-        )
+        embed.add_field(name=f"{data.strftime('%d/%m/%Y %H:%M')}", value=f"🔫 **{row['tipo']}** • {fmt_num(row['pacotes'])} pacotes ({fmt_num(row['municoes'])} munições)\n💊 Consumiu: {fmt_num(row['capsulas_consumidas'])} cápsulas + {fmt_num(row['embalagens_consumidas'])} embalagens\n👤 <@{row['produzido_por']}>", inline=False)
     
     await ctx.send(embed=embed)
+
+
 # =========================================================
 # ======================== POLVORAS ========================
 # =========================================================
