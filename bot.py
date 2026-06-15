@@ -2825,8 +2825,8 @@ async def finalizar_producao(pid, msg, prod):
     
     print(f"📊 {galpao}: {capsulas} cápsulas, {peso}kg, pólvora: {polvora}")
     
-    # Salva no banco com galpao e polvora
     async with db.acquire() as conn:
+        # 1. Salvar produção finalizada
         await conn.execute(
             """
             INSERT INTO producoes_finalizadas
@@ -2840,57 +2840,75 @@ async def finalizar_producao(pid, msg, prod):
             galpao
         )
         
-        # Também adicionar as cápsulas produzidas ao estoque de insumos
+        # 2. ADICIONAR CÁPSULAS AO ESTOQUE (É ISSO QUE VOCÊ QUER)
         await conn.execute(
             "UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1",
             capsulas
         )
+        
+        # 3. Registrar no histórico de entradas
+        await conn.execute(
+            """
+            INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs)
+            VALUES ($1, $2, $3, $4)
+            """,
+            "capsulas",
+            capsulas,
+            str(prod["autor"]),
+            f"Produção do {galpao}"
+        )
     
-    # Pega a descrição atual
+    # Buscar estoque atualizado
+    estoque_insumos = await carregar_estoque_insumos()
+    
+    def fmt_num(valor):
+        return f"{valor:,.0f}".replace(",", ".")
+    
+    # Enviar relatório para o canal do Baú
+    canal_bau = bot.get_channel(1448561598384963747)
+    if canal_bau:
+        embed_bau = discord.Embed(
+            title="🏭 PRODUÇÃO DE CÁPSULAS FINALIZADA",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed_bau.add_field(name="🏭 Galpão", value=galpao, inline=True)
+        embed_bau.add_field(name="💊 Cápsulas produzidas", value=f"**{fmt_num(capsulas)}** unidades", inline=True)
+        embed_bau.add_field(name="💣 Pólvora usada", value=f"**{polvora}**", inline=True)
+        embed_bau.add_field(name="👤 Produzido por", value=f"<@{prod['autor']}>", inline=True)
+        embed_bau.add_field(
+            name="📊 ESTOQUE ATUAL DE CÁPSULAS",
+            value=f"**{fmt_num(estoque_insumos['capsulas'])}** unidades",
+            inline=False
+        )
+        await canal_bau.send(embed=embed_bau)
+    
+    # Atualizar a mensagem original
     desc = msg.embeds[0].description if msg.embeds else ""
-    
-    # Remove a linha do timer e da barra
     linhas = desc.split("\n")
     novas_linhas = []
-    
     for linha in linhas:
         if not linha.startswith("⏳ **Restante:**") and not "▓" in linha and not "░" in linha:
             if linha.strip():
                 novas_linhas.append(linha)
     
     desc = "\n".join(novas_linhas)
+    desc += f"\n\n🔵 **Produção Finalizada**\n\n🧪 Produziu **{capsulas} cápsulas**\n⚖️ Peso total: **{peso:.2f} kg**\n💣 Pólvora utilizada: **{polvora}**\n\n💊 As cápsulas foram adicionadas ao estoque de insumos!"
     
-    # Adiciona as informações finais
-    desc += (
-        f"\n\n🔵 **Produção Finalizada**"
-        f"\n\n🧪 Produziu **{capsulas} cápsulas**"
-        f"\n⚖️ Peso total: **{peso:.2f} kg**"
-        f"\n💣 Pólvora utilizada: **{polvora}**"
-        f"\n\n💊 As cápsulas foram adicionadas ao estoque de insumos!"
-    )
-    
-    # Atualiza a mensagem final
     await msg.edit(
-        embed=discord.Embed(
-            title="🏭 Produção",
-            description=desc,
-            color=0x34495e
-        ),
+        embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e),
         view=None
     )
     
-    # Remove do banco
+    # Limpar produção ativa
     await deletar_producao(pid)
-    
-    # Remove da lista de tarefas ativas
     if pid in producoes_tasks:
         del producoes_tasks[pid]
     
-    # ATUALIZAR O PAINEL DE FABRICAÇÃO
+    # Atualizar painel
     await atualizar_painel_fabricacao()
     
-    print(f"✅ Produção {pid} finalizada com {capsulas} cápsulas")
-
+    print(f"✅ Produção finalizada: {capsulas} cápsulas adicionadas ao estoque")
 
 # =========================================================
 # ================= RELATÓRIO PRODUÇÃO ====================
