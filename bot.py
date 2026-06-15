@@ -2910,6 +2910,28 @@ async def finalizar_producao(pid, msg, prod):
     
     print(f"✅ Produção finalizada: {capsulas} cápsulas adicionadas ao estoque")
 
+# 🔥 ADICIONE O LOOP AQUI 🔥
+@tasks.loop(minutes=1)
+async def verificar_producoes_orfas():
+    """Verifica produções que deveriam estar ativas mas não estão na memória"""
+    try:
+        async with db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT pid FROM producoes 
+                WHERE CAST(fim AS timestamp) > NOW()
+                """
+            )
+        
+        for r in rows:
+            pid = r["pid"]
+            if pid not in producoes_tasks:
+                print(f"🔧 Produção órfã encontrada: {pid}, restaurando...")
+                task = bot.loop.create_task(acompanhar_producao(pid))
+                producoes_tasks[pid] = task
+    except Exception as e:
+        print(f"Erro no verificar_producoes_orfas: {e}")
+
 # =========================================================
 # ================= RELATÓRIO PRODUÇÃO ====================
 # =========================================================
@@ -6831,6 +6853,8 @@ async def verificar_alugueis_expirados():
     
     if expirou:
         await atualizar_painel_alugueis()
+
+
 
 
 # =========================================================
