@@ -7621,6 +7621,10 @@ async def on_ready():
 
            print("♻️ Ações resetadas (segunda)")
 
+    # Iniciar loop de verificação de produções órfãs
+    if not verificar_producoes_orfas.is_running():
+        verificar_producoes_orfas.start()
+
     
     # =====================================================
     # ================= RESTAURAR PRODUÇÕES ===============
@@ -7630,29 +7634,38 @@ async def on_ready():
         async with db.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT pid FROM producoes
-                WHERE pid NOT LIKE 'TESTE_%'
-                AND CAST(fim AS timestamp) > NOW()
+                SELECT pid, galpao, inicio, fim, msg_id, canal_id, autor, obs, polvora
+                FROM producoes 
+                WHERE CAST(fim AS timestamp) > NOW()
                 """
             )
-
+    
+        print(f"🏭 Encontradas {len(rows)} produções ativas para restaurar")
+    
         for r in rows:
-
             pid = r["pid"]
-
-            if pid not in producoes_tasks:
-
-                task = bot.loop.create_task(
-                    acompanhar_producao(pid)
-                )
-
-                producoes_tasks[pid] = task
-
-        print(f"🏭 Produções restauradas: {len(rows)}")
+        
+            # Verificar se a mensagem ainda existe no Discord
+            canal = bot.get_channel(int(r["canal_id"]))
+            if canal:
+                try:
+                    msg = await canal.fetch_message(int(r["msg_id"]))
+                    # Se conseguiu buscar a mensagem, restaura a task
+                    if pid not in producoes_tasks:
+                        task = bot.loop.create_task(acompanhar_producao(pid))
+                        producoes_tasks[pid] = task
+                        print(f"✅ Produção restaurada: {pid} - {r['galpao']}")
+                except discord.NotFound:
+                    print(f"⚠️ Mensagem da produção {pid} não encontrada, removendo do banco")
+                    # Mensagem foi deletada, remove do banco
+                    await conn.execute("DELETE FROM producoes WHERE pid = $1", pid)
+                except Exception as e:
+                    print(f"❌ Erro ao restaurar produção {pid}: {e}")
+            else:
+                print(f"❌ Canal não encontrado para produção {pid}")
 
     except Exception as e:
         print("Erro restaurar produções:", e)
-
     # =====================================================
     # ================= RESTAURAR GALPÕES ATIVOS ==========
     # =====================================================
