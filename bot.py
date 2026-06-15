@@ -2398,6 +2398,9 @@ class RegistrarCapsulasModal(discord.ui.Modal, title="📦 Registrar Cápsulas")
         embed_privado.add_field(name="📊 Estoque atual", value=f"**{fmt_num(estoque['capsulas'])}** cápsulas", inline=False)
         
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
+        
+        # ATUALIZAR O PAINEL DE FABRICAÇÃO
+        await atualizar_painel_fabricacao()
 
 
 # =========================================================
@@ -2459,8 +2462,10 @@ class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagen
         embed_privado.add_field(name="📊 Estoque atual", value=f"**{fmt_num(estoque['embalagens'])}** embalagens", inline=False)
         
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
-
-
+        
+        # ATUALIZAR O PAINEL DE FABRICAÇÃO
+        await atualizar_painel_fabricacao()
+        
 # =========================================================
 # ================= MODAL PRODUÇÃO MUNIÇÃO =================
 # =========================================================
@@ -2600,7 +2605,9 @@ class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
         )
         
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
-
+        
+        # ATUALIZAR O PAINEL DE FABRICAÇÃO
+        await atualizar_painel_fabricacao()
 
 # =========================================================
 # ================= VIEW FABRICAÇÃO ========================
@@ -2872,6 +2879,9 @@ async def finalizar_producao(pid, msg, prod):
     # Remove da lista de tarefas ativas
     if pid in producoes_tasks:
         del producoes_tasks[pid]
+    
+    # ATUALIZAR O PAINEL DE FABRICAÇÃO
+    await atualizar_painel_fabricacao()
     
     print(f"✅ Produção {pid} finalizada com {capsulas} cápsulas")
 
