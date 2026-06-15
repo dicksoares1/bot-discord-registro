@@ -7326,7 +7326,14 @@ class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
     
     async def on_submit(self, interaction: discord.Interaction):
         
+        # Responder imediatamente para evitar timeout
         await interaction.response.defer(ephemeral=True)
+        
+        # Validar produto
+        produto = self.produto.value.strip()
+        if not produto:
+            await interaction.followup.send("❌ **Produto inválido!**", ephemeral=True)
+            return
         
         # Validar valor
         try:
@@ -7335,15 +7342,9 @@ class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
                 raise ValueError
         except:
             await interaction.followup.send(
-                "❌ **Valor inválido!**\nDigite apenas números (ex: 50000, 1.500, 2.000,50)",
+                "❌ **Valor inválido!**\nDigite apenas números (ex: 50000, 1500, 2000)",
                 ephemeral=True
             )
-            return
-        
-        # Validar produto
-        produto = self.produto.value.strip()
-        if not produto:
-            await interaction.followup.send("❌ **Produto inválido!**", ephemeral=True)
             return
         
         # Salvar no banco
@@ -7358,7 +7359,8 @@ class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
         # Criar embed para enviar no canal de compras registradas
         embed = discord.Embed(
             title="📦 NOVA COMPRA REGISTRADA",
-            color=0x3498db
+            color=0x3498db,
+            timestamp=data_atual
         )
         
         embed.add_field(name="📦 Produto", value=produto, inline=True)
@@ -7366,7 +7368,7 @@ class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
         embed.add_field(name="👤 Comprado por", value=interaction.user.mention, inline=True)
         embed.add_field(name="📅 Data da compra", value=f"<t:{int(data_atual.timestamp())}:F>", inline=False)
         
-        embed.set_footer(text=f"ID da compra registrada no sistema")
+        embed.set_footer(text=f"Compra registrada no sistema")
         
         # Enviar no canal de compras registradas
         canal_destino = interaction.guild.get_channel(CANAL_COMPRAS_REGISTRADAS_ID)
@@ -7406,6 +7408,7 @@ class RegistrarCompraView(discord.ui.View):
         emoji="💰"
     )
     async def registrar_compra(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Abrir o modal imediatamente
         await interaction.response.send_modal(RegistrarCompraModal())
 
 
@@ -7442,14 +7445,19 @@ async def enviar_painel_registrar_compra():
     
     embed.set_footer(text="Todas as compras ficam salvas no banco de dados para relatórios futuros")
     
-    await enviar_ou_atualizar_painel(
-        "painel_registrar_compra",
-        CANAL_REGISTRAR_COMPRA_ID,
-        embed,
-        RegistrarCompraView()
-    )
+    # 🔥 DELETAR MENSAGENS ANTIGAS
+    async for msg in canal.history(limit=10):
+        if msg.author == bot.user and msg.embeds:
+            if msg.embeds[0].title == "💰 REGISTRAR COMPRA":
+                try:
+                    await msg.delete()
+                    print(f"🗑️ Mensagem antiga do registrar compra deletada")
+                except:
+                    pass
     
-    print(f"💰 Painel de registrar compra enviado/atualizado para o canal {CANAL_REGISTRAR_COMPRA_ID}")
+    # Criar nova mensagem
+    await canal.send(embed=embed, view=RegistrarCompraView())
+    print(f"💰 Painel de registrar compra enviado para o canal {CANAL_REGISTRAR_COMPRA_ID}")
     
 # =========================================================
 # ========================= ON_READY ======================
