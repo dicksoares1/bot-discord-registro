@@ -1888,7 +1888,9 @@ class AluguelModal(discord.ui.Modal, title="💰 Alugar Galpão"):
         super().__init__()
         self.galpao = galpao
         self.editando = editando
-        self.user_id = user_id    async def on_submit(self, interaction: discord.Interaction):
+        self.user_id = user_id
+
+    async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
             dias_aluguel = int(self.dias.value)
@@ -1950,10 +1952,24 @@ async def enviar_painel_alugueis():
         if galpao in alugueis_ativos:
             dados = alugueis_ativos[galpao]
             data_fim = dados["fim"]
-            embed.add_field(name=f"🏭 {galpao}", value=f"**STATUS:** 🔵 ALUGADO\n👤 <@{dados['user_id']}>\n📅 {dados['dias']} dias\n⏰ {formatar_tempo_detalhado(data_fim)}\n{calcular_barra_progresso(data_fim, dados['dias'])}", inline=False)
+            embed.add_field(
+                name=f"🏭 {galpao}",
+                value=(
+                    f"**STATUS:** 🔵 ALUGADO\n"
+                    f"👤 <@{dados['user_id']}>\n"
+                    f"📅 {dados['dias']} dias\n"
+                    f"⏰ {formatar_tempo_detalhado(data_fim)}\n"
+                    f"{calcular_barra_progresso(data_fim, dados['dias'])}"
+                ),
+                inline=False
+            )
             view.adicionar_edicao(galpao, dados['user_id'], dados['dias'])
         else:
-            embed.add_field(name=f"🏭 {galpao}", value="**STATUS:** 🟢 DISPONÍVEL\n💰 Clique no botão para alugar", inline=False)
+            embed.add_field(
+                name=f"🏭 {galpao}",
+                value="**STATUS:** 🟢 DISPONÍVEL\n💰 Clique no botão para alugar",
+                inline=False
+            )
     await enviar_ou_atualizar_painel("painel_alugueis", CANAL_FABRICACAO_ID, embed, view)
 
 async def atualizar_painel_alugueis():
