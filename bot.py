@@ -2957,22 +2957,114 @@ async def cmd_historico_vendas_estoque(ctx, limite: int = 10):
 # =========================================================
 
 async def restaurar_producoes():
-    """Restaura produções ativas após reinício"""
+    """Restaura produções ativas após reinício - VERSÃO COMPLETA E CORRIGIDA"""
     try:
-        async with db.acquire() as conn:
-            rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+        print("🔄 Iniciando restauração de produções...")
         
-        if rows:
-            print(f"🏭 Restaurando {len(rows)} produções ativas...")
+        async with db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT pid, galpao, inicio, fim, msg_id, canal_id, autor, obs, 
+                       polvora, qtd_galpoes, polvora_por_galpao, 
+                       segunda_task_user, segunda_task_time
+                FROM producoes 
+                WHERE CAST(fim AS timestamp) > NOW()
+                """
+            )
+        
+        if not rows:
+            print("📭 Nenhuma produção ativa para restaurar")
+            return
+        
+        print(f"🏭 Encontradas {len(rows)} produções ativas para restaurar")
         
         for r in rows:
             pid = r["pid"]
-            if pid not in producoes_tasks:
-                task = asyncio.create_task(acompanhar_producao(pid))
-                producoes_tasks[pid] = task
-                print(f"✅ Produção restaurada: {pid}")
+            
+            # Verifica se já está sendo acompanhada
+            if pid in producoes_tasks:
+                print(f"⏩ Produção {pid} já está sendo acompanhada")
+                continue
+            
+            # Reconstrói os dados da produção
+            dados = {
+                "galpao": r["galpao"],
+                "autor": int(r["autor"]),
+                "inicio": r["inicio"],
+                "fim": r["fim"],
+                "obs": r["obs"],
+                "msg_id": int(r["msg_id"]),
+                "canal_id": int(r["canal_id"]),
+                "polvora": r["polvora"] or 400,
+                "qtd_galpoes": r.get("qtd_galpoes", 1) if r.get("qtd_galpoes") else 1,
+                "polvora_por_galpao": r.get("polvora_por_galpao", 400) if r.get("polvora_por_galpao") else 400
+            }
+            
+            if r["segunda_task_user"]:
+                dados["segunda_task_confirmada"] = {
+                    "user": int(r["segunda_task_user"]),
+                    "time": r["segunda_task_time"]
+                }
+            
+            # Salva na memória (cache)
+            await salvar_producao(pid, dados)
+            
+            # VERIFICA SE A MENSAGEM EXISTE NO DISCORD
+            canal = bot.get_channel(int(r["canal_id"]))
+            msg_existe = False
+            
+            if canal:
+                try:
+                    msg = await canal.fetch_message(int(r["msg_id"]))
+                    msg_existe = True
+                    print(f"✅ Mensagem encontrada para produção {pid}")
+                    
+                    # Se a segunda task já foi confirmada, remove o botão
+                    if r["segunda_task_user"]:
+                        try:
+                            await msg.edit(view=None)
+                            print(f"✅ Botão removido para produção {pid} (segunda task já confirmada)")
+                        except:
+                            pass
+                except discord.NotFound:
+                    print(f"⚠️ Mensagem da produção {pid} não encontrada no Discord!")
+                except Exception as e:
+                    print(f"❌ Erro ao buscar mensagem {pid}: {e}")
+            
+            # SE A MENSAGEM NÃO EXISTE, RECRIA
+            if not msg_existe:
+                print(f"🔄 Recriando mensagem para produção {pid}...")
+                canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
+                if canal:
+                    try:
+                        # Gera descrição inicial
+                        desc = f"**Galpão:** {r['galpao']}\n"
+                        desc += f"**Iniciado por:** <@{r['autor']}>\n"
+                        desc += f"Início: <t:{int(datetime.fromisoformat(r['inicio']).timestamp())}:t>\n"
+                        desc += f"Término: <t:{int(datetime.fromisoformat(r['fim']).timestamp())}:t>\n\n"
+                        desc += f"⏳ **Restante:** Aguardando atualização...\n{barra(0)}"
+                        
+                        embed = discord.Embed(title=f"🏭 Produção", description=desc, color=0x3498db)
+                        view = SegundaTaskView(pid) if not r["segunda_task_user"] else None
+                        
+                        msg = await canal.send(embed=embed, view=view)
+                        
+                        # Atualiza o msg_id no banco
+                        dados["msg_id"] = msg.id
+                        await salvar_producao(pid, dados)
+                        print(f"✅ Mensagem recriada para produção {pid}")
+                    except Exception as e:
+                        print(f"❌ Erro ao recriar mensagem {pid}: {e}")
+            
+            # CRIA A TASK DE ACOMPANHAMENTO
+            task = asyncio.create_task(acompanhar_producao(pid))
+            producoes_tasks[pid] = task
+            print(f"✅ Task criada para produção {pid} - {r['galpao']}")
+            
     except Exception as e:
-        print(f"❌ Erro restaurar produções: {e}")
+        print(f"❌ ERRO CRÍTICO ao restaurar produções: {e}")
+        import traceback
+        traceback.print_exc()
 
 # =========================================================
 # ======================== POLVORAS ========================
@@ -7457,108 +7549,6 @@ async def on_ready():
     # ========== RESTAURA PRODUÇÕES ATIVAS ==========
     await restaurar_producoes()
     
-    # =====================================================
-    # ================= RESTAURAR PRODUÇÕES ===============
-    # =====================================================
-
-    try:
-        async with db.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT pid, galpao, inicio, fim, msg_id, canal_id, autor, obs, polvora,
-                       qtd_galpoes, polvora_por_galpao, segunda_task_user, segunda_task_time
-                FROM producoes 
-                WHERE CAST(fim AS timestamp) > NOW()
-                """
-            )
-    
-        print(f"🏭 Encontradas {len(rows)} produções ativas para restaurar")
-    
-        for r in rows:
-            pid = r["pid"]
-        
-            # Restaura a produção na memória
-            dados = {
-                "galpao": r["galpao"],
-                "autor": int(r["autor"]),
-                "inicio": r["inicio"],
-                "fim": r["fim"],
-                "obs": r["obs"],
-                "msg_id": int(r["msg_id"]),
-                "canal_id": int(r["canal_id"]),
-                "polvora": r["polvora"] or 400,
-                "qtd_galpoes": r.get("qtd_galpoes", 1) if r.get("qtd_galpoes") else 1,
-                "polvora_por_galpao": r.get("polvora_por_galpao", 400) if r.get("polvora_por_galpao") else 400
-            }
-            
-            if r["segunda_task_user"]:
-                dados["segunda_task_confirmada"] = {
-                    "user": int(r["segunda_task_user"]),
-                    "time": r["segunda_task_time"]
-                }
-            
-            # Salva na memória
-            await salvar_producao(pid, dados)
-        
-            # Verificar se a mensagem ainda existe no Discord
-            canal = bot.get_channel(int(r["canal_id"]))
-            if canal:
-                try:
-                    msg = await canal.fetch_message(int(r["msg_id"]))
-                    # Se conseguiu buscar a mensagem, restaura a task
-                    if pid not in producoes_tasks:
-                        task = bot.loop.create_task(acompanhar_producao(pid))
-                        producoes_tasks[pid] = task
-                        print(f"✅ Produção restaurada: {pid} - {r['galpao']}")
-                        
-                        # Verifica se a segunda task já foi confirmada e atualiza a view se necessário
-                        if r["segunda_task_user"]:
-                            # Já tem segunda task, remove o botão
-                            try:
-                                await msg.edit(view=None)
-                            except:
-                                pass
-                except discord.NotFound:
-                    print(f"⚠️ Mensagem da produção {pid} não encontrada, recriando...")
-                    # Recria a mensagem
-                    canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
-                    if canal:
-                        # Converte datas para timestamp
-                        fim = r["fim"]
-                        if isinstance(fim, datetime):
-                            fim_ts = int(fim.timestamp())
-                        else:
-                            fim_ts = int(datetime.fromisoformat(fim).timestamp())
-                        
-                        desc = (f"**Galpão:** {r['galpao']}\n"
-                               f"**Iniciado por:** <@{r['autor']}>\n"
-                               f"Início: <t:{int(datetime.fromisoformat(r['inicio']).timestamp())}:t>\n"
-                               f"Término: <t:{fim_ts}:t>\n\n"
-                               f"⏳ **Restante:** Aguardando atualização...")
-                        
-                        embed = discord.Embed(title="🏭 Produção", description=desc, color=0x34495e)
-                        view = SegundaTaskView(pid) if not r["segunda_task_user"] else None
-                        msg = await canal.send(embed=embed, view=view)
-                        
-                        # Atualiza o msg_id no banco
-                        dados["msg_id"] = msg.id
-                        await salvar_producao(pid, dados)
-                        
-                        # Restaura a task
-                        if pid not in producoes_tasks:
-                            task = bot.loop.create_task(acompanhar_producao(pid))
-                            producoes_tasks[pid] = task
-                            print(f"✅ Produção recriada: {pid}")
-                except Exception as e:
-                    print(f"❌ Erro ao restaurar produção {pid}: {e}")
-            else:
-                print(f"❌ Canal não encontrado para produção {pid}")
-
-    except Exception as e:
-        print("Erro restaurar produções:", e)
-        import traceback
-        traceback.print_exc()
-
     # =====================================================
     # ================= RESTAURAR GALPÕES ATIVOS ==========
     # =====================================================
