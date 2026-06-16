@@ -2350,7 +2350,8 @@ async def acompanhar_producao(pid):
     msg = None
     ultimo_pct = -1
     
-    while not bot.is_closed():
+    # CORRIGIDO: while True em vez de while not bot.is_closed()
+    while True:
         try:
             # Carrega produção do banco
             prod = await carregar_producao(pid)
@@ -2969,7 +2970,27 @@ async def cmd_historico_vendas_estoque(ctx, limite: int = 10):
         embed.add_field(name=f"Pedido #{row['pedido_numero']} - {data.strftime('%d/%m/%Y %H:%M')}", value=f"🔫 **{row['tipo']}** • {fmt_num(row['pacotes'])} pacotes\n👤 Retirado por: <@{row['retirado_por']}>", inline=False)
     
     await ctx.send(embed=embed)
+# =========================================================
+# ============= FUNÇÃO RESTAURAR PRODUÇÕES ================
+# =========================================================
 
+async def restaurar_producoes():
+    """Restaura produções ativas após reinício"""
+    try:
+        async with db.acquire() as conn:
+            rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+        
+        if rows:
+            print(f"🏭 Restaurando {len(rows)} produções ativas...")
+        
+        for r in rows:
+            pid = r["pid"]
+            if pid not in producoes_tasks:
+                task = asyncio.create_task(acompanhar_producao(pid))
+                producoes_tasks[pid] = task
+                print(f"✅ Produção restaurada: {pid}")
+    except Exception as e:
+        print(f"❌ Erro restaurar produções: {e}")
 
 # =========================================================
 # ======================== POLVORAS ========================
@@ -7446,10 +7467,13 @@ async def on_ready():
 
            print("♻️ Ações resetadas (segunda)")
 
-    # Iniciar loop de verificação de produções órfãs
+    # ========== INICIA LOOP DE VERIFICAÇÃO ==========
     if not verificar_producoes_orfas.is_running():
         verificar_producoes_orfas.start()
-
+        print("🔄 Loop de verificação de produções iniciado")
+    
+    # ========== RESTAURA PRODUÇÕES ATIVAS ==========
+    await restaurar_producoes()
     
     # =====================================================
     # ================= RESTAURAR PRODUÇÕES ===============
