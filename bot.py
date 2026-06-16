@@ -147,21 +147,31 @@ async def pegar_usuario(uid):
 BRASIL = ZoneInfo("America/Sao_Paulo")
 
 def agora():
-    """Retorna data/hora atual no horário do Brasil"""
+    """Retorna data/hora atual no horário do Brasil com timezone"""
     return datetime.now(BRASIL)
 
 def agora_db():
-    """Retorna data/hora sem fuso horário para salvar no banco"""
+    """Retorna data/hora sem fuso horário para salvar no banco (NAIVE)"""
     return datetime.now(BRASIL).replace(tzinfo=None)
 
 def str_para_datetime(data_str):
     """Converte string do banco para datetime com timezone"""
     if not data_str:
         return None
+    if isinstance(data_str, datetime):
+        if data_str.tzinfo is None:
+            return data_str.replace(tzinfo=BRASIL)
+        return data_str
     dt = datetime.fromisoformat(data_str)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=BRASIL)
     return dt
+
+def para_db_naive(dt):
+    """Converte datetime para naive (sem timezone) para salvar no banco"""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(BRASIL)
+    return dt.replace(tzinfo=None)
 
 # =========================================================
 # ================= FUNÇÃO PEGAR APELIDO ==================
@@ -2015,6 +2025,7 @@ async def verificar_estoque_suficiente(tipo, pacotes_necessarios):
 # =========================================================
 
 async def carregar_producao(pid):
+    """Carrega produção do banco com tratamento correto de datas"""
     async with db.acquire() as conn:
         r = await conn.fetchrow("SELECT * FROM producoes WHERE pid=$1", pid)
 
@@ -2044,6 +2055,7 @@ async def carregar_producao(pid):
 
 
 async def salvar_producao(pid, dados):
+    """Salva produção no banco com datas no formato correto"""
     segunda_user = None
     segunda_time = None
     qtd_galpoes = dados.get("qtd_galpoes", 1)
@@ -2052,6 +2064,10 @@ async def salvar_producao(pid, dados):
     if "segunda_task_confirmada" in dados:
         segunda_user = str(dados["segunda_task_confirmada"]["user"])
         segunda_time = dados["segunda_task_confirmada"]["time"]
+
+    # Converte datas para naive (sem timezone) para salvar no banco
+    inicio = para_db_naive(dados["inicio"]) if isinstance(dados["inicio"], datetime) else dados["inicio"]
+    fim = para_db_naive(dados["fim"]) if isinstance(dados["fim"], datetime) else dados["fim"]
 
     async with db.acquire() as conn:
         await conn.execute(
@@ -2077,8 +2093,8 @@ async def salvar_producao(pid, dados):
             pid,
             dados["galpao"],
             str(dados["autor"]),
-            dados["inicio"],
-            dados["fim"],
+            inicio,
+            fim,
             dados["obs"],
             str(dados["msg_id"]),
             str(dados["canal_id"]),
@@ -2124,12 +2140,37 @@ class SegundaTaskView(discord.ui.View):
         try:
             prod = await carregar_producao(self.pid)
             if not prod:
+                await interaction.followup.send("❌ Produção não encontrada!", ephemeral=True)
                 return
-            prod["segunda_task_confirmada"] = {"user": interaction.user.id, "time": agora().isoformat()}
+            
+            # Verifica se já foi confirmada
+            if prod.get("segunda_task_confirmada"):
+                await interaction.followup.send("⚠️ A segunda task já foi confirmada!", ephemeral=True)
+                return
+            
+            # Verifica se a produção já terminou
+            fim = prod["fim"]
+            if isinstance(fim, str):
+                fim = str_para_datetime(fim)
+            if agora() >= fim:
+                await interaction.followup.send("⚠️ Esta produção já terminou!", ephemeral=True)
+                return
+            
+            # Confirma a segunda task
+            prod["segunda_task_confirmada"] = {
+                "user": interaction.user.id,
+                "time": agora().isoformat()
+            }
             await salvar_producao(self.pid, prod)
+            
+            # Remove o botão
             await interaction.message.edit(view=None)
+            
+            await interaction.followup.send("✅ Segunda task confirmada com sucesso!", ephemeral=True)
+            
         except Exception as e:
             print("Erro segunda task:", e)
+            await interaction.followup.send(f"❌ Erro: {str(e)}", ephemeral=True)
 
 
 # =========================================================
@@ -2222,8 +2263,8 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
         dados = {
             "galpao": f"{self.galpao} ({qtd} galpões)",
             "autor": interaction.user.id,
-            "inicio": inicio.isoformat(),
-            "fim": fim.isoformat(),
+            "inicio": inicio,
+            "fim": fim,
             "obs": self.obs.value,
             "polvora": polvora_total,
             "qtd_galpoes": qtd,
@@ -2251,6 +2292,253 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
             f"⏱️ **Duração:** {tempo_real} minutos",
             ephemeral=True
         )
+
+
+# =========================================================
+# ================= LOOP DE ACOMPANHAMENTO =================
+# =========================================================
+
+async def gerar_desc_producao(prod, pct=None, restante=None):
+    """Gera a descrição da produção para o embed"""
+    if pct is None:
+        # Calcula se não foi passado
+        inicio = prod["inicio"]
+        fim = prod["fim"]
+        if isinstance(inicio, str):
+            inicio = str_para_datetime(inicio)
+        if isinstance(fim, str):
+            fim = str_para_datetime(fim)
+        
+        agora_dt = agora()
+        total = (fim - inicio).total_seconds()
+        restante = (fim - agora_dt).total_seconds()
+        restante = max(0, restante)
+        if total <= 0:
+            total = 1
+        pct = 1 - (restante / total)
+        pct = max(0, min(1, pct))
+    else:
+        restante = restante or 0
+    
+    mins = int(restante // 60)
+    segundos = int(restante % 60)
+    
+    desc = f"**Galpão:** {prod['galpao']}\n**Iniciado por:** <@{prod['autor']}>\n"
+    if prod.get("obs"):
+        desc += f"📝 **Obs:** {prod['obs']}\n"
+    
+    inicio = prod["inicio"]
+    fim = prod["fim"]
+    if isinstance(inicio, str):
+        inicio = str_para_datetime(inicio)
+    if isinstance(fim, str):
+        fim = str_para_datetime(fim)
+    
+    desc += f"Início: <t:{int(inicio.timestamp())}:t>\nTérmino: <t:{int(fim.timestamp())}:t>\n\n"
+    desc += f"⏳ **Restante:** {mins}m {segundos}s\n{barra(pct)}"
+    
+    if prod.get("segunda_task_confirmada"):
+        uid = prod["segunda_task_confirmada"]["user"]
+        desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
+    
+    return desc
+
+
+async def acompanhar_producao(pid):
+    """Acompanha a produção com verificação robusta de estado"""
+    print(f"▶ Produção iniciada/restaurada: {pid}")
+    msg = None
+    ultimo_pct = -1
+    
+    while not bot.is_closed():
+        try:
+            # Carrega produção do banco
+            prod = await carregar_producao(pid)
+            if not prod:
+                print(f"❌ Produção {pid} não encontrada no banco")
+                return
+            
+            # Verifica se já foi finalizada
+            inicio = prod["inicio"]
+            fim = prod["fim"]
+            if isinstance(inicio, str):
+                inicio = str_para_datetime(inicio)
+            if isinstance(fim, str):
+                fim = str_para_datetime(fim)
+            
+            agora_dt = agora()
+            
+            # SE JÁ PASSOU DO FIM, FINALIZA IMEDIATAMENTE
+            if agora_dt >= fim:
+                print(f"⏰ Produção {pid} já expirou, finalizando...")
+                canal = bot.get_channel(prod["canal_id"])
+                if canal:
+                    try:
+                        msg = await canal.fetch_message(prod["msg_id"])
+                    except:
+                        msg = None
+                    await finalizar_producao(pid, msg, prod)
+                else:
+                    await finalizar_producao(pid, None, prod)
+                return
+            
+            # Busca a mensagem se ainda não tiver
+            if msg is None:
+                canal = bot.get_channel(prod["canal_id"])
+                if canal:
+                    try:
+                        msg = await canal.fetch_message(prod["msg_id"])
+                    except discord.NotFound:
+                        print(f"⚠️ Mensagem da produção {pid} não encontrada, recriando...")
+                        # Recria a mensagem se necessário
+                        canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
+                        if canal:
+                            desc = await gerar_desc_producao(prod)
+                            embed = discord.Embed(title="🏭 Produção", description=desc, color=0x34495e)
+                            # Verifica se já tem segunda task para não mostrar o botão
+                            view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
+                            msg = await canal.send(embed=embed, view=view)
+                            # Atualiza o msg_id no banco
+                            prod["msg_id"] = msg.id
+                            await salvar_producao(pid, prod)
+                    except Exception as e:
+                        print(f"Erro ao buscar mensagem {pid}: {e}")
+                        await asyncio.sleep(5)
+                        continue
+            
+            # Atualiza a mensagem com progresso
+            if msg:
+                total = (fim - inicio).total_seconds()
+                restante = (fim - agora_dt).total_seconds()
+                restante = max(0, restante)
+                
+                if total <= 0:
+                    total = 1
+                
+                pct = 1 - (restante / total)
+                pct = max(0, min(1, pct))
+                
+                # Só atualiza se mudou significativamente (evita spam)
+                pct_int = int(pct * 100)
+                if pct_int != ultimo_pct:
+                    ultimo_pct = pct_int
+                    desc = await gerar_desc_producao(prod, pct, restante)
+                    try:
+                        await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
+                    except discord.HTTPException as e:
+                        if e.status == 429:
+                            await asyncio.sleep(3)
+                        else:
+                            print(f"Erro ao editar mensagem {pid}: {e}")
+        
+        except Exception as e:
+            print(f"Erro no acompanhar_producao {pid}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Espera antes da próxima verificação
+        await asyncio.sleep(10)  # Aumentado para 10 segundos para reduzir carga
+
+
+async def finalizar_producao(pid, msg, prod):
+    """Finaliza a produção e registra no banco"""
+    
+    print(f"🔵 FINALIZANDO produção {pid}")
+    
+    try:
+        polvora_total = prod.get("polvora", 400)
+        segunda = prod.get("segunda_task_confirmada")
+        galpao = prod["galpao"]
+        qtd_galpoes = prod.get("qtd_galpoes", 1)
+        polvora_por_galpao = prod.get("polvora_por_galpao", polvora_total // qtd_galpoes if qtd_galpoes > 0 else polvora_total)
+        
+        if "NORTE" in galpao.upper():
+            base_por_galpao = 1777 if segunda else 1688
+        elif "SUL" in galpao.upper():
+            base_por_galpao = 1618 if segunda else 1608
+        else:
+            base_por_galpao = 1777 if segunda else 1688
+        
+        capsulas_por_galpao = (base_por_galpao * polvora_por_galpao) // 400
+        capsulas_total = capsulas_por_galpao * qtd_galpoes
+        peso_total = capsulas_total * 0.05
+        
+        print(f"📊 {galpao}: {qtd_galpoes} galpões, {capsulas_total} cápsulas totais, {polvora_total} pólvora total")
+        
+        async with db.acquire() as conn:
+            # Registra produção finalizada
+            await conn.execute(
+                """INSERT INTO producoes_finalizadas (user_id, capsulas, data, polvora, galpao) 
+                   VALUES ($1, $2, $3, $4, $5)""",
+                str(prod["autor"]), capsulas_total, agora_db(), polvora_total, f"{galpao} ({qtd_galpoes} galpões)"
+            )
+            # Atualiza estoque de cápsulas
+            await conn.execute(
+                """UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1""",
+                capsulas_total
+            )
+            # Registra entrada de insumos
+            await conn.execute(
+                """INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) 
+                   VALUES ($1, $2, $3, $4)""",
+                "capsulas", capsulas_total, str(prod["autor"]), 
+                f"Produção do {galpao} - {qtd_galpoes} galpões - {polvora_total} pólvora"
+            )
+        
+        # Atualiza a mensagem se existir
+        if msg:
+            try:
+                desc = msg.embeds[0].description if msg.embeds else ""
+                linhas = desc.split("\n")
+                novas_linhas = []
+                for linha in linhas:
+                    if not linha.startswith("⏳ **Restante:**") and not "▓" in linha and not "░" in linha:
+                        if linha.strip():
+                            novas_linhas.append(linha)
+                
+                desc = "\n".join(novas_linhas)
+                def fmt_num(valor):
+                    return f"{valor:,.0f}".replace(",", ".")
+                
+                desc += (f"\n\n🔵 **Produção Finalizada**\n\n"
+                        f"🧪 Produziu **{fmt_num(capsulas_total)} cápsulas**\n"
+                        f"📦 **Por galpão:** {fmt_num(capsulas_por_galpao)} cápsulas\n"
+                        f"🏭 **Quantidade de galpões:** {qtd_galpoes}\n"
+                        f"⚖️ Peso total: **{peso_total:.2f} kg**\n"
+                        f"💣 Pólvora total utilizada: **{polvora_total}**\n"
+                        f"💣 Pólvora por galpão: **{polvora_por_galpao}**\n\n"
+                        f"💊 As cápsulas foram adicionadas ao estoque de insumos!")
+                
+                await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e), view=None)
+            except Exception as e:
+                print(f"Erro ao editar mensagem final: {e}")
+        
+        # Remove do banco e da memória
+        await deletar_producao(pid)
+        if pid in producoes_tasks:
+            del producoes_tasks[pid]
+        
+        # Envia notificação no canal do baú
+        canal_bau = bot.get_channel(1448561598384963747)
+        if canal_bau:
+            def fmt_num(valor):
+                return f"{valor:,.0f}".replace(",", ".")
+            embed_bau = discord.Embed(title="🏭 PRODUÇÃO DE CÁPSULAS FINALIZADA", color=0x2ecc71, timestamp=agora())
+            embed_bau.add_field(name="🏭 Galpão", value=galpao, inline=True)
+            embed_bau.add_field(name="🏭 Quantidade", value=f"{qtd_galpoes} galpão(ões)", inline=True)
+            embed_bau.add_field(name="💊 Cápsulas produzidas", value=f"**{fmt_num(capsulas_total)}** unidades", inline=True)
+            embed_bau.add_field(name="📦 Por galpão", value=f"{fmt_num(capsulas_por_galpao)} cápsulas", inline=True)
+            embed_bau.add_field(name="💣 Pólvora total", value=f"**{polvora_total}**", inline=True)
+            embed_bau.add_field(name="👤 Produzido por", value=f"<@{prod['autor']}>", inline=True)
+            await canal_bau.send(embed=embed_bau)
+        
+        await atualizar_painel_fabricacao()
+        print(f"✅ Produção {pid} finalizada com {capsulas_total} cápsulas ({qtd_galpoes} galpões)")
+    
+    except Exception as e:
+        print(f"❌ ERRO ao finalizar produção {pid}: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # =========================================================
@@ -2472,132 +2760,6 @@ class FabricacaoView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await atualizar_painel_fabricacao()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
-
-
-# =========================================================
-# ================= LOOP DE ACOMPANHAMENTO =================
-# =========================================================
-
-async def acompanhar_producao(pid):
-    print(f"▶ Produção iniciada: {pid}")
-    msg = None
-
-    while not bot.is_closed():
-        prod = await carregar_producao(pid)
-        if not prod:
-            print(f"❌ Produção {pid} não encontrada")
-            return
-
-        canal = pegar_canal(prod["canal_id"])
-        if not canal:
-            await asyncio.sleep(10)
-            continue
-
-        if msg is None:
-            try:
-                msg = await canal.fetch_message(int(prod["msg_id"]))
-            except Exception as e:
-                print(f"Erro buscar mensagem {pid}:", e)
-                await asyncio.sleep(5)
-                continue
-
-        inicio = str_para_datetime(prod["inicio"])
-        fim = str_para_datetime(prod["fim"])
-        agora_dt = agora()
-
-        if agora_dt >= fim:
-            await finalizar_producao(pid, msg, prod)
-            return
-
-        total = (fim - inicio).total_seconds()
-        restante = (fim - agora_dt).total_seconds()
-        restante = max(0, restante)
-        
-        if total <= 0:
-            total = 1
-
-        pct = 1 - (restante / total)
-        pct = max(0, min(1, pct))
-
-        mins = int(restante // 60)
-        segundos = int(restante % 60)
-
-        desc = (f"**Galpão:** {prod['galpao']}\n**Iniciado por:** <@{prod['autor']}>\n")
-        if prod.get("obs"):
-            desc += f"📝 **Obs:** {prod['obs']}\n"
-        desc += (f"Início: <t:{int(inicio.timestamp())}:t>\nTérmino: <t:{int(fim.timestamp())}:t>\n\n⏳ **Restante:** {mins}m {segundos}s\n{barra(pct)}")
-        if prod.get("segunda_task_confirmada"):
-            uid = prod["segunda_task_confirmada"]["user"]
-            desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
-
-        try:
-            await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
-        except Exception as e:
-            print(f"Erro ao editar mensagem {pid}:", e)
-
-        await asyncio.sleep(5)
-
-
-async def finalizar_producao(pid, msg, prod):
-    """Finaliza a produção e registra no banco"""
-    
-    print(f"🔵 FINALIZANDO produção {pid}")
-    
-    polvora_total = prod.get("polvora", 400)
-    segunda = prod.get("segunda_task_confirmada")
-    galpao = prod["galpao"]
-    qtd_galpoes = prod.get("qtd_galpoes", 1)
-    polvora_por_galpao = prod.get("polvora_por_galpao", polvora_total // qtd_galpoes if qtd_galpoes > 0 else polvora_total)
-    
-    if "NORTE" in galpao.upper():
-        base_por_galpao = 1777 if segunda else 1688
-    elif "SUL" in galpao.upper():
-        base_por_galpao = 1618 if segunda else 1608
-    else:
-        base_por_galpao = 1777 if segunda else 1688
-    
-    capsulas_por_galpao = (base_por_galpao * polvora_por_galpao) // 400
-    capsulas_total = capsulas_por_galpao * qtd_galpoes
-    peso_total = capsulas_total * 0.05
-    
-    print(f"📊 {galpao}: {qtd_galpoes} galpões, {capsulas_total} cápsulas totais, {polvora_total} pólvora total")
-    
-    async with db.acquire() as conn:
-        await conn.execute("INSERT INTO producoes_finalizadas (user_id, capsulas, data, polvora, galpao) VALUES ($1, $2, $3, $4, $5)", str(prod["autor"]), capsulas_total, agora_db(), polvora_total, f"{galpao} ({qtd_galpoes} galpões)")
-        await conn.execute("UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1", capsulas_total)
-        await conn.execute("INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) VALUES ($1, $2, $3, $4)", "capsulas", capsulas_total, str(prod["autor"]), f"Produção do {galpao} - {qtd_galpoes} galpões - {polvora_total} pólvora")
-    
-    desc = msg.embeds[0].description if msg.embeds else ""
-    linhas = desc.split("\n")
-    novas_linhas = []
-    for linha in linhas:
-        if not linha.startswith("⏳ **Restante:**") and not "▓" in linha and not "░" in linha:
-            if linha.strip():
-                novas_linhas.append(linha)
-    
-    desc = "\n".join(novas_linhas)
-    desc += (f"\n\n🔵 **Produção Finalizada**\n\n🧪 Produziu **{capsulas_total} cápsulas**\n📦 **Por galpão:** {capsulas_por_galpao} cápsulas\n🏭 **Quantidade de galpões:** {qtd_galpoes}\n⚖️ Peso total: **{peso_total:.2f} kg**\n💣 Pólvora total utilizada: **{polvora_total}**\n💣 Pólvora por galpão: **{polvora_por_galpao}**\n\n💊 As cápsulas foram adicionadas ao estoque de insumos!")
-    
-    await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e), view=None)
-    await deletar_producao(pid)
-    if pid in producoes_tasks:
-        del producoes_tasks[pid]
-    
-    canal_bau = bot.get_channel(1448561598384963747)
-    if canal_bau:
-        def fmt_num(valor):
-            return f"{valor:,.0f}".replace(",", ".")
-        embed_bau = discord.Embed(title="🏭 PRODUÇÃO DE CÁPSULAS FINALIZADA", color=0x2ecc71, timestamp=agora())
-        embed_bau.add_field(name="🏭 Galpão", value=galpao, inline=True)
-        embed_bau.add_field(name="🏭 Quantidade", value=f"{qtd_galpoes} galpão(ões)", inline=True)
-        embed_bau.add_field(name="💊 Cápsulas produzidas", value=f"**{fmt_num(capsulas_total)}** unidades", inline=True)
-        embed_bau.add_field(name="📦 Por galpão", value=f"{fmt_num(capsulas_por_galpao)} cápsulas", inline=True)
-        embed_bau.add_field(name="💣 Pólvora total", value=f"**{polvora_total}**", inline=True)
-        embed_bau.add_field(name="👤 Produzido por", value=f"<@{prod['autor']}>", inline=True)
-        await canal_bau.send(embed=embed_bau)
-    
-    await atualizar_painel_fabricacao()
-    print(f"✅ Produção {pid} finalizada com {capsulas_total} cápsulas ({qtd_galpoes} galpões)")
 
 
 # =========================================================
@@ -5986,10 +6148,6 @@ async def testar_saida(ctx, usuario: discord.User = None):
         await ctx.send(f"❌ Erro: {e}")
 
 # =========================================================
-# ================= FIM DO SISTEMA ========================
-# =========================================================
-
-# =========================================================
 # ================= SISTEMA DE ALUGUEL ====================
 # =========================================================
 
@@ -7301,7 +7459,8 @@ async def on_ready():
         async with db.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT pid, galpao, inicio, fim, msg_id, canal_id, autor, obs, polvora
+                SELECT pid, galpao, inicio, fim, msg_id, canal_id, autor, obs, polvora,
+                       qtd_galpoes, polvora_por_galpao, segunda_task_user, segunda_task_time
                 FROM producoes 
                 WHERE CAST(fim AS timestamp) > NOW()
                 """
@@ -7311,6 +7470,29 @@ async def on_ready():
     
         for r in rows:
             pid = r["pid"]
+        
+            # Restaura a produção na memória
+            dados = {
+                "galpao": r["galpao"],
+                "autor": int(r["autor"]),
+                "inicio": r["inicio"],
+                "fim": r["fim"],
+                "obs": r["obs"],
+                "msg_id": int(r["msg_id"]),
+                "canal_id": int(r["canal_id"]),
+                "polvora": r["polvora"] or 400,
+                "qtd_galpoes": r.get("qtd_galpoes", 1) if r.get("qtd_galpoes") else 1,
+                "polvora_por_galpao": r.get("polvora_por_galpao", 400) if r.get("polvora_por_galpao") else 400
+            }
+            
+            if r["segunda_task_user"]:
+                dados["segunda_task_confirmada"] = {
+                    "user": int(r["segunda_task_user"]),
+                    "time": r["segunda_task_time"]
+                }
+            
+            # Salva na memória
+            await salvar_producao(pid, dados)
         
             # Verificar se a mensagem ainda existe no Discord
             canal = bot.get_channel(int(r["canal_id"]))
@@ -7322,10 +7504,45 @@ async def on_ready():
                         task = bot.loop.create_task(acompanhar_producao(pid))
                         producoes_tasks[pid] = task
                         print(f"✅ Produção restaurada: {pid} - {r['galpao']}")
+                        
+                        # Verifica se a segunda task já foi confirmada e atualiza a view se necessário
+                        if r["segunda_task_user"]:
+                            # Já tem segunda task, remove o botão
+                            try:
+                                await msg.edit(view=None)
+                            except:
+                                pass
                 except discord.NotFound:
-                    print(f"⚠️ Mensagem da produção {pid} não encontrada, removendo do banco")
-                    # Mensagem foi deletada, remove do banco
-                    await conn.execute("DELETE FROM producoes WHERE pid = $1", pid)
+                    print(f"⚠️ Mensagem da produção {pid} não encontrada, recriando...")
+                    # Recria a mensagem
+                    canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
+                    if canal:
+                        # Converte datas para timestamp
+                        fim = r["fim"]
+                        if isinstance(fim, datetime):
+                            fim_ts = int(fim.timestamp())
+                        else:
+                            fim_ts = int(datetime.fromisoformat(fim).timestamp())
+                        
+                        desc = (f"**Galpão:** {r['galpao']}\n"
+                               f"**Iniciado por:** <@{r['autor']}>\n"
+                               f"Início: <t:{int(datetime.fromisoformat(r['inicio']).timestamp())}:t>\n"
+                               f"Término: <t:{fim_ts}:t>\n\n"
+                               f"⏳ **Restante:** Aguardando atualização...")
+                        
+                        embed = discord.Embed(title="🏭 Produção", description=desc, color=0x34495e)
+                        view = SegundaTaskView(pid) if not r["segunda_task_user"] else None
+                        msg = await canal.send(embed=embed, view=view)
+                        
+                        # Atualiza o msg_id no banco
+                        dados["msg_id"] = msg.id
+                        await salvar_producao(pid, dados)
+                        
+                        # Restaura a task
+                        if pid not in producoes_tasks:
+                            task = bot.loop.create_task(acompanhar_producao(pid))
+                            producoes_tasks[pid] = task
+                            print(f"✅ Produção recriada: {pid}")
                 except Exception as e:
                     print(f"❌ Erro ao restaurar produção {pid}: {e}")
             else:
@@ -7333,6 +7550,9 @@ async def on_ready():
 
     except Exception as e:
         print("Erro restaurar produções:", e)
+        import traceback
+        traceback.print_exc()
+
     # =====================================================
     # ================= RESTAURAR GALPÕES ATIVOS ==========
     # =====================================================
