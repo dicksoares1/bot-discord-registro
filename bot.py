@@ -5039,22 +5039,6 @@ class GrupoView(discord.ui.View):
         await interaction.response.send_modal(EditarGrupoModal(self.grupo_id, dados))
     
     @discord.ui.button(
-        label="💰 Registrar Compra",
-        style=discord.ButtonStyle.success,
-        custom_id="registrar_compra_grupo",
-        emoji="💰"
-    )
-    async def registrar_compra(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        
-        if not is_admin and not is_gerente:
-            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem registrar compras!", ephemeral=True)
-            return
-        
-        await interaction.response.send_modal(RegistrarCompraGrupoModal(self.grupo_id, self.nome_org))
-    
-    @discord.ui.button(
         label="🗑️ Excluir Grupo",
         style=discord.ButtonStyle.danger,
         custom_id="excluir_grupo",
