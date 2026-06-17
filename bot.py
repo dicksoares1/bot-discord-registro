@@ -634,7 +634,7 @@ async def consumir_insumos_producao(tipo, pacotes):
         embalagens_consumir = pacotes * 5
     else:
         capsulas_consumir = pacotes * 65
-        embalagens_consumir = pacotes * 25
+        embalagens_consumir = pacotes * 10
     
     await atualizar_estoque_capsulas(capsulas_consumir, "remover")
     await atualizar_estoque_embalagens(embalagens_consumir, "remover")
@@ -2966,7 +2966,7 @@ class FabricacaoView(discord.ui.View):
         embed = discord.Embed(title="📊 ESTOQUE COMPLETO", color=0x3498db)
         embed.add_field(name="🔫 MUNIÇÕES", value=f"**PT:** {fmt_num(estoque_municoes['PT'])} pacotes ({fmt_num(estoque_municoes['PT'] * 50)} munições)\n**SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes ({fmt_num(estoque_municoes['SUB'] * 50)} munições)", inline=False)
         embed.add_field(name="💊 INSUMOS", value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades", inline=False)
-        embed.add_field(name="📋 TABELA DE CONSUMO", value=("**Por pacote PT:**\n• 25 cápsulas\n• 5 embalagens\n\n**Por pacote SUB:**\n• 65 cápsulas\n• 25 embalagens"), inline=False)
+        embed.add_field(name="📋 TABELA DE CONSUMO", value=("**Por pacote PT:**\n• 25 cápsulas\n• 5 embalagens\n\n**Por pacote SUB:**\n• 65 cápsulas\n• 10 embalagens"), inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
     
     @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.secondary, custom_id="fabricacao_relatorio")
