@@ -2469,9 +2469,47 @@ class SegundaTaskView(discord.ui.View):
             await interaction.response.defer(ephemeral=True)
         try:
             prod = await carregar_producao(self.pid)
+            
+            # =========================================================
+            # ================= PRODUÇÃO JÁ FINALIZADA =================
+            # =========================================================
+            
             if not prod:
-                await interaction.followup.send("❌ Produção não encontrada!", ephemeral=True)
-                return
+                # Tentar encontrar a produção finalizada
+                async with get_db().acquire() as conn:
+                    finalizada = await conn.fetchrow(
+                        "SELECT * FROM producoes_finalizadas WHERE user_id = $1 ORDER BY data DESC LIMIT 1",
+                        str(interaction.user.id)
+                    )
+                
+                if finalizada:
+                    await interaction.followup.send(
+                        f"✅ **Produção já foi finalizada!**\n\n"
+                        f"🧪 Cápsulas produzidas: {fmt_num(finalizada['capsulas'])}\n"
+                        f"💣 Pólvora utilizada: {fmt_num(finalizada['polvora'])}",
+                        ephemeral=True
+                    )
+                    # Remover o botão da mensagem
+                    try:
+                        await interaction.message.edit(view=None)
+                    except:
+                        pass
+                    return
+                else:
+                    await interaction.followup.send(
+                        "❌ Produção não encontrada!\n\n"
+                        "💡 Pode ter sido finalizada automaticamente.",
+                        ephemeral=True
+                    )
+                    try:
+                        await interaction.message.edit(view=None)
+                    except:
+                        pass
+                    return
+            
+            # =========================================================
+            # ================= PRODUÇÃO ATIVA =========================
+            # =========================================================
             
             if prod.get("segunda_task_confirmada"):
                 await interaction.followup.send("⚠️ A segunda task já foi confirmada!", ephemeral=True)
@@ -2480,21 +2518,53 @@ class SegundaTaskView(discord.ui.View):
             fim = prod["fim"]
             if isinstance(fim, str):
                 fim = str_para_datetime(fim)
+            
+            # Se já terminou, finalizar imediatamente
             if agora() >= fim:
-                await interaction.followup.send("⚠️ Esta produção já terminou!", ephemeral=True)
+                await interaction.followup.send(
+                    "⏰ **Produção já terminou!**\n\n"
+                    "🔄 A produção será finalizada automaticamente.",
+                    ephemeral=True
+                )
+                # Forçar finalização
+                canal = interaction.guild.get_channel(prod["canal_id"])
+                msg = None
+                if canal:
+                    try:
+                        msg = await canal.fetch_message(prod["msg_id"])
+                    except:
+                        pass
+                await finalizar_producao(self.pid, msg, prod)
+                try:
+                    await interaction.message.edit(view=None)
+                except:
+                    pass
                 return
             
+            # Confirmar segunda task
             prod["segunda_task_confirmada"] = {
                 "user": interaction.user.id,
                 "time": agora().isoformat()
             }
             await salvar_producao(self.pid, prod)
-            await interaction.message.edit(view=None)
-            await interaction.followup.send("✅ Segunda task confirmada com sucesso!", ephemeral=True)
+            
+            # Remover botão
+            try:
+                await interaction.message.edit(view=None)
+            except:
+                pass
+            
+            await interaction.followup.send(
+                "✅ **Segunda task confirmada com sucesso!**\n\n"
+                "🔄 A produção continuará normalmente.",
+                ephemeral=True
+            )
             
         except Exception as e:
             print("Erro segunda task:", e)
-            await interaction.followup.send(f"❌ Erro: {str(e)}", ephemeral=True)
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
 
 
 class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
@@ -2527,7 +2597,7 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
             return
         
         polvora_total = polvora_por_galpao * qtd
-        tempo_real = max(1, int(self.tempo_base * (polvora_por_galpao / 400)))
+        tempo_real = max(2, int(self.tempo_base * (polvora_por_galpao / 400)))
         
         pid = f"{self.galpao}_{qtd}g_{interaction.id}_{int(time_module.time())}"
         inicio = agora()
