@@ -1048,6 +1048,11 @@ lavagens_pendentes = {}
 clips_postados = set()
 fila_clipes = None
 
+# GRUPOS - CONTROLE DE RATE LIMIT
+ultima_atualizacao_grupo = 0
+fila_atualizacao_grupos = asyncio.Queue()
+task_atualizacao_grupos = None
+
 # =========================================================
 # ============ CLASSE REGISTRO (MODAL E VIEWS) ============
 # =========================================================
@@ -5248,11 +5253,37 @@ class RegistrarGrupoView(discord.ui.View):
 
 
 # =========================================================
-# ==================== FUNÇÕES DE GRUPOS ===================
+# ==================== CONTROLE DE RATE LIMIT =============
 # =========================================================
 
-async def enviar_embed_grupo(grupo_id):
-    """Envia ou atualiza o embed de um grupo"""
+ultima_atualizacao_grupo = 0
+fila_atualizacao_grupos = asyncio.Queue()
+task_atualizacao_grupos = None
+
+async def processar_fila_grupos():
+    """Processa a fila de atualizações de grupos com rate limit"""
+    global ultima_atualizacao_grupo
+    
+    while True:
+        try:
+            grupo_id = await fila_atualizacao_grupos.get()
+            
+            # Aguardar para não exceder rate limit (mínimo 2 segundos entre atualizações)
+            agora_ts = time_module.time()
+            if agora_ts - ultima_atualizacao_grupo < 2:
+                await asyncio.sleep(2 - (agora_ts - ultima_atualizacao_grupo))
+            
+            await _enviar_embed_grupo_interno(grupo_id)
+            ultima_atualizacao_grupo = time_module.time()
+            fila_atualizacao_grupos.task_done()
+            
+        except Exception as e:
+            print(f"❌ Erro ao processar fila de grupos: {e}")
+            await asyncio.sleep(1)
+
+
+async def _enviar_embed_grupo_interno(grupo_id):
+    """Função interna que realmente envia/atualiza o embed"""
     
     dados = await carregar_grupo_db(grupo_id)
     if not dados:
@@ -5320,19 +5351,50 @@ async def enviar_embed_grupo(grupo_id):
     embed.add_field(name="📌 STATUS", value="🟢 **ATIVO**", inline=False)
     embed.set_footer(text=f"ID: {grupo_id} • CRIADO EM {dados['data_criacao'].strftime('%d/%m/%Y')}")
     
-    async for msg in canal.history(limit=50):
-        if msg.author == bot.user and msg.embeds:
-            for embed_msg in msg.embeds:
-                if embed_msg.footer and grupo_id in embed_msg.footer.text:
-                    try:
-                        await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
-                        print(f"✅ Grupo {nome_org} atualizado")
-                        return
-                    except Exception as e:
-                        print(f"Erro ao atualizar embed: {e}")
+    try:
+        async for msg in canal.history(limit=50):
+            if msg.author == bot.user and msg.embeds:
+                for embed_msg in msg.embeds:
+                    if embed_msg.footer and grupo_id in embed_msg.footer.text:
+                        try:
+                            await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
+                            print(f"✅ Grupo {nome_org} atualizado")
+                            return
+                        except discord.HTTPException as e:
+                            if e.status == 429:
+                                print(f"⏰ Rate limit ao atualizar {nome_org}, aguardando...")
+                                await asyncio.sleep(3)
+                                await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
+                                return
+                            raise
+        # Se não encontrou mensagem, criar nova
+        await canal.send(embed=embed, view=GrupoView(grupo_id, nome_org))
+        print(f"✅ Grupo {nome_org} criado")
+    except discord.HTTPException as e:
+        if e.status == 429:
+            print(f"⏰ Rate limit ao criar/editar {nome_org}, aguardando...")
+            await asyncio.sleep(5)
+            # Tentar novamente
+            async for msg in canal.history(limit=50):
+                if msg.author == bot.user and msg.embeds:
+                    for embed_msg in msg.embeds:
+                        if embed_msg.footer and grupo_id in embed_msg.footer.text:
+                            await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
+                            return
+            await canal.send(embed=embed, view=GrupoView(grupo_id, nome_org))
+
+
+async def enviar_embed_grupo(grupo_id):
+    """Envia ou atualiza o embed de um grupo (com fila para evitar rate limit)"""
+    global task_atualizacao_grupos
     
-    await canal.send(embed=embed, view=GrupoView(grupo_id, nome_org))
-    print(f"✅ Grupo {nome_org} criado")
+    # Iniciar a task de processamento se não estiver rodando
+    if task_atualizacao_grupos is None or task_atualizacao_grupos.done():
+        task_atualizacao_grupos = asyncio.create_task(processar_fila_grupos())
+        print("🔄 Task de processamento de grupos iniciada")
+    
+    # Adicionar à fila
+    await fila_atualizacao_grupos.put(grupo_id)
 
 
 async def enviar_painel_registro_grupos():
@@ -5383,7 +5445,7 @@ async def enviar_painel_registro_grupos():
 
 
 async def restaurar_grupos():
-    """Restaura os embeds dos grupos ativos após reinício"""
+    """Restaura os embeds dos grupos ativos após reinício (com delay para evitar rate limit)"""
     try:
         print("🔄 Restaurando grupos...")
         
@@ -5394,9 +5456,13 @@ async def restaurar_grupos():
         
         print(f"🏷️ Restaurando {len(grupos)} grupos...")
         
-        for grupo in grupos:
+        # Restaurar com delay maior para evitar rate limit
+        for i, grupo in enumerate(grupos):
             await enviar_embed_grupo(grupo["grupo_id"])
-            await asyncio.sleep(0.5)
+            # Delay progressivo: começa com 2s, vai aumentando
+            delay = min(2 + (i * 0.5), 5)  # Máximo 5 segundos
+            print(f"⏳ Aguardando {delay}s antes do próximo grupo...")
+            await asyncio.sleep(delay)
         
         print(f"✅ {len(grupos)} grupos restaurados")
         
@@ -5536,6 +5602,14 @@ async def on_ready():
         await restaurar_grupos()
     except Exception as e:
         print("Erro ao restaurar grupos:", e)
+
+    # Iniciar task de processamento de grupos
+    try:
+        if task_atualizacao_grupos is None or task_atualizacao_grupos.done():
+            task_atualizacao_grupos = asyncio.create_task(processar_fila_grupos())
+            print("🔄 Task de processamento de grupos iniciada")
+    except Exception as e:
+        print(f"Erro ao iniciar task de grupos: {e}")
     
     # Restaurar galpões ativos
     try:
