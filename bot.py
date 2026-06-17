@@ -798,6 +798,14 @@ async def carregar_compras_grupo_db(grupo_id):
                 "valor": row["total_valor"] or 0
             }
         return compras
+
+async def buscar_grupo_por_organizacao(nome_org):
+    """Busca um grupo pelo nome da organização"""
+    async with get_db().acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT grupo_id FROM grupos WHERE LOWER(nome_org) = LOWER($1) AND ativo = true",
+            nome_org
+        )
         
 # =========================================================
 # ==================== TWITCH API ==========================
@@ -1625,69 +1633,264 @@ class StatusView(discord.ui.View):
 
 
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
-    organizacao = discord.ui.TextInput(label="Organização")
-    qtd_pt = discord.ui.TextInput(label="Quantidade PT")
-    qtd_sub = discord.ui.TextInput(label="Quantidade SUB")
-    observacoes = discord.ui.TextInput(label="Observ", style=discord.TextStyle.paragraph, required=False)
+    organizacao = discord.ui.TextInput(
+        label="Organização",
+        placeholder="Digite o nome da organização (ex: VDR, POLICIA)",
+        required=True
+    )
+    qtd_pt = discord.ui.TextInput(
+        label="Quantidade PT",
+        placeholder="Digite a quantidade de munição PT"
+    )
+    qtd_sub = discord.ui.TextInput(
+        label="Quantidade SUB",
+        placeholder="Digite a quantidade de munição SUB"
+    )
+    observacoes = discord.ui.TextInput(
+        label="Observações",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        placeholder="Observações adicionais sobre a venda"
+    )
     
     async def on_submit(self, interaction: discord.Interaction):
         try:
             pt = int(self.qtd_pt.value.strip())
             sub = int(self.qtd_sub.value.strip())
         except:
-            await interaction.response.send_message("Valores inválidos.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Valores inválidos. Digite apenas números.",
+                ephemeral=True
+            )
             return
         
+        # =========================================================
+        # ================= CALCULAR VALORES ======================
+        # =========================================================
+        
         numero_pedido = await proximo_pedido()
+        
+        # Calcular pacotes e munições
         pacotes_pt = pt // 50
         pacotes_sub = sub // 50
+        
+        # Calcular total (PT: R$50 por munição, SUB: R$90 por munição)
         total = (pt * 50) + (sub * 90)
+        valor_novo = total
         
-        await salvar_venda_db(str(interaction.user.id), total, numero_pedido)
+        # =========================================================
+        # ================= SALVAR NO BANCO =======================
+        # =========================================================
         
-        valor_formatado = formatar_dinheiro(total)
+        await salvar_venda_db(
+            str(interaction.user.id),
+            total,
+            numero_pedido
+        )
+        
+        valor_formatado = (
+            f"{total:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
+        
         org_nome = self.organizacao.value.strip().upper()
-        config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
+        config = ORGANIZACOES_CONFIG.get(
+            org_nome,
+            {"emoji": "🏷️", "cor": 0x1e3a8a}
+        )
         
-        embed = discord.Embed(title=f"📦 NOVA ENCOMENDA • Pedido #{numero_pedido:04d}", color=config["cor"])
-        embed.add_field(name="👤 Vendedor", value=interaction.user.mention, inline=False)
-        embed.add_field(name="🏷 Organização", value=f"{config['emoji']} {org_nome}", inline=False)
-        embed.add_field(name="🔫 PT", value=f"{pt} munições\n📦 {pacotes_pt} pacotes", inline=True)
-        embed.add_field(name="🔫 SUB", value=f"{sub} munições\n📦 {pacotes_sub} pacotes", inline=True)
-        embed.add_field(name="💰 Total", value=f"**{valor_formatado}**", inline=False)
-        embed.add_field(name="📌 Status", value="📦 A Entregar\n⏳ Pagamento pendente", inline=False)
+        # =========================================================
+        # ================= INTEGRAÇÃO COM GRUPOS =================
+        # =========================================================
+        
+        # Buscar grupo pela organização
+        grupo = await buscar_grupo_por_organizacao(org_nome)
+        
+        if grupo:
+            # Registrar compra no grupo (PT e SUB)
+            if pacotes_pt > 0:
+                valor_pt = pacotes_pt * 50  # Preço por pacote PT (R$50)
+                await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt, valor_pt)
+                print(f"📦 PT registrado no grupo {org_nome}: {pacotes_pt} pacotes")
+            
+            if pacotes_sub > 0:
+                valor_sub = pacotes_sub * 90  # Preço por pacote SUB (R$90)
+                await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub, valor_sub)
+                print(f"📦 SUB registrado no grupo {org_nome}: {pacotes_sub} pacotes")
+            
+            # Atualizar o embed do grupo
+            await enviar_embed_grupo(grupo["grupo_id"])
+            
+            print(f"✅ Venda integrada com grupo: {org_nome}")
+        
+        # =========================================================
+        # ================= CRIAR EMBED DA VENDA ==================
+        # =========================================================
+        
+        embed = discord.Embed(
+            title=f"📦 NOVA ENCOMENDA • Pedido #{numero_pedido:04d}",
+            color=config["cor"]
+        )
+        
+        embed.add_field(
+            name="👤 Vendedor",
+            value=interaction.user.mention,
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🏷 Organização",
+            value=f"{config['emoji']} {org_nome}",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🔫 PT",
+            value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🔫 SUB",
+            value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="💰 Total",
+            value=f"**R$ {valor_formatado}**",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📌 Status",
+            value="📦 A Entregar\n⏳ Pagamento pendente",
+            inline=False
+        )
+        
         if self.observacoes.value:
-            embed.add_field(name="📝 Observ", value=self.observacoes.value, inline=False)
-        embed.set_footer(text="🛡 Sistema de Encomendas • VDR 442")
+            embed.add_field(
+                name="📝 Observações",
+                value=self.observacoes.value,
+                inline=False
+            )
+        
+        # Adicionar informação de integração com grupo
+        if grupo:
+            embed.add_field(
+                name="📊 INTEGRAÇÃO COM GRUPO",
+                value=f"✅ Compra registrada automaticamente no grupo **{org_nome}**",
+                inline=False
+            )
+        
+        embed.set_footer(
+            text="🛡 Sistema de Encomendas • VDR 442"
+        )
+        
+        # =========================================================
+        # ================= ENVIAR MENSAGEM =======================
+        # =========================================================
         
         canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
-        await canal.send(embed=embed, view=StatusView())
-        await responder_interacao(interaction, defer=True)
+        
+        if not canal:
+            await interaction.response.send_message(
+                "❌ Canal de encomendas não encontrado!",
+                ephemeral=True
+            )
+            return
+        
+        await canal.send(
+            embed=embed,
+            view=StatusView()
+        )
+        
+        # =========================================================
+        # ================= RESPOSTA AO USUÁRIO ===================
+        # =========================================================
+        
+        msg_resposta = f"✅ **Venda registrada com sucesso!**\n\n"
+        msg_resposta += f"📦 **Pedido #{numero_pedido:04d}**\n"
+        msg_resposta += f"🏷 **Organização:** {org_nome}\n"
+        msg_resposta += f"🔫 **PT:** {pt} munições ({pacotes_pt} pacotes)\n"
+        msg_resposta += f"🔫 **SUB:** {sub} munições ({pacotes_sub} pacotes)\n"
+        msg_resposta += f"💰 **Total:** R$ {valor_formatado}\n\n"
+        
+        if grupo:
+            msg_resposta += f"📊 **Grupo integrado:** ✅ {org_nome}\n"
+        else:
+            msg_resposta += f"📊 **Grupo integrado:** ❌ Nenhum grupo encontrado para {org_nome}\n"
+            msg_resposta += f"💡 Para integrar, cadastre um grupo com o nome **{org_nome}**"
+        
+        await interaction.response.send_message(
+            msg_resposta,
+            ephemeral=True
+        )
 
 
-class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
-    qtd_pt = discord.ui.TextInput(label="Nova Quantidade PT")
-    qtd_sub = discord.ui.TextInput(label="Nova Quantidade SUB")
-    organizacao = discord.ui.TextInput(label="Nova Organização (opcional)", required=False)
-    observacao = discord.ui.TextInput(label="Nova Observação (opcional)", style=discord.TextStyle.paragraph, required=False)
+class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
+    qtd_pt = discord.ui.TextInput(
+        label="Nova Quantidade PT",
+        placeholder="Digite a nova quantidade de PT"
+    )
+    qtd_sub = discord.ui.TextInput(
+        label="Nova Quantidade SUB",
+        placeholder="Digite a nova quantidade de SUB"
+    )
+    organizacao = discord.ui.TextInput(
+        label="Nova Organização (opcional)",
+        placeholder="Digite o novo nome da organização",
+        required=False
+    )
+    observacao = discord.ui.TextInput(
+        label="Nova Observação (opcional)",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        placeholder="Novas observações para a venda"
+    )
     
     def __init__(self, message):
         super().__init__()
         self.message = message
     
     async def on_submit(self, interaction: discord.Interaction):
+        # =========================================================
+        # ================= VALIDAR VALORES =======================
+        # =========================================================
+        
         try:
             pt = int(self.qtd_pt.value.strip())
             sub = int(self.qtd_sub.value.strip())
         except:
-            await interaction.response.send_message("Valores inválidos.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Valores inválidos. Digite apenas números.",
+                ephemeral=True
+            )
             return
+        
+        # =========================================================
+        # ================= CALCULAR NOVOS VALORES ================
+        # =========================================================
         
         pacotes_pt = pt // 50
         pacotes_sub = sub // 50
         total = (pt * 50) + (sub * 90)
-        valor_formatado = formatar_dinheiro(total)
+        valor_novo = total
+        
+        valor_formatado = (
+            f"{total:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
+        
         embed = self.message.embeds[0]
+        
+        # =========================================================
+        # ================= EXTRAIR VALORES ANTIGOS ===============
+        # =========================================================
         
         pt_antigo = 0
         sub_antigo = 0
@@ -1700,59 +1903,210 @@ class EditarVendaModal(discord.ui.Modal, title="Editar Venda"):
                     pt_antigo = int(field.value.split(" munições")[0])
                 except:
                     pass
+            
             if field.name == "🔫 SUB":
                 try:
                     sub_antigo = int(field.value.split(" munições")[0])
                 except:
                     pass
+            
             if field.name == "💰 Total":
                 try:
-                    valor_antigo = float(field.value.replace("**R$ ", "").replace("**", "").replace(".", "").replace(",", "."))
+                    valor_antigo = float(
+                        field.value
+                        .replace("**R$ ", "")
+                        .replace("**", "")
+                        .replace(".", "")
+                        .replace(",", ".")
+                    )
                 except:
                     pass
+            
             if field.name == "🏷 Organização":
                 organizacao_antiga = field.value
         
+        pacotes_pt_antigo = pt_antigo // 50
+        pacotes_sub_antigo = sub_antigo // 50
+        
+        # =========================================================
+        # ================= ATUALIZAR EMBED =======================
+        # =========================================================
+        
         for i, field in enumerate(embed.fields):
             if field.name == "🔫 PT":
-                embed.set_field_at(i, name="🔫 PT", value=f"{pt} munições\n📦 {pacotes_pt} pacotes", inline=True)
+                embed.set_field_at(
+                    i,
+                    name="🔫 PT",
+                    value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
+                    inline=True
+                )
+            
             if field.name == "🔫 SUB":
-                embed.set_field_at(i, name="🔫 SUB", value=f"{sub} munições\n📦 {pacotes_sub} pacotes", inline=True)
+                embed.set_field_at(
+                    i,
+                    name="🔫 SUB",
+                    value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
+                    inline=True
+                )
+            
             if field.name == "💰 Total":
-                embed.set_field_at(i, name="💰 Total", value=f"**{valor_formatado}**", inline=False)
+                embed.set_field_at(
+                    i,
+                    name="💰 Total",
+                    value=f"**R$ {valor_formatado}**",
+                    inline=False
+                )
+            
             if field.name == "🏷 Organização" and self.organizacao.value:
-                embed.set_field_at(i, name="🏷 Organização", value=self.organizacao.value.strip(), inline=False)
-            if field.name == "📝 Observ" and self.observacao.value:
-                embed.set_field_at(i, name="📝 Observ", value=self.observacao.value.strip(), inline=False)
+                embed.set_field_at(
+                    i,
+                    name="🏷 Organização",
+                    value=self.organizacao.value.strip(),
+                    inline=False
+                )
+            
+            if field.name == "📝 Observações" and self.observacao.value:
+                embed.set_field_at(
+                    i,
+                    name="📝 Observações",
+                    value=self.observacao.value.strip(),
+                    inline=False
+                )
         
         titulo = embed.title
         pedido_numero = int(titulo.split("#")[1])
+        
+        # =========================================================
+        # ================= ATUALIZAR BANCO =======================
+        # =========================================================
+        
         await atualizar_valor_venda_db(pedido_numero, total)
         await self.message.edit(embed=embed)
         
+        # =========================================================
+        # ================= DETECTAR ALTERAÇÕES ===================
+        # =========================================================
+        
         alteracoes = []
+        
         if pt_antigo != pt:
             alteracoes.append(f"PT: {pt_antigo} → {pt}")
+        
         if sub_antigo != sub:
             alteracoes.append(f"SUB: {sub_antigo} → {sub}")
-        if valor_antigo != total:
-            alteracoes.append(f"Valor: {formatar_dinheiro(valor_antigo)} → {valor_formatado}")
+        
+        if valor_antigo != valor_novo:
+            valor_antigo_fmt = (
+                f"{valor_antigo:,.2f}"
+                .replace(",", "X")
+                .replace(".", ",")
+                .replace("X", ".")
+            )
+            alteracoes.append(
+                f"Valor: R$ {valor_antigo_fmt} → R$ {valor_formatado}"
+            )
+        
         if self.organizacao.value:
             alteracoes.append("Organização alterada")
+        
         if self.observacao.value:
             alteracoes.append("Observação alterada")
         
-        alteracao_texto = "\n".join(alteracoes) if alteracoes else "Nenhuma alteração detectada"
+        alteracao_texto = (
+            "\n".join(alteracoes)
+            if alteracoes
+            else "Nenhuma alteração detectada"
+        )
+        
+        # =========================================================
+        # ================= INTEGRAÇÃO COM GRUPOS =================
+        # =========================================================
+        
+        # Organização final (nova ou antiga)
+        org_nome_final = self.organizacao.value.strip().upper() if self.organizacao.value else organizacao_antiga
+        
+        if org_nome_final:
+            grupo = await buscar_grupo_por_organizacao(org_nome_final)
+            
+            if grupo:
+                # Calcular diferença de quantidades
+                diff_pt = pacotes_pt - pacotes_pt_antigo
+                diff_sub = pacotes_sub - pacotes_sub_antigo
+                
+                if diff_pt > 0:
+                    valor_pt = diff_pt * 50
+                    await registrar_compra_grupo_db(grupo["grupo_id"], "PT", diff_pt, valor_pt)
+                    print(f"📦 PT ajustado no grupo {org_nome_final}: +{diff_pt} pacotes")
+                elif diff_pt < 0:
+                    # Remover (registrar negativo)
+                    valor_pt = abs(diff_pt) * 50
+                    await registrar_compra_grupo_db(grupo["grupo_id"], "PT", diff_pt, -valor_pt)
+                    print(f"📦 PT ajustado no grupo {org_nome_final}: {diff_pt} pacotes")
+                
+                if diff_sub > 0:
+                    valor_sub = diff_sub * 90
+                    await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", diff_sub, valor_sub)
+                    print(f"📦 SUB ajustado no grupo {org_nome_final}: +{diff_sub} pacotes")
+                elif diff_sub < 0:
+                    valor_sub = abs(diff_sub) * 90
+                    await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", diff_sub, -valor_sub)
+                    print(f"📦 SUB ajustado no grupo {org_nome_final}: {diff_sub} pacotes")
+                
+                # Atualizar o embed do grupo
+                await enviar_embed_grupo(grupo["grupo_id"])
+                
+                print(f"✅ Venda editada integrada com grupo: {org_nome_final}")
+        
+        # =========================================================
+        # ================= LOG DE ALTERAÇÕES =====================
+        # =========================================================
         
         canal_log = interaction.guild.get_channel(1478381934026424391)
+        
         if canal_log:
-            embed_log = discord.Embed(title="✏️ Venda Editada", color=0xf1c40f)
-            embed_log.add_field(name="👤 Editado por", value=interaction.user.mention, inline=False)
-            embed_log.add_field(name="🧾 Pedido", value=embed.title, inline=False)
-            embed_log.add_field(name="🔧 Alter", value=alteracao_texto, inline=False)
+            embed_log = discord.Embed(
+                title="✏️ Venda Editada",
+                color=0xf1c40f
+            )
+            
+            embed_log.add_field(
+                name="👤 Editado por",
+                value=interaction.user.mention,
+                inline=False
+            )
+            
+            embed_log.add_field(
+                name="🧾 Pedido",
+                value=embed.title,
+                inline=False
+            )
+            
+            embed_log.add_field(
+                name="🔧 Alterações",
+                value=alteracao_texto,
+                inline=False
+            )
+            
             await canal_log.send(embed=embed_log)
         
-        await interaction.response.send_message("Venda editada com sucesso.", ephemeral=True)
+        # =========================================================
+        # ================= RESPOSTA AO USUÁRIO ===================
+        # =========================================================
+        
+        msg_resposta = "✅ **Venda editada com sucesso!**\n\n"
+        msg_resposta += f"📦 **Pedido #{pedido_numero:04d}**\n"
+        msg_resposta += f"🔫 **PT:** {pt} munições ({pacotes_pt} pacotes)\n"
+        msg_resposta += f"🔫 **SUB:** {sub} munições ({pacotes_sub} pacotes)\n"
+        msg_resposta += f"💰 **Total:** R$ {valor_formatado}\n\n"
+        
+        if grupo:
+            msg_resposta += f"📊 **Grupo integrado:** ✅ {org_nome_final}\n"
+            msg_resposta += f"📦 **Ajustes registrados no grupo**"
+        
+        await interaction.response.send_message(
+            msg_resposta,
+            ephemeral=True
+        )
 
 
 class CalculadoraView(discord.ui.View):
@@ -4763,23 +5117,31 @@ async def enviar_embed_grupo(grupo_id):
         print(f"❌ Canal de grupos não encontrado")
         return
     
+    # TUDO EM MAIÚSCULO
+    nome_org = dados['nome_org'].upper()
+    lider_nome = dados['lider_nome'].upper()
+    lider_telefone = dados['lider_telefone'].upper()
+    braco_nome = dados['braco_nome'].upper() if dados['braco_nome'] else None
+    braco_telefone = dados['braco_telefone'].upper() if dados['braco_telefone'] else None
+    produto = dados['produto'].upper()
+    
     embed = discord.Embed(
-        title=f"🏷️ {dados['nome_org']}",
+        title=f"🏷️ {nome_org}",
         color=0x3498db,
         timestamp=agora()
     )
     
     info_grupo = (
-        f"**👤 Líder:** {dados['lider_nome']}\n"
-        f"**📱 Telefone:** {dados['lider_telefone']}\n"
+        f"**👤 LÍDER:** {lider_nome}\n"
+        f"**📱 TELEFONE:** {lider_telefone}\n"
     )
     
-    if dados['braco_nome']:
-        info_grupo += f"**👤 Braço:** {dados['braco_nome']}\n"
-    if dados['braco_telefone']:
-        info_grupo += f"**📱 Telefone Braço:** {dados['braco_telefone']}\n"
+    if braco_nome:
+        info_grupo += f"**👤 BRAÇO:** {braco_nome}\n"
+    if braco_telefone:
+        info_grupo += f"**📱 TELEFONE BRAÇO:** {braco_telefone}\n"
     
-    info_grupo += f"\n**🔫 Produto:** {dados['produto']}"
+    info_grupo += f"\n**🔫 PRODUTO:** {produto}"
     
     embed.add_field(name="📋 INFORMAÇÕES DO GRUPO", value=info_grupo, inline=False)
     
@@ -4791,37 +5153,37 @@ async def enviar_embed_grupo(grupo_id):
     if total_pt["quantidade"] > 0 or total_sub["quantidade"] > 0:
         if total_pt["quantidade"] > 0:
             compras_texto += (
-                f"**🔫 PT:** {fmt_num(total_pt['quantidade'])} pacotes\n"
+                f"**🔫 PT:** {fmt_num(total_pt['quantidade'])} PACOTES\n"
                 f"💰 {formatar_dinheiro(total_pt['valor'])}\n"
             )
         
         if total_sub["quantidade"] > 0:
             compras_texto += (
-                f"**🔫 SUB:** {fmt_num(total_sub['quantidade'])} pacotes\n"
+                f"**🔫 SUB:** {fmt_num(total_sub['quantidade'])} PACOTES\n"
                 f"💰 {formatar_dinheiro(total_sub['valor'])}\n"
             )
         
-        compras_texto += f"\n**📅 Total de compras:** {fmt_num(total_pt['quantidade'] + total_sub['quantidade'])} pacotes"
+        compras_texto += f"\n**📅 TOTAL DE COMPRAS:** {fmt_num(total_pt['quantidade'] + total_sub['quantidade'])} PACOTES"
     else:
-        compras_texto = "📭 Nenhuma compra registrada ainda."
+        compras_texto = "📭 NENHUMA COMPRA REGISTRADA AINDA."
     
     embed.add_field(name="📦 HISTÓRICO DE COMPRAS", value=compras_texto, inline=False)
     embed.add_field(name="📌 STATUS", value="🟢 **ATIVO**", inline=False)
-    embed.set_footer(text=f"ID: {grupo_id} • Criado em {dados['data_criacao'].strftime('%d/%m/%Y')}")
+    embed.set_footer(text=f"ID: {grupo_id} • CRIADO EM {dados['data_criacao'].strftime('%d/%m/%Y')}")
     
     async for msg in canal.history(limit=50):
         if msg.author == bot.user and msg.embeds:
             for embed_msg in msg.embeds:
                 if embed_msg.footer and grupo_id in embed_msg.footer.text:
                     try:
-                        await msg.edit(embed=embed, view=GrupoView(grupo_id, dados['nome_org']))
-                        print(f"✅ Grupo {dados['nome_org']} atualizado")
+                        await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
+                        print(f"✅ Grupo {nome_org} atualizado")
                         return
                     except Exception as e:
                         print(f"Erro ao atualizar embed: {e}")
     
-    await canal.send(embed=embed, view=GrupoView(grupo_id, dados['nome_org']))
-    print(f"✅ Grupo {dados['nome_org']} criado")
+    await canal.send(embed=embed, view=GrupoView(grupo_id, nome_org))
+    print(f"✅ Grupo {nome_org} criado")
 
 
 async def enviar_painel_registro_grupos():
