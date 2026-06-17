@@ -2232,11 +2232,12 @@ async def gerar_desc_producao(prod, pct=None, restante=None):
         return f"**Galpão:** {prod.get('galpao', 'Desconhecido')}\n⏳ **Em andamento...**"
         
 async def acompanhar_producao(pid):
-    """Acompanha a produção com verificação robusta de estado - VERSÃO MELHORADA"""
+    """Acompanha a produção com verificação robusta de estado - VERSÃO CORRIGIDA"""
     print(f"▶ Produção iniciada/restaurada: {pid}")
     msg = None
     ultimo_pct = -1
     falhas_consecutivas = 0
+    tentativas_recriar = 0
     
     while True:
         try:
@@ -2280,48 +2281,61 @@ async def acompanhar_producao(pid):
             # ================= BUSCAR MENSAGEM =======================
             # =========================================================
             
+            canal = bot.get_channel(prod["canal_id"])
+            if not canal:
+                print(f"❌ Canal não encontrado para {pid}")
+                await asyncio.sleep(10)
+                continue
+            
+            # Tentar buscar a mensagem
             if msg is None:
-                canal = bot.get_channel(prod["canal_id"])
-                if canal:
-                    try:
-                        msg = await canal.fetch_message(prod["msg_id"])
-                        print(f"✅ Mensagem encontrada para {pid}")
+                try:
+                    msg = await canal.fetch_message(prod["msg_id"])
+                    print(f"✅ Mensagem encontrada para {pid}")
+                    falhas_consecutivas = 0
+                    tentativas_recriar = 0
+                except discord.NotFound:
+                    print(f"⚠️ Mensagem da produção {pid} não encontrada (NotFound)")
+                    falhas_consecutivas += 1
+                    
+                    if falhas_consecutivas > 2 or tentativas_recriar == 0:
+                        print(f"🔄 Recriando mensagem para {pid}...")
+                        desc = await gerar_desc_producao(prod)
+                        embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
+                        view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
+                        
+                        try:
+                            # Tentar deletar a mensagem antiga se existir
+                            try:
+                                old_msg = await canal.fetch_message(prod["msg_id"])
+                                await old_msg.delete()
+                            except:
+                                pass
+                        except:
+                            pass
+                        
+                        msg = await canal.send(embed=embed, view=view)
+                        prod["msg_id"] = msg.id
+                        await salvar_producao(pid, prod)
+                        print(f"✅ Mensagem recriada para {pid} (novo ID: {msg.id})")
                         falhas_consecutivas = 0
-                    except discord.NotFound:
-                        print(f"⚠️ Mensagem da produção {pid} não encontrada, recriando...")
-                        canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
-                        if canal:
-                            desc = await gerar_desc_producao(prod)
-                            embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
-                            view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
-                            msg = await canal.send(embed=embed, view=view)
-                            prod["msg_id"] = msg.id
-                            await salvar_producao(pid, prod)
-                            print(f"✅ Mensagem recriada para {pid}")
-                            falhas_consecutivas = 0
-                    except Exception as e:
-                        print(f"⚠️ Erro ao buscar mensagem {pid}: {e}")
-                        falhas_consecutivas += 1
-                        if falhas_consecutivas > 3:
-                            print(f"❌ Muitas falhas para {pid}, tentando recriar...")
-                            canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
-                            if canal:
-                                desc = await gerar_desc_producao(prod)
-                                embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
-                                view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
-                                msg = await canal.send(embed=embed, view=view)
-                                prod["msg_id"] = msg.id
-                                await salvar_producao(pid, prod)
-                                print(f"✅ Mensagem recriada para {pid} (após falhas)")
-                                falhas_consecutivas = 0
-                        await asyncio.sleep(5)
-                        continue
+                        tentativas_recriar += 1
+                    
+                    await asyncio.sleep(5)
+                    continue
+                    
+                except Exception as e:
+                    print(f"⚠️ Erro ao buscar mensagem {pid}: {e}")
+                    falhas_consecutivas += 1
+                    await asyncio.sleep(5)
+                    continue
             
             # =========================================================
             # ================= ATUALIZAR PROGRESSO ===================
             # =========================================================
             
             if msg:
+                # Calcular progresso
                 total = (fim - inicio).total_seconds()
                 restante = (fim - agora_dt).total_seconds()
                 restante = max(0, restante)
@@ -2334,37 +2348,52 @@ async def acompanhar_producao(pid):
                 
                 pct_int = int(pct * 100)
                 
+                # Atualizar a cada mudança de 1% ou a cada 10 segundos
                 if pct_int != ultimo_pct or pct_int % 5 == 0:
                     ultimo_pct = pct_int
                     desc = await gerar_desc_producao(prod, pct, restante)
+                    
                     try:
                         await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
-                        print(f"🔄 Produção {pid}: {pct_int}% concluída")
+                        print(f"🔄 Produção {pid}: {pct_int}% concluída | Restante: {int(restante//60)}m {int(restante%60)}s")
                         falhas_consecutivas = 0
+                    except discord.NotFound:
+                        print(f"⚠️ Mensagem {pid} foi deletada, recriando...")
+                        msg = None
+                        falhas_consecutivas = 3  # Forçar recriação
+                        continue
                     except discord.HTTPException as e:
                         if e.status == 429:
-                            print(f"⏰ Rate limit {pid}, aguardando...")
+                            print(f"⏰ Rate limit {pid}, aguardando 5s...")
                             await asyncio.sleep(5)
                         else:
                             print(f"⚠️ Erro ao editar mensagem {pid}: {e}")
                             falhas_consecutivas += 1
                     
-                    if falhas_consecutivas > 2:
+                    # Se muitas falhas, recriar mensagem
+                    if falhas_consecutivas > 3:
                         print(f"⚠️ Muitas falhas ao editar {pid}, recriando mensagem...")
-                        canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
-                        if canal:
-                            desc = await gerar_desc_producao(prod)
-                            embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
-                            view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
+                        try:
+                            # Tentar deletar a mensagem antiga
                             try:
                                 await msg.delete()
                             except:
                                 pass
+                            
+                            desc = await gerar_desc_producao(prod)
+                            embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
+                            view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
                             msg = await canal.send(embed=embed, view=view)
                             prod["msg_id"] = msg.id
                             await salvar_producao(pid, prod)
                             print(f"✅ Mensagem recriada para {pid} (após falhas de edição)")
                             falhas_consecutivas = 0
+                            tentativas_recriar += 1
+                        except Exception as e:
+                            print(f"❌ Erro ao recriar mensagem {pid}: {e}")
+                            msg = None
+                            await asyncio.sleep(5)
+                            continue
         
         except Exception as e:
             print(f"❌ Erro no acompanhar_producao {pid}: {e}")
@@ -2372,8 +2401,10 @@ async def acompanhar_producao(pid):
             traceback.print_exc()
             falhas_consecutivas += 1
         
-        await asyncio.sleep(10)
-        
+        # Aguardar antes de verificar novamente (5 segundos para atualização mais rápida)
+        await asyncio.sleep(5)
+
+
 async def finalizar_producao(pid, msg, prod):
     print(f"🔵 FINALIZANDO produção {pid}")
     
@@ -4572,6 +4603,104 @@ async def forcar_producao(ctx):
     except Exception as e:
         await ctx.send(f"❌ Erro: {e}")
         print(f"Erro forcar_producao: {e}")
+
+@bot.command(name="atualizar_producao")
+async def cmd_atualizar_producao(ctx, pid: str = None):
+    """Força a atualização de uma produção específica ou de todas"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    await ctx.send("🔄 Forçando atualização...")
+    
+    try:
+        if pid:
+            # Atualizar produção específica
+            prod = await carregar_producao(pid)
+            if not prod:
+                await ctx.send(f"❌ Produção {pid} não encontrada!")
+                return
+            
+            canal = bot.get_channel(prod["canal_id"])
+            if canal:
+                try:
+                    msg = await canal.fetch_message(prod["msg_id"])
+                    desc = await gerar_desc_producao(prod)
+                    await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
+                    await ctx.send(f"✅ Produção {pid} atualizada!")
+                except Exception as e:
+                    await ctx.send(f"❌ Erro: {e}")
+        else:
+            # Atualizar todas
+            async with get_db().acquire() as conn:
+                rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+            
+            if not rows:
+                await ctx.send("📭 Nenhuma produção ativa.")
+                return
+            
+            atualizadas = 0
+            for r in rows:
+                try:
+                    prod = await carregar_producao(r["pid"])
+                    if prod:
+                        canal = bot.get_channel(prod["canal_id"])
+                        if canal:
+                            msg = await canal.fetch_message(prod["msg_id"])
+                            desc = await gerar_desc_producao(prod)
+                            await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
+                            atualizadas += 1
+                            await asyncio.sleep(2)
+                except Exception as e:
+                    print(f"Erro ao atualizar {r['pid']}: {e}")
+            
+            await ctx.send(f"✅ {atualizadas} produção(ões) atualizadas!")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro atualizar_producao: {e}")
+
+@bot.command(name="status_producoes")
+async def cmd_status_producoes(ctx):
+    """Mostra o status das produções ativas"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    try:
+        async with get_db().acquire() as conn:
+            rows = await conn.fetch("SELECT pid, galpao, fim FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+        
+        if not rows:
+            await ctx.send("📭 Nenhuma produção ativa.")
+            return
+        
+        embed = discord.Embed(title="🏭 STATUS DAS PRODUÇÕES", color=0x3498db)
+        
+        for r in rows:
+            pid = r["pid"]
+            fim = r["fim"]
+            if isinstance(fim, str):
+                fim = str_para_datetime(fim)
+            
+            restante = (fim - agora()).total_seconds()
+            restante = max(0, restante)
+            
+            task_viva = pid in producoes_tasks and not producoes_tasks[pid].done()
+            
+            status = "🟢 ATIVA" if task_viva else "🔴 TRAVADA"
+            
+            embed.add_field(
+                name=f"📦 {r['galpao']}",
+                value=f"**ID:** `{pid}`\n**Status:** {status}\n**Restante:** {int(restante//60)}m {int(restante%60)}s",
+                inline=False
+            )
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro status_producoes: {e}")
 
 # =========================================================
 # ==================== COMANDOS DE GRUPOS ==================
