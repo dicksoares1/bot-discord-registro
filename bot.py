@@ -2168,61 +2168,9 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
 # =========================================================
 
 async def gerar_desc_producao(prod, pct=None, restante=None):
-    if pct is None:
-        inicio = prod["inicio"]
-        fim = prod["fim"]
-        if isinstance(inicio, str):
-            inicio = str_para_datetime(inicio)
-        if isinstance(fim, str):
-            fim = str_para_datetime(fim)
-        
-        agora_dt = agora()
-        total = (fim - inicio).total_seconds()
-        restante = (fim - agora_dt).total_seconds()
-        restante = max(0, restante)
-        if total <= 0:
-            total = 1
-        pct = 1 - (restante / total)
-        pct = max(0, min(1, pct))
-    else:
-        restante = restante or 0
-    
-    mins = int(restante // 60)
-    segundos = int(restante % 60)
-    
-    desc = f"**Galpão:** {prod['galpao']}\n**Iniciado por:** <@{prod['autor']}>\n"
-    if prod.get("obs"):
-        desc += f"📝 **Obs:** {prod['obs']}\n"
-    
-    inicio = prod["inicio"]
-    fim = prod["fim"]
-    if isinstance(inicio, str):
-        inicio = str_para_datetime(inicio)
-    if isinstance(fim, str):
-        fim = str_para_datetime(fim)
-    
-    desc += f"Início: <t:{int(inicio.timestamp())}:t>\nTérmino: <t:{int(fim.timestamp())}:t>\n\n"
-    desc += f"⏳ **Restante:** {mins}m {segundos}s\n{barra(pct)}"
-    
-    if prod.get("segunda_task_confirmada"):
-        uid = prod["segunda_task_confirmada"]["user"]
-        desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
-    
-    return desc
-
-
-async def acompanhar_producao(pid):
-    print(f"▶ Produção iniciada/restaurada: {pid}")
-    msg = None
-    ultimo_pct = -1
-    
-    while True:
-        try:
-            prod = await carregar_producao(pid)
-            if not prod:
-                print(f"❌ Produção {pid} não encontrada no banco")
-                return
-            
+    """Gera a descrição da produção para o embed - VERSÃO CORRIGIDA"""
+    try:
+        if pct is None:
             inicio = prod["inicio"]
             fim = prod["fim"]
             if isinstance(inicio, str):
@@ -2231,6 +2179,85 @@ async def acompanhar_producao(pid):
                 fim = str_para_datetime(fim)
             
             agora_dt = agora()
+            total = (fim - inicio).total_seconds()
+            restante = (fim - agora_dt).total_seconds()
+            restante = max(0, restante)
+            if total <= 0:
+                total = 1
+            pct = 1 - (restante / total)
+            pct = max(0, min(1, pct))
+        else:
+            restante = restante or 0
+        
+        mins = int(restante // 60)
+        segundos = int(restante % 60)
+        
+        qtd_galpoes = prod.get('qtd_galpoes', 1)
+        polvora_total = prod.get('polvora', 400)
+        
+        desc = f"**Galpão:** {prod['galpao']}\n"
+        desc += f"**Quantidade de galpões:** {qtd_galpoes}\n"
+        desc += f"**Iniciado por:** <@{prod['autor']}>\n"
+        
+        if prod.get("obs"):
+            desc += f"📝 **Obs:** {prod['obs']}\n"
+        
+        desc += f"**Pólvora por galpão:** {prod.get('polvora_por_galpao', 400)}\n"
+        desc += f"**Pólvora total:** {polvora_total}\n"
+        
+        inicio = prod["inicio"]
+        fim = prod["fim"]
+        if isinstance(inicio, str):
+            inicio = str_para_datetime(inicio)
+        if isinstance(fim, str):
+            fim = str_para_datetime(fim)
+        
+        desc += f"Início: <t:{int(inicio.timestamp())}:t>\n"
+        desc += f"Término: <t:{int(fim.timestamp())}:t>\n\n"
+        desc += f"⏳ **Restante:** {mins}m {segundos}s\n{barra(pct)}"
+        
+        if prod.get("segunda_task_confirmada"):
+            uid = prod["segunda_task_confirmada"]["user"]
+            desc += f"\n\n✅ **Segunda task concluída por:** <@{uid}>"
+        
+        return desc
+    
+    except Exception as e:
+        print(f"❌ Erro ao gerar descrição: {e}")
+        return f"**Galpão:** {prod.get('galpao', 'Desconhecido')}\n⏳ **Em andamento...**"
+        
+async def acompanhar_producao(pid):
+    """Acompanha a produção com verificação robusta de estado - VERSÃO MELHORADA"""
+    print(f"▶ Produção iniciada/restaurada: {pid}")
+    msg = None
+    ultimo_pct = -1
+    falhas_consecutivas = 0
+    
+    while True:
+        try:
+            # =========================================================
+            # ================= CARREGAR PRODUÇÃO ======================
+            # =========================================================
+            
+            prod = await carregar_producao(pid)
+            if not prod:
+                print(f"❌ Produção {pid} não encontrada no banco")
+                return
+            
+            inicio = prod["inicio"]
+            fim = prod["fim"]
+            
+            if isinstance(inicio, str):
+                inicio = str_para_datetime(inicio)
+            if isinstance(fim, str):
+                fim = str_para_datetime(fim)
+            
+            agora_dt = agora()
+            
+            # =========================================================
+            # ================= VERIFICAR SE EXPIR0U ==================
+            # =========================================================
+            
             if agora_dt >= fim:
                 print(f"⏰ Produção {pid} já expirou, finalizando...")
                 canal = bot.get_channel(prod["canal_id"])
@@ -2244,55 +2271,104 @@ async def acompanhar_producao(pid):
                     await finalizar_producao(pid, None, prod)
                 return
             
+            # =========================================================
+            # ================= BUSCAR MENSAGEM =======================
+            # =========================================================
+            
             if msg is None:
                 canal = bot.get_channel(prod["canal_id"])
                 if canal:
                     try:
                         msg = await canal.fetch_message(prod["msg_id"])
+                        print(f"✅ Mensagem encontrada para {pid}")
+                        falhas_consecutivas = 0
                     except discord.NotFound:
                         print(f"⚠️ Mensagem da produção {pid} não encontrada, recriando...")
                         canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
                         if canal:
                             desc = await gerar_desc_producao(prod)
-                            embed = discord.Embed(title="🏭 Produção", description=desc, color=0x34495e)
+                            embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
                             view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
                             msg = await canal.send(embed=embed, view=view)
                             prod["msg_id"] = msg.id
                             await salvar_producao(pid, prod)
+                            print(f"✅ Mensagem recriada para {pid}")
+                            falhas_consecutivas = 0
                     except Exception as e:
-                        print(f"Erro ao buscar mensagem {pid}: {e}")
+                        print(f"⚠️ Erro ao buscar mensagem {pid}: {e}")
+                        falhas_consecutivas += 1
+                        if falhas_consecutivas > 3:
+                            print(f"❌ Muitas falhas para {pid}, tentando recriar...")
+                            canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
+                            if canal:
+                                desc = await gerar_desc_producao(prod)
+                                embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
+                                view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
+                                msg = await canal.send(embed=embed, view=view)
+                                prod["msg_id"] = msg.id
+                                await salvar_producao(pid, prod)
+                                print(f"✅ Mensagem recriada para {pid} (após falhas)")
+                                falhas_consecutivas = 0
                         await asyncio.sleep(5)
                         continue
+            
+            # =========================================================
+            # ================= ATUALIZAR PROGRESSO ===================
+            # =========================================================
             
             if msg:
                 total = (fim - inicio).total_seconds()
                 restante = (fim - agora_dt).total_seconds()
                 restante = max(0, restante)
+                
                 if total <= 0:
                     total = 1
+                
                 pct = 1 - (restante / total)
                 pct = max(0, min(1, pct))
                 
                 pct_int = int(pct * 100)
-                if pct_int != ultimo_pct:
+                
+                if pct_int != ultimo_pct or pct_int % 5 == 0:
                     ultimo_pct = pct_int
                     desc = await gerar_desc_producao(prod, pct, restante)
                     try:
                         await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
+                        print(f"🔄 Produção {pid}: {pct_int}% concluída")
+                        falhas_consecutivas = 0
                     except discord.HTTPException as e:
                         if e.status == 429:
-                            await asyncio.sleep(3)
+                            print(f"⏰ Rate limit {pid}, aguardando...")
+                            await asyncio.sleep(5)
                         else:
-                            print(f"Erro ao editar mensagem {pid}: {e}")
+                            print(f"⚠️ Erro ao editar mensagem {pid}: {e}")
+                            falhas_consecutivas += 1
+                    
+                    if falhas_consecutivas > 2:
+                        print(f"⚠️ Muitas falhas ao editar {pid}, recriando mensagem...")
+                        canal = bot.get_channel(CANAL_REGISTRO_GALPAO_ID)
+                        if canal:
+                            desc = await gerar_desc_producao(prod)
+                            embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
+                            view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
+                            try:
+                                await msg.delete()
+                            except:
+                                pass
+                            msg = await canal.send(embed=embed, view=view)
+                            prod["msg_id"] = msg.id
+                            await salvar_producao(pid, prod)
+                            print(f"✅ Mensagem recriada para {pid} (após falhas de edição)")
+                            falhas_consecutivas = 0
         
         except Exception as e:
-            print(f"Erro no acompanhar_producao {pid}: {e}")
+            print(f"❌ Erro no acompanhar_producao {pid}: {e}")
             import traceback
             traceback.print_exc()
+            falhas_consecutivas += 1
         
         await asyncio.sleep(10)
-
-
+        
 async def finalizar_producao(pid, msg, prod):
     print(f"🔵 FINALIZANDO produção {pid}")
     
@@ -4373,6 +4449,55 @@ async def cmd_remover_live(ctx, user_id: int = None):
     await enviar_painel_lives()
     await enviar_painel_admin_lives()
 
+@bot.command(name="forcar_producao")
+async def forcar_producao(ctx):
+    """Força a atualização de todas as produções ativas (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    await ctx.send("🔄 Forçando atualização das produções...")
+    
+    try:
+        async with get_db().acquire() as conn:
+            rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+        
+        if not rows:
+            await ctx.send("📭 Nenhuma produção ativa.")
+            return
+        
+        atualizadas = 0
+        for r in rows:
+            pid = r["pid"]
+            
+            if pid in producoes_tasks:
+                producoes_tasks[pid].cancel()
+                del producoes_tasks[pid]
+            
+            task = asyncio.create_task(acompanhar_producao(pid))
+            producoes_tasks[pid] = task
+            atualizadas += 1
+            
+            prod = await carregar_producao(pid)
+            if prod:
+                canal = bot.get_channel(prod["canal_id"])
+                if canal:
+                    try:
+                        msg = await canal.fetch_message(prod["msg_id"])
+                        if msg:
+                            desc = await gerar_desc_producao(prod)
+                            await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
+                    except:
+                        pass
+            
+            await asyncio.sleep(0.5)
+        
+        await ctx.send(f"✅ {atualizadas} produção(ões) reiniciada(s)!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro forcar_producao: {e}")
+
 # =========================================================
 # ==================== COMANDOS DE GRUPOS ==================
 # =========================================================
@@ -4729,6 +4854,46 @@ async def enviar_painel_registrar_compra():
     await canal.send(embed=embed, view=RegistrarCompraView())
     print(f"💰 Painel de registrar compra enviado para o canal {CANAL_REGISTRAR_COMPRA_ID}")
 
+
+# =========================================================
+# ==================== LOOP DE VERIFICAÇÃO ================
+# =========================================================
+
+@tasks.loop(seconds=30)
+async def verificar_producoes_ativas():
+    """Verifica se as produções estão sendo atualizadas"""
+    try:
+        async with get_db().acquire() as conn:
+            rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+        
+        for r in rows:
+            pid = r["pid"]
+            
+            if pid not in producoes_tasks or producoes_tasks[pid].done():
+                print(f"🔧 Task morta para {pid}, recriando...")
+                if pid in producoes_tasks:
+                    del producoes_tasks[pid]
+                task = asyncio.create_task(acompanhar_producao(pid))
+                producoes_tasks[pid] = task
+            
+            prod = await carregar_producao(pid)
+            if prod:
+                canal = bot.get_channel(prod["canal_id"])
+                if canal:
+                    try:
+                        await canal.fetch_message(prod["msg_id"])
+                    except discord.NotFound:
+                        print(f"⚠️ Mensagem perdida para {pid}, recriando...")
+                        desc = await gerar_desc_producao(prod)
+                        embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
+                        view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
+                        msg = await canal.send(embed=embed, view=view)
+                        prod["msg_id"] = msg.id
+                        await salvar_producao(pid, prod)
+                        print(f"✅ Mensagem recriada para {pid}")
+    
+    except Exception as e:
+        print(f"❌ Erro no verificar_producoes_ativas: {e}")
 
 # =========================================================
 # ==================== RESTAURAR PRODUÇÕES ================
@@ -5354,6 +5519,14 @@ async def on_ready():
             verificar_alugueis_expirados.start()
     except Exception as e:
         print("Erro loop expirados:", e)
+
+    # Iniciar loop de verificação de produções
+    try:
+        if not verificar_producoes_ativas.is_running():
+            verificar_producoes_ativas.start()
+            print("🔄 Loop de verificação de produções iniciado")
+    except Exception as e:
+        print("Erro ao iniciar loop de produções:", e)
     
     # Restaurar produções
     await restaurar_producoes()
