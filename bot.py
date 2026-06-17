@@ -4421,32 +4421,18 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 Registrar Novo Grupo"):
         max_length=50
     )
     
-    lider_nome = discord.ui.TextInput(
-        label="👤 Nome do Líder",
-        placeholder="Nome completo do líder",
+    lider = discord.ui.TextInput(
+        label="👤 Líder (Nome e Telefone)",
+        placeholder="Ex: João Silva - (11) 99999-9999",
         required=True,
-        max_length=50
+        max_length=100
     )
     
-    lider_telefone = discord.ui.TextInput(
-        label="📱 Telefone do Líder",
-        placeholder="Ex: (11) 99999-9999",
-        required=True,
-        max_length=20
-    )
-    
-    braco_nome = discord.ui.TextInput(
-        label="👤 Nome do Braço",
-        placeholder="Nome do braço direito (opcional)",
+    braco = discord.ui.TextInput(
+        label="👤 Braço (Nome e Telefone - opcional)",
+        placeholder="Ex: José Santos - (11) 88888-8888",
         required=False,
-        max_length=50
-    )
-    
-    braco_telefone = discord.ui.TextInput(
-        label="📱 Telefone do Braço",
-        placeholder="Telefone do braço (opcional)",
-        required=False,
-        max_length=20
+        max_length=100
     )
     
     produto = discord.ui.TextInput(
@@ -4460,16 +4446,29 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 Registrar Novo Grupo"):
         
         await interaction.response.defer(ephemeral=True)
         
+        # Separar nome e telefone do líder
+        lider_parts = self.lider.value.strip().split(" - ")
+        lider_nome = lider_parts[0] if lider_parts else self.lider.value
+        lider_telefone = lider_parts[1] if len(lider_parts) > 1 else "Não informado"
+        
+        # Separar nome e telefone do braço (se informado)
+        braco_nome = None
+        braco_telefone = None
+        if self.braco.value:
+            braco_parts = self.braco.value.strip().split(" - ")
+            braco_nome = braco_parts[0] if braco_parts else self.braco.value
+            braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "Não informado"
+        
         import time
         grupo_id = f"GRUPO_{int(time.time())}_{interaction.user.id}"
         
         await salvar_grupo_db(
             grupo_id,
             self.nome_org.value.strip(),
-            self.lider_nome.value.strip(),
-            self.lider_telefone.value.strip(),
-            self.braco_nome.value.strip() if self.braco_nome.value else None,
-            self.braco_telefone.value.strip() if self.braco_telefone.value else None,
+            lider_nome,
+            lider_telefone,
+            braco_nome,
+            braco_telefone,
             self.produto.value.strip()
         )
         
@@ -4490,10 +4489,16 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ Editar Grupo"):
         self.dados = dados
         
         self.nome_org.default = dados["nome_org"]
-        self.lider_nome.default = dados["lider_nome"]
-        self.lider_telefone.default = dados["lider_telefone"]
-        self.braco_nome.default = dados["braco_nome"] or ""
-        self.braco_telefone.default = dados["braco_telefone"] or ""
+        # Juntar nome e telefone do líder
+        lider_texto = f"{dados['lider_nome']} - {dados['lider_telefone']}"
+        self.lider.default = lider_texto
+        # Juntar nome e telefone do braço (se existir)
+        if dados.get('braco_nome') and dados.get('braco_telefone'):
+            self.braco.default = f"{dados['braco_nome']} - {dados['braco_telefone']}"
+        elif dados.get('braco_nome'):
+            self.braco.default = dados['braco_nome']
+        else:
+            self.braco.default = ""
         self.produto.default = dados["produto"]
     
     nome_org = discord.ui.TextInput(
@@ -4502,28 +4507,16 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ Editar Grupo"):
         max_length=50
     )
     
-    lider_nome = discord.ui.TextInput(
-        label="👤 Nome do Líder",
+    lider = discord.ui.TextInput(
+        label="👤 Líder (Nome - Telefone)",
         required=True,
-        max_length=50
+        max_length=100
     )
     
-    lider_telefone = discord.ui.TextInput(
-        label="📱 Telefone do Líder",
-        required=True,
-        max_length=20
-    )
-    
-    braco_nome = discord.ui.TextInput(
-        label="👤 Nome do Braço",
+    braco = discord.ui.TextInput(
+        label="👤 Braço (Nome - Telefone - opcional)",
         required=False,
-        max_length=50
-    )
-    
-    braco_telefone = discord.ui.TextInput(
-        label="📱 Telefone do Braço",
-        required=False,
-        max_length=20
+        max_length=100
     )
     
     produto = discord.ui.TextInput(
@@ -4536,13 +4529,26 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ Editar Grupo"):
         
         await interaction.response.defer(ephemeral=True)
         
+        # Separar nome e telefone do líder
+        lider_parts = self.lider.value.strip().split(" - ")
+        lider_nome = lider_parts[0] if lider_parts else self.lider.value
+        lider_telefone = lider_parts[1] if len(lider_parts) > 1 else "Não informado"
+        
+        # Separar nome e telefone do braço (se informado)
+        braco_nome = None
+        braco_telefone = None
+        if self.braco.value:
+            braco_parts = self.braco.value.strip().split(" - ")
+            braco_nome = braco_parts[0] if braco_parts else self.braco.value
+            braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "Não informado"
+        
         await atualizar_grupo_db(
             self.grupo_id,
             self.nome_org.value.strip(),
-            self.lider_nome.value.strip(),
-            self.lider_telefone.value.strip(),
-            self.braco_nome.value.strip() if self.braco_nome.value else None,
-            self.braco_telefone.value.strip() if self.braco_telefone.value else None,
+            lider_nome,
+            lider_telefone,
+            braco_nome,
+            braco_telefone,
             self.produto.value.strip()
         )
         
