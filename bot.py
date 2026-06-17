@@ -607,7 +607,7 @@ async def verificar_insumos_producao(tipo, pacotes):
         embalagens_necessarias = pacotes * 5
     else:
         capsulas_necessarias = pacotes * 65
-        embalagens_necessarias = pacotes * 25
+        embalagens_necessarias = pacotes * 10
     
     return {
         "suficiente": estoque["capsulas"] >= capsulas_necessarias and estoque["embalagens"] >= embalagens_necessarias,
