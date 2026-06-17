@@ -737,10 +737,20 @@ async def obter_token_twitch():
 async def checar_twitch(canal):
     try:
         token = await obter_token_twitch()
-        headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {token}"}
+        if not token:
+            print(f"❌ Não foi possível obter token Twitch para {canal}")
+            return False, None, None, None
+        
+        headers = {
+            "Client-ID": TWITCH_CLIENT_ID,
+            "Authorization": f"Bearer {token}"
+        }
         url = f"https://api.twitch.tv/helix/streams?user_login={canal}"
         
         async with http_session.get(url, headers=headers, timeout=10) as r:
+            if r.status != 200:
+                print(f"⚠️ Twitch API status {r.status} para {canal}")
+                return False, None, None, None
             data = await r.json()
             if data.get("data"):
                 info = data["data"][0]
@@ -748,14 +758,18 @@ async def checar_twitch(canal):
                 return True, info.get("title"), info.get("game_name"), thumbnail
         return False, None, None, None
     except Exception as e:
-        print(f"Erro Twitch API: {e}")
+        print(f"Erro Twitch API para {canal}: {e}")
         return False, None, None, None
 
 async def checar_kick(canal):
-    """Verifica se um canal da Kick está ao vivo"""
+    """Verifica se um canal da Kick está ao vivo - CORRIGIDO"""
     try:
+        # Primeiro tenta a API oficial
         url_api = f"https://kick.com/api/v2/channels/{canal}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept": "application/json"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json"
+        }
         
         async with http_session.get(url_api, headers=headers, timeout=15) as r:
             if r.status == 200:
@@ -763,35 +777,94 @@ async def checar_kick(canal):
                 if data.get("livestream"):
                     livestream = data["livestream"]
                     titulo = livestream.get("session_title", f"Live na Kick - {canal}")
+                    
                     thumbnail = None
                     if livestream.get("thumbnail"):
                         thumbnail = livestream["thumbnail"].get("url")
                     elif data.get("user", {}).get("profile_pic"):
                         thumbnail = data["user"]["profile_pic"]
+                    
                     categoria = data.get("category", {})
                     jogo = categoria.get("name") if categoria else None
+                    
+                    print(f"✅ Kick API: {canal} está AO VIVO! Título: {titulo[:50]}")
                     return True, titulo, jogo, thumbnail
+                else:
+                    print(f"📴 Kick API: {canal} está OFFLINE")
+                    # Continua para fallback HTML
+            else:
+                print(f"⚠️ Kick API retornou status {r.status}, tentando fallback HTML")
+        
+        # Fallback: scraping do HTML
+        url_page = f"https://kick.com/{canal}"
+        headers_html = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        }
+        
+        async with http_session.get(url_page, headers=headers_html, timeout=15) as r:
+            if r.status == 200:
+                html = await r.text()
+                
+                # Procura por indicadores de live
+                if "isLive:true" in html or '"livestream":{' in html:
+                    # Tenta extrair título
+                    titulo_match = re.search(r'"sessionTitle":"([^"]+)"', html)
+                    titulo = titulo_match.group(1) if titulo_match else f"Live na Kick - {canal}"
+                    
+                    # Tenta extrair thumbnail
+                    thumb_match = re.search(r'"thumbnail":"([^"]+)"', html)
+                    thumbnail = thumb_match.group(1) if thumb_match else None
+                    
+                    # Tenta extrair jogo
+                    jogo_match = re.search(r'"category":"([^"]+)"', html)
+                    jogo = jogo_match.group(1) if jogo_match else None
+                    
+                    print(f"✅ Kick HTML: {canal} está AO VIVO! Título: {titulo[:50]}")
+                    return True, titulo, jogo, thumbnail
+                else:
+                    print(f"📴 Kick HTML: {canal} está OFFLINE")
+                    return False, None, None, None
+            else:
+                print(f"❌ Kick HTML: status {r.status} para {canal}")
                 return False, None, None, None
-    except Exception as e:
-        print(f"Erro ao verificar Kick para {canal}: {e}")
+                
+    except asyncio.TimeoutError:
+        print(f"⏰ Timeout ao verificar Kick: {canal}")
         return False, None, None, None
+    except Exception as e:
+        print(f"❌ Erro ao verificar Kick para {canal}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, None, None, None  # <--- ESSA LINHA ESTAVA FALTANDO!
 
 async def checar_tiktok(username):
     try:
         username = username.lower().replace("@", "").strip()
         url = f"https://www.tiktok.com/@{username}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        }
         
         async with http_session.get(url, headers=headers, timeout=10) as response:
+            if response.status != 200:
+                print(f"⚠️ TikTok status {response.status} para {username}")
+                return False, None, None, None
             html = await response.text()
         
+        import re
         if re.search(r'"isLive":\s*true', html, re.IGNORECASE):
             titulo_match = re.search(r'"title":"([^"]+)"', html)
             titulo = titulo_match.group(1) if titulo_match else f"Live no TikTok - @{username}"
             return True, titulo, "TikTok", None
+        
         return False, None, None, None
     except Exception as e:
-        print(f"Erro TikTok: {e}")
+        print(f"Erro TikTok para {username}: {e}")
         return False, None, None, None
 
 # =========================================================
@@ -2603,10 +2676,13 @@ class PainelLivesAdmin(discord.ui.View):
 
 @tasks.loop(minutes=2)
 async def verificar_lives():
+    """Verifica todas as lives cadastradas (Twitch, Kick e TikTok)"""
+    
     print("🔄 Verificando lives...")
     
     try:
         lives = await carregar_lives_db()
+        
         if not lives:
             print("📭 Nenhuma live cadastrada")
             return
@@ -2623,6 +2699,7 @@ async def verificar_lives():
             canal_name = extrair_canal(link)
             
             if not plataforma or not canal_name:
+                print(f"⚠️ Link inválido ou não suportado: {link}")
                 continue
             
             ao_vivo = False
@@ -2633,12 +2710,28 @@ async def verificar_lives():
             try:
                 if plataforma == "twitch":
                     ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal_name)
+                    print(f"📺 Twitch {canal_name}: ao_vivo={ao_vivo}")
+                
                 elif plataforma == "kick":
-                    ao_vivo, titulo, jogo, thumbnail = await checar_kick(canal_name)
+                    resultado = await checar_kick(canal_name)
+                    # VERIFICA SE O RETORNO É VÁLIDO
+                    if resultado is not None and len(resultado) == 4:
+                        ao_vivo, titulo, jogo, thumbnail = resultado
+                        print(f"🟢 Kick {canal_name}: ao_vivo={ao_vivo}")
+                    else:
+                        print(f"⚠️ Kick {canal_name}: retorno inválido - {resultado}")
+                        continue
+                
                 elif plataforma == "tiktok":
                     ao_vivo, titulo, jogo, thumbnail = await checar_tiktok(canal_name)
+                    print(f"📱 TikTok {canal_name}: ao_vivo={ao_vivo}")
+                
+                else:
+                    print(f"⚠️ Plataforma não suportada: {plataforma}")
+                    continue
+                
             except Exception as e:
-                print(f"Erro ao verificar {plataforma}/{canal_name}: {e}")
+                print(f"❌ Erro ao verificar {plataforma}/{canal_name}: {e}")
                 continue
             
             if not ao_vivo and divulgado:
@@ -2646,20 +2739,23 @@ async def verificar_lives():
                 print(f"📴 Live encerrada: {plataforma}/{canal_name}")
             
             if ao_vivo and not divulgado:
-                print(f"🔴 LIVE DETECTADA ({plataforma.upper()}): {canal_name}")
+                print(f"🔴🔴🔴 LIVE DETECTADA ({plataforma.upper()}): {canal_name}")
+                print(f"   → User ID: {user_id}")
+                print(f"   → Link: {link}")
+                print(f"   → Título: {titulo}")
+                
                 resultado = await divulgar_live(user_id, link, titulo, jogo, thumbnail)
+                
                 if resultado:
                     await atualizar_divulgado_db(link, True)
                     print(f"✅ Live divulgada: {plataforma}/{canal_name}")
                 else:
                     print(f"❌ FALHA ao divulgar live: {plataforma}/{canal_name}")
-    
+                    
     except Exception as e:
         print(f"❌ Erro no loop de lives: {e}")
         import traceback
         traceback.print_exc()
-
-
 async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
     try:
         canal = bot.get_channel(CANAL_DIVULGACAO_LIVE_ID)
