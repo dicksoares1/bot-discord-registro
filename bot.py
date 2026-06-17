@@ -43,6 +43,36 @@ BRASIL = ZoneInfo("America/Sao_Paulo")
 GUILD_ID = 1229526644193099880
 
 # =========================================================
+# ==================== FUNÇÕES AUXILIARES =================
+# =========================================================
+
+def str_para_datetime_completa(data_str):
+    """Converte string ISO para datetime com timezone"""
+    if not data_str:
+        return None
+    if isinstance(data_str, datetime):
+        if data_str.tzinfo is None:
+            return data_str.replace(tzinfo=BRASIL)
+        return data_str
+    try:
+        # Tenta converter ISO string
+        dt = datetime.fromisoformat(data_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BRASIL)
+        return dt
+    except:
+        return None
+
+def datetime_para_str(dt):
+    """Converte datetime para string ISO"""
+    if not dt:
+        return None
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BRASIL)
+        return dt.isoformat()
+    return str(dt)
+# =========================================================
 # ==================== IDS DOS CANAIS =====================
 # =========================================================
 
@@ -368,27 +398,124 @@ async def carregar_vendas_db():
 
 # --- PRODUÇÃO ---
 async def carregar_producao(pid):
-    async with get_db().acquire() as conn:
-        return await conn.fetchrow("SELECT * FROM producoes WHERE pid=$1", pid)
+    """Carrega produção do banco com tratamento correto de datas"""
+    try:
+        async with get_db().acquire() as conn:
+            r = await conn.fetchrow("SELECT * FROM producoes WHERE pid=$1", pid)
+
+        if not r:
+            return None
+
+        # =========================================================
+        # ================= CONVERTER DATAS =======================
+        # =========================================================
+        
+        # Converter inicio
+        if isinstance(r["inicio"], datetime):
+            inicio = r["inicio"].isoformat()
+        else:
+            inicio = r["inicio"]
+        
+        # Converter fim
+        if isinstance(r["fim"], datetime):
+            fim = r["fim"].isoformat()
+        else:
+            fim = r["fim"]
+
+        dados = {
+            "galpao": r["galpao"],
+            "autor": int(r["autor"]),
+            "inicio": inicio,
+            "fim": fim,
+            "obs": r.get("obs") or "",
+            "msg_id": int(r["msg_id"]),
+            "canal_id": int(r["canal_id"]),
+            "polvora": r.get("polvora") or 400,
+            "qtd_galpoes": r.get("qtd_galpoes") or 1,
+            "polvora_por_galpao": r.get("polvora_por_galpao") or 400
+        }
+
+        if r.get("segunda_task_user"):
+            dados["segunda_task_confirmada"] = {
+                "user": int(r["segunda_task_user"]),
+                "time": r["segunda_task_time"]
+            }
+
+        return dados
+        
+    except Exception as e:
+        print(f"❌ Erro ao carregar produção {pid}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 async def salvar_producao(pid, dados):
+    """Salva produção no banco com datas no formato correto"""
+    
+    # =========================================================
+    # ================= CONVERTER DATAS =======================
+    # =========================================================
+    
+    # Converter inicio para string ISO se for datetime
+    if isinstance(dados["inicio"], datetime):
+        inicio_str = dados["inicio"].isoformat()
+    else:
+        inicio_str = dados["inicio"]
+    
+    if isinstance(dados["fim"], datetime):
+        fim_str = dados["fim"].isoformat()
+    else:
+        fim_str = dados["fim"]
+    
+    # Segunda task
+    segunda_user = None
+    segunda_time = None
+    
+    if "segunda_task_confirmada" in dados:
+        segunda_user = str(dados["segunda_task_confirmada"]["user"])
+        segunda_time = dados["segunda_task_confirmada"]["time"]
+    
+    # Quantidade de galpões
+    qtd_galpoes = dados.get("qtd_galpoes", 1)
+    polvora_por_galpao = dados.get("polvora_por_galpao", 400)
+    
     async with get_db().acquire() as conn:
         await conn.execute(
             """
             INSERT INTO producoes 
-            (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, segunda_task_user, segunda_task_time, polvora, qtd_galpoes, polvora_por_galpao)
+            (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, 
+             segunda_task_user, segunda_task_time, polvora, qtd_galpoes, polvora_por_galpao)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
             ON CONFLICT (pid)
             DO UPDATE SET
-            galpao=$2, autor=$3, inicio=$4, fim=$5, obs=$6, msg_id=$7, canal_id=$8,
-            segunda_task_user=$9, segunda_task_time=$10, polvora=$11, qtd_galpoes=$12, polvora_por_galpao=$13
+            galpao=$2,
+            autor=$3,
+            inicio=$4,
+            fim=$5,
+            obs=$6,
+            msg_id=$7,
+            canal_id=$8,
+            segunda_task_user=$9,
+            segunda_task_time=$10,
+            polvora=$11,
+            qtd_galpoes=$12,
+            polvora_por_galpao=$13
             """,
-            pid, dados["galpao"], str(dados["autor"]), dados["inicio"], dados["fim"],
-            dados["obs"], str(dados["msg_id"]), str(dados["canal_id"]),
-            dados.get("segunda_task_user"), dados.get("segunda_task_time"),
-            dados.get("polvora", 400), dados.get("qtd_galpoes", 1), dados.get("polvora_por_galpao", 400)
+            pid,
+            dados["galpao"],
+            str(dados["autor"]),
+            inicio_str,  # ← USAR STRING
+            fim_str,     # ← USAR STRING
+            dados.get("obs", ""),
+            str(dados["msg_id"]),
+            str(dados["canal_id"]),
+            segunda_user,
+            segunda_time,
+            dados.get("polvora", 400),
+            qtd_galpoes,
+            polvora_por_galpao
         )
-
+        print(f"💾 Produção {pid} salva no banco: inicio={inicio_str}, fim={fim_str}")
 async def deletar_producao(pid):
     async with get_db().acquire() as conn:
         await conn.execute("DELETE FROM producoes WHERE pid=$1", pid)
@@ -2175,15 +2302,37 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
 async def gerar_desc_producao(prod, pct=None, restante=None):
     """Gera a descrição da produção para o embed - VERSÃO CORRIGIDA"""
     try:
-        if pct is None:
+        # =========================================================
+        # ================= CONVERTER DATAS =======================
+        # =========================================================
+        
+        # Converter inicio
+        if isinstance(prod["inicio"], str):
+            inicio = str_para_datetime_completa(prod["inicio"])
+        else:
             inicio = prod["inicio"]
+            if isinstance(inicio, datetime) and inicio.tzinfo is None:
+                inicio = inicio.replace(tzinfo=BRASIL)
+        
+        # Converter fim
+        if isinstance(prod["fim"], str):
+            fim = str_para_datetime_completa(prod["fim"])
+        else:
             fim = prod["fim"]
-            if isinstance(inicio, str):
-                inicio = str_para_datetime(inicio)
-            if isinstance(fim, str):
-                fim = str_para_datetime(fim)
-            
-            agora_dt = agora()
+            if isinstance(fim, datetime) and fim.tzinfo is None:
+                fim = fim.replace(tzinfo=BRASIL)
+        
+        if not inicio or not fim:
+            print(f"❌ Datas inválidas: inicio={prod['inicio']}, fim={prod['fim']}")
+            return f"**Galpão:** {prod.get('galpao', 'Desconhecido')}\n⏳ **Aguardando dados...**"
+        
+        agora_dt = agora()
+        
+        # =========================================================
+        # ================= CALCULAR PROGRESSO ====================
+        # =========================================================
+        
+        if pct is None:
             total = (fim - inicio).total_seconds()
             restante = (fim - agora_dt).total_seconds()
             restante = max(0, restante)
@@ -2197,6 +2346,10 @@ async def gerar_desc_producao(prod, pct=None, restante=None):
         mins = int(restante // 60)
         segundos = int(restante % 60)
         
+        # =========================================================
+        # ================= MONTAR DESCRIÇÃO ======================
+        # =========================================================
+        
         qtd_galpoes = prod.get('qtd_galpoes', 1)
         polvora_total = prod.get('polvora', 400)
         
@@ -2209,14 +2362,6 @@ async def gerar_desc_producao(prod, pct=None, restante=None):
         
         desc += f"**Pólvora por galpão:** {prod.get('polvora_por_galpao', 400)}\n"
         desc += f"**Pólvora total:** {polvora_total}\n"
-        
-        inicio = prod["inicio"]
-        fim = prod["fim"]
-        if isinstance(inicio, str):
-            inicio = str_para_datetime(inicio)
-        if isinstance(fim, str):
-            fim = str_para_datetime(fim)
-        
         desc += f"Início: <t:{int(inicio.timestamp())}:t>\n"
         desc += f"Término: <t:{int(fim.timestamp())}:t>\n\n"
         desc += f"⏳ **Restante:** {mins}m {segundos}s\n{barra(pct)}"
@@ -2229,15 +2374,16 @@ async def gerar_desc_producao(prod, pct=None, restante=None):
     
     except Exception as e:
         print(f"❌ Erro ao gerar descrição: {e}")
-        return f"**Galpão:** {prod.get('galpao', 'Desconhecido')}\n⏳ **Em andamento...**"
+        import traceback
+        traceback.print_exc()
+        return f"**Galpão:** {prod.get('galpao', 'Desconhecido')}\n⏳ **Erro ao carregar dados...**"
         
 async def acompanhar_producao(pid):
-    """Acompanha a produção com verificação robusta de estado - VERSÃO CORRIGIDA"""
+    """Acompanha a produção com verificação robusta - VERSÃO CORRIGIDA"""
     print(f"▶ Produção iniciada/restaurada: {pid}")
     msg = None
     ultimo_pct = -1
     falhas_consecutivas = 0
-    tentativas_recriar = 0
     
     while True:
         try:
@@ -2250,13 +2396,27 @@ async def acompanhar_producao(pid):
                 print(f"❌ Produção {pid} não encontrada no banco")
                 return
             
-            inicio = prod["inicio"]
-            fim = prod["fim"]
+            print(f"📊 Dados carregados: inicio={prod['inicio']}, fim={prod['fim']}")
             
-            if isinstance(inicio, str):
-                inicio = str_para_datetime(inicio)
-            if isinstance(fim, str):
-                fim = str_para_datetime(fim)
+            # Converter datas
+            if isinstance(prod["inicio"], str):
+                inicio = str_para_datetime_completa(prod["inicio"])
+            else:
+                inicio = prod["inicio"]
+                if isinstance(inicio, datetime) and inicio.tzinfo is None:
+                    inicio = inicio.replace(tzinfo=BRASIL)
+            
+            if isinstance(prod["fim"], str):
+                fim = str_para_datetime_completa(prod["fim"])
+            else:
+                fim = prod["fim"]
+                if isinstance(fim, datetime) and fim.tzinfo is None:
+                    fim = fim.replace(tzinfo=BRASIL)
+            
+            if not inicio or not fim:
+                print(f"❌ Datas inválidas para {pid}")
+                await asyncio.sleep(10)
+                continue
             
             agora_dt = agora()
             
@@ -2265,7 +2425,7 @@ async def acompanhar_producao(pid):
             # =========================================================
             
             if agora_dt >= fim:
-                print(f"⏰ Produção {pid} já expirou, finalizando...")
+                print(f"⏰ Produção {pid} expirou, finalizando...")
                 canal = bot.get_channel(prod["canal_id"])
                 if canal:
                     try:
@@ -2287,43 +2447,21 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(10)
                 continue
             
-            # Tentar buscar a mensagem
             if msg is None:
                 try:
                     msg = await canal.fetch_message(prod["msg_id"])
                     print(f"✅ Mensagem encontrada para {pid}")
                     falhas_consecutivas = 0
-                    tentativas_recriar = 0
                 except discord.NotFound:
-                    print(f"⚠️ Mensagem da produção {pid} não encontrada (NotFound)")
-                    falhas_consecutivas += 1
-                    
-                    if falhas_consecutivas > 2 or tentativas_recriar == 0:
-                        print(f"🔄 Recriando mensagem para {pid}...")
-                        desc = await gerar_desc_producao(prod)
-                        embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
-                        view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
-                        
-                        try:
-                            # Tentar deletar a mensagem antiga se existir
-                            try:
-                                old_msg = await canal.fetch_message(prod["msg_id"])
-                                await old_msg.delete()
-                            except:
-                                pass
-                        except:
-                            pass
-                        
-                        msg = await canal.send(embed=embed, view=view)
-                        prod["msg_id"] = msg.id
-                        await salvar_producao(pid, prod)
-                        print(f"✅ Mensagem recriada para {pid} (novo ID: {msg.id})")
-                        falhas_consecutivas = 0
-                        tentativas_recriar += 1
-                    
-                    await asyncio.sleep(5)
-                    continue
-                    
+                    print(f"⚠️ Mensagem {pid} não encontrada, recriando...")
+                    desc = await gerar_desc_producao(prod)
+                    embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
+                    view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
+                    msg = await canal.send(embed=embed, view=view)
+                    prod["msg_id"] = msg.id
+                    await salvar_producao(pid, prod)
+                    print(f"✅ Mensagem recriada para {pid}")
+                    falhas_consecutivas = 0
                 except Exception as e:
                     print(f"⚠️ Erro ao buscar mensagem {pid}: {e}")
                     falhas_consecutivas += 1
@@ -2335,7 +2473,6 @@ async def acompanhar_producao(pid):
             # =========================================================
             
             if msg:
-                # Calcular progresso
                 total = (fim - inicio).total_seconds()
                 restante = (fim - agora_dt).total_seconds()
                 restante = max(0, restante)
@@ -2348,52 +2485,26 @@ async def acompanhar_producao(pid):
                 
                 pct_int = int(pct * 100)
                 
-                # Atualizar a cada mudança de 1% ou a cada 10 segundos
+                # Atualizar a cada 1% ou a cada 10 segundos
                 if pct_int != ultimo_pct or pct_int % 5 == 0:
                     ultimo_pct = pct_int
                     desc = await gerar_desc_producao(prod, pct, restante)
                     
                     try:
                         await msg.edit(embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
-                        print(f"🔄 Produção {pid}: {pct_int}% concluída | Restante: {int(restante//60)}m {int(restante%60)}s")
+                        print(f"🔄 Produção {pid}: {pct_int}% | Restante: {int(restante//60)}m {int(restante%60)}s")
                         falhas_consecutivas = 0
                     except discord.NotFound:
-                        print(f"⚠️ Mensagem {pid} foi deletada, recriando...")
+                        print(f"⚠️ Mensagem {pid} deletada, recriando...")
                         msg = None
-                        falhas_consecutivas = 3  # Forçar recriação
                         continue
                     except discord.HTTPException as e:
                         if e.status == 429:
-                            print(f"⏰ Rate limit {pid}, aguardando 5s...")
+                            print(f"⏰ Rate limit {pid}, aguardando...")
                             await asyncio.sleep(5)
                         else:
-                            print(f"⚠️ Erro ao editar mensagem {pid}: {e}")
+                            print(f"⚠️ Erro ao editar {pid}: {e}")
                             falhas_consecutivas += 1
-                    
-                    # Se muitas falhas, recriar mensagem
-                    if falhas_consecutivas > 3:
-                        print(f"⚠️ Muitas falhas ao editar {pid}, recriando mensagem...")
-                        try:
-                            # Tentar deletar a mensagem antiga
-                            try:
-                                await msg.delete()
-                            except:
-                                pass
-                            
-                            desc = await gerar_desc_producao(prod)
-                            embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
-                            view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
-                            msg = await canal.send(embed=embed, view=view)
-                            prod["msg_id"] = msg.id
-                            await salvar_producao(pid, prod)
-                            print(f"✅ Mensagem recriada para {pid} (após falhas de edição)")
-                            falhas_consecutivas = 0
-                            tentativas_recriar += 1
-                        except Exception as e:
-                            print(f"❌ Erro ao recriar mensagem {pid}: {e}")
-                            msg = None
-                            await asyncio.sleep(5)
-                            continue
         
         except Exception as e:
             print(f"❌ Erro no acompanhar_producao {pid}: {e}")
@@ -2401,10 +2512,7 @@ async def acompanhar_producao(pid):
             traceback.print_exc()
             falhas_consecutivas += 1
         
-        # Aguardar antes de verificar novamente (5 segundos para atualização mais rápida)
-        await asyncio.sleep(5)
-
-
+        await asyncio.sleep(10)
 async def finalizar_producao(pid, msg, prod):
     print(f"🔵 FINALIZANDO produção {pid}")
     
