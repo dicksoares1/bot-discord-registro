@@ -5511,6 +5511,40 @@ class GrupoView(discord.ui.View):
         await interaction.response.send_modal(EditarGrupoModal(self.grupo_id, dados))
     
     @discord.ui.button(
+        label="🔄 Atualizar",
+        style=discord.ButtonStyle.secondary,
+        custom_id="atualizar_grupo",
+        emoji="🔄"
+    )
+    async def atualizar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Atualiza apenas este grupo específico"""
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Atualizar o embed do grupo
+            await enviar_embed_grupo(self.grupo_id)
+            
+            await interaction.followup.send(
+                f"✅ **Grupo {self.nome_org} atualizado com sucesso!**",
+                ephemeral=True
+            )
+            
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await interaction.followup.send(
+                    f"⏰ **Rate limit!** Aguarde alguns segundos e tente novamente.",
+                    ephemeral=True
+                )
+            else:
+                raise
+        except Exception as e:
+            print(f"❌ Erro ao atualizar grupo {self.grupo_id}: {e}")
+            await interaction.followup.send(
+                f"❌ Erro ao atualizar o grupo: {e}",
+                ephemeral=True
+            )
+    
+    @discord.ui.button(
         label="🗑️ Excluir Grupo",
         style=discord.ButtonStyle.danger,
         custom_id="excluir_grupo",
@@ -5638,6 +5672,7 @@ async def enviar_embed_grupo(grupo_id):
     embed.add_field(name="📌 STATUS", value="🟢 **ATIVO**", inline=False)
     embed.set_footer(text=f"ID: {grupo_id} • CRIADO EM {dados['data_criacao'].strftime('%d/%m/%Y')}")
     
+    # Tentar encontrar a mensagem existente
     async for msg in canal.history(limit=50):
         if msg.author == bot.user and msg.embeds:
             for embed_msg in msg.embeds:
@@ -5646,12 +5681,19 @@ async def enviar_embed_grupo(grupo_id):
                         await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
                         print(f"✅ Grupo {nome_org} atualizado")
                         return
+                    except discord.HTTPException as e:
+                        if e.status == 429:
+                            print(f"⏰ Rate limit ao atualizar {nome_org}, aguardando...")
+                            await asyncio.sleep(3)
+                            await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
+                            return
+                        raise
                     except Exception as e:
                         print(f"Erro ao atualizar embed: {e}")
     
+    # Se não encontrou mensagem, criar nova
     await canal.send(embed=embed, view=GrupoView(grupo_id, nome_org))
     print(f"✅ Grupo {nome_org} criado")
-
 
 async def enviar_painel_registro_grupos():
     """Envia o painel com botão para registrar grupos"""
@@ -5884,28 +5926,22 @@ async def on_ready():
     # Restaurar produções
     await restaurar_producoes()
 
-    # Restaurar grupos
-    try:
-        await restaurar_grupos()
-    except Exception as e:
-        print("Erro ao restaurar grupos:", e)
-
-   # Enviar painel de grupos
+    # =========================================================
+    # ================= GRUPOS - SOMENTE O PAINEL =============
+    # =========================================================
+    
+    # Enviar painel de grupos (apenas o botão de registro)
     try:
         await enviar_painel_registro_grupos()
     except Exception as e:
         print("Erro ao enviar painel registro grupos:", e)
     
-# Iniciar task de processamento de grupos
-    #try:
-    #    global task_atualizacao_grupos
-    #    if task_atualizacao_grupos is None or task_atualizacao_grupos.done():
-     #       task_atualizacao_grupos = asyncio.create_task(processar_fila_grupos())
-    #        print("🔄 Task de processamento de grupos iniciada")
-   # except Exception as e:
-   #     print(f"Erro ao iniciar task de grupos: {e}")
-    #    import traceback
-     #   traceback.print_exc()
+    # NÃO RESTAURAR GRUPOS AUTOMATICAMENTE para evitar rate limit
+    print("📋 Sistema de grupos carregado. Use o botão '🔄 Atualizar' no embed para atualizar cada grupo.")
+    
+    # =========================================================
+    # ================= FIM GRUPOS ============================
+    # =========================================================
     
     # Restaurar galpões ativos
     try:
@@ -5967,30 +6003,6 @@ async def on_ready():
     print("=========================================")
     print("✅ BOT ONLINE 100% ESTÁVEL")
     print("=========================================")
-
-
-async def worker_clipes():
-    global fila_clipes
-    print("🎬 Worker clips iniciado")
-    while True:
-        message = await fila_clipes.get()
-        try:
-            canal = bot.get_channel(CANAL_POSTAGEM_X)
-            if not canal:
-                await message.reply("❌ Canal de postagem não encontrado.")
-                fila_clipes.task_done()
-                continue
-            link = message.content if message.content else "Sem link"
-            texto = f"🚀 **CLIPE APROVADO**\n\n👤 Autor: {message.author.mention}\n🔗 Link: {link}\n\n━━━━━━━━━━━━━━━━━━━━━━\n📝 **COPIAR E POSTAR NO X:**\n\n🔥 Olha esse clipe!\n\n{link}\n\n#fivem #clips #gaming\n━━━━━━━━━━━━━━━━━━━━━━"
-            await canal.send(texto)
-            await message.reply("📤 Enviado para canal de postagem!")
-        except Exception as e:
-            print("ERRO CLIP:", e)
-            await message.reply("❌ Erro ao enviar.")
-        await asyncio.sleep(5)
-        fila_clipes.task_done()
-
-
 # =========================================================
 # ==================== START ==============================
 # =========================================================
