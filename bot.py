@@ -645,12 +645,14 @@ async def consumir_insumos_producao(tipo, pacotes):
 async def salvar_polvora_db(user_id, qtd, valor):
     """Salva compra de pólvora no banco"""
     async with get_db().acquire() as conn:
+        # Converter para string ISO (já que data é TEXT)
+        data_str = agora().isoformat()
         await conn.execute(
             "INSERT INTO polvoras (user_id, quantidade, valor, data) VALUES ($1, $2, $3, $4)",
             str(user_id), 
             qtd, 
             valor, 
-            agora_db()  # Isso já retorna um datetime naive
+            data_str  # ← STRING
         )
 
 async def carregar_polvoras_db():
@@ -3067,14 +3069,29 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
         
         valor = qtd * PRECO_POLVORA
         
-        # Salvar no banco (sem vendedor)
-        await salvar_polvora_db(
-            interaction.user.id,
-            qtd,
-            valor
-        )
+        # Salvar no banco
+        try:
+            await salvar_polvora_db(
+                interaction.user.id,
+                qtd,
+                valor
+            )
+        except Exception as e:
+            print(f"❌ Erro ao salvar pólvora: {e}")
+            await interaction.response.send_message(
+                f"❌ Erro ao salvar: {e}",
+                ephemeral=True
+            )
+            return
         
         canal = interaction.guild.get_channel(CANAL_REGISTRO_POLVORA_ID)
+        
+        if not canal:
+            await interaction.response.send_message(
+                "❌ Canal de registro não encontrado!",
+                ephemeral=True
+            )
+            return
         
         valor_formatado = formatar_dinheiro(valor)
         
