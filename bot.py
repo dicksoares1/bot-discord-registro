@@ -646,8 +646,11 @@ async def salvar_polvora_db(user_id, qtd, valor):
     """Salva compra de pólvora no banco"""
     async with get_db().acquire() as conn:
         await conn.execute(
-            "INSERT INTO polvoras (user_id, quantidade, valor, data) VALUES ($1,$2,$3,$4)",
-            str(user_id), qtd, valor, agora_db()
+            "INSERT INTO polvoras (user_id, quantidade, valor, data) VALUES ($1, $2, $3, $4)",
+            str(user_id), 
+            qtd, 
+            valor, 
+            agora_db()  # Isso já retorna um datetime naive
         )
 
 async def carregar_polvoras_db():
