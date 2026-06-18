@@ -5625,56 +5625,65 @@ class SelectGrupoView(discord.ui.View):
 
 class SelectGrupoDropdown(discord.ui.Select):
     def __init__(self):
-        self.grupos = None
+        self.grupos = []
         self.opcoes = []
-        self._carregar_opcoes()
-        
         super().__init__(
-            placeholder="📋 Selecione um grupo...",
+            placeholder="📋 Carregando grupos...",
             min_values=1,
             max_values=1,
-            options=self.opcoes,
-            custom_id="select_grupo_dropdown"
+            options=[
+                discord.SelectOption(label="Carregando...", value="loading", emoji="⏳")
+            ],
+            custom_id="select_grupo_dropdown_painel"
         )
+        # Carregar opções depois que a classe for inicializada
+        asyncio.create_task(self._carregar_opcoes_async())
     
-    def _carregar_opcoes(self):
-        """Carrega as opções do select"""
-        # Buscar grupos do banco
-        import asyncio
-        loop = asyncio.get_event_loop()
-        grupos = loop.run_until_complete(carregar_grupos_db())
-        self.grupos = grupos
-        
-        self.opcoes = []
-        if grupos:
-            for grupo in grupos[:25]:  # Limite de 25 opções
-                nome = grupo['nome_org'][:50]
+    async def _carregar_opcoes_async(self):
+        """Carrega as opções do select de forma assíncrona"""
+        try:
+            self.grupos = await carregar_grupos_db()
+            
+            self.opcoes = []
+            if self.grupos:
+                for grupo in self.grupos[:25]:
+                    nome = grupo['nome_org'][:50]
+                    self.opcoes.append(
+                        discord.SelectOption(
+                            label=nome,
+                            value=str(grupo['grupo_id']),
+                            emoji="🏷️"
+                        )
+                    )
+            else:
                 self.opcoes.append(
                     discord.SelectOption(
-                        label=nome,
-                        value=str(grupo['grupo_id']),
-                        emoji="🏷️"
+                        label="Nenhum grupo cadastrado",
+                        value="none",
+                        emoji="📭"
                     )
                 )
-        
-        if not self.opcoes:
-            self.opcoes.append(
-                discord.SelectOption(
-                    label="Nenhum grupo cadastrado",
-                    value="none",
-                    emoji="📭"
-                )
-            )
+            
+            # Atualizar o select
+            self.options = self.opcoes
+            self.placeholder = "📋 Selecione um grupo..."
+            
+        except Exception as e:
+            print(f"❌ Erro ao carregar grupos no select: {e}")
+            self.opcoes = [
+                discord.SelectOption(label="Erro ao carregar", value="error", emoji="❌")
+            ]
+            self.options = self.opcoes
     
     async def callback(self, interaction: discord.Interaction):
         """Quando um grupo é selecionado"""
         grupo_id = self.values[0]
         
-        if grupo_id == "none":
-            await interaction.response.send_message("📭 Nenhum grupo selecionado.", ephemeral=True)
+        if grupo_id == "none" or grupo_id == "loading" or grupo_id == "error":
+            await interaction.response.send_message("📭 Nenhum grupo disponível.", ephemeral=True)
             return
         
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=False)
         
         # Buscar dados do grupo
         dados = await carregar_grupo_db(grupo_id)
@@ -5683,6 +5692,71 @@ class SelectGrupoDropdown(discord.ui.Select):
             return
         
         compras = await carregar_compras_grupo_db(grupo_id)
+        
+        # =========================================================
+        # ================= CRIAR EMBED DO GRUPO ===================
+        # =========================================================
+        
+        nome_org = dados['nome_org'].upper()
+        lider_nome = dados['lider_nome'].upper()
+        lider_telefone = dados['lider_telefone'].upper()
+        braco_nome = dados['braco_nome'].upper() if dados['braco_nome'] else None
+        braco_telefone = dados['braco_telefone'].upper() if dados['braco_telefone'] else None
+        produto = dados['produto'].upper()
+        
+        embed = discord.Embed(
+            title=f"🏷️ {nome_org}",
+            color=0x3498db,
+            timestamp=agora()
+        )
+        
+        info_grupo = (
+            f"**👤 LÍDER:** {lider_nome}\n"
+            f"**📱 TELEFONE:** {lider_telefone}\n"
+        )
+        
+        if braco_nome:
+            info_grupo += f"**👤 BRAÇO:** {braco_nome}\n"
+        if braco_telefone:
+            info_grupo += f"**📱 TELEFONE BRAÇO:** {braco_telefone}\n"
+        
+        info_grupo += f"\n**🔫 PRODUTO:** {produto}"
+        
+        embed.add_field(name="📋 INFORMAÇÕES DO GRUPO", value=info_grupo, inline=False)
+        
+        total_pt = compras.get("PT", {})
+        total_sub = compras.get("SUB", {})
+        
+        compras_texto = ""
+        
+        if total_pt["quantidade"] > 0 or total_sub["quantidade"] > 0:
+            if total_pt["quantidade"] > 0:
+                compras_texto += (
+                    f"**🔫 PT:** {fmt_num(total_pt['quantidade'])} PACOTES\n"
+                    f"💰 {formatar_dinheiro(total_pt['valor'])}\n"
+                )
+            
+            if total_sub["quantidade"] > 0:
+                compras_texto += (
+                    f"**🔫 SUB:** {fmt_num(total_sub['quantidade'])} PACOTES\n"
+                    f"💰 {formatar_dinheiro(total_sub['valor'])}\n"
+                )
+            
+            compras_texto += f"\n**📅 TOTAL DE COMPRAS:** {fmt_num(total_pt['quantidade'] + total_sub['quantidade'])} PACOTES"
+        else:
+            compras_texto = "📭 NENHUMA COMPRA REGISTRADA AINDA."
+        
+        embed.add_field(name="📦 HISTÓRICO DE COMPRAS", value=compras_texto, inline=False)
+        embed.add_field(name="📌 STATUS", value="🟢 **ATIVO**", inline=False)
+        embed.set_footer(text=f"ID: {grupo_id} • CRIADO EM {dados['data_criacao'].strftime('%d/%m/%Y')}")
+        
+        # View com botões de editar e excluir
+        view = GrupoView(grupo_id, nome_org)
+        
+        # Enviar no mesmo canal
+        await interaction.followup.send(embed=embed, view=view)
+        
+        print(f"✅ Grupo {nome_org} exibido no painel")
         
         # =========================================================
         # ================= CRIAR EMBED DO GRUPO ===================
@@ -5923,17 +5997,15 @@ async def enviar_painel_registro_grupos():
         return
     
     # =========================================================
-    # ================= CRIAR VIEW PRINCIPAL ===================
-    # =========================================================
-    
-    view = PainelGruposView()
-    
-    # =========================================================
-    # ================= CRIAR EMBED ============================
+    # ================= CARREGAR DADOS =========================
     # =========================================================
     
     grupos = await carregar_grupos_db()
     total_grupos = len(grupos)
+    
+    # =========================================================
+    # ================= CRIAR EMBED ============================
+    # =========================================================
     
     embed = discord.Embed(
         title="📋 GERENCIAMENTO DE GRUPOS",
@@ -5955,13 +6027,19 @@ async def enviar_painel_registro_grupos():
     
     if grupos:
         lista = ""
-        for i, g in enumerate(grupos[:5], 1):
+        for i, g in enumerate(grupos[:50], 1):
             lista += f"**{i}.** {g['nome_org'].upper()}\n"
         if total_grupos > 5:
-            lista += f"\n*... e mais {total_grupos - 5} grupos*"
+            lista += f"\n*... e mais {total_grupos - 50} grupos*"
         embed.add_field(name="📌 ÚLTIMOS GRUPOS", value=lista, inline=False)
     
     embed.set_footer(text="Selecione um grupo no menu abaixo")
+    
+    # =========================================================
+    # ================= CRIAR VIEW =============================
+    # =========================================================
+    
+    view = PainelGruposView()
     
     await enviar_ou_atualizar_painel(
         "painel_registro_grupos",
@@ -6021,10 +6099,7 @@ class AtualizarGruposButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        # Atualizar o select
-        novo_select = SelectGrupoDropdown()
-        
-        # Criar nova view
+        # Criar nova view com select atualizado
         view = PainelGruposView()
         
         # Atualizar embed com nova contagem
@@ -6058,7 +6133,6 @@ class AtualizarGruposButton(discord.ui.Button):
         
         await interaction.message.edit(embed=embed, view=view)
         await interaction.followup.send(f"✅ Lista atualizada! ({total_grupos} grupos)", ephemeral=True)
-
 
 class SelectGrupoDropdown(discord.ui.Select):
     def __init__(self):
