@@ -642,11 +642,12 @@ async def consumir_insumos_producao(tipo, pacotes):
     return capsulas_consumir, embalagens_consumir
 
 # --- PÓLVORA ---
-async def salvar_polvora_db(user_id, vendedor, qtd, valor):
+async def salvar_polvora_db(user_id, qtd, valor):
+    """Salva compra de pólvora no banco"""
     async with get_db().acquire() as conn:
         await conn.execute(
-            "INSERT INTO polvoras (user_id, vendedor, quantidade, valor, data) VALUES ($1,$2,$3,$4,$5)",
-            str(user_id), vendedor, qtd, valor, agora_db()
+            "INSERT INTO polvoras (user_id, quantidade, valor, data) VALUES ($1,$2,$3,$4)",
+            str(user_id), qtd, valor, agora_db()
         )
 
 async def carregar_polvoras_db():
@@ -3063,9 +3064,9 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
         
         valor = qtd * PRECO_POLVORA
         
+        # Salvar no banco (sem vendedor)
         await salvar_polvora_db(
             interaction.user.id,
-            "Sistema",
             qtd,
             valor
         )
