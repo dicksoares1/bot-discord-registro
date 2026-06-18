@@ -6003,6 +6003,28 @@ async def on_ready():
     print("=========================================")
     print("✅ BOT ONLINE 100% ESTÁVEL")
     print("=========================================")
+
+async def worker_clipes():
+    global fila_clipes
+    print("🎬 Worker clips iniciado")
+    while True:
+        message = await fila_clipes.get()
+        try:
+            canal = bot.get_channel(CANAL_POSTAGEM_X)
+            if not canal:
+                await message.reply("❌ Canal de postagem não encontrado.")
+                fila_clipes.task_done()
+                continue
+            link = message.content if message.content else "Sem link"
+            texto = f"🚀 **CLIPE APROVADO**\n\n👤 Autor: {message.author.mention}\n🔗 Link: {link}\n\n━━━━━━━━━━━━━━━━━━━━━━\n📝 **COPIAR E POSTAR NO X:**\n\n🔥 Olha esse clipe!\n\n{link}\n\n#fivem #clips #gaming\n━━━━━━━━━━━━━━━━━━━━━━"
+            await canal.send(texto)
+            await message.reply("📤 Enviado para canal de postagem!")
+        except Exception as e:
+            print("ERRO CLIP:", e)
+            await message.reply("❌ Erro ao enviar.")
+        await asyncio.sleep(5)
+        fila_clipes.task_done()
+        
 # =========================================================
 # ==================== START ==============================
 # =========================================================
