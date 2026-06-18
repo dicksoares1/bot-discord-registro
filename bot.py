@@ -5622,13 +5622,17 @@ async def enviar_painel_registro_grupos():
     
     embed.set_footer(text="Apenas ADM e Gerentes podem gerenciar grupos")
     
-    await enviar_ou_atualizar_painel(
-        "painel_registro_grupos",
-        CANAL_REGISTRO_GRUPOS_ID,
-        embed,
-        RegistrarGrupoView()
-    )
+    # DELETAR MENSAGENS ANTIGAS
+    async for msg in canal.history(limit=20):
+        if msg.author == bot.user and msg.embeds:
+            if msg.embeds[0].title == "📋 REGISTRO DE GRUPOS" or msg.embeds[0].title == "📋 GERENCIAMENTO DE GRUPOS":
+                try:
+                    await msg.delete()
+                    print(f"🗑️ Mensagem antiga deletada")
+                except:
+                    pass
     
+    await canal.send(embed=embed, view=RegistrarGrupoView())
     print(f"📋 Painel de registro de grupos enviado")
 
 
