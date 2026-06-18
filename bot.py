@@ -5861,6 +5861,41 @@ async def enviar_painel_registro_grupos():
     print(f"📋 Painel de registro de grupos enviado")
 
 
+async def processar_fila_grupos():
+    """Processa a fila de atualizações de grupos com rate limit"""
+    global ultima_atualizacao_grupo
+    
+    while True:
+        try:
+            grupo_id = await fila_atualizacao_grupos.get()
+            
+            # Aguardar para não exceder rate limit (mínimo 2 segundos entre atualizações)
+            agora_ts = time_module.time()
+            if agora_ts - ultima_atualizacao_grupo < 2:
+                await asyncio.sleep(2 - (agora_ts - ultima_atualizacao_grupo))
+            
+            await enviar_embed_grupo(grupo_id)
+            ultima_atualizacao_grupo = time_module.time()
+            fila_atualizacao_grupos.task_done()
+            
+        except Exception as e:
+            print(f"❌ Erro ao processar fila de grupos: {e}")
+            await asyncio.sleep(1)
+
+
+async def enviar_embed_grupo_com_fila(grupo_id):
+    """Envia ou atualiza o embed de um grupo (com fila para evitar rate limit)"""
+    global task_atualizacao_grupos
+    
+    # Iniciar a task de processamento se não estiver rodando
+    if task_atualizacao_grupos is None or task_atualizacao_grupos.done():
+        task_atualizacao_grupos = asyncio.create_task(processar_fila_grupos())
+        print("🔄 Task de processamento de grupos iniciada")
+    
+    # Adicionar à fila
+    await fila_atualizacao_grupos.put(grupo_id)
+
+
 async def restaurar_grupos():
     """Restaura os embeds dos grupos ativos após reinício"""
     try:
@@ -6015,13 +6050,17 @@ async def on_ready():
     except Exception as e:
         print("Erro ao restaurar grupos:", e)
 
+   
     # Iniciar task de processamento de grupos
     try:
+        global task_atualizacao_grupos
         if task_atualizacao_grupos is None or task_atualizacao_grupos.done():
             task_atualizacao_grupos = asyncio.create_task(processar_fila_grupos())
             print("🔄 Task de processamento de grupos iniciada")
     except Exception as e:
         print(f"Erro ao iniciar task de grupos: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Restaurar galpões ativos
     try:
