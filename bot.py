@@ -5240,7 +5240,6 @@ async def restaurar_producoes():
         traceback.print_exc()
 
 # =========================================================
-# =========================================================
 # ==================== SISTEMA DE GRUPOS ===================
 # =========================================================
 
@@ -5483,38 +5482,32 @@ class GrupoView(discord.ui.View):
 
 class SelectGrupoDropdown(discord.ui.Select):
     def __init__(self):
-        self.grupos = []
-        self.opcoes = []
         super().__init__(
-            placeholder="📋 Carregando grupos...",
+            placeholder="📋 Selecione um grupo...",
             min_values=1,
             max_values=1,
-            options=[
-                discord.SelectOption(label="Carregando...", value="loading", emoji="⏳")
-            ],
+            options=[],
             custom_id="select_grupo_dropdown_painel"
         )
-        # Carregar opções depois que a classe for inicializada
-        asyncio.create_task(self._carregar_opcoes_async())
+        self._carregado = False
     
-    async def _carregar_opcoes_async(self):
-        """Carrega as opções do select de forma assíncrona"""
+    async def carregar_opcoes(self):
+        """Carrega as opções do select"""
         try:
-            self.grupos = await carregar_grupos_db()
+            grupos = await carregar_grupos_db()
             
-            self.opcoes = []
-            if self.grupos:
-                for grupo in self.grupos[:25]:
-                    nome = grupo['nome_org'][:50]
-                    self.opcoes.append(
+            opcoes = []
+            if grupos:
+                for grupo in grupos[:25]:
+                    opcoes.append(
                         discord.SelectOption(
-                            label=nome,
+                            label=grupo['nome_org'][:50],
                             value=str(grupo['grupo_id']),
                             emoji="🏷️"
                         )
                     )
             else:
-                self.opcoes.append(
+                opcoes.append(
                     discord.SelectOption(
                         label="Nenhum grupo cadastrado",
                         value="none",
@@ -5522,28 +5515,30 @@ class SelectGrupoDropdown(discord.ui.Select):
                     )
                 )
             
-            # Atualizar o select
-            self.options = self.opcoes
+            self.options = opcoes
             self.placeholder = "📋 Selecione um grupo..."
+            self._carregado = True
             
         except Exception as e:
             print(f"❌ Erro ao carregar grupos no select: {e}")
-            self.opcoes = [
+            self.options = [
                 discord.SelectOption(label="Erro ao carregar", value="error", emoji="❌")
             ]
-            self.options = self.opcoes
     
     async def callback(self, interaction: discord.Interaction):
         """Quando um grupo é selecionado"""
         grupo_id = self.values[0]
         
-        if grupo_id == "none" or grupo_id == "loading" or grupo_id == "error":
+        if grupo_id == "none":
             await interaction.response.send_message("📭 Nenhum grupo disponível.", ephemeral=True)
+            return
+        
+        if grupo_id == "error":
+            await interaction.response.send_message("❌ Erro ao carregar grupos. Tente novamente.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=False)
         
-        # Buscar dados do grupo
         dados = await carregar_grupo_db(grupo_id)
         if not dados:
             await interaction.followup.send("❌ Grupo não encontrado!", ephemeral=True)
@@ -5551,10 +5546,7 @@ class SelectGrupoDropdown(discord.ui.Select):
         
         compras = await carregar_compras_grupo_db(grupo_id)
         
-        # =========================================================
-        # ================= CRIAR EMBED DO GRUPO ===================
-        # =========================================================
-        
+        # Criar embed do grupo
         nome_org = dados['nome_org'].upper()
         lider_nome = dados['lider_nome'].upper()
         lider_telefone = dados['lider_telefone'].upper()
@@ -5608,12 +5600,9 @@ class SelectGrupoDropdown(discord.ui.Select):
         embed.add_field(name="📌 STATUS", value="🟢 **ATIVO**", inline=False)
         embed.set_footer(text=f"ID: {grupo_id} • CRIADO EM {dados['data_criacao'].strftime('%d/%m/%Y')}")
         
-        # View com botões de editar e excluir
         view = GrupoView(grupo_id, nome_org)
         
-        # Enviar no mesmo canal
         await interaction.followup.send(embed=embed, view=view)
-        
         print(f"✅ Grupo {nome_org} exibido no painel")
 
 
@@ -5654,7 +5643,7 @@ class RegistrarGrupoButton(discord.ui.Button):
 class AtualizarGruposButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
-            label="🔄 Atualizar",
+            label="🔄 Atualizar Lista",
             style=discord.ButtonStyle.secondary,
             custom_id="atualizar_grupos_btn_painel",
             emoji="🔄",
@@ -5664,40 +5653,55 @@ class AtualizarGruposButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        # Criar nova view com select atualizado
-        view = PainelGruposView()
-        
-        # Atualizar embed com nova contagem
-        embed = interaction.message.embeds[0]
-        grupos = await carregar_grupos_db()
-        total_grupos = len(grupos)
-        
-        # Atualizar estatísticas
-        for i, field in enumerate(embed.fields):
-            if field.name == "📊 ESTATÍSTICAS":
-                embed.set_field_at(
-                    i,
-                    name="📊 ESTATÍSTICAS",
-                    value=f"**Total de grupos ativos:** {total_grupos}",
-                    inline=False
-                )
-                break
-        
-        # Atualizar lista
-        if grupos:
-            lista = ""
-            for i, g in enumerate(grupos[:5], 1):
-                lista += f"**{i}.** {g['nome_org'].upper()}\n"
-            if total_grupos > 5:
-                lista += f"\n*... e mais {total_grupos - 5} grupos*"
+        try:
+            # Buscar grupos novamente
+            grupos = await carregar_grupos_db()
+            total_grupos = len(grupos)
             
-            for i, field in enumerate(embed.fields):
-                if field.name == "📌 ÚLTIMOS GRUPOS":
-                    embed.set_field_at(i, name="📌 ÚLTIMOS GRUPOS", value=lista, inline=False)
+            # Criar novo select e carregar
+            novo_select = SelectGrupoDropdown()
+            await novo_select.carregar_opcoes()
+            
+            # Criar nova view e substituir o select
+            view = PainelGruposView()
+            for i, child in enumerate(view.children):
+                if isinstance(child, SelectGrupoDropdown):
+                    view.children[i] = novo_select
                     break
-        
-        await interaction.message.edit(embed=embed, view=view)
-        await interaction.followup.send(f"✅ Lista atualizada! ({total_grupos} grupos)", ephemeral=True)
+            
+            # Atualizar embed
+            embed = interaction.message.embeds[0]
+            
+            # Atualizar estatísticas
+            for i, field in enumerate(embed.fields):
+                if field.name == "📊 ESTATÍSTICAS":
+                    embed.set_field_at(
+                        i,
+                        name="📊 ESTATÍSTICAS",
+                        value=f"**Total de grupos ativos:** {total_grupos}",
+                        inline=False
+                    )
+                    break
+            
+            # Atualizar lista
+            if grupos:
+                lista = ""
+                for i, g in enumerate(grupos[:10], 1):
+                    lista += f"**{i}.** {g['nome_org'].upper()}\n"
+                if total_grupos > 10:
+                    lista += f"\n*... e mais {total_grupos - 10} grupos*"
+                
+                for i, field in enumerate(embed.fields):
+                    if field.name == "📌 ÚLTIMOS GRUPOS":
+                        embed.set_field_at(i, name="📌 ÚLTIMOS GRUPOS", value=lista, inline=False)
+                        break
+            
+            await interaction.message.edit(embed=embed, view=view)
+            await interaction.followup.send(f"✅ Lista atualizada! ({total_grupos} grupos)", ephemeral=True)
+            
+        except Exception as e:
+            print(f"❌ Erro ao atualizar grupos: {e}")
+            await interaction.followup.send(f"❌ Erro ao atualizar: {e}", ephemeral=True)
 
 
 # =========================================================
@@ -5827,10 +5831,10 @@ async def enviar_painel_registro_grupos():
     
     if grupos:
         lista = ""
-        for i, g in enumerate(grupos[:5], 1):
+        for i, g in enumerate(grupos[:10], 1):
             lista += f"**{i}.** {g['nome_org'].upper()}\n"
-        if total_grupos > 5:
-            lista += f"\n*... e mais {total_grupos - 5} grupos*"
+        if total_grupos > 10:
+            lista += f"\n*... e mais {total_grupos - 10} grupos*"
         embed.add_field(name="📌 ÚLTIMOS GRUPOS", value=lista, inline=False)
     
     embed.set_footer(text="Selecione um grupo no menu abaixo")
@@ -5840,6 +5844,12 @@ async def enviar_painel_registro_grupos():
     # =========================================================
     
     view = PainelGruposView()
+    
+    # Carregar o select imediatamente
+    for child in view.children:
+        if isinstance(child, SelectGrupoDropdown):
+            await child.carregar_opcoes()
+            break
     
     await enviar_ou_atualizar_painel(
         "painel_registro_grupos",
@@ -5865,14 +5875,14 @@ async def restaurar_grupos():
         
         for grupo in grupos:
             await enviar_embed_grupo(grupo["grupo_id"])
-            await asyncio.sleep(2)  # Delay para evitar rate limit
+            await asyncio.sleep(2)
         
         print(f"✅ {len(grupos)} grupos restaurados")
         
     except Exception as e:
         print(f"❌ Erro ao restaurar grupos: {e}")
         import traceback
-        traceback.print_exc()        
+        traceback.print_exc()
 # =========================================================
 # ==================== ON_READY ===========================
 # =========================================================
