@@ -5488,14 +5488,24 @@ class RegistrarGrupoView(discord.ui.View):
         emoji="📋"
     )
     async def registrar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        
-        if not is_admin and not is_gerente:
-            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem registrar grupos!", ephemeral=True)
-            return
-        
-        await interaction.response.send_modal(RegistrarGrupoModal())
+        try:
+            # Verificar permissão
+            is_admin = interaction.user.guild_permissions.administrator
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            
+            if not is_admin and not is_gerente:
+                await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem registrar grupos!", ephemeral=True)
+                return
+            
+            # Abrir o modal
+            await interaction.response.send_modal(RegistrarGrupoModal())
+            
+        except Exception as e:
+            print(f"❌ Erro ao abrir modal de registro: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+            except:
+                pass
 
 
 # =========================================================
@@ -5594,16 +5604,59 @@ async def enviar_painel_registro_grupos():
         print(f"❌ Canal de registro de grupos não encontrado: {CANAL_REGISTRO_GRUPOS_ID}")
         return
     
+    # Verificar se já existe uma mensagem do bot no canal
+    async for msg in canal.history(limit=20):
+        if msg.author == bot.user and msg.embeds:
+            if msg.embeds[0].title == "📋 REGISTRO DE GRUPOS":
+                # Atualizar a mensagem existente
+                try:
+                    embed = discord.Embed(
+                        title="📋 REGISTRO DE GRUPOS",
+                        description=(
+                            "**Clique no botão abaixo para registrar um novo grupo de clientes.**\n\n"
+                            "📌 **Informações necessárias:**\n"
+                            "• 🏷️ Nome da Organização\n"
+                            "• 👤 Líder (Nome e Telefone)\n"
+                            "• 👤 Braço (Nome e Telefone - opcional)\n"
+                            "• 🔫 Produto que fornece\n\n"
+                            "✅ Após o registro, o grupo aparecerá no canal de grupos."
+                        ),
+                        color=0x2ecc71
+                    )
+                    
+                    embed.add_field(
+                        name="📌 EXEMPLO",
+                        value=(
+                            "**Organização:** VDR\n"
+                            "**Líder:** João Silva - (11) 99999-9999\n"
+                            "**Produto:** PT e SUB"
+                        ),
+                        inline=False
+                    )
+                    
+                    embed.set_footer(text="Apenas ADM e Gerentes podem gerenciar grupos")
+                    
+                    await msg.edit(embed=embed, view=RegistrarGrupoView())
+                    print(f"📋 Painel de registro de grupos atualizado")
+                    return
+                except Exception as e:
+                    print(f"Erro ao atualizar painel: {e}")
+                    # Se não conseguir atualizar, deletar e criar novo
+                    try:
+                        await msg.delete()
+                    except:
+                        pass
+                    break
+    
+    # Criar nova mensagem
     embed = discord.Embed(
         title="📋 REGISTRO DE GRUPOS",
         description=(
             "**Clique no botão abaixo para registrar um novo grupo de clientes.**\n\n"
             "📌 **Informações necessárias:**\n"
             "• 🏷️ Nome da Organização\n"
-            "• 👤 Nome do Líder\n"
-            "• 📱 Telefone do Líder\n"
-            "• 👤 Nome do Braço (opcional)\n"
-            "• 📱 Telefone do Braço (opcional)\n"
+            "• 👤 Líder (Nome e Telefone)\n"
+            "• 👤 Braço (Nome e Telefone - opcional)\n"
             "• 🔫 Produto que fornece\n\n"
             "✅ Após o registro, o grupo aparecerá no canal de grupos."
         ),
@@ -5622,19 +5675,8 @@ async def enviar_painel_registro_grupos():
     
     embed.set_footer(text="Apenas ADM e Gerentes podem gerenciar grupos")
     
-    # DELETAR MENSAGENS ANTIGAS
-    async for msg in canal.history(limit=20):
-        if msg.author == bot.user and msg.embeds:
-            if msg.embeds[0].title == "📋 REGISTRO DE GRUPOS" or msg.embeds[0].title == "📋 GERENCIAMENTO DE GRUPOS":
-                try:
-                    await msg.delete()
-                    print(f"🗑️ Mensagem antiga deletada")
-                except:
-                    pass
-    
     await canal.send(embed=embed, view=RegistrarGrupoView())
     print(f"📋 Painel de registro de grupos enviado")
-
 
 async def restaurar_grupos():
     """Restaura os embeds dos grupos ativos após reinício"""
