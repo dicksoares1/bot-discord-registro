@@ -3043,29 +3043,71 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 # =========================================================
 
 class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
-    vendedor = discord.ui.TextInput(label="Vendedor (preencha o nome)", placeholder="Digite o nome do vendedor")
-    quantidade = discord.ui.TextInput(label="Quantidade", placeholder="Ex: 100")
+    quantidade = discord.ui.TextInput(
+        label="Quantidade de Pólvora",
+        placeholder="Digite apenas a quantidade (ex: 100)",
+        required=True
+    )
     
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            qtd = int(self.quantidade.value)
+            qtd = int(self.quantidade.value.strip())
+            if qtd <= 0:
+                raise ValueError
         except:
-            await interaction.response.send_message("Quantidade inválida.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Quantidade inválida! Digite um número positivo.",
+                ephemeral=True
+            )
             return
         
-        valor = qtd * 80
-        await salvar_polvora_db(interaction.user.id, self.vendedor.value, qtd, valor)
+        valor = qtd * PRECO_POLVORA
+        
+        await salvar_polvora_db(
+            interaction.user.id,
+            "Sistema",
+            qtd,
+            valor
+        )
         
         canal = interaction.guild.get_channel(CANAL_REGISTRO_POLVORA_ID)
-        embed = discord.Embed(title="🧨 Registro de Pólvora", color=0xe67e22)
-        embed.add_field(name="Vendedor", value=self.vendedor.value, inline=False)
-        embed.add_field(name="Comprado por", value=interaction.user.mention, inline=False)
-        embed.add_field(name="Quantidade", value=str(qtd), inline=True)
-        embed.add_field(name="Valor", value=f"**{formatar_dinheiro(valor)}**", inline=True)
+        
+        valor_formatado = formatar_dinheiro(valor)
+        
+        embed = discord.Embed(
+            title="🧨 Registro de Pólvora",
+            color=0xe67e22,
+            timestamp=agora()
+        )
+        
+        embed.add_field(
+            name="Registrado por",
+            value=interaction.user.mention,
+            inline=False
+        )
+        
+        embed.add_field(
+            name="Quantidade",
+            value=f"{fmt_num(qtd)} unidades",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="Valor total",
+            value=f"**{valor_formatado}**",
+            inline=True
+        )
+        
+        embed.set_footer(text=f"R$ {PRECO_POLVORA:.2f} por unidade")
+        
         await canal.send(embed=embed)
-        await interaction.response.send_message("Registro feito com sucesso!", ephemeral=True)
-
-
+        
+        await interaction.response.send_message(
+            f"✅ **Registro feito com sucesso!**\n\n"
+            f"📦 Quantidade: {fmt_num(qtd)} unidades\n"
+            f"💰 Valor: {valor_formatado}",
+            ephemeral=True
+        )
 class ConfirmarPagamentoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -4971,10 +5013,25 @@ async def enviar_painel_polvoras():
     if not canal:
         print("❌ Canal de pólvora não encontrado")
         return
-    embed = discord.Embed(title="💣 Registro de Pólvora", description="Clique no botão para registrar.", color=0xe67e22)
-    await enviar_ou_atualizar_painel("painel_polvora", CANAL_CALCULO_POLVORA_ID, embed, PolvoraView())
+    
+    embed = discord.Embed(
+        title="💣 Registro de Pólvora",
+        description=(
+            "**Clique no botão abaixo para registrar a compra de pólvora.**\n\n"
+            "📌 **Informe apenas a quantidade comprada.**\n"
+            "💰 O valor será calculado automaticamente (R$ 80 por unidade)."
+        ),
+        color=0xe67e22
+    )
+    
+    await enviar_ou_atualizar_painel(
+        "painel_polvora",
+        CANAL_CALCULO_POLVORA_ID,
+        embed,
+        PolvoraView()
+    )
+    
     print("💣 Painel de pólvora verificado/atualizado")
-
 
 async def enviar_painel_lavagem():
     canal = bot.get_channel(CANAL_INICIAR_LAVAGEM_ID)
