@@ -939,6 +939,87 @@ async def buscar_grupo_por_organizacao(nome_org):
             "SELECT grupo_id FROM grupos WHERE LOWER(nome_org) = LOWER($1) AND ativo = true",
             nome_org
         )
+
+# =========================================================
+# ==================== QUERIES DE ENTREGAS =================
+# =========================================================
+
+async def salvar_entrega_parcelada(
+    pedido_original: int,
+    total_entregas: int,
+    pt_por_entrega: int,
+    sub_por_entrega: int,
+    vendedor_id: str,
+    organizacao: str,
+    observacoes: str,
+    canal_id: str
+):
+    """Salva uma venda parcelada no banco"""
+    async with get_db().acquire() as conn:
+        proxima = agora() + timedelta(days=1)
+        proxima = proxima.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        return await conn.fetchval(
+            """
+            INSERT INTO entregas_parceladas (
+                pedido_original, entrega_atual, total_entregas,
+                pt_por_entrega, sub_por_entrega,
+                vendedor_id, organizacao, observacoes,
+                proxima_entrega, canal_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            RETURNING id
+            """,
+            pedido_original, 1, total_entregas,
+            pt_por_entrega, sub_por_entrega,
+            vendedor_id, organizacao, observacoes,
+            proxima, canal_id
+        )
+
+
+async def buscar_entregas_pendentes():
+    """Busca entregas que precisam ser criadas"""
+    async with get_db().acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT * FROM entregas_parceladas
+            WHERE ativo = true
+            AND proxima_entrega <= NOW()
+            ORDER BY proxima_entrega ASC
+            """
+        )
+
+
+async def atualizar_entrega_parcelada(
+    entrega_id: int,
+    entrega_atual: int,
+    mensagem_id: str,
+    proxima_entrega = None
+):
+    """Atualiza o progresso de uma entrega parcelada"""
+    async with get_db().acquire() as conn:
+        if proxima_entrega is None:
+            proxima_entrega = agora() + timedelta(days=1)
+            proxima_entrega = proxima_entrega.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        await conn.execute(
+            """
+            UPDATE entregas_parceladas
+            SET entrega_atual = $1,
+                mensagem_ids = array_append(mensagem_ids, $2),
+                proxima_entrega = $3
+            WHERE id = $4
+            """,
+            entrega_atual, mensagem_id, proxima_entrega, entrega_id
+        )
+
+
+async def finalizar_entregas(entrega_id: int):
+    """Marca as entregas como concluídas"""
+    async with get_db().acquire() as conn:
+        await conn.execute(
+            "UPDATE entregas_parceladas SET ativo = false WHERE id = $1",
+            entrega_id
+        )
         
 # =========================================================
 # ==================== TWITCH API ==========================
@@ -1795,34 +1876,83 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         placeholder="Observações adicionais sobre a venda"
     )
     
+    # NOVO CAMPO - Quantas entregas
+    entregas = discord.ui.TextInput(
+        label="Quantas entregas? (se >8k, use 2+)",
+        placeholder="Digite 1 para entrega única, ou 2,3,4... para parcelar",
+        required=True,
+        default="1"
+    )
+    
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            pt = int(self.qtd_pt.value.strip())
-            sub = int(self.qtd_sub.value.strip())
-        except:
+            pt = int(self.qtd_pt.value.strip()) if self.qtd_pt.value.strip() else 0
+            sub = int(self.qtd_sub.value.strip()) if self.qtd_sub.value.strip() else 0
+            num_entregas = int(self.entregas.value.strip())
+            
+            if pt < 0 or sub < 0 or num_entregas < 1:
+                raise ValueError
+                
+        except ValueError:
             await interaction.response.send_message(
-                "❌ Valores inválidos. Digite apenas números.",
+                "❌ Valores inválidos. Digite apenas números positivos.\n"
+                "Quantidade de entregas: 1 (entrega única) ou 2+ (parcelado)",
                 ephemeral=True
             )
             return
         
         # =========================================================
-        # ================= CALCULAR VALORES ======================
+        # ================= CALCULAR POR ENTREGA ==================
+        # =========================================================
+        
+        LIMITE_DIARIO = 8000
+        
+        # Se a quantidade TOTAL ultrapassar 8k E o usuário colocou 1 entrega
+        # Avisar que precisa parcelar
+        if (pt + sub) > LIMITE_DIARIO and num_entregas == 1:
+            await interaction.response.send_message(
+                f"⚠️ **ATENÇÃO!**\n\n"
+                f"Total: {fmt_num(pt + sub)} munições\n"
+                f"Limite diário: {fmt_num(LIMITE_DIARIO)} munições\n\n"
+                f"📌 Você precisa parcelar essa venda!\n"
+                f"Digite no campo 'Quantas entregas?' um número maior que 1.\n"
+                f"Exemplo: se são {fmt_num(pt + sub)} munições, use **{((pt + sub) // LIMITE_DIARIO) + 1}** entregas.",
+                ephemeral=True
+            )
+            return
+        
+        # Se o usuário parcelou, verificar se cada entrega tem <= 8k
+        pt_por_entrega = pt // num_entregas
+        sub_por_entrega = sub // num_entregas
+        resto_pt = pt % num_entregas
+        resto_sub = sub % num_entregas
+        
+        # Verificar se cada entrega tem no máximo 8k (PT + SUB)
+        for i in range(num_entregas):
+            pt_entrega = pt_por_entrega + (resto_pt if i == 0 else 0)
+            sub_entrega = sub_por_entrega + (resto_sub if i == 0 else 0)
+            
+            if (pt_entrega + sub_entrega) > LIMITE_DIARIO:
+                await interaction.response.send_message(
+                    f"❌ **Cada entrega deve ter no máximo {fmt_num(LIMITE_DIARIO)} munições!**\n\n"
+                    f"Entrega {i+1}: {fmt_num(pt_entrega + sub_entrega)} munições\n"
+                    f"💡 Aumente o número de entregas para {((pt + sub) // LIMITE_DIARIO) + 1}.",
+                    ephemeral=True
+                )
+                return
+        
+        # =========================================================
+        # ================= REGISTRAR VENDA =======================
         # =========================================================
         
         numero_pedido = await proximo_pedido()
         
-        # Calcular pacotes e munições
-        pacotes_pt = pt // 50
-        pacotes_sub = sub // 50
+        # Calcular pacotes e munições (TOTAL)
+        pacotes_pt_total = pt // 50
+        pacotes_sub_total = sub // 50
         
         # Calcular total (PT: R$50 por munição, SUB: R$90 por munição)
         total = (pt * 50) + (sub * 90)
-        valor_novo = total
-        
-        # =========================================================
-        # ================= SALVAR NO BANCO =======================
-        # =========================================================
         
         await salvar_venda_db(
             str(interaction.user.id),
@@ -1851,16 +1981,16 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         grupo = await buscar_grupo_por_organizacao(org_nome)
         
         if grupo:
-            # Registrar compra no grupo (PT e SUB)
-            if pacotes_pt > 0:
-                valor_pt = pacotes_pt * 50  # Preço por pacote PT (R$50)
-                await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt, valor_pt)
-                print(f"📦 PT registrado no grupo {org_nome}: {pacotes_pt} pacotes")
+            # Registrar compra no grupo (PT e SUB) - APENAS UMA VEZ (total)
+            if pacotes_pt_total > 0:
+                valor_pt = pacotes_pt_total * 50  # Preço por pacote PT (R$50)
+                await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt_total, valor_pt)
+                print(f"📦 PT registrado no grupo {org_nome}: {pacotes_pt_total} pacotes")
             
-            if pacotes_sub > 0:
-                valor_sub = pacotes_sub * 90  # Preço por pacote SUB (R$90)
-                await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub, valor_sub)
-                print(f"📦 SUB registrado no grupo {org_nome}: {pacotes_sub} pacotes")
+            if pacotes_sub_total > 0:
+                valor_sub = pacotes_sub_total * 90  # Preço por pacote SUB (R$90)
+                await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub_total, valor_sub)
+                print(f"📦 SUB registrado no grupo {org_nome}: {pacotes_sub_total} pacotes")
             
             # Atualizar o embed do grupo
             await enviar_embed_grupo(grupo["grupo_id"])
@@ -1868,109 +1998,229 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             print(f"✅ Venda integrada com grupo: {org_nome}")
         
         # =========================================================
-        # ================= CRIAR EMBED DA VENDA ==================
+        # ================= SE FOR PARCELADO ======================
         # =========================================================
         
-        embed = discord.Embed(
-            title=f"📦 NOVA ENCOMENDA • Pedido #{numero_pedido:04d}",
-            color=config["cor"]
-        )
-        
-        embed.add_field(
-            name="👤 Vendedor",
-            value=interaction.user.mention,
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🏷 Organização",
-            value=f"{config['emoji']} {org_nome}",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🔫 PT",
-            value=f"{pt} munições\n📦 {pacotes_pt} pacotes",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="🔫 SUB",
-            value=f"{sub} munições\n📦 {pacotes_sub} pacotes",
-            inline=True
-        )
-        
-        embed.add_field(
-            name="💰 Total",
-            value=f"**R$ {valor_formatado}**",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📌 Status",
-            value="📦 A Entregar\n⏳ Pagamento pendente",
-            inline=False
-        )
-        
-        if self.observacoes.value:
-            embed.add_field(
-                name="📝 Observações",
-                value=self.observacoes.value,
-                inline=False
+        if num_entregas > 1:
+            # Salvar no banco de entregas parceladas
+            entrega_id = await salvar_entrega_parcelada(
+                pedido_original=numero_pedido,
+                total_entregas=num_entregas,
+                pt_por_entrega=pt_por_entrega,
+                sub_por_entrega=sub_por_entrega,
+                vendedor_id=str(interaction.user.id),
+                organizacao=org_nome,
+                observacoes=self.observacoes.value,
+                canal_id=str(CANAL_ENCOMENDAS_ID)
             )
-        
-        # Adicionar informação de integração com grupo
-        if grupo:
-            embed.add_field(
-                name="📊 INTEGRAÇÃO COM GRUPO",
-                value=f"✅ Compra registrada automaticamente no grupo **{org_nome}**",
-                inline=False
+            
+            # Criar PRIMEIRA entrega (agora)
+            pt_primeira = pt_por_entrega + resto_pt
+            sub_primeira = sub_por_entrega + resto_sub
+            
+            await criar_embed_entrega(
+                interaction=interaction,
+                pedido_numero=numero_pedido,
+                entrega_atual=1,
+                total_entregas=num_entregas,
+                pt=pt_primeira,
+                sub=sub_primeira,
+                org_nome=org_nome,
+                config=config,
+                observacoes=self.observacoes.value,
+                entrega_id=entrega_id,
+                vendedor_id=str(interaction.user.id),
+                grupo=grupo  # Passa o grupo para o embed
             )
-        
-        embed.set_footer(
-            text="🛡 Sistema de Encomendas • VDR 442"
-        )
-        
-        # =========================================================
-        # ================= ENVIAR MENSAGEM =======================
-        # =========================================================
-        
-        canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
-        
-        if not canal:
-            await interaction.response.send_message(
-                "❌ Canal de encomendas não encontrado!",
-                ephemeral=True
+            
+            # Mensagem de confirmação com informações das entregas
+            msg_resposta = (
+                f"✅ **Venda parcelada registrada com sucesso!**\n\n"
+                f"📦 **Pedido #{numero_pedido:04d}**\n"
+                f"🏷 **Organização:** {org_nome}\n"
+                f"📦 **Total PT:** {fmt_num(pt)} munições ({pacotes_pt_total} pacotes)\n"
+                f"📦 **Total SUB:** {fmt_num(sub)} munições ({pacotes_sub_total} pacotes)\n"
+                f"💰 **Total:** R$ {valor_formatado}\n\n"
+                f"📋 **Entregas:** {num_entregas} parcelas\n"
+                f"📅 **Próximas entregas:** Automáticas à meia-noite\n\n"
+                f"✅ **Entrega 1/{num_entregas} criada!**\n"
             )
+            
+            if grupo:
+                msg_resposta += f"\n📊 **Grupo integrado:** ✅ {org_nome}"
+            else:
+                msg_resposta += f"\n📊 **Grupo integrado:** ❌ Nenhum grupo encontrado para {org_nome}"
+            
+            await interaction.response.send_message(msg_resposta, ephemeral=True)
             return
         
-        await canal.send(
-            embed=embed,
-            view=StatusView()
+        # =========================================================
+        # ================= ENTREGA ÚNICA (como já era) ==========
+        # =========================================================
+        
+        await criar_embed_entrega(
+            interaction=interaction,
+            pedido_numero=numero_pedido,
+            entrega_atual=1,
+            total_entregas=1,
+            pt=pt,
+            sub=sub,
+            org_nome=org_nome,
+            config=config,
+            observacoes=self.observacoes.value,
+            entrega_id=None,
+            vendedor_id=str(interaction.user.id),
+            grupo=grupo  # Passa o grupo para o embed
         )
         
-        # =========================================================
-        # ================= RESPOSTA AO USUÁRIO ===================
-        # =========================================================
-        
-        msg_resposta = f"✅ **Venda registrada com sucesso!**\n\n"
-        msg_resposta += f"📦 **Pedido #{numero_pedido:04d}**\n"
-        msg_resposta += f"🏷 **Organização:** {org_nome}\n"
-        msg_resposta += f"🔫 **PT:** {pt} munições ({pacotes_pt} pacotes)\n"
-        msg_resposta += f"🔫 **SUB:** {sub} munições ({pacotes_sub} pacotes)\n"
-        msg_resposta += f"💰 **Total:** R$ {valor_formatado}\n\n"
+        msg_resposta = (
+            f"✅ **Venda registrada com sucesso!**\n\n"
+            f"📦 **Pedido #{numero_pedido:04d}**\n"
+            f"🏷 **Organização:** {org_nome}\n"
+            f"🔫 **PT:** {pt} munições ({pacotes_pt_total} pacotes)\n"
+            f"🔫 **SUB:** {sub} munições ({pacotes_sub_total} pacotes)\n"
+            f"💰 **Total:** R$ {valor_formatado}\n"
+        )
         
         if grupo:
-            msg_resposta += f"📊 **Grupo integrado:** ✅ {org_nome}\n"
+            msg_resposta += f"\n📊 **Grupo integrado:** ✅ {org_nome}"
         else:
-            msg_resposta += f"📊 **Grupo integrado:** ❌ Nenhum grupo encontrado para {org_nome}\n"
-            msg_resposta += f"💡 Para integrar, cadastre um grupo com o nome **{org_nome}**"
+            msg_resposta += f"\n📊 **Grupo integrado:** ❌ Nenhum grupo encontrado para {org_nome}"
         
-        await interaction.response.send_message(
-            msg_resposta,
-            ephemeral=True
-        )
+        await interaction.response.send_message(msg_resposta, ephemeral=True)
 
+# =========================================================
+# ==================== FUNÇÃO PARA CRIAR EMBED DE ENTREGA =
+# =========================================================
+
+async def criar_embed_entrega(
+    interaction: discord.Interaction,
+    pedido_numero: int,
+    entrega_atual: int,
+    total_entregas: int,
+    pt: int,
+    sub: int,
+    org_nome: str,
+    config: dict,
+    observacoes: str,
+    entrega_id: int = None,
+    vendedor_id: str = None,
+    grupo: dict = None  # NOVO: recebe o grupo para integração
+):
+    """Cria um embed de entrega (única ou parcelada)"""
+    
+    canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
+    if not canal:
+        await interaction.followup.send("❌ Canal de encomendas não encontrado!", ephemeral=True)
+        return
+    
+    pacotes_pt = pt // 50
+    pacotes_sub = sub // 50
+    
+    # Título com informação de parcela
+    if total_entregas > 1:
+        titulo = f"📦 ENTREGA {entrega_atual}/{total_entregas} • Pedido #{pedido_numero:04d}"
+    else:
+        titulo = f"📦 NOVA ENCOMENDA • Pedido #{pedido_numero:04d}"
+    
+    embed = discord.Embed(
+        title=titulo,
+        color=config["cor"]
+    )
+    
+    embed.add_field(
+        name="👤 Vendedor",
+        value=f"<@{vendedor_id or interaction.user.id}>",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🏷 Organização",
+        value=f"{config['emoji']} {org_nome}",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🔫 PT",
+        value=f"{fmt_num(pt)} munições\n📦 {pacotes_pt} pacotes",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🔫 SUB",
+        value=f"{fmt_num(sub)} munições\n📦 {pacotes_sub} pacotes",
+        inline=True
+    )
+    
+    # Valor parcial (apenas dessa entrega)
+    valor_entrega = (pt * 50) + (sub * 90)
+    valor_formatado = (
+        f"{valor_entrega:,.2f}"
+        .replace(",", "X")
+        .replace(".", ",")
+        .replace("X", ".")
+    )
+    
+    embed.add_field(
+        name="💰 Valor (esta entrega)",
+        value=f"**R$ {valor_formatado}**",
+        inline=False
+    )
+    
+    # Se for parcelado, mostrar informações
+    if total_entregas > 1:
+        embed.add_field(
+            name="📋 INFORMAÇÕES DAS ENTREGAS",
+            value=(
+                f"**Total de entregas:** {total_entregas}\n"
+                f"**Entrega atual:** {entrega_atual}/{total_entregas}\n"
+                f"**Próxima entrega:** Automática à meia-noite"
+            ),
+            inline=False
+        )
+    
+    embed.add_field(
+        name="📌 Status",
+        value="📦 A Entregar\n⏳ Pagamento pendente",
+        inline=False
+    )
+    
+    if observacoes:
+        embed.add_field(
+            name="📝 Observações",
+            value=observacoes,
+            inline=False
+        )
+    
+    # =========================================================
+    # ================= INTEGRAÇÃO COM GRUPOS =================
+    # =========================================================
+    
+    # Adicionar informação de integração com grupo (se houver)
+    if grupo:
+        embed.add_field(
+            name="📊 INTEGRAÇÃO COM GRUPO",
+            value=f"✅ Compra registrada automaticamente no grupo **{org_nome}**",
+            inline=False
+        )
+    
+    embed.set_footer(
+        text="🛡 Sistema de Encomendas • VDR 442"
+    )
+    
+    # Enviar mensagem
+    msg = await canal.send(embed=embed, view=StatusView())
+    
+    # Se for parcelado, salvar ID da mensagem
+    if entrega_id:
+        await atualizar_entrega_parcelada(
+            entrega_id=entrega_id,
+            entrega_atual=entrega_atual,
+            mensagem_id=str(msg.id),
+            proxima_entrega=None  # Calcula automático +1 dia
+        )
+    
+    return msg
 
 class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
     qtd_pt = discord.ui.TextInput(
@@ -4332,6 +4582,171 @@ async def verificar_alugueis_expirados():
     if expirou:
         await enviar_painel_alugueis()
 
+# =========================================================
+# ==================== LOOP DE ENTREGAS PARCELADAS ========
+# =========================================================
+
+@tasks.loop(minutes=1)
+async def verificar_entregas_parceladas():
+    """Verifica e cria entregas parceladas pendentes"""
+    try:
+        entregas = await buscar_entregas_pendentes()
+        
+        if not entregas:
+            return
+        
+        for entrega in entregas:
+            entrega_id = entrega["id"]
+            pedido_original = entrega["pedido_original"]
+            entrega_atual = entrega["entrega_atual"]
+            total_entregas = entrega["total_entregas"]
+            pt_por_entrega = entrega["pt_por_entrega"]
+            sub_por_entrega = entrega["sub_por_entrega"]
+            vendedor_id = entrega["vendedor_id"]
+            organizacao = entrega["organizacao"]
+            observacoes = entrega["observacoes"]
+            canal_id = int(entrega["canal_id"])
+            
+            # Se já terminou, finalizar
+            if entrega_atual >= total_entregas:
+                await finalizar_entregas(entrega_id)
+                continue
+            
+            # Próxima entrega
+            proxima_entrega_num = entrega_atual + 1
+            
+            # Verificar se deve criar (já passou meia-noite)
+            agora_br = agora()
+            proxima_data = entrega["proxima_entrega"]
+            if proxima_data.tzinfo is None:
+                proxima_data = proxima_data.replace(tzinfo=BRASIL)
+            
+            if agora_br < proxima_data:
+                continue
+            
+            print(f"🔄 Criando entrega {proxima_entrega_num}/{total_entregas} do pedido #{pedido_original}")
+            
+            # Buscar o canal
+            canal = bot.get_channel(canal_id)
+            if not canal:
+                print(f"❌ Canal {canal_id} não encontrado para entrega {entrega_id}")
+                continue
+            
+            # Buscar o usuário vendedor
+            vendedor = await pegar_usuario(int(vendedor_id))
+            if not vendedor:
+                print(f"❌ Vendedor {vendedor_id} não encontrado")
+                continue
+            
+            # Criar embed da nova entrega
+            config = ORGANIZACOES_CONFIG.get(
+                organizacao,
+                {"emoji": "🏷️", "cor": 0x1e3a8a}
+            )
+            
+            # Calcular PT e SUB dessa entrega
+            pt_entrega = pt_por_entrega
+            sub_entrega = sub_por_entrega
+            
+            pacotes_pt = pt_entrega // 50
+            pacotes_sub = sub_entrega // 50
+            
+            titulo = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
+            
+            embed = discord.Embed(
+                title=titulo,
+                color=config["cor"]
+            )
+            
+            embed.add_field(
+                name="👤 Vendedor",
+                value=f"<@{vendedor_id}>",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="🏷 Organização",
+                value=f"{config['emoji']} {organizacao}",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="🔫 PT",
+                value=f"{fmt_num(pt_entrega)} munições\n📦 {pacotes_pt} pacotes",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="🔫 SUB",
+                value=f"{fmt_num(sub_entrega)} munições\n📦 {pacotes_sub} pacotes",
+                inline=True
+            )
+            
+            valor_entrega = (pt_entrega * 50) + (sub_entrega * 90)
+            valor_formatado = (
+                f"{valor_entrega:,.2f}"
+                .replace(",", "X")
+                .replace(".", ",")
+                .replace("X", ".")
+            )
+            
+            embed.add_field(
+                name="💰 Valor (esta entrega)",
+                value=f"**R$ {valor_formatado}**",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📋 INFORMAÇÕES DAS ENTREGAS",
+                value=(
+                    f"**Total de entregas:** {total_entregas}\n"
+                    f"**Entrega atual:** {proxima_entrega_num}/{total_entregas}\n"
+                    f"**Próxima entrega:** Automática à meia-noite"
+                ),
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📌 Status",
+                value="📦 A Entregar\n⏳ Pagamento pendente",
+                inline=False
+            )
+            
+            if observacoes:
+                embed.add_field(
+                    name="📝 Observações",
+                    value=observacoes,
+                    inline=False
+                )
+            
+            # NOTA: Não adiciona integração com grupo nas entregas seguintes
+            # porque a compra já foi registrada no grupo no momento da venda
+            
+            embed.set_footer(
+                text="🛡 Sistema de Encomendas • VDR 442"
+            )
+            
+            # Enviar a mensagem
+            msg = await canal.send(embed=embed, view=StatusView())
+            
+            # Atualizar banco
+            await atualizar_entrega_parcelada(
+                entrega_id=entrega_id,
+                entrega_atual=proxima_entrega_num,
+                mensagem_id=str(msg.id),
+                proxima_entrega=None
+            )
+            
+            print(f"✅ Entrega {proxima_entrega_num}/{total_entregas} criada para pedido #{pedido_original}")
+            
+            # Pequeno delay para não sobrecarregar
+            await asyncio.sleep(2)
+            
+    except Exception as e:
+        print(f"❌ Erro no verificar_entregas_parceladas: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 # =========================================================
 # ==================== SISTEMA DE COMPRAS ==================
@@ -5946,6 +6361,14 @@ async def on_ready():
     
     # Restaurar produções
     await restaurar_producoes()
+
+        # Iniciar loop de entregas parceladas
+    try:
+        if not verificar_entregas_parceladas.is_running():
+            verificar_entregas_parceladas.start()
+            print("📦 Loop de entregas parceladas iniciado")
+    except Exception as e:
+        print("Erro ao iniciar loop de entregas:", e)
 
     # =========================================================
     # ================= GRUPOS - SOMENTE O PAINEL =============
