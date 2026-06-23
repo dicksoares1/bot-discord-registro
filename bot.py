@@ -1085,109 +1085,233 @@ async def checar_twitch(canal):
         return False, None, None, None
 
 async def checar_kick(canal):
-    """Verifica se um canal da Kick está ao vivo - CORRIGIDO"""
+    """Verifica se um canal da Kick está ao vivo - VERSÃO MELHORADA"""
     try:
-        # Primeiro tenta a API oficial
+        # Verificar cache primeiro
+        cache_key = f"kick_{canal}"
+        agora_ts = time_module.time()
+        
+        if cache_key in cache_lives:
+            dados, timestamp = cache_lives[cache_key]
+            if agora_ts - timestamp < CACHE_LIVES_TTL:
+                print(f"📦 Cache Kick: {canal} = {dados[0]}")
+                return dados
+        
+        # =========================================================
+        # ================= TENTATIVA 1: API OFICIAL ==============
+        # =========================================================
+        
         url_api = f"https://kick.com/api/v2/channels/{canal}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json"
+            "Accept": "application/json",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
         }
         
-        async with http_session.get(url_api, headers=headers, timeout=15) as r:
-            if r.status == 200:
-                data = await r.json()
-                if data.get("livestream"):
-                    livestream = data["livestream"]
-                    titulo = livestream.get("session_title", f"Live na Kick - {canal}")
-                    
-                    thumbnail = None
-                    if livestream.get("thumbnail"):
-                        thumbnail = livestream["thumbnail"].get("url")
-                    elif data.get("user", {}).get("profile_pic"):
-                        thumbnail = data["user"]["profile_pic"]
-                    
-                    categoria = data.get("category", {})
-                    jogo = categoria.get("name") if categoria else None
-                    
-                    print(f"✅ Kick API: {canal} está AO VIVO! Título: {titulo[:50]}")
-                    return True, titulo, jogo, thumbnail
+        try:
+            async with http_session.get(url_api, headers=headers, timeout=10) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    if data.get("livestream"):
+                        livestream = data["livestream"]
+                        titulo = livestream.get("session_title", f"Live na Kick - {canal}")
+                        
+                        thumbnail = None
+                        if livestream.get("thumbnail"):
+                            thumbnail = livestream["thumbnail"].get("url")
+                        elif data.get("user", {}).get("profile_pic"):
+                            thumbnail = data["user"]["profile_pic"]
+                        
+                        categoria = data.get("category", {})
+                        jogo = categoria.get("name") if categoria else None
+                        
+                        resultado = (True, titulo, jogo, thumbnail)
+                        cache_lives[cache_key] = (resultado, agora_ts)
+                        print(f"✅ Kick API: {canal} está AO VIVO!")
+                        return resultado
+                    else:
+                        print(f"📴 Kick API: {canal} está OFFLINE")
                 else:
-                    print(f"📴 Kick API: {canal} está OFFLINE")
-                    # Continua para fallback HTML
-            else:
-                print(f"⚠️ Kick API retornou status {r.status}, tentando fallback HTML")
+                    print(f"⚠️ Kick API status {r.status}, tentando fallback")
+        except asyncio.TimeoutError:
+            print(f"⏰ Timeout na API Kick para {canal}, tentando fallback")
+        except Exception as e:
+            print(f"⚠️ Erro na API Kick para {canal}: {e}, tentando fallback")
         
-        # Fallback: scraping do HTML
-        url_page = f"https://kick.com/{canal}"
-        headers_html = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-        }
+        # =========================================================
+        # ================= TENTATIVA 2: SCRAPING HTML ============
+        # =========================================================
         
-        async with http_session.get(url_page, headers=headers_html, timeout=15) as r:
-            if r.status == 200:
-                html = await r.text()
-                
-                # Procura por indicadores de live
-                if "isLive:true" in html or '"livestream":{' in html:
-                    # Tenta extrair título
-                    titulo_match = re.search(r'"sessionTitle":"([^"]+)"', html)
-                    titulo = titulo_match.group(1) if titulo_match else f"Live na Kick - {canal}"
+        try:
+            url_page = f"https://kick.com/{canal}"
+            headers_html = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+            }
+            
+            async with http_session.get(url_page, headers=headers_html, timeout=15) as r:
+                if r.status == 200:
+                    html = await r.text()
                     
-                    # Tenta extrair thumbnail
-                    thumb_match = re.search(r'"thumbnail":"([^"]+)"', html)
-                    thumbnail = thumb_match.group(1) if thumb_match else None
+                    # Múltiplos padrões de busca
+                    padroes = [
+                        r'"isLive":\s*true',
+                        r'"livestream":\s*\{',
+                        r'"live":\s*true',
+                        r'isLive:true'
+                    ]
                     
-                    # Tenta extrair jogo
-                    jogo_match = re.search(r'"category":"([^"]+)"', html)
-                    jogo = jogo_match.group(1) if jogo_match else None
+                    ao_vivo = False
+                    for padrao in padroes:
+                        if re.search(padrao, html, re.IGNORECASE):
+                            ao_vivo = True
+                            break
                     
-                    print(f"✅ Kick HTML: {canal} está AO VIVO! Título: {titulo[:50]}")
-                    return True, titulo, jogo, thumbnail
+                    if ao_vivo:
+                        # Tentar extrair título
+                        titulo_match = re.search(r'"sessionTitle":"([^"]+)"', html)
+                        titulo = titulo_match.group(1) if titulo_match else f"Live na Kick - {canal}"
+                        
+                        # Tentar extrair thumbnail
+                        thumb_match = re.search(r'"thumbnail":"([^"]+)"', html)
+                        thumbnail = thumb_match.group(1) if thumb_match else None
+                        
+                        # Tentar extrair jogo
+                        jogo_match = re.search(r'"category":"([^"]+)"', html)
+                        jogo = jogo_match.group(1) if jogo_match else None
+                        
+                        resultado = (True, titulo, jogo, thumbnail)
+                        cache_lives[cache_key] = (resultado, agora_ts)
+                        print(f"✅ Kick HTML: {canal} está AO VIVO!")
+                        return resultado
+                    else:
+                        print(f"📴 Kick HTML: {canal} está OFFLINE")
                 else:
-                    print(f"📴 Kick HTML: {canal} está OFFLINE")
-                    return False, None, None, None
-            else:
-                print(f"❌ Kick HTML: status {r.status} para {canal}")
-                return False, None, None, None
-                
-    except asyncio.TimeoutError:
-        print(f"⏰ Timeout ao verificar Kick: {canal}")
-        return False, None, None, None
+                    print(f"❌ Kick HTML: status {r.status} para {canal}")
+        except asyncio.TimeoutError:
+            print(f"⏰ Timeout no HTML Kick para {canal}")
+        except Exception as e:
+            print(f"⚠️ Erro no HTML Kick para {canal}: {e}")
+        
+        # =========================================================
+        # ================= TENTATIVA 3: FALLBACK FINAL ===========
+        # =========================================================
+        
+        # Se todas as tentativas falharem, considerar OFFLINE
+        resultado = (False, None, None, None)
+        cache_lives[cache_key] = (resultado, agora_ts)
+        print(f"📴 Kick: {canal} - OFFLINE (fallback final)")
+        return resultado
+        
     except Exception as e:
         print(f"❌ Erro ao verificar Kick para {canal}: {e}")
         import traceback
         traceback.print_exc()
-        return False, None, None, None  # <--- ESSA LINHA ESTAVA FALTANDO!
+        return False, None, None, None
 
 async def checar_tiktok(username):
+    """Verifica se um canal do TikTok está ao vivo - VERSÃO MELHORADA"""
     try:
         username = username.lower().replace("@", "").strip()
-        url = f"https://www.tiktok.com/@{username}"
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-        }
+        # Verificar cache primeiro
+        cache_key = f"tiktok_{username}"
+        agora_ts = time_module.time()
         
-        async with http_session.get(url, headers=headers, timeout=10) as response:
-            if response.status != 200:
-                print(f"⚠️ TikTok status {response.status} para {username}")
-                return False, None, None, None
-            html = await response.text()
+        if cache_key in cache_lives:
+            dados, timestamp = cache_lives[cache_key]
+            if agora_ts - timestamp < CACHE_LIVES_TTL:
+                print(f"📦 Cache TikTok: {username} = {dados[0]}")
+                return dados
         
-        import re
-        if re.search(r'"isLive":\s*true', html, re.IGNORECASE):
-            titulo_match = re.search(r'"title":"([^"]+)"', html)
-            titulo = titulo_match.group(1) if titulo_match else f"Live no TikTok - @{username}"
-            return True, titulo, "TikTok", None
+        # =========================================================
+        # ================= TENTATIVA 1: API TIKTOK ===============
+        # =========================================================
         
-        return False, None, None, None
+        # TikTok tem API pública limitada, mas vamos tentar
+        try:
+            url_api = f"https://www.tiktok.com/api/v1/live/detail/?aid=1988&room_id=&uniqueId={username}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+            }
+            
+            async with http_session.get(url_api, headers=headers, timeout=10) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    if data.get("status_code") == 0 and data.get("data", {}).get("room_id"):
+                        titulo = data.get("data", {}).get("title", f"Live no TikTok - @{username}")
+                        jogo = "TikTok"
+                        thumbnail = data.get("data", {}).get("cover_url")
+                        resultado = (True, titulo, jogo, thumbnail)
+                        cache_lives[cache_key] = (resultado, agora_ts)
+                        print(f"✅ TikTok API: {username} está AO VIVO!")
+                        return resultado
+        except Exception as e:
+            print(f"⚠️ Erro na API TikTok para {username}: {e}")
+        
+        # =========================================================
+        # ================= TENTATIVA 2: SCRAPING =================
+        # =========================================================
+        
+        try:
+            url = f"https://www.tiktok.com/@{username}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+            }
+            
+            async with http_session.get(url, headers=headers, timeout=15) as response:
+                if response.status != 200:
+                    print(f"⚠️ TikTok status {response.status} para {username}")
+                    resultado = (False, None, None, None)
+                    cache_lives[cache_key] = (resultado, agora_ts)
+                    return resultado
+                
+                html = await response.text()
+                
+                # Múltiplos padrões de busca
+                padroes = [
+                    r'"isLive":\s*true',
+                    r'"liveStatus":\s*1',
+                    r'"room_id":"\d+"',
+                    r'"status":\s*1',
+                ]
+                
+                ao_vivo = False
+                for padrao in padroes:
+                    if re.search(padrao, html, re.IGNORECASE):
+                        ao_vivo = True
+                        break
+                
+                if ao_vivo:
+                    titulo_match = re.search(r'"title":"([^"]+)"', html)
+                    titulo = titulo_match.group(1) if titulo_match else f"Live no TikTok - @{username}"
+                    
+                    resultado = (True, titulo, "TikTok", None)
+                    cache_lives[cache_key] = (resultado, agora_ts)
+                    print(f"✅ TikTok HTML: {username} está AO VIVO!")
+                    return resultado
+                else:
+                    print(f"📴 TikTok HTML: {username} está OFFLINE")
+        
+        except asyncio.TimeoutError:
+            print(f"⏰ Timeout no TikTok para {username}")
+        except Exception as e:
+            print(f"⚠️ Erro no TikTok para {username}: {e}")
+        
+        # =========================================================
+        # ================= FALLBACK FINAL ========================
+        # =========================================================
+        
+        resultado = (False, None, None, None)
+        cache_lives[cache_key] = (resultado, agora_ts)
+        return resultado
+        
     except Exception as e:
-        print(f"Erro TikTok para {username}: {e}")
+        print(f"❌ Erro ao verificar TikTok para {username}: {e}")
         return False, None, None, None
 
 # =========================================================
@@ -1276,6 +1400,14 @@ cache_grupos_timestamp = 0
 ultima_atualizacao_grupo = 0
 fila_atualizacao_grupos = asyncio.Queue()
 task_atualizacao_grupos = None
+
+# =========================================================
+# ==================== CACHE DE LIVES =====================
+# =========================================================
+
+cache_lives = {}
+cache_lives_timestamp = 0
+CACHE_LIVES_TTL = 120  # 2 minutos de cache
 
 # =========================================================
 # ============ CLASSE REGISTRO (MODAL E VIEWS) ============
@@ -5570,6 +5702,17 @@ async def cmd_status_producoes(ctx):
         await ctx.send(f"❌ Erro: {e}")
         print(f"Erro status_producoes: {e}")
 
+@bot.command(name="limpar_cache_lives")
+async def cmd_limpar_cache_lives(ctx):
+    """Limpa o cache de lives manualmente"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    global cache_lives
+    cache_lives.clear()
+    await ctx.send("✅ Cache de lives limpo!")
+
 # =========================================================
 # ==================== COMANDOS DE GRUPOS ==================
 # =========================================================
@@ -6018,6 +6161,28 @@ async def restaurar_producoes():
         print(f"❌ ERRO CRÍTICO ao restaurar produções: {e}")
         import traceback
         traceback.print_exc()
+
+# =========================================================
+# ==================== LIMPAR CACHE LIVES =================
+# =========================================================
+
+@tasks.loop(minutes=10)
+async def limpar_cache_lives():
+    """Limpa o cache de lives a cada 10 minutos"""
+    global cache_lives
+    agora_ts = time_module.time()
+    
+    # Remover entradas mais antigas que o TTL
+    keys_to_remove = []
+    for key, (_, timestamp) in cache_lives.items():
+        if agora_ts - timestamp > CACHE_LIVES_TTL:
+            keys_to_remove.append(key)
+    
+    for key in keys_to_remove:
+        del cache_lives[key]
+    
+    if keys_to_remove:
+        print(f"🧹 Cache de lives limpo: {len(keys_to_remove)} entradas removidas")
 
 # =========================================================
 # ==================== SISTEMA DE GRUPOS ===================
@@ -6656,6 +6821,15 @@ async def on_ready():
             print("💚 Loop de heartbeat das produções iniciado")
     except Exception as e:
         print("Erro ao iniciar loop de heartbeat:", e)
+
+        # Iniciar loop de limpeza de cache de lives
+    try:
+        if not limpar_cache_lives.is_running():
+            limpar_cache_lives.start()
+            print("🧹 Loop de limpeza de cache de lives iniciado")
+    except Exception as e:
+        print("Erro ao iniciar loop de limpeza de cache:", e)
+    
 
 
     # =========================================================
