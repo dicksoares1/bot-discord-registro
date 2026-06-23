@@ -1863,11 +1863,13 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     )
     qtd_pt = discord.ui.TextInput(
         label="Quantidade PT",
-        placeholder="Digite a quantidade de munição PT"
+        placeholder="Digite a quantidade de munição PT (ex: 24000)",
+        required=True
     )
     qtd_sub = discord.ui.TextInput(
         label="Quantidade SUB",
-        placeholder="Digite a quantidade de munição SUB"
+        placeholder="Digite a quantidade de munição SUB (ex: 16000)",
+        required=True
     )
     observacoes = discord.ui.TextInput(
         label="Observações",
@@ -1876,70 +1878,49 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         placeholder="Observações adicionais sobre a venda"
     )
     
-    # NOVO CAMPO - Quantas entregas
-    entregas = discord.ui.TextInput(
-        label="Quantas entregas? (se >8k, use 2+)",
-        placeholder="Digite 1 para entrega única, ou 2,3,4... para parcelar",
-        required=True,
-        default="1"
-    )
-    
     async def on_submit(self, interaction: discord.Interaction):
         try:
             pt = int(self.qtd_pt.value.strip()) if self.qtd_pt.value.strip() else 0
             sub = int(self.qtd_sub.value.strip()) if self.qtd_sub.value.strip() else 0
-            num_entregas = int(self.entregas.value.strip())
             
-            if pt < 0 or sub < 0 or num_entregas < 1:
+            if pt < 0 or sub < 0:
                 raise ValueError
+                
+            # Se ambos forem 0, erro
+            if pt == 0 and sub == 0:
+                await interaction.response.send_message(
+                    "❌ Você precisa informar pelo menos PT ou SUB!",
+                    ephemeral=True
+                )
+                return
                 
         except ValueError:
             await interaction.response.send_message(
-                "❌ Valores inválidos. Digite apenas números positivos.\n"
-                "Quantidade de entregas: 1 (entrega única) ou 2+ (parcelado)",
+                "❌ Valores inválidos. Digite apenas números positivos.",
                 ephemeral=True
             )
             return
         
         # =========================================================
-        # ================= CALCULAR POR ENTREGA ==================
+        # ================= CALCULAR ENTREGAS AUTOMATICAMENTE =====
         # =========================================================
         
         LIMITE_DIARIO = 8000
+        total_municoes = pt + sub
         
-        # Se a quantidade TOTAL ultrapassar 8k E o usuário colocou 1 entrega
-        # Avisar que precisa parcelar
-        if (pt + sub) > LIMITE_DIARIO and num_entregas == 1:
-            await interaction.response.send_message(
-                f"⚠️ **ATENÇÃO!**\n\n"
-                f"Total: {fmt_num(pt + sub)} munições\n"
-                f"Limite diário: {fmt_num(LIMITE_DIARIO)} munições\n\n"
-                f"📌 Você precisa parcelar essa venda!\n"
-                f"Digite no campo 'Quantas entregas?' um número maior que 1.\n"
-                f"Exemplo: se são {fmt_num(pt + sub)} munições, use **{((pt + sub) // LIMITE_DIARIO) + 1}** entregas.",
-                ephemeral=True
-            )
-            return
+        # Calcular quantas entregas são necessárias
+        if total_municoes <= LIMITE_DIARIO:
+            num_entregas = 1
+        else:
+            num_entregas = (total_municoes // LIMITE_DIARIO)
+            if total_municoes % LIMITE_DIARIO != 0:
+                num_entregas += 1
         
-        # Se o usuário parcelou, verificar se cada entrega tem <= 8k
+        # Distribuir PT e SUB igualmente entre as entregas
         pt_por_entrega = pt // num_entregas
         sub_por_entrega = sub // num_entregas
         resto_pt = pt % num_entregas
         resto_sub = sub % num_entregas
-        
-        # Verificar se cada entrega tem no máximo 8k (PT + SUB)
-        for i in range(num_entregas):
-            pt_entrega = pt_por_entrega + (resto_pt if i == 0 else 0)
-            sub_entrega = sub_por_entrega + (resto_sub if i == 0 else 0)
-            
-            if (pt_entrega + sub_entrega) > LIMITE_DIARIO:
-                await interaction.response.send_message(
-                    f"❌ **Cada entrega deve ter no máximo {fmt_num(LIMITE_DIARIO)} munições!**\n\n"
-                    f"Entrega {i+1}: {fmt_num(pt_entrega + sub_entrega)} munições\n"
-                    f"💡 Aumente o número de entregas para {((pt + sub) // LIMITE_DIARIO) + 1}.",
-                    ephemeral=True
-                )
-                return
         
         # =========================================================
         # ================= REGISTRAR VENDA =======================
@@ -1983,12 +1964,12 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         if grupo:
             # Registrar compra no grupo (PT e SUB) - APENAS UMA VEZ (total)
             if pacotes_pt_total > 0:
-                valor_pt = pacotes_pt_total * 50  # Preço por pacote PT (R$50)
+                valor_pt = pacotes_pt_total * 50
                 await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt_total, valor_pt)
                 print(f"📦 PT registrado no grupo {org_nome}: {pacotes_pt_total} pacotes")
             
             if pacotes_sub_total > 0:
-                valor_sub = pacotes_sub_total * 90  # Preço por pacote SUB (R$90)
+                valor_sub = pacotes_sub_total * 90
                 await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub_total, valor_sub)
                 print(f"📦 SUB registrado no grupo {org_nome}: {pacotes_sub_total} pacotes")
             
@@ -1998,7 +1979,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             print(f"✅ Venda integrada com grupo: {org_nome}")
         
         # =========================================================
-        # ================= SE FOR PARCELADO ======================
+        # ================= SE FOR PARCELADO (mais de 1 entrega) ==
         # =========================================================
         
         if num_entregas > 1:
@@ -2030,7 +2011,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 observacoes=self.observacoes.value,
                 entrega_id=entrega_id,
                 vendedor_id=str(interaction.user.id),
-                grupo=grupo  # Passa o grupo para o embed
+                grupo=grupo
             )
             
             # Mensagem de confirmação com informações das entregas
@@ -2041,7 +2022,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 f"📦 **Total PT:** {fmt_num(pt)} munições ({pacotes_pt_total} pacotes)\n"
                 f"📦 **Total SUB:** {fmt_num(sub)} munições ({pacotes_sub_total} pacotes)\n"
                 f"💰 **Total:** R$ {valor_formatado}\n\n"
-                f"📋 **Entregas:** {num_entregas} parcelas\n"
+                f"📋 **Entregas necessárias:** {num_entregas} parcelas\n"
                 f"📅 **Próximas entregas:** Automáticas à meia-noite\n\n"
                 f"✅ **Entrega 1/{num_entregas} criada!**\n"
             )
@@ -2055,7 +2036,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             return
         
         # =========================================================
-        # ================= ENTREGA ÚNICA (como já era) ==========
+        # ================= ENTREGA ÚNICA (1 entrega) ============
         # =========================================================
         
         await criar_embed_entrega(
@@ -2070,15 +2051,15 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             observacoes=self.observacoes.value,
             entrega_id=None,
             vendedor_id=str(interaction.user.id),
-            grupo=grupo  # Passa o grupo para o embed
+            grupo=grupo
         )
         
         msg_resposta = (
             f"✅ **Venda registrada com sucesso!**\n\n"
             f"📦 **Pedido #{numero_pedido:04d}**\n"
             f"🏷 **Organização:** {org_nome}\n"
-            f"🔫 **PT:** {pt} munições ({pacotes_pt_total} pacotes)\n"
-            f"🔫 **SUB:** {sub} munições ({pacotes_sub_total} pacotes)\n"
+            f"🔫 **PT:** {fmt_num(pt)} munições ({pacotes_pt_total} pacotes)\n"
+            f"🔫 **SUB:** {fmt_num(sub)} munições ({pacotes_sub_total} pacotes)\n"
             f"💰 **Total:** R$ {valor_formatado}\n"
         )
         
@@ -2088,7 +2069,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             msg_resposta += f"\n📊 **Grupo integrado:** ❌ Nenhum grupo encontrado para {org_nome}"
         
         await interaction.response.send_message(msg_resposta, ephemeral=True)
-
+        
 # =========================================================
 # ==================== FUNÇÃO PARA CRIAR EMBED DE ENTREGA =
 # =========================================================
@@ -2105,9 +2086,9 @@ async def criar_embed_entrega(
     observacoes: str,
     entrega_id: int = None,
     vendedor_id: str = None,
-    grupo: dict = None  # NOVO: recebe o grupo para integração
+    grupo: dict = None
 ):
-    """Cria um embed de entrega (única ou parcelada)"""
+    """Cria um embed de entrega (única ou parcelada) com destaque no número de entregas"""
     
     canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
     if not canal:
@@ -2117,16 +2098,35 @@ async def criar_embed_entrega(
     pacotes_pt = pt // 50
     pacotes_sub = sub // 50
     
-    # Título com informação de parcela
+    # =========================================================
+    # ================= TÍTULO COM DESTAQUE ===================
+    # =========================================================
+    
     if total_entregas > 1:
+        # Título com DESTAQUE mostrando quantas entregas
         titulo = f"📦 ENTREGA {entrega_atual}/{total_entregas} • Pedido #{pedido_numero:04d}"
+        descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**"
     else:
         titulo = f"📦 NOVA ENCOMENDA • Pedido #{pedido_numero:04d}"
+        descricao = "✅ Entrega única"
     
     embed = discord.Embed(
         title=titulo,
+        description=descricao,
         color=config["cor"]
     )
+    
+    # =========================================================
+    # ================= DESTAQUE DO NÚMERO DE ENTREGAS ========
+    # =========================================================
+    
+    if total_entregas > 1:
+        # Campo de DESTAQUE logo no início
+        embed.add_field(
+            name="🚨 QUANTAS ENTREGAS?",
+            value=f"**{total_entregas} ENTREGAS NO TOTAL**\n📌 Esta é a entrega **{entrega_atual}/{total_entregas}**\n🔄 Próxima entrega: Automática à meia-noite",
+            inline=False
+        )
     
     embed.add_field(
         name="👤 Vendedor",
@@ -2167,14 +2167,19 @@ async def criar_embed_entrega(
         inline=False
     )
     
-    # Se for parcelado, mostrar informações
+    # =========================================================
+    # ================= SE FOR PARCELADO, MAIS DETALHES =======
+    # =========================================================
+    
     if total_entregas > 1:
+        # Mostrar também o total da venda completa
         embed.add_field(
-            name="📋 INFORMAÇÕES DAS ENTREGAS",
+            name="📋 RESUMO DA VENDA COMPLETA",
             value=(
                 f"**Total de entregas:** {total_entregas}\n"
                 f"**Entrega atual:** {entrega_atual}/{total_entregas}\n"
-                f"**Próxima entrega:** Automática à meia-noite"
+                f"**Próxima entrega:** Automática à meia-noite\n"
+                f"**Status:** ⏳ Aguardando próximas entregas"
             ),
             inline=False
         )
@@ -2191,6 +2196,32 @@ async def criar_embed_entrega(
             value=observacoes,
             inline=False
         )
+    
+    # Integração com grupos (se houver)
+    if grupo:
+        embed.add_field(
+            name="📊 INTEGRAÇÃO COM GRUPO",
+            value=f"✅ Compra registrada automaticamente no grupo **{org_nome}**",
+            inline=False
+        )
+    
+    embed.set_footer(
+        text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas}"
+    )
+    
+    # Enviar mensagem
+    msg = await canal.send(embed=embed, view=StatusView())
+    
+    # Se for parcelado, salvar ID da mensagem
+    if entrega_id:
+        await atualizar_entrega_parcelada(
+            entrega_id=entrega_id,
+            entrega_atual=entrega_atual,
+            mensagem_id=str(msg.id),
+            proxima_entrega=None
+        )
+    
+    return msg
     
     # =========================================================
     # ================= INTEGRAÇÃO COM GRUPOS =================
@@ -4588,7 +4619,7 @@ async def verificar_alugueis_expirados():
 
 @tasks.loop(minutes=1)
 async def verificar_entregas_parceladas():
-    """Verifica e cria entregas parceladas pendentes"""
+    """Verifica e cria entregas parceladas pendentes com DESTAQUE"""
     try:
         entregas = await buscar_entregas_pendentes()
         
@@ -4651,11 +4682,24 @@ async def verificar_entregas_parceladas():
             pacotes_pt = pt_entrega // 50
             pacotes_sub = sub_entrega // 50
             
+            # =========================================================
+            # ================= TÍTULO COM DESTAQUE ===================
+            # =========================================================
+            
             titulo = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
+            descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**"
             
             embed = discord.Embed(
                 title=titulo,
+                description=descricao,
                 color=config["cor"]
+            )
+            
+            # Campo de DESTAQUE logo no início
+            embed.add_field(
+                name="🚨 QUANTAS ENTREGAS?",
+                value=f"**{total_entregas} ENTREGAS NO TOTAL**\n📌 Esta é a entrega **{proxima_entrega_num}/{total_entregas}**\n🔄 Próxima entrega: Automática à meia-noite",
+                inline=False
             )
             
             embed.add_field(
@@ -4697,11 +4741,12 @@ async def verificar_entregas_parceladas():
             )
             
             embed.add_field(
-                name="📋 INFORMAÇÕES DAS ENTREGAS",
+                name="📋 RESUMO DA VENDA COMPLETA",
                 value=(
                     f"**Total de entregas:** {total_entregas}\n"
                     f"**Entrega atual:** {proxima_entrega_num}/{total_entregas}\n"
-                    f"**Próxima entrega:** Automática à meia-noite"
+                    f"**Próxima entrega:** Automática à meia-noite\n"
+                    f"**Status:** ⏳ Aguardando próximas entregas"
                 ),
                 inline=False
             )
@@ -4719,11 +4764,8 @@ async def verificar_entregas_parceladas():
                     inline=False
                 )
             
-            # NOTA: Não adiciona integração com grupo nas entregas seguintes
-            # porque a compra já foi registrada no grupo no momento da venda
-            
             embed.set_footer(
-                text="🛡 Sistema de Encomendas • VDR 442"
+                text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas}"
             )
             
             # Enviar a mensagem
@@ -4746,7 +4788,6 @@ async def verificar_entregas_parceladas():
         print(f"❌ Erro no verificar_entregas_parceladas: {e}")
         import traceback
         traceback.print_exc()
-
 
 # =========================================================
 # ==================== SISTEMA DE COMPRAS ==================
