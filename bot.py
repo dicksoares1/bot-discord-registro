@@ -1904,7 +1904,6 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             if pt < 0 or sub < 0:
                 raise ValueError
                 
-            # Se ambos forem 0, erro
             if pt == 0 and sub == 0:
                 await interaction.response.send_message(
                     "❌ Você precisa informar pelo menos PT ou SUB!",
@@ -1920,25 +1919,73 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             return
         
         # =========================================================
-        # ================= CALCULAR ENTREGAS AUTOMATICAMENTE =====
+        # ================= CALCULAR ENTREGAS =====================
         # =========================================================
         
         LIMITE_DIARIO = 8000
-        total_municoes = pt + sub
         
-        # Calcular quantas entregas são necessárias
-        if total_municoes <= LIMITE_DIARIO:
-            num_entregas = 1
+        # Calcular quantas entregas de PT são necessárias
+        if pt <= LIMITE_DIARIO:
+            entregas_pt = 1 if pt > 0 else 0
         else:
-            num_entregas = (total_municoes // LIMITE_DIARIO)
-            if total_municoes % LIMITE_DIARIO != 0:
-                num_entregas += 1
+            entregas_pt = (pt // LIMITE_DIARIO)
+            if pt % LIMITE_DIARIO != 0:
+                entregas_pt += 1
         
-        # Distribuir PT e SUB igualmente entre as entregas
+        # Calcular quantas entregas de SUB são necessárias
+        if sub <= LIMITE_DIARIO:
+            entregas_sub = 1 if sub > 0 else 0
+        else:
+            entregas_sub = (sub // LIMITE_DIARIO)
+            if sub % LIMITE_DIARIO != 0:
+                entregas_sub += 1
+        
+        # O número TOTAL de entregas é o MAIOR entre os dois
+        # Porque cada entrega tem PT E SUB juntos
+        num_entregas = max(entregas_pt, entregas_sub)
+        
+        # Se um dos produtos não tem entrega, usa 1
+        if num_entregas == 0:
+            num_entregas = 1
+        
+        # =========================================================
+        # ================= DISTRIBUIR PT =========================
+        # =========================================================
+        
         pt_por_entrega = pt // num_entregas
-        sub_por_entrega = sub // num_entregas
         resto_pt = pt % num_entregas
+        
+        # =========================================================
+        # ================= DISTRIBUIR SUB ========================
+        # =========================================================
+        
+        sub_por_entrega = sub // num_entregas
         resto_sub = sub % num_entregas
+        
+        # =========================================================
+        # ================= VERIFICAR LIMITE ======================
+        # =========================================================
+        
+        # Verificar se cada entrega tem no máximo 8k de PT e 8k de SUB
+        for i in range(num_entregas):
+            pt_entrega = pt_por_entrega + (resto_pt if i == 0 else 0)
+            sub_entrega = sub_por_entrega + (resto_sub if i == 0 else 0)
+            
+            if pt_entrega > LIMITE_DIARIO:
+                await interaction.response.send_message(
+                    f"❌ **ERRO!** Entrega {i+1} teria {fmt_num(pt_entrega)} PT, acima do limite de {fmt_num(LIMITE_DIARIO)}.\n"
+                    f"💡 Aumente o número de entregas para {((pt // LIMITE_DIARIO) + 1)}.",
+                    ephemeral=True
+                )
+                return
+            
+            if sub_entrega > LIMITE_DIARIO:
+                await interaction.response.send_message(
+                    f"❌ **ERRO!** Entrega {i+1} teria {fmt_num(sub_entrega)} SUB, acima do limite de {fmt_num(LIMITE_DIARIO)}.\n"
+                    f"💡 Aumente o número de entregas para {((sub // LIMITE_DIARIO) + 1)}.",
+                    ephemeral=True
+                )
+                return
         
         # =========================================================
         # ================= REGISTRAR VENDA =======================
@@ -1946,11 +1993,9 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         
         numero_pedido = await proximo_pedido()
         
-        # Calcular pacotes e munições (TOTAL)
         pacotes_pt_total = pt // 50
         pacotes_sub_total = sub // 50
         
-        # Calcular total (PT: R$50 por munição, SUB: R$90 por munição)
         total = (pt * 50) + (sub * 90)
         
         await salvar_venda_db(
@@ -1976,11 +2021,9 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         # ================= INTEGRAÇÃO COM GRUPOS =================
         # =========================================================
         
-        # Buscar grupo pela organização
         grupo = await buscar_grupo_por_organizacao(org_nome)
         
         if grupo:
-            # Registrar compra no grupo (PT e SUB) - APENAS UMA VEZ (total)
             if pacotes_pt_total > 0:
                 valor_pt = pacotes_pt_total * 50
                 await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt_total, valor_pt)
@@ -1991,17 +2034,29 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub_total, valor_sub)
                 print(f"📦 SUB registrado no grupo {org_nome}: {pacotes_sub_total} pacotes")
             
-            # Atualizar o embed do grupo
             await enviar_embed_grupo(grupo["grupo_id"])
-            
             print(f"✅ Venda integrada com grupo: {org_nome}")
         
         # =========================================================
-        # ================= SE FOR PARCELADO (mais de 1 entrega) ==
+        # ================= CRIAR LISTA DE ENTREGAS ===============
+        # =========================================================
+        
+        entregas_lista = []
+        
+        for i in range(num_entregas):
+            pt_entrega = pt_por_entrega + (resto_pt if i == 0 else 0)
+            sub_entrega = sub_por_entrega + (resto_sub if i == 0 else 0)
+            entregas_lista.append({
+                "tipo": "PT+SUB",
+                "pt": pt_entrega,
+                "sub": sub_entrega
+            })
+        
+        # =========================================================
+        # ================= CRIAR ENTREGAS ========================
         # =========================================================
         
         if num_entregas > 1:
-            # Salvar no banco de entregas parceladas
             entrega_id = await salvar_entrega_parcelada(
                 pedido_original=numero_pedido,
                 total_entregas=num_entregas,
@@ -2013,48 +2068,52 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 canal_id=str(CANAL_ENCOMENDAS_ID)
             )
             
-            # Criar PRIMEIRA entrega (agora)
-            pt_primeira = pt_por_entrega + resto_pt
-            sub_primeira = sub_por_entrega + resto_sub
+            # Primeira entrega
+            primeira = entregas_lista[0]
             
             await criar_embed_entrega(
                 interaction=interaction,
                 pedido_numero=numero_pedido,
                 entrega_atual=1,
                 total_entregas=num_entregas,
-                pt=pt_primeira,
-                sub=sub_primeira,
+                pt=primeira["pt"],
+                sub=primeira["sub"],
                 org_nome=org_nome,
                 config=config,
                 observacoes=self.observacoes.value,
                 entrega_id=entrega_id,
                 vendedor_id=str(interaction.user.id),
-                grupo=grupo
+                grupo=grupo,
+                entregas_lista=entregas_lista
             )
             
-            # Mensagem de confirmação com informações das entregas
+            # Construir resumo das entregas
+            resumo_entregas = ""
+            for i, e in enumerate(entregas_lista, 1):
+                resumo_entregas += f"• Entrega {i}/{num_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
+            
             msg_resposta = (
-                f"✅ **Venda parcelada registrada com sucesso!**\n\n"
+                f"✅ **Venda parcelada registrada!**\n\n"
                 f"📦 **Pedido #{numero_pedido:04d}**\n"
                 f"🏷 **Organização:** {org_nome}\n"
-                f"📦 **Total PT:** {fmt_num(pt)} munições ({pacotes_pt_total} pacotes)\n"
-                f"📦 **Total SUB:** {fmt_num(sub)} munições ({pacotes_sub_total} pacotes)\n"
+                f"📦 **Total PT:** {fmt_num(pt)} munições\n"
+                f"📦 **Total SUB:** {fmt_num(sub)} munições\n"
                 f"💰 **Total:** R$ {valor_formatado}\n\n"
-                f"📋 **Entregas necessárias:** {num_entregas} parcelas\n"
-                f"📅 **Próximas entregas:** Automáticas à meia-noite\n\n"
+                f"📋 **Entregas ({num_entregas} no total):**\n{resumo_entregas}\n"
                 f"✅ **Entrega 1/{num_entregas} criada!**\n"
+                f"📌 Próxima entrega: Quando esta for ENTREGUE"
             )
             
             if grupo:
                 msg_resposta += f"\n📊 **Grupo integrado:** ✅ {org_nome}"
             else:
-                msg_resposta += f"\n📊 **Grupo integrado:** ❌ Nenhum grupo encontrado para {org_nome}"
+                msg_resposta += f"\n📊 **Grupo integrado:** ❌ Nenhum grupo encontrado"
             
             await interaction.response.send_message(msg_resposta, ephemeral=True)
             return
         
         # =========================================================
-        # ================= ENTREGA ÚNICA (1 entrega) ============
+        # ================= ENTREGA ÚNICA =========================
         # =========================================================
         
         await criar_embed_entrega(
@@ -2069,22 +2128,23 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             observacoes=self.observacoes.value,
             entrega_id=None,
             vendedor_id=str(interaction.user.id),
-            grupo=grupo
+            grupo=grupo,
+            entregas_lista=None
         )
         
         msg_resposta = (
-            f"✅ **Venda registrada com sucesso!**\n\n"
+            f"✅ **Venda registrada!**\n\n"
             f"📦 **Pedido #{numero_pedido:04d}**\n"
             f"🏷 **Organização:** {org_nome}\n"
-            f"🔫 **PT:** {fmt_num(pt)} munições ({pacotes_pt_total} pacotes)\n"
-            f"🔫 **SUB:** {fmt_num(sub)} munições ({pacotes_sub_total} pacotes)\n"
-            f"💰 **Total:** R$ {valor_formatado}\n"
+            f"🔫 **PT:** {fmt_num(pt)} munições\n"
+            f"🔫 **SUB:** {fmt_num(sub)} munições\n"
+            f"💰 **Total:** R$ {valor_formatado}"
         )
         
         if grupo:
             msg_resposta += f"\n📊 **Grupo integrado:** ✅ {org_nome}"
         else:
-            msg_resposta += f"\n📊 **Grupo integrado:** ❌ Nenhum grupo encontrado para {org_nome}"
+            msg_resposta += f"\n📊 **Grupo integrado:** ❌ Nenhum grupo encontrado"
         
         await interaction.response.send_message(msg_resposta, ephemeral=True)
         
@@ -2104,9 +2164,10 @@ async def criar_embed_entrega(
     observacoes: str,
     entrega_id: int = None,
     vendedor_id: str = None,
-    grupo: dict = None
+    grupo: dict = None,
+    entregas_lista: list = None
 ):
-    """Cria um embed de entrega (única ou parcelada) com destaque no número de entregas"""
+    """Cria um embed de entrega (única ou parcelada)"""
     
     canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
     if not canal:
@@ -2118,7 +2179,7 @@ async def criar_embed_entrega(
     
     if total_entregas > 1:
         titulo = f"📦 ENTREGA {entrega_atual}/{total_entregas} • Pedido #{pedido_numero:04d}"
-        descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**"
+        descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt)} + SUB {fmt_num(sub)} munições"
     else:
         titulo = f"📦 NOVA ENCOMENDA • Pedido #{pedido_numero:04d}"
         descricao = "✅ Entrega única"
@@ -2129,10 +2190,26 @@ async def criar_embed_entrega(
         color=config["cor"]
     )
     
-    if total_entregas > 1:
+    if total_entregas > 1 and entregas_lista:
+        resumo = ""
+        for i, e in enumerate(entregas_lista, 1):
+            if i < entrega_atual:
+                status = "✅"
+            elif i == entrega_atual:
+                status = "🔴"
+            else:
+                status = "⏳"
+            resumo += f"{status} Entrega {i}/{total_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
+        
+        embed.add_field(
+            name="🚨 RESUMO DAS ENTREGAS",
+            value=resumo,
+            inline=False
+        )
+    elif total_entregas > 1:
         embed.add_field(
             name="🚨 QUANTAS ENTREGAS?",
-            value=f"**{total_entregas} ENTREGAS NO TOTAL**\n📌 Esta é a entrega **{entrega_atual}/{total_entregas}**\n🔄 Próxima entrega: Será criada automaticamente quando esta for **ENTREGUE**",
+            value=f"**{total_entregas} ENTREGAS NO TOTAL**\n📌 Esta é a entrega **{entrega_atual}/{total_entregas}**\n🔄 Próxima entrega: Será criada quando esta for **ENTREGUE**",
             inline=False
         )
     
@@ -2176,12 +2253,11 @@ async def criar_embed_entrega(
     
     if total_entregas > 1:
         embed.add_field(
-            name="📋 RESUMO DA VENDA COMPLETA",
+            name="📋 STATUS DAS ENTREGAS",
             value=(
                 f"**Total de entregas:** {total_entregas}\n"
                 f"**Entrega atual:** {entrega_atual}/{total_entregas}\n"
-                f"**Próxima entrega:** 🔒 Aguardando esta ser ENTREGUE\n"
-                f"**Status:** ⏳ Aguardando confirmação de entrega"
+                f"**Próxima entrega:** 🔒 Aguardando esta ser ENTREGUE"
             ),
             inline=False
         )
@@ -2206,10 +2282,6 @@ async def criar_embed_entrega(
             inline=False
         )
     
-    # =========================================================
-    # ================= FOOTER COM ID DA ENTREGA ==============
-    # =========================================================
-    
     if entrega_id:
         embed.set_footer(
             text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas} • ID: {entrega_id}"
@@ -2219,7 +2291,6 @@ async def criar_embed_entrega(
             text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas}"
         )
     
-    # Enviar mensagem com StatusView (passando entrega_id)
     msg = await canal.send(embed=embed, view=StatusView(entrega_id=entrega_id))
     
     if entrega_id:
@@ -2232,7 +2303,6 @@ async def criar_embed_entrega(
     
     return msg
 
-
 # =========================================================
 # ==================== CRIAR PRÓXIMA ENTREGA ==============
 # =========================================================
@@ -2240,7 +2310,6 @@ async def criar_embed_entrega(
 async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
     """Cria a próxima entrega quando a atual for entregue"""
     try:
-        # Buscar dados da entrega
         async with get_db().acquire() as conn:
             entrega = await conn.fetchrow(
                 "SELECT * FROM entregas_parceladas WHERE id = $1 AND ativo = true",
@@ -2254,18 +2323,15 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
         entrega_atual = entrega["entrega_atual"]
         total_entregas = entrega["total_entregas"]
         
-        # Se já é a última entrega, finalizar
         if entrega_atual >= total_entregas:
             await finalizar_entregas(entrega_id)
             print(f"✅ Todas as {total_entregas} entregas foram concluídas!")
             return
         
-        # Próxima entrega
         proxima_entrega_num = entrega_atual + 1
         
         print(f"🔄 Criando próxima entrega {proxima_entrega_num}/{total_entregas}")
         
-        # Buscar dados
         pedido_original = entrega["pedido_original"]
         pt_por_entrega = entrega["pt_por_entrega"]
         sub_por_entrega = entrega["sub_por_entrega"]
@@ -2274,31 +2340,43 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
         observacoes = entrega["observacoes"]
         canal_id = int(entrega["canal_id"])
         
-        # Buscar canal
         canal = bot.get_channel(canal_id)
         if not canal:
             print(f"❌ Canal {canal_id} não encontrado")
             return
         
-        # Buscar config da organização
         config = ORGANIZACOES_CONFIG.get(
             organizacao,
             {"emoji": "🏷️", "cor": 0x1e3a8a}
         )
         
-        # Buscar grupo (para mostrar no embed)
         grupo = await buscar_grupo_por_organizacao(organizacao)
         
-        # Calcular PT e SUB dessa entrega
+        # =========================================================
+        # ================= CONSTRUIR LISTA DE ENTREGAS ===========
+        # =========================================================
+        
+        entregas_lista = []
+        for i in range(total_entregas):
+            entregas_lista.append({
+                "tipo": "PT+SUB",
+                "pt": pt_por_entrega,
+                "sub": sub_por_entrega
+            })
+        
+        # =========================================================
+        # ================= CALCULAR PT E SUB DESTA ENTREGA =======
+        # =========================================================
+        
         pt_entrega = pt_por_entrega
         sub_entrega = sub_por_entrega
         
-        # Se for a última, adicionar o resto (já foi distribuído na primeira)
-        # O resto já está na primeira entrega, então as demais são iguais
+        # =========================================================
+        # ================= CRIAR EMBED ===========================
+        # =========================================================
         
-        # Criar embed
         titulo = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
-        descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**"
+        descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições"
         
         embed = discord.Embed(
             title=titulo,
@@ -2306,9 +2384,20 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
             color=config["cor"]
         )
         
+        # Resumo das entregas
+        resumo = ""
+        for i, e in enumerate(entregas_lista, 1):
+            if i < proxima_entrega_num:
+                status = "✅"
+            elif i == proxima_entrega_num:
+                status = "🔴"
+            else:
+                status = "⏳"
+            resumo += f"{status} Entrega {i}/{total_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
+        
         embed.add_field(
-            name="🚨 QUANTAS ENTREGAS?",
-            value=f"**{total_entregas} ENTREGAS NO TOTAL**\n📌 Esta é a entrega **{proxima_entrega_num}/{total_entregas}**\n🔄 Próxima entrega: Será criada quando esta for **ENTREGUE**",
+            name="🚨 RESUMO DAS ENTREGAS",
+            value=resumo,
             inline=False
         )
         
@@ -2354,12 +2443,11 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
         )
         
         embed.add_field(
-            name="📋 RESUMO DA VENDA COMPLETA",
+            name="📋 STATUS DAS ENTREGAS",
             value=(
                 f"**Total de entregas:** {total_entregas}\n"
                 f"**Entrega atual:** {proxima_entrega_num}/{total_entregas}\n"
-                f"**Próxima entrega:** 🔒 Aguardando esta ser ENTREGUE\n"
-                f"**Status:** ⏳ Aguardando confirmação de entrega"
+                f"**Próxima entrega:** 🔒 Aguardando esta ser ENTREGUE"
             ),
             inline=False
         )
@@ -2388,10 +2476,8 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
             text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas} • ID: {entrega_id}"
         )
         
-        # Enviar mensagem
         msg = await canal.send(embed=embed, view=StatusView(entrega_id=entrega_id))
         
-        # Atualizar banco
         await atualizar_entrega_parcelada(
             entrega_id=entrega_id,
             entrega_atual=proxima_entrega_num,
@@ -2401,10 +2487,10 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
         
         print(f"✅ Entrega {proxima_entrega_num}/{total_entregas} criada para pedido #{pedido_original}")
         
-        # Notificar que nova entrega foi criada
         await canal.send(
             f"📦 **Nova entrega criada!**\n"
             f"Entrega {proxima_entrega_num}/{total_entregas} do pedido #{pedido_original:04d}\n"
+            f"📦 Conteúdo: PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições\n"
             f"👤 Vendedor: <@{vendedor_id}>"
         )
         
