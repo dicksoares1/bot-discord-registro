@@ -1677,8 +1677,9 @@ async def depositar_na_meta(user_id, valor, motivo):
 # =========================================================
 
 class StatusView(discord.ui.View):
-    def __init__(self, disabled: bool = False):
+    def __init__(self, disabled: bool = False, entrega_id: int = None):
         super().__init__(timeout=None)
+        self.entrega_id = entrega_id
         if disabled:
             for item in self.children:
                 item.disabled = True
@@ -1825,6 +1826,14 @@ class StatusView(discord.ui.View):
                     await canal_bau.send(texto)
                 except Exception as e:
                     print("Erro envio baú:", e)
+        
+        # =========================================================
+        # ================= CRIAR PRÓXIMA ENTREGA =================
+        # =========================================================
+        
+        # Se tem entrega_id, verificar se precisa criar a próxima
+        if self.entrega_id:
+            await criar_proxima_entrega(self.entrega_id, interaction.guild)
     
     @discord.ui.button(label="❌ Pedido cancelado", style=discord.ButtonStyle.danger, custom_id="status_cancelado")
     async def cancelado(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1844,6 +1853,10 @@ class StatusView(discord.ui.View):
         embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
         await responder_interacao(interaction, defer=True)
+        
+        # Se cancelar, finalizar as entregas também
+        if self.entrega_id:
+            await finalizar_entregas(self.entrega_id)
     
     @discord.ui.button(label="✏️ Editar Venda", style=discord.ButtonStyle.secondary, custom_id="status_editar_venda")
     async def editar(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1853,7 +1866,6 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⚠️ Pedido cancelado não pode ser editado.", ephemeral=True)
             return
         await interaction.response.send_modal(EditarVendaModal(interaction.message))
-
 
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(
@@ -2098,12 +2110,7 @@ async def criar_embed_entrega(
     pacotes_pt = pt // 50
     pacotes_sub = sub // 50
     
-    # =========================================================
-    # ================= TÍTULO COM DESTAQUE ===================
-    # =========================================================
-    
     if total_entregas > 1:
-        # Título com DESTAQUE mostrando quantas entregas
         titulo = f"📦 ENTREGA {entrega_atual}/{total_entregas} • Pedido #{pedido_numero:04d}"
         descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**"
     else:
@@ -2116,15 +2123,10 @@ async def criar_embed_entrega(
         color=config["cor"]
     )
     
-    # =========================================================
-    # ================= DESTAQUE DO NÚMERO DE ENTREGAS ========
-    # =========================================================
-    
     if total_entregas > 1:
-        # Campo de DESTAQUE logo no início
         embed.add_field(
             name="🚨 QUANTAS ENTREGAS?",
-            value=f"**{total_entregas} ENTREGAS NO TOTAL**\n📌 Esta é a entrega **{entrega_atual}/{total_entregas}**\n🔄 Próxima entrega: Automática à meia-noite",
+            value=f"**{total_entregas} ENTREGAS NO TOTAL**\n📌 Esta é a entrega **{entrega_atual}/{total_entregas}**\n🔄 Próxima entrega: Será criada automaticamente quando esta for **ENTREGUE**",
             inline=False
         )
     
@@ -2152,7 +2154,6 @@ async def criar_embed_entrega(
         inline=True
     )
     
-    # Valor parcial (apenas dessa entrega)
     valor_entrega = (pt * 50) + (sub * 90)
     valor_formatado = (
         f"{valor_entrega:,.2f}"
@@ -2167,19 +2168,14 @@ async def criar_embed_entrega(
         inline=False
     )
     
-    # =========================================================
-    # ================= SE FOR PARCELADO, MAIS DETALHES =======
-    # =========================================================
-    
     if total_entregas > 1:
-        # Mostrar também o total da venda completa
         embed.add_field(
             name="📋 RESUMO DA VENDA COMPLETA",
             value=(
                 f"**Total de entregas:** {total_entregas}\n"
                 f"**Entrega atual:** {entrega_atual}/{total_entregas}\n"
-                f"**Próxima entrega:** Automática à meia-noite\n"
-                f"**Status:** ⏳ Aguardando próximas entregas"
+                f"**Próxima entrega:** 🔒 Aguardando esta ser ENTREGUE\n"
+                f"**Status:** ⏳ Aguardando confirmação de entrega"
             ),
             inline=False
         )
@@ -2197,7 +2193,6 @@ async def criar_embed_entrega(
             inline=False
         )
     
-    # Integração com grupos (se houver)
     if grupo:
         embed.add_field(
             name="📊 INTEGRAÇÃO COM GRUPO",
@@ -2205,14 +2200,22 @@ async def criar_embed_entrega(
             inline=False
         )
     
-    embed.set_footer(
-        text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas}"
-    )
+    # =========================================================
+    # ================= FOOTER COM ID DA ENTREGA ==============
+    # =========================================================
     
-    # Enviar mensagem
-    msg = await canal.send(embed=embed, view=StatusView())
+    if entrega_id:
+        embed.set_footer(
+            text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas} • ID: {entrega_id}"
+        )
+    else:
+        embed.set_footer(
+            text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas}"
+        )
     
-    # Se for parcelado, salvar ID da mensagem
+    # Enviar mensagem com StatusView (passando entrega_id)
+    msg = await canal.send(embed=embed, view=StatusView(entrega_id=entrega_id))
+    
     if entrega_id:
         await atualizar_entrega_parcelada(
             entrega_id=entrega_id,
@@ -2222,6 +2225,187 @@ async def criar_embed_entrega(
         )
     
     return msg
+
+
+# =========================================================
+# ==================== CRIAR PRÓXIMA ENTREGA ==============
+# =========================================================
+
+async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
+    """Cria a próxima entrega quando a atual for entregue"""
+    try:
+        # Buscar dados da entrega
+        async with get_db().acquire() as conn:
+            entrega = await conn.fetchrow(
+                "SELECT * FROM entregas_parceladas WHERE id = $1 AND ativo = true",
+                entrega_id
+            )
+        
+        if not entrega:
+            print(f"❌ Entrega {entrega_id} não encontrada")
+            return
+        
+        entrega_atual = entrega["entrega_atual"]
+        total_entregas = entrega["total_entregas"]
+        
+        # Se já é a última entrega, finalizar
+        if entrega_atual >= total_entregas:
+            await finalizar_entregas(entrega_id)
+            print(f"✅ Todas as {total_entregas} entregas foram concluídas!")
+            return
+        
+        # Próxima entrega
+        proxima_entrega_num = entrega_atual + 1
+        
+        print(f"🔄 Criando próxima entrega {proxima_entrega_num}/{total_entregas}")
+        
+        # Buscar dados
+        pedido_original = entrega["pedido_original"]
+        pt_por_entrega = entrega["pt_por_entrega"]
+        sub_por_entrega = entrega["sub_por_entrega"]
+        vendedor_id = entrega["vendedor_id"]
+        organizacao = entrega["organizacao"]
+        observacoes = entrega["observacoes"]
+        canal_id = int(entrega["canal_id"])
+        
+        # Buscar canal
+        canal = bot.get_channel(canal_id)
+        if not canal:
+            print(f"❌ Canal {canal_id} não encontrado")
+            return
+        
+        # Buscar config da organização
+        config = ORGANIZACOES_CONFIG.get(
+            organizacao,
+            {"emoji": "🏷️", "cor": 0x1e3a8a}
+        )
+        
+        # Buscar grupo (para mostrar no embed)
+        grupo = await buscar_grupo_por_organizacao(organizacao)
+        
+        # Calcular PT e SUB dessa entrega
+        pt_entrega = pt_por_entrega
+        sub_entrega = sub_por_entrega
+        
+        # Se for a última, adicionar o resto (já foi distribuído na primeira)
+        # O resto já está na primeira entrega, então as demais são iguais
+        
+        # Criar embed
+        titulo = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
+        descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**"
+        
+        embed = discord.Embed(
+            title=titulo,
+            description=descricao,
+            color=config["cor"]
+        )
+        
+        embed.add_field(
+            name="🚨 QUANTAS ENTREGAS?",
+            value=f"**{total_entregas} ENTREGAS NO TOTAL**\n📌 Esta é a entrega **{proxima_entrega_num}/{total_entregas}**\n🔄 Próxima entrega: Será criada quando esta for **ENTREGUE**",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="👤 Vendedor",
+            value=f"<@{vendedor_id}>",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🏷 Organização",
+            value=f"{config['emoji']} {organizacao}",
+            inline=False
+        )
+        
+        pacotes_pt = pt_entrega // 50
+        pacotes_sub = sub_entrega // 50
+        
+        embed.add_field(
+            name="🔫 PT",
+            value=f"{fmt_num(pt_entrega)} munições\n📦 {pacotes_pt} pacotes",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🔫 SUB",
+            value=f"{fmt_num(sub_entrega)} munições\n📦 {pacotes_sub} pacotes",
+            inline=True
+        )
+        
+        valor_entrega = (pt_entrega * 50) + (sub_entrega * 90)
+        valor_formatado = (
+            f"{valor_entrega:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
+        
+        embed.add_field(
+            name="💰 Valor (esta entrega)",
+            value=f"**R$ {valor_formatado}**",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📋 RESUMO DA VENDA COMPLETA",
+            value=(
+                f"**Total de entregas:** {total_entregas}\n"
+                f"**Entrega atual:** {proxima_entrega_num}/{total_entregas}\n"
+                f"**Próxima entrega:** 🔒 Aguardando esta ser ENTREGUE\n"
+                f"**Status:** ⏳ Aguardando confirmação de entrega"
+            ),
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📌 Status",
+            value="📦 A Entregar\n⏳ Pagamento pendente",
+            inline=False
+        )
+        
+        if observacoes:
+            embed.add_field(
+                name="📝 Observações",
+                value=observacoes,
+                inline=False
+            )
+        
+        if grupo:
+            embed.add_field(
+                name="📊 INTEGRAÇÃO COM GRUPO",
+                value=f"✅ Compra registrada automaticamente no grupo **{organizacao}**",
+                inline=False
+            )
+        
+        embed.set_footer(
+            text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas} • ID: {entrega_id}"
+        )
+        
+        # Enviar mensagem
+        msg = await canal.send(embed=embed, view=StatusView(entrega_id=entrega_id))
+        
+        # Atualizar banco
+        await atualizar_entrega_parcelada(
+            entrega_id=entrega_id,
+            entrega_atual=proxima_entrega_num,
+            mensagem_id=str(msg.id),
+            proxima_entrega=None
+        )
+        
+        print(f"✅ Entrega {proxima_entrega_num}/{total_entregas} criada para pedido #{pedido_original}")
+        
+        # Notificar que nova entrega foi criada
+        await canal.send(
+            f"📦 **Nova entrega criada!**\n"
+            f"Entrega {proxima_entrega_num}/{total_entregas} do pedido #{pedido_original:04d}\n"
+            f"👤 Vendedor: <@{vendedor_id}>"
+        )
+        
+    except Exception as e:
+        print(f"❌ Erro ao criar próxima entrega: {e}")
+        import traceback
+        traceback.print_exc()
     
     # =========================================================
     # ================= INTEGRAÇÃO COM GRUPOS =================
@@ -4613,181 +4797,6 @@ async def verificar_alugueis_expirados():
     if expirou:
         await enviar_painel_alugueis()
 
-# =========================================================
-# ==================== LOOP DE ENTREGAS PARCELADAS ========
-# =========================================================
-
-@tasks.loop(minutes=1)
-async def verificar_entregas_parceladas():
-    """Verifica e cria entregas parceladas pendentes com DESTAQUE"""
-    try:
-        entregas = await buscar_entregas_pendentes()
-        
-        if not entregas:
-            return
-        
-        for entrega in entregas:
-            entrega_id = entrega["id"]
-            pedido_original = entrega["pedido_original"]
-            entrega_atual = entrega["entrega_atual"]
-            total_entregas = entrega["total_entregas"]
-            pt_por_entrega = entrega["pt_por_entrega"]
-            sub_por_entrega = entrega["sub_por_entrega"]
-            vendedor_id = entrega["vendedor_id"]
-            organizacao = entrega["organizacao"]
-            observacoes = entrega["observacoes"]
-            canal_id = int(entrega["canal_id"])
-            
-            # Se já terminou, finalizar
-            if entrega_atual >= total_entregas:
-                await finalizar_entregas(entrega_id)
-                continue
-            
-            # Próxima entrega
-            proxima_entrega_num = entrega_atual + 1
-            
-            # Verificar se deve criar (já passou meia-noite)
-            agora_br = agora()
-            proxima_data = entrega["proxima_entrega"]
-            if proxima_data.tzinfo is None:
-                proxima_data = proxima_data.replace(tzinfo=BRASIL)
-            
-            if agora_br < proxima_data:
-                continue
-            
-            print(f"🔄 Criando entrega {proxima_entrega_num}/{total_entregas} do pedido #{pedido_original}")
-            
-            # Buscar o canal
-            canal = bot.get_channel(canal_id)
-            if not canal:
-                print(f"❌ Canal {canal_id} não encontrado para entrega {entrega_id}")
-                continue
-            
-            # Buscar o usuário vendedor
-            vendedor = await pegar_usuario(int(vendedor_id))
-            if not vendedor:
-                print(f"❌ Vendedor {vendedor_id} não encontrado")
-                continue
-            
-            # Criar embed da nova entrega
-            config = ORGANIZACOES_CONFIG.get(
-                organizacao,
-                {"emoji": "🏷️", "cor": 0x1e3a8a}
-            )
-            
-            # Calcular PT e SUB dessa entrega
-            pt_entrega = pt_por_entrega
-            sub_entrega = sub_por_entrega
-            
-            pacotes_pt = pt_entrega // 50
-            pacotes_sub = sub_entrega // 50
-            
-            # =========================================================
-            # ================= TÍTULO COM DESTAQUE ===================
-            # =========================================================
-            
-            titulo = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
-            descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**"
-            
-            embed = discord.Embed(
-                title=titulo,
-                description=descricao,
-                color=config["cor"]
-            )
-            
-            # Campo de DESTAQUE logo no início
-            embed.add_field(
-                name="🚨 QUANTAS ENTREGAS?",
-                value=f"**{total_entregas} ENTREGAS NO TOTAL**\n📌 Esta é a entrega **{proxima_entrega_num}/{total_entregas}**\n🔄 Próxima entrega: Automática à meia-noite",
-                inline=False
-            )
-            
-            embed.add_field(
-                name="👤 Vendedor",
-                value=f"<@{vendedor_id}>",
-                inline=False
-            )
-            
-            embed.add_field(
-                name="🏷 Organização",
-                value=f"{config['emoji']} {organizacao}",
-                inline=False
-            )
-            
-            embed.add_field(
-                name="🔫 PT",
-                value=f"{fmt_num(pt_entrega)} munições\n📦 {pacotes_pt} pacotes",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="🔫 SUB",
-                value=f"{fmt_num(sub_entrega)} munições\n📦 {pacotes_sub} pacotes",
-                inline=True
-            )
-            
-            valor_entrega = (pt_entrega * 50) + (sub_entrega * 90)
-            valor_formatado = (
-                f"{valor_entrega:,.2f}"
-                .replace(",", "X")
-                .replace(".", ",")
-                .replace("X", ".")
-            )
-            
-            embed.add_field(
-                name="💰 Valor (esta entrega)",
-                value=f"**R$ {valor_formatado}**",
-                inline=False
-            )
-            
-            embed.add_field(
-                name="📋 RESUMO DA VENDA COMPLETA",
-                value=(
-                    f"**Total de entregas:** {total_entregas}\n"
-                    f"**Entrega atual:** {proxima_entrega_num}/{total_entregas}\n"
-                    f"**Próxima entrega:** Automática à meia-noite\n"
-                    f"**Status:** ⏳ Aguardando próximas entregas"
-                ),
-                inline=False
-            )
-            
-            embed.add_field(
-                name="📌 Status",
-                value="📦 A Entregar\n⏳ Pagamento pendente",
-                inline=False
-            )
-            
-            if observacoes:
-                embed.add_field(
-                    name="📝 Observações",
-                    value=observacoes,
-                    inline=False
-                )
-            
-            embed.set_footer(
-                text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas}"
-            )
-            
-            # Enviar a mensagem
-            msg = await canal.send(embed=embed, view=StatusView())
-            
-            # Atualizar banco
-            await atualizar_entrega_parcelada(
-                entrega_id=entrega_id,
-                entrega_atual=proxima_entrega_num,
-                mensagem_id=str(msg.id),
-                proxima_entrega=None
-            )
-            
-            print(f"✅ Entrega {proxima_entrega_num}/{total_entregas} criada para pedido #{pedido_original}")
-            
-            # Pequeno delay para não sobrecarregar
-            await asyncio.sleep(2)
-            
-    except Exception as e:
-        print(f"❌ Erro no verificar_entregas_parceladas: {e}")
-        import traceback
-        traceback.print_exc()
 
 # =========================================================
 # ==================== SISTEMA DE COMPRAS ==================
@@ -6403,13 +6412,6 @@ async def on_ready():
     # Restaurar produções
     await restaurar_producoes()
 
-        # Iniciar loop de entregas parceladas
-    try:
-        if not verificar_entregas_parceladas.is_running():
-            verificar_entregas_parceladas.start()
-            print("📦 Loop de entregas parceladas iniciado")
-    except Exception as e:
-        print("Erro ao iniciar loop de entregas:", e)
 
     # =========================================================
     # ================= GRUPOS - SOMENTE O PAINEL =============
