@@ -959,6 +959,9 @@ async def salvar_entrega_parcelada(
         proxima = agora() + timedelta(days=1)
         proxima = proxima.replace(hour=0, minute=0, second=0, microsecond=0)
         
+        # USANDO A FUNÇÃO QUE JÁ EXISTE NO SEU CÓDIGO
+        proxima_naive = para_db_naive(proxima)
+        
         return await conn.fetchval(
             """
             INSERT INTO entregas_parceladas (
@@ -972,7 +975,8 @@ async def salvar_entrega_parcelada(
             pedido_original, 1, total_entregas,
             pt_por_entrega, sub_por_entrega,
             vendedor_id, organizacao, observacoes,
-            proxima, canal_id
+            proxima_naive,
+            canal_id
         )
 
 
@@ -1001,6 +1005,9 @@ async def atualizar_entrega_parcelada(
             proxima_entrega = agora() + timedelta(days=1)
             proxima_entrega = proxima_entrega.replace(hour=0, minute=0, second=0, microsecond=0)
         
+        # USANDO A FUNÇÃO QUE JÁ EXISTE NO SEU CÓDIGO
+        proxima_naive = para_db_naive(proxima_entrega)
+        
         await conn.execute(
             """
             UPDATE entregas_parceladas
@@ -1009,9 +1016,8 @@ async def atualizar_entrega_parcelada(
                 proxima_entrega = $3
             WHERE id = $4
             """,
-            entrega_atual, mensagem_id, proxima_entrega, entrega_id
+            entrega_atual, mensagem_id, proxima_naive, entrega_id
         )
-
 
 async def finalizar_entregas(entrega_id: int):
     """Marca as entregas como concluídas"""
