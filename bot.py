@@ -1924,27 +1924,40 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         
         LIMITE_DIARIO = 8000
         
-        # Calcular quantas entregas de PT são necessárias
-        if pt <= LIMITE_DIARIO:
-            entregas_pt = 1 if pt > 0 else 0
+        # =========================================================
+        # ================= CALCULAR ENTREGAS DE PT ===============
+        # =========================================================
+        
+        if pt == 0:
+            entregas_pt = 0
+        elif pt <= LIMITE_DIARIO:
+            entregas_pt = 1
         else:
             entregas_pt = (pt // LIMITE_DIARIO)
             if pt % LIMITE_DIARIO != 0:
                 entregas_pt += 1
         
-        # Calcular quantas entregas de SUB são necessárias
-        if sub <= LIMITE_DIARIO:
-            entregas_sub = 1 if sub > 0 else 0
+        # =========================================================
+        # ================= CALCULAR ENTREGAS DE SUB ==============
+        # =========================================================
+        
+        if sub == 0:
+            entregas_sub = 0
+        elif sub <= LIMITE_DIARIO:
+            entregas_sub = 1
         else:
             entregas_sub = (sub // LIMITE_DIARIO)
             if sub % LIMITE_DIARIO != 0:
                 entregas_sub += 1
         
-        # O número TOTAL de entregas é o MAIOR entre os dois
-        # Porque cada entrega tem PT E SUB juntos
+        # =========================================================
+        # ================= TOTAL DE ENTREGAS =====================
+        # =========================================================
+        
+        # O total de entregas é o MAIOR entre PT e SUB
         num_entregas = max(entregas_pt, entregas_sub)
         
-        # Se um dos produtos não tem entrega, usa 1
+        # Se ambos forem 0 (nunca acontece), usar 1
         if num_entregas == 0:
             num_entregas = 1
         
@@ -1952,40 +1965,25 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         # ================= DISTRIBUIR PT =========================
         # =========================================================
         
-        pt_por_entrega = pt // num_entregas
-        resto_pt = pt % num_entregas
+        # PT é distribuído APENAS entre as entregas de PT
+        if entregas_pt > 0:
+            pt_por_entrega = pt // entregas_pt
+            resto_pt = pt % entregas_pt
+        else:
+            pt_por_entrega = 0
+            resto_pt = 0
         
         # =========================================================
         # ================= DISTRIBUIR SUB ========================
         # =========================================================
         
-        sub_por_entrega = sub // num_entregas
-        resto_sub = sub % num_entregas
-        
-        # =========================================================
-        # ================= VERIFICAR LIMITE ======================
-        # =========================================================
-        
-        # Verificar se cada entrega tem no máximo 8k de PT e 8k de SUB
-        for i in range(num_entregas):
-            pt_entrega = pt_por_entrega + (resto_pt if i == 0 else 0)
-            sub_entrega = sub_por_entrega + (resto_sub if i == 0 else 0)
-            
-            if pt_entrega > LIMITE_DIARIO:
-                await interaction.response.send_message(
-                    f"❌ **ERRO!** Entrega {i+1} teria {fmt_num(pt_entrega)} PT, acima do limite de {fmt_num(LIMITE_DIARIO)}.\n"
-                    f"💡 Aumente o número de entregas para {((pt // LIMITE_DIARIO) + 1)}.",
-                    ephemeral=True
-                )
-                return
-            
-            if sub_entrega > LIMITE_DIARIO:
-                await interaction.response.send_message(
-                    f"❌ **ERRO!** Entrega {i+1} teria {fmt_num(sub_entrega)} SUB, acima do limite de {fmt_num(LIMITE_DIARIO)}.\n"
-                    f"💡 Aumente o número de entregas para {((sub // LIMITE_DIARIO) + 1)}.",
-                    ephemeral=True
-                )
-                return
+        # SUB é distribuído APENAS entre as entregas de SUB
+        if entregas_sub > 0:
+            sub_por_entrega = sub // entregas_sub
+            resto_sub = sub % entregas_sub
+        else:
+            sub_por_entrega = 0
+            resto_sub = 0
         
         # =========================================================
         # ================= REGISTRAR VENDA =======================
@@ -2043,17 +2041,36 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         
         entregas_lista = []
         
+        # Controle de quantas entregas de cada já foram distribuídas
+        pt_entregue = 0
+        sub_entregue = 0
+        
         for i in range(num_entregas):
-            pt_entrega = pt_por_entrega + (resto_pt if i == 0 else 0)
-            sub_entrega = sub_por_entrega + (resto_sub if i == 0 else 0)
+            # Calcular PT para esta entrega
+            if pt_entregue < entregas_pt:
+                # Ainda tem PT para distribuir
+                pt_entrega = pt_por_entrega + (resto_pt if pt_entregue == 0 else 0)
+                pt_entregue += 1
+            else:
+                # PT já acabou
+                pt_entrega = 0
+            
+            # Calcular SUB para esta entrega
+            if sub_entregue < entregas_sub:
+                # Ainda tem SUB para distribuir
+                sub_entrega = sub_por_entrega + (resto_sub if sub_entregue == 0 else 0)
+                sub_entregue += 1
+            else:
+                # SUB já acabou
+                sub_entrega = 0
+            
             entregas_lista.append({
-                "tipo": "PT+SUB",
                 "pt": pt_entrega,
                 "sub": sub_entrega
             })
         
         # =========================================================
-        # ================= CRIAR ENTREGAS ========================
+        # ================= SALVAR NO BANCO =======================
         # =========================================================
         
         if num_entregas > 1:
@@ -2353,23 +2370,67 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
         grupo = await buscar_grupo_por_organizacao(organizacao)
         
         # =========================================================
+        # ================= CALCULAR ENTREGAS =====================
+        # =========================================================
+        
+        LIMITE_DIARIO = 8000
+        
+        # Calcular entregas de PT
+        if pt_por_entrega == 0:
+            entregas_pt = 0
+        elif pt_por_entrega <= LIMITE_DIARIO:
+            entregas_pt = 1
+        else:
+            entregas_pt = (pt_por_entrega // LIMITE_DIARIO)
+            if pt_por_entrega % LIMITE_DIARIO != 0:
+                entregas_pt += 1
+        
+        # Calcular entregas de SUB
+        if sub_por_entrega == 0:
+            entregas_sub = 0
+        elif sub_por_entrega <= LIMITE_DIARIO:
+            entregas_sub = 1
+        else:
+            entregas_sub = (sub_por_entrega // LIMITE_DIARIO)
+            if sub_por_entrega % LIMITE_DIARIO != 0:
+                entregas_sub += 1
+        
+        # Total de entregas é o MAIOR entre os dois
+        total_entregas_calc = max(entregas_pt, entregas_sub)
+        
+        # =========================================================
         # ================= CONSTRUIR LISTA DE ENTREGAS ===========
         # =========================================================
         
         entregas_lista = []
-        for i in range(total_entregas):
+        pt_entregue = 0
+        sub_entregue = 0
+        
+        for i in range(total_entregas_calc):
+            if pt_entregue < entregas_pt:
+                pt_entrega = pt_por_entrega
+                pt_entregue += 1
+            else:
+                pt_entrega = 0
+            
+            if sub_entregue < entregas_sub:
+                sub_entrega = sub_por_entrega
+                sub_entregue += 1
+            else:
+                sub_entrega = 0
+            
             entregas_lista.append({
-                "tipo": "PT+SUB",
-                "pt": pt_por_entrega,
-                "sub": sub_por_entrega
+                "pt": pt_entrega,
+                "sub": sub_entrega
             })
         
         # =========================================================
-        # ================= CALCULAR PT E SUB DESTA ENTREGA =======
+        # ================= DETERMINAR ESTA ENTREGA ===============
         # =========================================================
         
-        pt_entrega = pt_por_entrega
-        sub_entrega = sub_por_entrega
+        entrega_atual_data = entregas_lista[proxima_entrega_num - 1]
+        pt_entrega = entrega_atual_data["pt"]
+        sub_entrega = entrega_atual_data["sub"]
         
         # =========================================================
         # ================= CRIAR EMBED ===========================
@@ -2384,7 +2445,6 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
             color=config["cor"]
         )
         
-        # Resumo das entregas
         resumo = ""
         for i, e in enumerate(entregas_lista, 1):
             if i < proxima_entrega_num:
