@@ -3140,6 +3140,81 @@ async def acompanhar_producao(pid):
             falhas_consecutivas += 1
         
         await asyncio.sleep(10)
+
+# =========================================================
+# ==================== HEARTBEAT PRODUÇÕES ================
+# =========================================================
+
+async def verificar_heartbeat_producoes():
+    """Verifica se todas as produções estão sendo atualizadas"""
+    try:
+        async with get_db().acquire() as conn:
+            rows = await conn.fetch("SELECT pid, galpao, fim FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+        
+        if not rows:
+            return
+        
+        agora_br = agora()
+        producoes_ativas = {}
+        
+        for r in rows:
+            pid = r["pid"]
+            fim = r["fim"]
+            if isinstance(fim, str):
+                fim = str_para_datetime(fim)
+            
+            # Verificar se já passou do fim
+            if agora_br >= fim:
+                # Finalizar produção
+                prod = await carregar_producao(pid)
+                if prod:
+                    canal = bot.get_channel(prod["canal_id"])
+                    msg = None
+                    if canal:
+                        try:
+                            msg = await canal.fetch_message(prod["msg_id"])
+                        except:
+                            pass
+                    await finalizar_producao(pid, msg, prod)
+                continue
+            
+            producoes_ativas[pid] = fim
+        
+        # Verificar cada produção ativa
+        for pid, fim in producoes_ativas.items():
+            # Verificar se a task está rodando
+            if pid not in producoes_tasks or producoes_tasks[pid].done():
+                print(f"🔧 HEARTBEAT: Task morta para {pid}, recriando...")
+                if pid in producoes_tasks:
+                    del producoes_tasks[pid]
+                task = asyncio.create_task(acompanhar_producao(pid))
+                producoes_tasks[pid] = task
+                print(f"✅ HEARTBEAT: Task recriada para {pid}")
+            
+            # Verificar se a mensagem ainda existe
+            prod = await carregar_producao(pid)
+            if prod:
+                canal = bot.get_channel(prod["canal_id"])
+                if canal:
+                    try:
+                        msg = await canal.fetch_message(prod["msg_id"])
+                    except discord.NotFound:
+                        print(f"⚠️ HEARTBEAT: Mensagem perdida para {pid}, recriando...")
+                        desc = await gerar_desc_producao(prod)
+                        embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
+                        view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
+                        msg = await canal.send(embed=embed, view=view)
+                        prod["msg_id"] = msg.id
+                        await salvar_producao(pid, prod)
+                        print(f"✅ HEARTBEAT: Mensagem recriada para {pid}")
+        
+        print(f"💚 HEARTBEAT: {len(producoes_ativas)} produções ativas verificadas")
+        
+    except Exception as e:
+        print(f"❌ Erro no heartbeat: {e}")
+        import traceback
+        traceback.print_exc()
+        
 async def finalizar_producao(pid, msg, prod):
     print(f"🔵 FINALIZANDO produção {pid}")
     
@@ -4950,6 +5025,7 @@ async def verificar_alugueis_expirados():
         await enviar_painel_alugueis()
 
 
+
 # =========================================================
 # ==================== SISTEMA DE COMPRAS ==================
 # =========================================================
@@ -5907,6 +5983,15 @@ async def verificar_producoes_ativas():
         print(f"❌ Erro no verificar_producoes_ativas: {e}")
 
 # =========================================================
+# ==================== LOOP HEARTBEAT =====================
+# =========================================================
+
+@tasks.loop(minutes=2)
+async def heartbeat_producoes():
+    """Loop de heartbeat para verificar produções a cada 2 minutos"""
+    await verificar_heartbeat_producoes()
+
+# =========================================================
 # ==================== RESTAURAR PRODUÇÕES ================
 # =========================================================
 
@@ -6563,6 +6648,14 @@ async def on_ready():
     
     # Restaurar produções
     await restaurar_producoes()
+
+        # Iniciar loop de heartbeat para produções
+    try:
+        if not heartbeat_producoes.is_running():
+            heartbeat_producoes.start()
+            print("💚 Loop de heartbeat das produções iniciado")
+    except Exception as e:
+        print("Erro ao iniciar loop de heartbeat:", e)
 
 
     # =========================================================
