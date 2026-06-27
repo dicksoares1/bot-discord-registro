@@ -2019,6 +2019,12 @@ class StatusView(discord.ui.View):
                     await canal_bau.send(texto)
                 except Exception as e:
                     print("Erro envio baú:", e)
+
+        # =========================================================
+        # ================= SINCRONIZAR PAINÉIS ===================
+        # =========================================================
+        await enviar_painel_vendas()
+        await enviar_painel_fabricacao()
     
     @discord.ui.button(
         label="📦 Criar Próxima Entrega",
@@ -2321,6 +2327,12 @@ class StatusView(discord.ui.View):
                 f"📦 Conteúdo: PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições",
                 ephemeral=True
             )
+
+            # =========================================================
+            # ================= SINCRONIZAR PAINÉIS ===================
+            # =========================================================
+            await enviar_painel_vendas()
+            await enviar_painel_fabricacao()
             
         except Exception as e:
             print(f"❌ Erro ao criar próxima entrega: {e}")
@@ -2613,6 +2625,12 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             
             await interaction.response.send_message(msg_resposta, ephemeral=True)
             return
+
+        # =========================================================
+        # ================= SINCRONIZAR PAINÉIS ==================
+        # =========================================================
+        await enviar_painel_vendas()
+        await enviar_painel_fabricacao()
         
         # =========================================================
         # ================= ENTREGA ÚNICA =========================
@@ -3346,6 +3364,12 @@ class CalculadoraView(discord.ui.View):
     @discord.ui.button(label="Relatório", style=discord.ButtonStyle.success, custom_id="calc_relatorio_vendas")
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioModal())
+    
+    @discord.ui.button(label="🔄 Atualizar Estoque", style=discord.ButtonStyle.secondary, custom_id="calc_atualizar_estoque", emoji="🔄")
+    async def atualizar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_vendas()
+        await interaction.followup.send("✅ Estoque atualizado!", ephemeral=True)
 
 
 class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
@@ -4026,6 +4050,12 @@ class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
         await enviar_painel_fabricacao()
 
+        # =========================================================
+        # ================= ATUALIZAR PAINÉIS =====================
+        # =========================================================
+        await enviar_painel_fabricacao()
+        await enviar_painel_vendas()
+
 
 class RegistrarCapsulasModal(discord.ui.Modal, title="📦 Registrar Cápsulas"):
     quantidade = discord.ui.TextInput(label="Quantidade de CÁPSULAS", placeholder="Ex: 1000", required=True)
@@ -4059,6 +4089,11 @@ class RegistrarCapsulasModal(discord.ui.Modal, title="📦 Registrar Cápsulas")
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
         await enviar_painel_fabricacao()
 
+        # =========================================================
+        # ================= ATUALIZAR PAINEL ======================
+        # =========================================================
+        await enviar_painel_fabricacao()
+
 
 class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagens"):
     quantidade = discord.ui.TextInput(label="Quantidade de EMBALAGENS", placeholder="Ex: 500", required=True)
@@ -4090,6 +4125,11 @@ class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagen
         embed_privado = discord.Embed(title="✅ EMBALAGENS REGISTRADAS", description=f"**{fmt_num(quantidade)}** embalagens adicionadas!", color=0x2ecc71)
         embed_privado.add_field(name="📊 Estoque atual", value=f"**{fmt_num(estoque['embalagens'])}** embalagens", inline=False)
         await interaction.followup.send(embed=embed_privado, ephemeral=True)
+        await enviar_painel_fabricacao()
+
+        # =========================================================
+        # ================= ATUALIZAR PAINEL ======================
+        # =========================================================
         await enviar_painel_fabricacao()
 
 
@@ -4147,7 +4187,6 @@ class FabricacaoView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_fabricacao()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
-
 
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
     data_inicio = discord.ui.TextInput(label="Data inicial (DD/MM/AAAA)", placeholder="Ex: 01/04/2026")
@@ -6164,30 +6203,104 @@ async def enviar_painel_registro():
     print("✅ Painel de registro criado")
 
 
+async def sincronizar_paineis_estoque(guild):
+    """Sincroniza o estoque entre os painéis de vendas e fabricação"""
+    try:
+        # Atualizar painel de vendas
+        await enviar_painel_vendas()
+        
+        # Atualizar painel de fabricação
+        await enviar_painel_fabricacao()
+        
+        print("🔄 Estoques sincronizados entre os painéis")
+    except Exception as e:
+        print(f"❌ Erro ao sincronizar painéis: {e}")
+
 async def enviar_painel_vendas():
+    """Envia/atualiza o painel de vendas com estoque atualizado"""
     canal = bot.get_channel(CANAL_VENDAS_ID)
     if not canal:
         print("❌ Canal de vendas não encontrado")
         return
+    
     estoque = await carregar_estoque()
-    embed = discord.Embed(title="🛒 Painel de Vendas", description="Escolha uma opção abaixo.\n\n⚠️ **ATENÇÃO:** Antes de entregar um pedido, verifique se há ESTOQUE disponível!", color=0x2ecc71)
-    embed.add_field(name="📦 ESTOQUE DISPONÍVEL", value=f"🔫 PT: **{fmt_num(estoque['PT'])}** pacotes\n🔫 SUB: **{fmt_num(estoque['SUB'])}** pacotes", inline=False)
-    await enviar_ou_atualizar_painel("painel_vendas", CANAL_VENDAS_ID, embed, CalculadoraView())
-    print("🛒 Painel de vendas verificado/atualizado")
+    
+    embed = discord.Embed(
+        title="🛒 Painel de Vendas",
+        description="Escolha uma opção abaixo.\n\n⚠️ **ATENÇÃO:** Antes de entregar um pedido, verifique se há ESTOQUE disponível!",
+        color=0x2ecc71
+    )
+    
+    embed.add_field(
+        name="📦 ESTOQUE DISPONÍVEL",
+        value=f"🔫 PT: **{fmt_num(estoque['PT'])}** pacotes\n🔫 SUB: **{fmt_num(estoque['SUB'])}** pacotes",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"🔄 Atualizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+    
+    # View com botão de atualizar
+    view = CalculadoraView()
+    
+    await enviar_ou_atualizar_painel("painel_vendas", CANAL_VENDAS_ID, embed, view)
+    print("🛒 Painel de vendas atualizado")
 
 
 async def enviar_painel_fabricacao():
+    """Envia/atualiza o painel de fabricação com estoque atualizado"""
     canal = bot.get_channel(CANAL_FABRICACAO_ID)
     if not canal:
         print("❌ Canal de fabricação não encontrado")
         return
+    
     estoque_municoes = await carregar_estoque()
     estoque_insumos = await carregar_estoque_insumos()
-    embed = discord.Embed(title="🏭 PAINEL DE FABRICAÇÃO", description="**Gerencie a produção e estoque:**", color=0x2ecc71)
-    embed.add_field(name="📦 ESTOQUE DE MUNIÇÃO", value=f"🔫 **PT:** {fmt_num(estoque_municoes['PT'])} pacotes\n🔫 **SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes", inline=False)
-    embed.add_field(name="💊 ESTOQUE DE INSUMOS", value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades", inline=False)
-    embed.add_field(name="🏭 PRODUÇÃO DE CÁPSULAS", value="• **Galpões Norte:** 65 minutos (3 galpões)\n• **Galpões Sul:** 130 minutos (3 galpões)\n\n💡 Ao clicar, informe:\n   - Quantos galpões (1, 2 ou 3)\n   - Pólvora por galpão", inline=False)
-    embed.set_footer(text="Utilize os botões abaixo para gerenciar o estoque")
+    
+    embed = discord.Embed(
+        title="🏭 PAINEL DE FABRICAÇÃO",
+        description="**Gerencie a produção e estoque:**",
+        color=0x2ecc71
+    )
+    
+    embed.add_field(
+        name="📦 ESTOQUE DE MUNIÇÃO",
+        value=f"🔫 **PT:** {fmt_num(estoque_municoes['PT'])} pacotes\n🔫 **SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="💊 ESTOQUE DE INSUMOS",
+        value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🏭 PRODUÇÃO DE CÁPSULAS",
+        value=(
+            "• **Galpões Norte:** 65 minutos (3 galpões)\n"
+            "• **Galpões Sul:** 130 minutos (3 galpões)\n\n"
+            "💡 Ao clicar, informe:\n"
+            "   - Quantos galpões (1, 2 ou 3)\n"
+            "   - Pólvora por galpão"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text=f"🔄 Atualizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+    
+    # Usar a mesma view com botão de atualizar
+    view = FabricacaoView()
+    
+    # Deletar mensagens antigas do painel
+    async for msg in canal.history(limit=20):
+        if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "🏭 PAINEL DE FABRICAÇÃO":
+            try:
+                await msg.delete()
+            except:
+                pass
+    
+    await canal.send(embed=embed, view=view)
+    print("🏭 Painel de fabricação atualizado")
     
     async for msg in canal.history(limit=10):
         if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "🏭 PAINEL DE FABRICAÇÃO":
