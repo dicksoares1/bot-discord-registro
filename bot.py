@@ -2316,16 +2316,105 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⚠️ Este pedido já foi cancelado.", ephemeral=True)
             return
 
+        # =========================================================
+        # ================= VERIFICAR SE JÁ FOI ENTREGUE ==========
+        # =========================================================
+        
+        # Verificar se tem linha de "✅ Entregue" no status
+        if self.entrega_ja_foi_entregue(linhas):
+            # Se já foi entregue, precisamos reverter o estoque
+            
+            # Extrair quantidades do embed
+            pacotes_pt = 0
+            pacotes_sub = 0
+            
+            for field in embed.fields:
+                if field.name == "🔫 PT":
+                    try:
+                        linhas_field = field.value.split("\n")
+                        for l in linhas_field:
+                            if "📦" in l:
+                                pacotes_pt = int(l.replace("📦", "").replace("pacotes", "").strip())
+                    except:
+                        pass
+                if field.name == "🔫 SUB":
+                    try:
+                        linhas_field = field.value.split("\n")
+                        for l in linhas_field:
+                            if "📦" in l:
+                                pacotes_sub = int(l.replace("📦", "").replace("pacotes", "").strip())
+                    except:
+                        pass
+            
+            # =========================================================
+            # ================= REVERTER ESTOQUE =====================
+            # =========================================================
+            
+            if pacotes_pt > 0 or pacotes_sub > 0:
+                titulo = embed.title
+                pedido_numero = int(titulo.split("#")[1]) if "#" in titulo else 0
+                
+                # Reverter: adicionar de volta ao estoque
+                if pacotes_pt > 0:
+                    await atualizar_estoque("PT", pacotes_pt, "adicionar")
+                    print(f"🔄 Estoque PT reabastecido: +{pacotes_pt} pacotes (pedido #{pedido_numero} cancelado)")
+                
+                if pacotes_sub > 0:
+                    await atualizar_estoque("SUB", pacotes_sub, "adicionar")
+                    print(f"🔄 Estoque SUB reabastecido: +{pacotes_sub} pacotes (pedido #{pedido_numero} cancelado)")
+                
+                # Registrar no banco a reversão
+                async with get_db().acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO saida_estoque (pedido_numero, tipo, pacotes, retirado_por, data, observacao) VALUES ($1, $2, $3, $4, $5, $6)",
+                        pedido_numero, "REVERSÃO", pacotes_pt + pacotes_sub, str(interaction.user.id), agora_db(), f"CANCELAMENTO - Reversão de estoque"
+                    )
+                
+                # Enviar notificação no canal do baú
+                canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+                if canal_bau:
+                    try:
+                        texto = f"🔄 **REVERSÃO DE ESTOQUE - PEDIDO CANCELADO**\n\n"
+                        texto += f"👤 Cancelado por: {interaction.user.mention}\n"
+                        texto += f"📦 Pedido #{pedido_numero}\n"
+                        if pacotes_pt > 0:
+                            texto += f"🔫 PT: +{pacotes_pt} pacotes (reabastecido)\n"
+                        if pacotes_sub > 0:
+                            texto += f"🔫 SUB: +{pacotes_sub} pacotes (reabastecido)"
+                        await canal_bau.send(texto)
+                    except Exception as e:
+                        print("Erro envio baú reversão:", e)
+        
+        # =========================================================
+        # ================= ATUALIZAR EMBED =======================
+        # =========================================================
+
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
-        linhas = [f"❌ Pedido cancelado por {user} • {agora_str}"]
+        
+        # Verificar se já tinha "✅ Entregue" para adicionar informação de reversão
+        if self.entrega_ja_foi_entregue(linhas):
+            linhas = [f"❌ Pedido cancelado por {user} • {agora_str}\n🔄 **ESTOQUE REVERTIDO**"]
+        else:
+            linhas = [f"❌ Pedido cancelado por {user} • {agora_str}"]
+        
         embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
         await responder_interacao(interaction, defer=True)
 
+        # =========================================================
+        # ================= FINALIZAR ENTREGAS ====================
+        # =========================================================
+
         if self.entrega_id:
             await finalizar_entregas(self.entrega_id)
 
+        # =========================================================
+        # ================= ATUALIZAR PAINÉIS =====================
+        # =========================================================
+
+        await enviar_painel_vendas()
+        await enviar_painel_fabricacao()
     @discord.ui.button(label="✏️ Editar Venda", style=discord.ButtonStyle.secondary, custom_id="status_editar_venda")
     async def editar(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
