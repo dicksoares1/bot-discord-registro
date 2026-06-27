@@ -1818,6 +1818,7 @@ class StatusView(discord.ui.View):
     def __init__(self, disabled: bool = False, entrega_id: int = None):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
+        self.entrega_ja_entregue = False  # NOVO: controle para evitar duplo clique
         if disabled:
             for item in self.children:
                 item.disabled = True
@@ -1874,6 +1875,17 @@ class StatusView(discord.ui.View):
     
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
     async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # =========================================================
+        # ================= IMPEDIR DUPLO CLIQUE ==================
+        # =========================================================
+        
+        if self.entrega_ja_entregue:
+            await interaction.response.send_message(
+                "⚠️ **Esta entrega já foi marcada como entregue!**",
+                ephemeral=True
+            )
+            return
+        
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
         
@@ -1881,7 +1893,18 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⚠️ Este pedido foi cancelado.", ephemeral=True)
             return
         
-        # Verificar estoque
+        # Verificar se já foi entregue (linha com ✅ Entregue)
+        if any(l.startswith("✅") for l in linhas):
+            await interaction.response.send_message(
+                "⚠️ **Esta entrega já foi entregue!**",
+                ephemeral=True
+            )
+            return
+        
+        # =========================================================
+        # ================= VERIFICAR ESTOQUE =====================
+        # =========================================================
+        
         pacotes_pt = 0
         pacotes_sub = 0
         
@@ -1923,6 +1946,24 @@ class StatusView(discord.ui.View):
                 )
                 return
         
+        # =========================================================
+        # ================= MARCAR COMO ENTREGUE (BLOQUEAR) =======
+        # =========================================================
+        
+        # BLOQUEAR IMEDIATAMENTE para evitar duplo clique
+        self.entrega_ja_entregue = True
+        
+        # Desabilitar o botão "Entregue" visualmente
+        for child in self.children:
+            if child.custom_id == "status_entregue":
+                child.disabled = True
+                child.label = "✅ Entregue (Concluído)"
+                break
+        
+        # =========================================================
+        # ================= REGISTRAR SAÍDA DO ESTOQUE ============
+        # =========================================================
+        
         titulo = embed.title
         pedido_numero = int(titulo.split("#")[1]) if "#" in titulo else 0
         
@@ -1931,6 +1972,10 @@ class StatusView(discord.ui.View):
         if pacotes_sub > 0:
             await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
         
+        # =========================================================
+        # ================= ATUALIZAR EMBED =======================
+        # =========================================================
+        
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user
         
@@ -1938,6 +1983,10 @@ class StatusView(discord.ui.View):
         linhas = [l for l in linhas if not l.startswith("✅")]
         linhas.append(f"✅ Entregue por {user.mention} • {agora_str}")
         embed = self.set_status(embed, idx, linhas)
+        
+        # =========================================================
+        # ================= VERIFICAR SE FINALIZOU ================
+        # =========================================================
         
         finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
         if finalizado:
@@ -1951,6 +2000,10 @@ class StatusView(discord.ui.View):
             await interaction.message.edit(embed=embed, view=self)
         
         await responder_interacao(interaction, defer=True)
+        
+        # =========================================================
+        # ================= ENVIAR NOTIFICAÇÃO DO BAÚ =============
+        # =========================================================
         
         if pacotes_pt > 0 or pacotes_sub > 0:
             canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
@@ -1969,7 +2022,6 @@ class StatusView(discord.ui.View):
         # ================= CRIAR PRÓXIMA ENTREGA =================
         # =========================================================
         
-        # Se tem entrega_id, verificar se precisa criar a próxima
         if self.entrega_id:
             await criar_proxima_entrega(self.entrega_id, interaction.guild)
     
@@ -1992,7 +2044,6 @@ class StatusView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
         await responder_interacao(interaction, defer=True)
         
-        # Se cancelar, finalizar as entregas também
         if self.entrega_id:
             await finalizar_entregas(self.entrega_id)
     
@@ -2004,6 +2055,7 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⚠️ Pedido cancelado não pode ser editado.", ephemeral=True)
             return
         await interaction.response.send_modal(EditarVendaModal(interaction.message))
+
 
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(
@@ -2472,11 +2524,13 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
         entrega_atual = entrega["entrega_atual"]
         total_entregas = entrega["total_entregas"]
         
+        # SE JÁ CHEGOU NA ÚLTIMA, FINALIZAR
         if entrega_atual >= total_entregas:
             await finalizar_entregas(entrega_id)
             print(f"✅ Todas as {total_entregas} entregas foram concluídas!")
             return
         
+        # PRÓXIMA ENTREGA
         proxima_entrega_num = entrega_atual + 1
         
         print(f"🔄 Criando próxima entrega {proxima_entrega_num}/{total_entregas}")
@@ -2668,7 +2722,15 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
             text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas} • ID: {entrega_id}"
         )
         
+        # =========================================================
+        # ================= ENVIAR MENSAGEM =======================
+        # =========================================================
+        
         msg = await canal.send(embed=embed, view=StatusView(entrega_id=entrega_id))
+        
+        # =========================================================
+        # ================= ATUALIZAR BANCO =======================
+        # =========================================================
         
         await atualizar_entrega_parcelada(
             entrega_id=entrega_id,
@@ -2678,6 +2740,10 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
         )
         
         print(f"✅ Entrega {proxima_entrega_num}/{total_entregas} criada para pedido #{pedido_original}")
+        
+        # =========================================================
+        # ================= NOTIFICAR NO CANAL ====================
+        # =========================================================
         
         await canal.send(
             f"📦 **Nova entrega criada!**\n"
@@ -2690,36 +2756,7 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
         print(f"❌ Erro ao criar próxima entrega: {e}")
         import traceback
         traceback.print_exc()
-    
-    # =========================================================
-    # ================= INTEGRAÇÃO COM GRUPOS =================
-    # =========================================================
-    
-    # Adicionar informação de integração com grupo (se houver)
-    if grupo:
-        embed.add_field(
-            name="📊 INTEGRAÇÃO COM GRUPO",
-            value=f"✅ Compra registrada automaticamente no grupo **{org_nome}**",
-            inline=False
-        )
-    
-    embed.set_footer(
-        text="🛡 Sistema de Encomendas • VDR 442"
-    )
-    
-    # Enviar mensagem
-    msg = await canal.send(embed=embed, view=StatusView())
-    
-    # Se for parcelado, salvar ID da mensagem
-    if entrega_id:
-        await atualizar_entrega_parcelada(
-            entrega_id=entrega_id,
-            entrega_atual=entrega_atual,
-            mensagem_id=str(msg.id),
-            proxima_entrega=None  # Calcula automático +1 dia
-        )
-    
-    return msg
+
 
 class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
     qtd_pt = discord.ui.TextInput(
