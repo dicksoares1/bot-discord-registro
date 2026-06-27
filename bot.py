@@ -1819,7 +1819,7 @@ class StatusView(discord.ui.View):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
         self.entrega_ja_entregue = False
-        self.proxima_criada = False  # NOVO: controla se a próxima já foi criada
+        self.proxima_criada = False
         if disabled:
             for item in self.children:
                 item.disabled = True
@@ -1879,10 +1879,6 @@ class StatusView(discord.ui.View):
     
     @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
     async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # =========================================================
-        # ================= IMPEDIR DUPLO CLIQUE ==================
-        # =========================================================
-        
         if self.entrega_ja_entregue:
             await interaction.response.send_message(
                 "⚠️ **Esta entrega já foi marcada como entregue!**",
@@ -1897,17 +1893,12 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⚠️ Este pedido foi cancelado.", ephemeral=True)
             return
         
-        # Verificar se já foi entregue
         if self.entrega_ja_foi_entregue(linhas):
             await interaction.response.send_message(
                 "⚠️ **Esta entrega já foi entregue!**",
                 ephemeral=True
             )
             return
-        
-        # =========================================================
-        # ================= VERIFICAR ESTOQUE =====================
-        # =========================================================
         
         pacotes_pt = 0
         pacotes_sub = 0
@@ -1950,24 +1941,15 @@ class StatusView(discord.ui.View):
                 )
                 return
         
-        # =========================================================
-        # ================= MARCAR COMO ENTREGUE ==================
-        # =========================================================
-        
         self.entrega_ja_entregue = True
         
-        # Desabilitar botão "Entregue" e habilitar "Criar Próxima"
         for child in self.children:
             if child.custom_id == "status_entregue":
                 child.disabled = True
                 child.label = "✅ Entregue (Concluído)"
             if child.custom_id == "criar_proxima_entrega":
-                child.disabled = False  # HABILITAR O BOTÃO DE CRIAR PRÓXIMA
+                child.disabled = False
                 child.label = "📦 Criar Próxima Entrega"
-        
-        # =========================================================
-        # ================= REGISTRAR SAÍDA DO ESTOQUE ============
-        # =========================================================
         
         titulo = embed.title
         pedido_numero = int(titulo.split("#")[1]) if "#" in titulo else 0
@@ -1977,10 +1959,6 @@ class StatusView(discord.ui.View):
         if pacotes_sub > 0:
             await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
         
-        # =========================================================
-        # ================= ATUALIZAR EMBED =======================
-        # =========================================================
-        
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user
         
@@ -1989,7 +1967,6 @@ class StatusView(discord.ui.View):
         linhas.append(f"✅ Entregue por {user.mention} • {agora_str}")
         embed = self.set_status(embed, idx, linhas)
         
-        # Verificar se finalizou (pago + entregue)
         finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
         if finalizado:
             embed.color = 0x2ecc71
@@ -2003,10 +1980,6 @@ class StatusView(discord.ui.View):
         
         await responder_interacao(interaction, defer=True)
         
-        # =========================================================
-        # ================= ENVIAR NOTIFICAÇÃO DO BAÚ =============
-        # =========================================================
-        
         if pacotes_pt > 0 or pacotes_sub > 0:
             canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
             if canal_bau:
@@ -2019,14 +1992,11 @@ class StatusView(discord.ui.View):
                     await canal_bau.send(texto)
                 except Exception as e:
                     print("Erro envio baú:", e)
-
-        # =========================================================
-        # ================= SINCRONIZAR PAINÉIS ===================
-        # =========================================================
+        
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
     
-        @discord.ui.button(
+    @discord.ui.button(
         label="📦 Criar Próxima Entrega",
         style=discord.ButtonStyle.primary,
         custom_id="criar_proxima_entrega",
@@ -2091,62 +2061,10 @@ class StatusView(discord.ui.View):
             proxima_entrega_num = entrega_atual + 1
             pedido_original = entrega["pedido_original"]
             
-            # =========================================================
-            # ================= RECALCULAR TOTAL REAL =================
-            # =========================================================
-            
-            # Buscar TODAS as mensagens de entrega já criadas para este pedido
-            canal_id = int(entrega["canal_id"])
-            canal = bot.get_channel(canal_id)
-            
-            # Pegar o total original do pedido a partir do banco de vendas
-            venda = await conn.fetchrow(
-                "SELECT valor FROM vendas WHERE pedido_numero = $1",
-                pedido_original
-            )
-            
-            # Pegar a lista de mensagens já criadas
-            mensagem_ids = entrega.get("mensagem_ids", [])
-            
-            # Calcular quanto já foi entregue somando os valores dos embeds
-            pt_ja_entregue = 0
-            sub_ja_entregue = 0
-            
-            for msg_id in mensagem_ids:
-                try:
-                    msg = await canal.fetch_message(int(msg_id))
-                    if msg and msg.embeds:
-                        embed = msg.embeds[0]
-                        for field in embed.fields:
-                            if field.name == "🔫 PT":
-                                try:
-                                    valor = field.value.split(" munições")[0]
-                                    pt_ja_entregue += int(valor.replace(".", "").replace(",", ""))
-                                except:
-                                    pass
-                            if field.name == "🔫 SUB":
-                                try:
-                                    valor = field.value.split(" munições")[0]
-                                    sub_ja_entregue += int(valor.replace(".", "").replace(",", ""))
-                                except:
-                                    pass
-                except:
-                    pass
-            
-            # Se não conseguiu calcular pelo embed, usar o valor do banco
-            if pt_ja_entregue == 0 and sub_ja_entregue == 0:
-                # Fallback: usar o pt_por_entrega * entregas_feitas
-                pt_por_entrega = entrega["pt_por_entrega"]
-                sub_por_entrega = entrega["sub_por_entrega"]
-                entregas_feitas = entrega_atual - 1
-                pt_ja_entregue = pt_por_entrega * entregas_feitas
-                sub_ja_entregue = sub_por_entrega * entregas_feitas
-            
-            # Calcular o total original (9.000 no exemplo)
-            # Buscar o total original da primeira venda
+            # Buscar a primeira entrega para pegar os valores originais
             primeira_entrega = await conn.fetchrow(
-                "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 AND id = $2",
-                pedido_original, self.entrega_id
+                "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
+                pedido_original
             )
             
             if primeira_entrega:
@@ -2156,115 +2074,23 @@ class StatusView(discord.ui.View):
                 pt_por_entrega = entrega["pt_por_entrega"]
                 sub_por_entrega = entrega["sub_por_entrega"]
             
-            # O total original NÃO É pt_por_entrega * total_entregas
-            # Porque cada entrega pode ter valores diferentes
-            # Precisamos calcular o total REAL a partir das mensagens já criadas
-            
-            # =========================================================
-            # ================= CALCULAR O QUE RESTA ==================
-            # =========================================================
-            
-            # Para saber o total, vamos olhar o valor total da venda no banco
-            if venda:
-                valor_total = venda["valor"]
-                # O valor total é (pt_total * 50) + (sub_total * 90)
-                # Precisamos descobrir pt_total e sub_total
-                # Para isso, vamos usar a primeira entrega como referência
-                # e calcular baseado no valor
-                
-                # Se a primeira entrega tinha 8000 PT, o valor era 400.000
-                # Se o total foi 450.000, então o total era 9000
-                # Isso é complexo, vamos usar um método mais simples:
-                
-                # Buscar a PRIMEIRA mensagem criada (que tem o total correto)
-                primeira_msg_id = mensagem_ids[0] if mensagem_ids else None
-                if primeira_msg_id:
-                    try:
-                        msg = await canal.fetch_message(int(primeira_msg_id))
-                        if msg and msg.embeds:
-                            embed = msg.embeds[0]
-                            # Procurar o campo de resumo que tem todas as entregas
-                            for field in embed.fields:
-                                if field.name == "🚨 RESUMO DAS ENTREGAS":
-                                    # Extrair o total de cada entrega
-                                    linhas = field.value.split("\n")
-                                    pt_total = 0
-                                    sub_total = 0
-                                    for linha in linhas:
-                                        if "PT" in linha and "SUB" in linha:
-                                            import re
-                                            pt_match = re.search(r'PT\s*([\d.]+)', linha)
-                                            sub_match = re.search(r'SUB\s*([\d.]+)', linha)
-                                            if pt_match:
-                                                pt_total += int(pt_match.group(1).replace(".", ""))
-                                            if sub_match:
-                                                sub_total += int(sub_match.group(1).replace(".", ""))
-                                    pt_total_original = pt_total
-                                    sub_total_original = sub_total
-                                    break
-                    except:
-                        pass
-            
-            # Se ainda não conseguiu, usar o método antigo (mas com correção)
-            if 'pt_total_original' not in locals():
-                # Usar o pt_por_entrega * total_entregas, mas limitar pelo valor da venda
-                pt_por_entrega = entrega["pt_por_entrega"]
-                sub_por_entrega = entrega["sub_por_entrega"]
-                pt_total_original = pt_por_entrega * total_entregas
-                sub_total_original = sub_por_entrega * total_entregas
-                
-                # Se o valor da venda existe, tentar recalcular
-                if venda:
-                    valor_total = venda["valor"]
-                    # Tentar descobrir a proporção
-                    if pt_por_entrega > 0 and sub_por_entrega > 0:
-                        # Ambos têm valor
-                        pt_valor_por_entrega = pt_por_entrega * 50
-                        sub_valor_por_entrega = sub_por_entrega * 90
-                        valor_por_entrega = pt_valor_por_entrega + sub_valor_por_entrega
-                        total_entregas_real = valor_total // valor_por_entrega
-                        if total_entregas_real > 0:
-                            pt_total_original = pt_por_entrega * total_entregas_real
-                            sub_total_original = sub_por_entrega * total_entregas_real
-                    elif pt_por_entrega > 0:
-                        # Só PT
-                        pt_total_original = valor_total // 50
-                    elif sub_por_entrega > 0:
-                        # Só SUB
-                        sub_total_original = valor_total // 90
-            
-            # =========================================================
-            # ================= CALCULAR O QUE JÁ FOI ENTREGUE =======
-            # =========================================================
+            # Calcular o total original baseado na primeira entrega
+            pt_total_original = pt_por_entrega * total_entregas
+            sub_total_original = sub_por_entrega * total_entregas
             
             # Já foram entregues `entrega_atual - 1` entregas
             entregas_feitas = entrega_atual - 1
             
-            # O que já foi entregue (usando os valores reais das mensagens)
-            # Se não conseguiu calcular pelo embed, usar a estimativa
-            if pt_ja_entregue == 0:
-                # Calcular baseado no pt_por_entrega * entregas_feitas
-                pt_ja_entregue = entrega["pt_por_entrega"] * entregas_feitas
-            if sub_ja_entregue == 0:
-                sub_ja_entregue = entrega["sub_por_entrega"] * entregas_feitas
+            pt_ja_entregue = pt_por_entrega * entregas_feitas
+            sub_ja_entregue = sub_por_entrega * entregas_feitas
             
-            # O que RESTA para entregar
             pt_restante_total = pt_total_original - pt_ja_entregue
             sub_restante_total = sub_total_original - sub_ja_entregue
             
-            # Se ficou negativo, ajustar
             if pt_restante_total < 0:
                 pt_restante_total = 0
             if sub_restante_total < 0:
                 sub_restante_total = 0
-            
-            print(f"📊 Total original: PT={pt_total_original}, SUB={sub_total_original}")
-            print(f"📊 Já entregue: PT={pt_ja_entregue}, SUB={sub_ja_entregue}")
-            print(f"📊 Restante: PT={pt_restante_total}, SUB={sub_restante_total}")
-            
-            # =========================================================
-            # ================= CRIAR A PRÓXIMA ENTREGA ==============
-            # =========================================================
             
             LIMITE_DIARIO = 8000
             
@@ -2275,7 +2101,9 @@ class StatusView(discord.ui.View):
             vendedor_id = entrega["vendedor_id"]
             organizacao = entrega["organizacao"]
             observacoes = entrega["observacoes"]
+            canal_id = int(entrega["canal_id"])
             
+            canal = bot.get_channel(canal_id)
             if not canal:
                 await interaction.followup.send(
                     f"❌ **Canal {canal_id} não encontrado!**",
@@ -2290,10 +2118,6 @@ class StatusView(discord.ui.View):
             
             grupo = await buscar_grupo_por_organizacao(organizacao)
             
-            # =========================================================
-            # ================= CRIAR EMBED ===========================
-            # =========================================================
-            
             titulo_embed = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
             descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições"
             
@@ -2303,29 +2127,22 @@ class StatusView(discord.ui.View):
                 color=config["cor"]
             )
             
-            # Construir resumo com base no que já foi entregue
+            # Construir resumo
             resumo = ""
-            
-            # Entregas já concluídas
-            for i in range(1, proxima_entrega_num):
+            for i in range(1, total_entregas + 1):
                 if i < proxima_entrega_num:
-                    # Pegar o valor da entrega (se soubermos)
-                    if i == 1:
-                        # Primeira entrega: 8000
-                        pt_valor = min(LIMITE_DIARIO, pt_total_original) if pt_total_original > 0 else 0
-                        sub_valor = min(LIMITE_DIARIO, sub_total_original) if sub_total_original > 0 else 0
-                    else:
-                        # Outras entregas
-                        pt_valor = 0
-                        sub_valor = 0
-                    resumo += f"✅ Entrega {i}/{total_entregas}: PT {fmt_num(pt_valor)} + SUB {fmt_num(sub_valor)} munições\n"
-            
-            # Entrega atual
-            resumo += f"🔴 Entrega {proxima_entrega_num}/{total_entregas}: PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições\n"
-            
-            # Entregas futuras
-            for i in range(proxima_entrega_num + 1, total_entregas + 1):
-                resumo += f"⏳ Entrega {i}/{total_entregas}: PT 0 + SUB 0 munições\n"
+                    status = "✅"
+                    pt_valor = pt_por_entrega if pt_por_entrega > 0 else 0
+                    sub_valor = sub_por_entrega if sub_por_entrega > 0 else 0
+                elif i == proxima_entrega_num:
+                    status = "🔴"
+                    pt_valor = pt_entrega
+                    sub_valor = sub_entrega
+                else:
+                    status = "⏳"
+                    pt_valor = 0
+                    sub_valor = 0
+                resumo += f"{status} Entrega {i}/{total_entregas}: PT {fmt_num(pt_valor)} + SUB {fmt_num(sub_valor)} munições\n"
             
             embed_novo.add_field(
                 name="🚨 RESUMO DAS ENTREGAS",
@@ -2431,17 +2248,6 @@ class StatusView(discord.ui.View):
                 ephemeral=True
             )
             
-        except Exception as e:
-            print(f"❌ Erro ao criar próxima entrega: {e}")
-            import traceback
-            traceback.print_exc()
-            await interaction.followup.send(
-                f"❌ **Erro ao criar próxima entrega:** {str(e)}",
-                ephemeral=True
-            )
-            # =========================================================
-            # ================= SINCRONIZAR PAINÉIS ===================
-            # =========================================================
             await enviar_painel_vendas()
             await enviar_painel_fabricacao()
             
@@ -2484,7 +2290,6 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⚠️ Pedido cancelado não pode ser editado.", ephemeral=True)
             return
         await interaction.response.send_modal(EditarVendaModal(interaction.message))
-
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(
         label="Organização",
