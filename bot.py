@@ -2103,15 +2103,28 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             return
         
         # =========================================================
+        # ================= PEGAR ORGANIZAÇÃO =====================
+        # =========================================================
+        
+        org_nome = self.organizacao.value.strip().upper()
+        config = ORGANIZACOES_CONFIG.get(
+            org_nome,
+            {"emoji": "🏷️", "cor": 0x1e3a8a}
+        )
+        
+        # =========================================================
+        # ================= GERAR NÚMERO DO PEDIDO ================
+        # =========================================================
+        
+        numero_pedido = await proximo_pedido()
+        
+        # =========================================================
         # ================= CALCULAR ENTREGAS =====================
         # =========================================================
         
         LIMITE_DIARIO = 8000
         
-        # =========================================================
-        # ================= CALCULAR ENTREGAS DE PT ===============
-        # =========================================================
-        
+        # Calcular entregas de PT
         if pt == 0:
             entregas_pt = 0
         elif pt <= LIMITE_DIARIO:
@@ -2121,10 +2134,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             if pt % LIMITE_DIARIO != 0:
                 entregas_pt += 1
         
-        # =========================================================
-        # ================= CALCULAR ENTREGAS DE SUB ==============
-        # =========================================================
-        
+        # Calcular entregas de SUB
         if sub == 0:
             entregas_sub = 0
         elif sub <= LIMITE_DIARIO:
@@ -2134,14 +2144,8 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             if sub % LIMITE_DIARIO != 0:
                 entregas_sub += 1
         
-        # =========================================================
-        # ================= TOTAL DE ENTREGAS =====================
-        # =========================================================
-        
-        # O total de entregas é o MAIOR entre PT e SUB
+        # Total de entregas é o MAIOR entre PT e SUB
         num_entregas = max(entregas_pt, entregas_sub)
-        
-        # Se ambos forem 0 (nunca acontece), usar 1
         if num_entregas == 0:
             num_entregas = 1
         
@@ -2152,11 +2156,10 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         if pt == 0:
             pt_por_entrega = 0
         else:
-            # Cada entrega normal leva 8000, a última leva o resto
             if pt <= LIMITE_DIARIO:
-                pt_por_entrega = pt  # Uma única entrega com tudo
+                pt_por_entrega = pt
             else:
-                pt_por_entrega = LIMITE_DIARIO  # 8000 por entrega, a última com o resto
+                pt_por_entrega = LIMITE_DIARIO
         
         # =========================================================
         # ================= CALCULAR SUB POR ENTREGA ==============
@@ -2165,11 +2168,10 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         if sub == 0:
             sub_por_entrega = 0
         else:
-            # Cada entrega normal leva 8000, a última leva o resto
             if sub <= LIMITE_DIARIO:
-                sub_por_entrega = sub  # Uma única entrega com tudo
+                sub_por_entrega = sub
             else:
-                sub_por_entrega = LIMITE_DIARIO  # 8000 por entrega, a última com o resto
+                sub_por_entrega = LIMITE_DIARIO
         
         # =========================================================
         # ================= CRIAR LISTA DE ENTREGAS ===============
@@ -2182,25 +2184,19 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         for i in range(num_entregas):
             entrega_num = i + 1
             
-            # Calcular PT para esta entrega
             if pt_restante > 0:
                 if entrega_num == num_entregas:
-                    # ÚLTIMA ENTREGA: o que sobrou
                     pt_entrega = pt_restante
                 else:
-                    # ENTREGAS NORMAIS: 8000 (ou o que faltar)
                     pt_entrega = min(LIMITE_DIARIO, pt_restante)
                 pt_restante -= pt_entrega
             else:
                 pt_entrega = 0
             
-            # Calcular SUB para esta entrega
             if sub_restante > 0:
                 if entrega_num == num_entregas:
-                    # ÚLTIMA ENTREGA: o que sobrou
                     sub_entrega = sub_restante
                 else:
-                    # ENTREGAS NORMAIS: 8000 (ou o que faltar)
                     sub_entrega = min(LIMITE_DIARIO, sub_restante)
                 sub_restante -= sub_entrega
             else:
@@ -2212,12 +2208,30 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             })
         
         # =========================================================
+        # ================= REGISTRAR VENDA =======================
+        # =========================================================
+        
+        pacotes_pt_total = pt // 50
+        pacotes_sub_total = sub // 50
+        
+        total = (pt * 50) + (sub * 90)
+        
+        await salvar_venda_db(
+            str(interaction.user.id),
+            total,
+            numero_pedido
+        )
+        
+        valor_formatado = (
+            f"{total:,.2f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
+        
+        # =========================================================
         # ================= INTEGRAÇÃO COM GRUPOS =================
         # =========================================================
-
-
-        # PEGAR O NOME DA ORGANIZAÇÃO DO MODAL
-        org_nome = self.organizacao.value.strip().upper()
         
         grupo = await buscar_grupo_por_organizacao(org_nome)
         
@@ -2236,24 +2250,11 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             print(f"✅ Venda integrada com grupo: {org_nome}")
         
         # =========================================================
-        # ================= CRIAR LISTA DE ENTREGAS ===============
-        # =========================================================
-        
-        entregas_lista = []
-        
-        # Controle de quantas entregas de cada já foram distribuídas
-        pt_entregue = 0
-        sub_entregue = 0
-        
-# DEPOIS (correto - USAR A LISTA JÁ CALCULADA):
-# A lista entregas_lista já foi calculada acima com a nova lógica
-# NÃO PRECISA RECALCULAR AQUI!
-        
-        # =========================================================
-        # ================= SALVAR NO BANCO =======================
+        # ================= CRIAR ENTREGAS ========================
         # =========================================================
         
         if num_entregas > 1:
+            # Venda parcelada
             entrega_id = await salvar_entrega_parcelada(
                 pedido_original=numero_pedido,
                 total_entregas=num_entregas,
@@ -2284,7 +2285,6 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 entregas_lista=entregas_lista
             )
             
-            # Construir resumo das entregas
             resumo_entregas = ""
             for i, e in enumerate(entregas_lista, 1):
                 resumo_entregas += f"• Entrega {i}/{num_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
