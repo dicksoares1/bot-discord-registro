@@ -2026,7 +2026,7 @@ class StatusView(discord.ui.View):
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
     
-    @discord.ui.button(
+        @discord.ui.button(
         label="📦 Criar Próxima Entrega",
         style=discord.ButtonStyle.primary,
         custom_id="criar_proxima_entrega",
@@ -2091,63 +2091,191 @@ class StatusView(discord.ui.View):
             proxima_entrega_num = entrega_atual + 1
             pedido_original = entrega["pedido_original"]
             
-            pt_por_entrega = entrega["pt_por_entrega"]
-            sub_por_entrega = entrega["sub_por_entrega"]
+            # =========================================================
+            # ================= RECALCULAR TOTAL REAL =================
+            # =========================================================
             
-            pt_total_original = pt_por_entrega * total_entregas
-            sub_total_original = sub_por_entrega * total_entregas
+            # Buscar TODAS as mensagens de entrega já criadas para este pedido
+            canal_id = int(entrega["canal_id"])
+            canal = bot.get_channel(canal_id)
             
+            # Pegar o total original do pedido a partir do banco de vendas
+            venda = await conn.fetchrow(
+                "SELECT valor FROM vendas WHERE pedido_numero = $1",
+                pedido_original
+            )
+            
+            # Pegar a lista de mensagens já criadas
+            mensagem_ids = entrega.get("mensagem_ids", [])
+            
+            # Calcular quanto já foi entregue somando os valores dos embeds
+            pt_ja_entregue = 0
+            sub_ja_entregue = 0
+            
+            for msg_id in mensagem_ids:
+                try:
+                    msg = await canal.fetch_message(int(msg_id))
+                    if msg and msg.embeds:
+                        embed = msg.embeds[0]
+                        for field in embed.fields:
+                            if field.name == "🔫 PT":
+                                try:
+                                    valor = field.value.split(" munições")[0]
+                                    pt_ja_entregue += int(valor.replace(".", "").replace(",", ""))
+                                except:
+                                    pass
+                            if field.name == "🔫 SUB":
+                                try:
+                                    valor = field.value.split(" munições")[0]
+                                    sub_ja_entregue += int(valor.replace(".", "").replace(",", ""))
+                                except:
+                                    pass
+                except:
+                    pass
+            
+            # Se não conseguiu calcular pelo embed, usar o valor do banco
+            if pt_ja_entregue == 0 and sub_ja_entregue == 0:
+                # Fallback: usar o pt_por_entrega * entregas_feitas
+                pt_por_entrega = entrega["pt_por_entrega"]
+                sub_por_entrega = entrega["sub_por_entrega"]
+                entregas_feitas = entrega_atual - 1
+                pt_ja_entregue = pt_por_entrega * entregas_feitas
+                sub_ja_entregue = sub_por_entrega * entregas_feitas
+            
+            # Calcular o total original (9.000 no exemplo)
+            # Buscar o total original da primeira venda
+            primeira_entrega = await conn.fetchrow(
+                "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 AND id = $2",
+                pedido_original, self.entrega_id
+            )
+            
+            if primeira_entrega:
+                pt_por_entrega = primeira_entrega["pt_por_entrega"]
+                sub_por_entrega = primeira_entrega["sub_por_entrega"]
+            else:
+                pt_por_entrega = entrega["pt_por_entrega"]
+                sub_por_entrega = entrega["sub_por_entrega"]
+            
+            # O total original NÃO É pt_por_entrega * total_entregas
+            # Porque cada entrega pode ter valores diferentes
+            # Precisamos calcular o total REAL a partir das mensagens já criadas
+            
+            # =========================================================
+            # ================= CALCULAR O QUE RESTA ==================
+            # =========================================================
+            
+            # Para saber o total, vamos olhar o valor total da venda no banco
+            if venda:
+                valor_total = venda["valor"]
+                # O valor total é (pt_total * 50) + (sub_total * 90)
+                # Precisamos descobrir pt_total e sub_total
+                # Para isso, vamos usar a primeira entrega como referência
+                # e calcular baseado no valor
+                
+                # Se a primeira entrega tinha 8000 PT, o valor era 400.000
+                # Se o total foi 450.000, então o total era 9000
+                # Isso é complexo, vamos usar um método mais simples:
+                
+                # Buscar a PRIMEIRA mensagem criada (que tem o total correto)
+                primeira_msg_id = mensagem_ids[0] if mensagem_ids else None
+                if primeira_msg_id:
+                    try:
+                        msg = await canal.fetch_message(int(primeira_msg_id))
+                        if msg and msg.embeds:
+                            embed = msg.embeds[0]
+                            # Procurar o campo de resumo que tem todas as entregas
+                            for field in embed.fields:
+                                if field.name == "🚨 RESUMO DAS ENTREGAS":
+                                    # Extrair o total de cada entrega
+                                    linhas = field.value.split("\n")
+                                    pt_total = 0
+                                    sub_total = 0
+                                    for linha in linhas:
+                                        if "PT" in linha and "SUB" in linha:
+                                            import re
+                                            pt_match = re.search(r'PT\s*([\d.]+)', linha)
+                                            sub_match = re.search(r'SUB\s*([\d.]+)', linha)
+                                            if pt_match:
+                                                pt_total += int(pt_match.group(1).replace(".", ""))
+                                            if sub_match:
+                                                sub_total += int(sub_match.group(1).replace(".", ""))
+                                    pt_total_original = pt_total
+                                    sub_total_original = sub_total
+                                    break
+                    except:
+                        pass
+            
+            # Se ainda não conseguiu, usar o método antigo (mas com correção)
+            if 'pt_total_original' not in locals():
+                # Usar o pt_por_entrega * total_entregas, mas limitar pelo valor da venda
+                pt_por_entrega = entrega["pt_por_entrega"]
+                sub_por_entrega = entrega["sub_por_entrega"]
+                pt_total_original = pt_por_entrega * total_entregas
+                sub_total_original = sub_por_entrega * total_entregas
+                
+                # Se o valor da venda existe, tentar recalcular
+                if venda:
+                    valor_total = venda["valor"]
+                    # Tentar descobrir a proporção
+                    if pt_por_entrega > 0 and sub_por_entrega > 0:
+                        # Ambos têm valor
+                        pt_valor_por_entrega = pt_por_entrega * 50
+                        sub_valor_por_entrega = sub_por_entrega * 90
+                        valor_por_entrega = pt_valor_por_entrega + sub_valor_por_entrega
+                        total_entregas_real = valor_total // valor_por_entrega
+                        if total_entregas_real > 0:
+                            pt_total_original = pt_por_entrega * total_entregas_real
+                            sub_total_original = sub_por_entrega * total_entregas_real
+                    elif pt_por_entrega > 0:
+                        # Só PT
+                        pt_total_original = valor_total // 50
+                    elif sub_por_entrega > 0:
+                        # Só SUB
+                        sub_total_original = valor_total // 90
+            
+            # =========================================================
+            # ================= CALCULAR O QUE JÁ FOI ENTREGUE =======
+            # =========================================================
+            
+            # Já foram entregues `entrega_atual - 1` entregas
             entregas_feitas = entrega_atual - 1
             
-            pt_ja_entregue = pt_por_entrega * entregas_feitas
-            sub_ja_entregue = sub_por_entrega * entregas_feitas
+            # O que já foi entregue (usando os valores reais das mensagens)
+            # Se não conseguiu calcular pelo embed, usar a estimativa
+            if pt_ja_entregue == 0:
+                # Calcular baseado no pt_por_entrega * entregas_feitas
+                pt_ja_entregue = entrega["pt_por_entrega"] * entregas_feitas
+            if sub_ja_entregue == 0:
+                sub_ja_entregue = entrega["sub_por_entrega"] * entregas_feitas
             
+            # O que RESTA para entregar
             pt_restante_total = pt_total_original - pt_ja_entregue
             sub_restante_total = sub_total_original - sub_ja_entregue
             
+            # Se ficou negativo, ajustar
+            if pt_restante_total < 0:
+                pt_restante_total = 0
+            if sub_restante_total < 0:
+                sub_restante_total = 0
+            
+            print(f"📊 Total original: PT={pt_total_original}, SUB={sub_total_original}")
+            print(f"📊 Já entregue: PT={pt_ja_entregue}, SUB={sub_ja_entregue}")
+            print(f"📊 Restante: PT={pt_restante_total}, SUB={sub_restante_total}")
+            
+            # =========================================================
+            # ================= CRIAR A PRÓXIMA ENTREGA ==============
+            # =========================================================
+            
             LIMITE_DIARIO = 8000
-            entregas_restantes = total_entregas - entregas_feitas
             
-            entregas_lista = []
-            pt_restante = pt_restante_total
-            sub_restante = sub_restante_total
-            
-            for i in range(entregas_restantes):
-                entrega_num = i + 1
-                
-                if pt_restante > 0:
-                    if entrega_num == entregas_restantes:
-                        pt_entrega = pt_restante
-                    else:
-                        pt_entrega = min(LIMITE_DIARIO, pt_restante)
-                    pt_restante -= pt_entrega
-                else:
-                    pt_entrega = 0
-                
-                if sub_restante > 0:
-                    if entrega_num == entregas_restantes:
-                        sub_entrega = sub_restante
-                    else:
-                        sub_entrega = min(LIMITE_DIARIO, sub_restante)
-                    sub_restante -= sub_entrega
-                else:
-                    sub_entrega = 0
-                
-                entregas_lista.append({
-                    "pt": pt_entrega,
-                    "sub": sub_entrega
-                })
-            
-            entrega_atual_data = entregas_lista[0]
-            pt_entrega = entrega_atual_data["pt"]
-            sub_entrega = entrega_atual_data["sub"]
+            # A próxima entrega é o que resta, limitado a 8000
+            pt_entrega = min(LIMITE_DIARIO, pt_restante_total) if pt_restante_total > 0 else 0
+            sub_entrega = min(LIMITE_DIARIO, sub_restante_total) if sub_restante_total > 0 else 0
             
             vendedor_id = entrega["vendedor_id"]
             organizacao = entrega["organizacao"]
             observacoes = entrega["observacoes"]
-            canal_id = int(entrega["canal_id"])
             
-            canal = bot.get_channel(canal_id)
             if not canal:
                 await interaction.followup.send(
                     f"❌ **Canal {canal_id} não encontrado!**",
@@ -2162,6 +2290,10 @@ class StatusView(discord.ui.View):
             
             grupo = await buscar_grupo_por_organizacao(organizacao)
             
+            # =========================================================
+            # ================= CRIAR EMBED ===========================
+            # =========================================================
+            
             titulo_embed = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
             descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições"
             
@@ -2171,58 +2303,29 @@ class StatusView(discord.ui.View):
                 color=config["cor"]
             )
             
-            entregas_completas = []
-            
-            if pt_total_original == 0:
-                entregas_pt = 0
-            else:
-                entregas_pt = (pt_total_original + LIMITE_DIARIO - 1) // LIMITE_DIARIO
-            
-            if sub_total_original == 0:
-                entregas_sub = 0
-            else:
-                entregas_sub = (sub_total_original + LIMITE_DIARIO - 1) // LIMITE_DIARIO
-            
-            total_entregas_calc = max(entregas_pt, entregas_sub)
-            
-            pt_restante_completo = pt_total_original
-            sub_restante_completo = sub_total_original
-            
-            for i in range(total_entregas_calc):
-                entrega_num = i + 1
-                
-                if pt_restante_completo > 0:
-                    if entrega_num == total_entregas_calc:
-                        pt_valor = pt_restante_completo
-                    else:
-                        pt_valor = min(LIMITE_DIARIO, pt_restante_completo)
-                    pt_restante_completo -= pt_valor
-                else:
-                    pt_valor = 0
-                
-                if sub_restante_completo > 0:
-                    if entrega_num == total_entregas_calc:
-                        sub_valor = sub_restante_completo
-                    else:
-                        sub_valor = min(LIMITE_DIARIO, sub_restante_completo)
-                    sub_restante_completo -= sub_valor
-                else:
-                    sub_valor = 0
-                
-                entregas_completas.append({
-                    "pt": pt_valor,
-                    "sub": sub_valor
-                })
-            
+            # Construir resumo com base no que já foi entregue
             resumo = ""
-            for i, e in enumerate(entregas_completas, 1):
+            
+            # Entregas já concluídas
+            for i in range(1, proxima_entrega_num):
                 if i < proxima_entrega_num:
-                    status = "✅"
-                elif i == proxima_entrega_num:
-                    status = "🔴"
-                else:
-                    status = "⏳"
-                resumo += f"{status} Entrega {i}/{total_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
+                    # Pegar o valor da entrega (se soubermos)
+                    if i == 1:
+                        # Primeira entrega: 8000
+                        pt_valor = min(LIMITE_DIARIO, pt_total_original) if pt_total_original > 0 else 0
+                        sub_valor = min(LIMITE_DIARIO, sub_total_original) if sub_total_original > 0 else 0
+                    else:
+                        # Outras entregas
+                        pt_valor = 0
+                        sub_valor = 0
+                    resumo += f"✅ Entrega {i}/{total_entregas}: PT {fmt_num(pt_valor)} + SUB {fmt_num(sub_valor)} munições\n"
+            
+            # Entrega atual
+            resumo += f"🔴 Entrega {proxima_entrega_num}/{total_entregas}: PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições\n"
+            
+            # Entregas futuras
+            for i in range(proxima_entrega_num + 1, total_entregas + 1):
+                resumo += f"⏳ Entrega {i}/{total_entregas}: PT 0 + SUB 0 munições\n"
             
             embed_novo.add_field(
                 name="🚨 RESUMO DAS ENTREGAS",
@@ -2327,7 +2430,15 @@ class StatusView(discord.ui.View):
                 f"📦 Conteúdo: PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições",
                 ephemeral=True
             )
-
+            
+        except Exception as e:
+            print(f"❌ Erro ao criar próxima entrega: {e}")
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(
+                f"❌ **Erro ao criar próxima entrega:** {str(e)}",
+                ephemeral=True
+            )
             # =========================================================
             # ================= SINCRONIZAR PAINÉIS ===================
             # =========================================================
@@ -2467,30 +2578,6 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             num_entregas = 1
         
         # =========================================================
-        # ================= CALCULAR PT POR ENTREGA ===============
-        # =========================================================
-        
-        if pt == 0:
-            pt_por_entrega = 0
-        else:
-            if pt <= LIMITE_DIARIO:
-                pt_por_entrega = pt
-            else:
-                pt_por_entrega = LIMITE_DIARIO
-        
-        # =========================================================
-        # ================= CALCULAR SUB POR ENTREGA ==============
-        # =========================================================
-        
-        if sub == 0:
-            sub_por_entrega = 0
-        else:
-            if sub <= LIMITE_DIARIO:
-                sub_por_entrega = sub
-            else:
-                sub_por_entrega = LIMITE_DIARIO
-        
-        # =========================================================
         # ================= CRIAR LISTA DE ENTREGAS ===============
         # =========================================================
         
@@ -2503,8 +2590,10 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             
             if pt_restante > 0:
                 if entrega_num == num_entregas:
+                    # ÚLTIMA ENTREGA: o que sobrou
                     pt_entrega = pt_restante
                 else:
+                    # ENTREGAS NORMAIS: 8000 (ou o que faltar)
                     pt_entrega = min(LIMITE_DIARIO, pt_restante)
                 pt_restante -= pt_entrega
             else:
@@ -2512,8 +2601,10 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             
             if sub_restante > 0:
                 if entrega_num == num_entregas:
+                    # ÚLTIMA ENTREGA: o que sobrou
                     sub_entrega = sub_restante
                 else:
+                    # ENTREGAS NORMAIS: 8000 (ou o que faltar)
                     sub_entrega = min(LIMITE_DIARIO, sub_restante)
                 sub_restante -= sub_entrega
             else:
@@ -2523,6 +2614,17 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 "pt": pt_entrega,
                 "sub": sub_entrega
             })
+        
+        # =========================================================
+        # ================= CALCULAR VALOR POR ENTREGA ============
+        # =========================================================
+        
+        # O valor que vai ser salvo no banco é o valor da PRIMEIRA entrega
+        # (pois o sistema usa pt_por_entrega * total_entregas para calcular o total)
+        # Mas como cada entrega tem valores diferentes, vamos salvar o total real
+        primeira_entrega = entregas_lista[0]
+        pt_por_entrega = primeira_entrega["pt"]
+        sub_por_entrega = primeira_entrega["sub"]
         
         # =========================================================
         # ================= REGISTRAR VENDA =======================
@@ -2570,13 +2672,16 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         # ================= CRIAR ENTREGAS ========================
         # =========================================================
         
-        if num_entregas > 1:
-            # Venda parcelada
+            if num_entregas > 1:
+            # Venda parcelada - salvar a PRIMEIRA entrega como referência
+            # O banco vai usar isso para calcular o total original
+            primeira_entrega = entregas_lista[0]
+            
             entrega_id = await salvar_entrega_parcelada(
                 pedido_original=numero_pedido,
                 total_entregas=num_entregas,
-                pt_por_entrega=pt_por_entrega,
-                sub_por_entrega=sub_por_entrega,
+                pt_por_entrega=primeira_entrega["pt"],  # PRIMEIRA entrega (8.000)
+                sub_por_entrega=primeira_entrega["sub"],  # PRIMEIRA entrega (0)
                 vendedor_id=str(interaction.user.id),
                 organizacao=org_nome,
                 observacoes=self.observacoes.value,
