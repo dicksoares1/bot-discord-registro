@@ -2002,6 +2002,13 @@ class StatusView(discord.ui.View):
         custom_id="criar_proxima_entrega",
         disabled=True
     )
+    
+        @discord.ui.button(
+        label="📦 Criar Próxima Entrega",
+        style=discord.ButtonStyle.primary,
+        custom_id="criar_proxima_entrega",
+        disabled=True
+    )
     async def criar_proxima(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Cria a próxima entrega MANUALMENTE após clicar em Entregue"""
         
@@ -2029,6 +2036,10 @@ class StatusView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         try:
+            # =========================================================
+            # ================= BUSCAR DADOS DA ENTREGA ===============
+            # =========================================================
+            
             async with get_db().acquire() as conn:
                 entrega = await conn.fetchrow(
                     "SELECT * FROM entregas_parceladas WHERE id = $1 AND ativo = true",
@@ -2062,10 +2073,11 @@ class StatusView(discord.ui.View):
             pedido_original = entrega["pedido_original"]
             
             # Buscar a primeira entrega para pegar os valores originais
-            primeira_entrega = await conn.fetchrow(
-                "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
-                pedido_original
-            )
+            async with get_db().acquire() as conn2:
+                primeira_entrega = await conn2.fetchrow(
+                    "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
+                    pedido_original
+                )
             
             if primeira_entrega:
                 pt_por_entrega = primeira_entrega["pt_por_entrega"]
@@ -2227,12 +2239,17 @@ class StatusView(discord.ui.View):
             
             msg = await canal.send(embed=embed_novo, view=StatusView(entrega_id=self.entrega_id))
             
-            await atualizar_entrega_parcelada(
-                entrega_id=self.entrega_id,
-                entrega_atual=proxima_entrega_num,
-                mensagem_id=str(msg.id),
-                proxima_entrega=None
-            )
+            # =========================================================
+            # ================= ATUALIZAR BANCO =======================
+            # =========================================================
+            
+            async with get_db().acquire() as conn3:
+                await atualizar_entrega_parcelada(
+                    entrega_id=self.entrega_id,
+                    entrega_atual=proxima_entrega_num,
+                    mensagem_id=str(msg.id),
+                    proxima_entrega=None
+                )
             
             self.proxima_criada = True
             for child in self.children:
