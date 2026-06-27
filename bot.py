@@ -2290,6 +2290,7 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⚠️ Pedido cancelado não pode ser editado.", ephemeral=True)
             return
         await interaction.response.send_modal(EditarVendaModal(interaction.message))
+        
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(
         label="Organização",
@@ -2395,10 +2396,8 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             
             if pt_restante > 0:
                 if entrega_num == num_entregas:
-                    # ÚLTIMA ENTREGA: o que sobrou
                     pt_entrega = pt_restante
                 else:
-                    # ENTREGAS NORMAIS: 8000 (ou o que faltar)
                     pt_entrega = min(LIMITE_DIARIO, pt_restante)
                 pt_restante -= pt_entrega
             else:
@@ -2406,10 +2405,8 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             
             if sub_restante > 0:
                 if entrega_num == num_entregas:
-                    # ÚLTIMA ENTREGA: o que sobrou
                     sub_entrega = sub_restante
                 else:
-                    # ENTREGAS NORMAIS: 8000 (ou o que faltar)
                     sub_entrega = min(LIMITE_DIARIO, sub_restante)
                 sub_restante -= sub_entrega
             else:
@@ -2421,12 +2418,9 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             })
         
         # =========================================================
-        # ================= CALCULAR VALOR POR ENTREGA ============
+        # ================= PEGAR PRIMEIRA ENTREGA ================
         # =========================================================
         
-        # O valor que vai ser salvo no banco é o valor da PRIMEIRA entrega
-        # (pois o sistema usa pt_por_entrega * total_entregas para calcular o total)
-        # Mas como cada entrega tem valores diferentes, vamos salvar o total real
         primeira_entrega = entregas_lista[0]
         pt_por_entrega = primeira_entrega["pt"]
         sub_por_entrega = primeira_entrega["sub"]
@@ -2477,16 +2471,13 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         # ================= CRIAR ENTREGAS ========================
         # =========================================================
         
-            if num_entregas > 1:
+        if num_entregas > 1:
             # Venda parcelada - salvar a PRIMEIRA entrega como referência
-            # O banco vai usar isso para calcular o total original
-            primeira_entrega = entregas_lista[0]
-            
             entrega_id = await salvar_entrega_parcelada(
                 pedido_original=numero_pedido,
                 total_entregas=num_entregas,
-                pt_por_entrega=primeira_entrega["pt"],  # PRIMEIRA entrega (8.000)
-                sub_por_entrega=primeira_entrega["sub"],  # PRIMEIRA entrega (0)
+                pt_por_entrega=pt_por_entrega,
+                sub_por_entrega=sub_por_entrega,
                 vendedor_id=str(interaction.user.id),
                 organizacao=org_nome,
                 observacoes=self.observacoes.value,
@@ -2534,13 +2525,10 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 msg_resposta += f"\n📊 **Grupo integrado:** ❌ Nenhum grupo encontrado"
             
             await interaction.response.send_message(msg_resposta, ephemeral=True)
+            
+            await enviar_painel_vendas()
+            await enviar_painel_fabricacao()
             return
-
-        # =========================================================
-        # ================= SINCRONIZAR PAINÉIS ==================
-        # =========================================================
-        await enviar_painel_vendas()
-        await enviar_painel_fabricacao()
         
         # =========================================================
         # ================= ENTREGA ÚNICA =========================
@@ -2577,6 +2565,9 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             msg_resposta += f"\n📊 **Grupo integrado:** ❌ Nenhum grupo encontrado"
         
         await interaction.response.send_message(msg_resposta, ephemeral=True)
+        
+        await enviar_painel_vendas()
+        await enviar_painel_fabricacao()
         
 # =========================================================
 # ==================== FUNÇÃO PARA CRIAR EMBED DE ENTREGA =
