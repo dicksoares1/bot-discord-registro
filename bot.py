@@ -1996,7 +1996,7 @@ class StatusView(discord.ui.View):
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
     
-    @discord.ui.button(label="📦 Criar Próxima Entrega", style=discord.ButtonStyle.primary, custom_id="criar_proxima_entrega", disabled=True)
+        @discord.ui.button(label="📦 Criar Próxima Entrega", style=discord.ButtonStyle.primary, custom_id="criar_proxima_entrega", disabled=True)
     async def criar_proxima(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Cria a próxima entrega MANUALMENTE após clicar em Entregue"""
         
@@ -2056,39 +2056,101 @@ class StatusView(discord.ui.View):
             proxima_entrega_num = entrega_atual + 1
             pedido_original = entrega["pedido_original"]
             
+            # =========================================================
+            # ================= BUSCAR LISTA DE ENTREGAS =============
+            # =========================================================
+            
+            import json
+            
+            # Tentar buscar a lista completa de entregas salva
             async with get_db().acquire() as conn2:
-                primeira_entrega = await conn2.fetchrow(
-                    "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
-                    pedido_original
+                detalhes = await conn2.fetchrow(
+                    "SELECT entregas_json FROM entregas_detalhes WHERE entrega_id = $1",
+                    self.entrega_id
                 )
             
-            if primeira_entrega:
-                pt_por_entrega = primeira_entrega["pt_por_entrega"]
-                sub_por_entrega = primeira_entrega["sub_por_entrega"]
+            if detalhes and detalhes["entregas_json"]:
+                entregas_lista = json.loads(detalhes["entregas_json"])
+                print(f"📊 Lista de entregas carregada do JSON: {entregas_lista}")
             else:
-                pt_por_entrega = entrega["pt_por_entrega"]
-                sub_por_entrega = entrega["sub_por_entrega"]
+                # Fallback: recalcular baseado na primeira entrega
+                async with get_db().acquire() as conn3:
+                    primeira = await conn3.fetchrow(
+                        "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
+                        pedido_original
+                    )
+                
+                if primeira:
+                    pt_por_entrega = primeira["pt_por_entrega"]
+                    sub_por_entrega = primeira["sub_por_entrega"]
+                else:
+                    pt_por_entrega = entrega["pt_por_entrega"]
+                    sub_por_entrega = entrega["sub_por_entrega"]
+                
+                # Reconstruir a lista
+                entregas_lista = []
+                LIMITE_DIARIO = 8000
+                pt_total = pt_por_entrega * total_entregas
+                sub_total = sub_por_entrega * total_entregas
+                pt_restante = pt_total
+                sub_restante = sub_total
+                
+                for i in range(total_entregas):
+                    entrega_num = i + 1
+                    if pt_restante > 0:
+                        if entrega_num == total_entregas:
+                            pt_valor = pt_restante
+                        else:
+                            pt_valor = min(LIMITE_DIARIO, pt_restante)
+                        pt_restante -= pt_valor
+                    else:
+                        pt_valor = 0
+                    
+                    if sub_restante > 0:
+                        if entrega_num == total_entregas:
+                            sub_valor = sub_restante
+                        else:
+                            sub_valor = min(LIMITE_DIARIO, sub_restante)
+                        sub_restante -= sub_valor
+                    else:
+                        sub_valor = 0
+                    
+                    entregas_lista.append({"pt": pt_valor, "sub": sub_valor})
             
-            pt_total_original = pt_por_entrega * total_entregas
-            sub_total_original = sub_por_entrega * total_entregas
+            # =========================================================
+            # ================= PEGAR A PRÓXIMA ENTREGA ==============
+            # =========================================================
             
-            entregas_feitas = entrega_atual - 1
+            # A lista é 0-indexed, então a entrega atual é a posição (proxima_entrega_num - 1)
+            idx = proxima_entrega_num - 1
+            if idx >= len(entregas_lista):
+                await interaction.followup.send(
+                    f"❌ **Erro: Entrega {proxima_entrega_num} não encontrada na lista!**",
+                    ephemeral=True
+                )
+                return
             
-            pt_ja_entregue = pt_por_entrega * entregas_feitas
-            sub_ja_entregue = sub_por_entrega * entregas_feitas
+            entrega_data = entregas_lista[idx]
+            pt_entrega = entrega_data["pt"]
+            sub_entrega = entrega_data["sub"]
             
-            pt_restante_total = pt_total_original - pt_ja_entregue
-            sub_restante_total = sub_total_original - sub_ja_entregue
+            # =========================================================
+            # ================= VERIFICAR SE É ZERO ===================
+            # =========================================================
             
-            if pt_restante_total < 0:
-                pt_restante_total = 0
-            if sub_restante_total < 0:
-                sub_restante_total = 0
-            
-            LIMITE_DIARIO = 8000
-            
-            pt_entrega = min(LIMITE_DIARIO, pt_restante_total) if pt_restante_total > 0 else 0
-            sub_entrega = min(LIMITE_DIARIO, sub_restante_total) if sub_restante_total > 0 else 0
+            if pt_entrega == 0 and sub_entrega == 0:
+                await interaction.followup.send(
+                    f"⚠️ **Esta entrega ({proxima_entrega_num}/{total_entregas}) não tem conteúdo!**\n"
+                    f"✅ Todas as entregas foram concluídas.",
+                    ephemeral=True
+                )
+                self.proxima_criada = True
+                for child in self.children:
+                    if child.custom_id == "criar_proxima_entrega":
+                        child.disabled = True
+                        child.label = "✅ Todas criadas"
+                await interaction.message.edit(view=self)
+                return
             
             vendedor_id = entrega["vendedor_id"]
             organizacao = entrega["organizacao"]
@@ -2119,21 +2181,16 @@ class StatusView(discord.ui.View):
                 color=config["cor"]
             )
             
+            # Construir resumo completo
             resumo = ""
-            for i in range(1, total_entregas + 1):
+            for i, e in enumerate(entregas_lista, 1):
                 if i < proxima_entrega_num:
                     status = "✅"
-                    pt_valor = pt_por_entrega if pt_por_entrega > 0 else 0
-                    sub_valor = sub_por_entrega if sub_por_entrega > 0 else 0
                 elif i == proxima_entrega_num:
                     status = "🔴"
-                    pt_valor = pt_entrega
-                    sub_valor = sub_entrega
                 else:
                     status = "⏳"
-                    pt_valor = 0
-                    sub_valor = 0
-                resumo += f"{status} Entrega {i}/{total_entregas}: PT {fmt_num(pt_valor)} + SUB {fmt_num(sub_valor)} munições\n"
+                resumo += f"{status} Entrega {i}/{total_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
             
             embed_novo.add_field(
                 name="🚨 RESUMO DAS ENTREGAS",
@@ -2218,7 +2275,7 @@ class StatusView(discord.ui.View):
             
             msg = await canal.send(embed=embed_novo, view=StatusView(entrega_id=self.entrega_id))
             
-            async with get_db().acquire() as conn3:
+            async with get_db().acquire() as conn4:
                 await atualizar_entrega_parcelada(
                     entrega_id=self.entrega_id,
                     entrega_atual=proxima_entrega_num,
@@ -2281,7 +2338,9 @@ class StatusView(discord.ui.View):
         if self.pedido_cancelado(linhas):
             await interaction.response.send_message("⚠️ Pedido cancelado não pode ser editado.", ephemeral=True)
             return
-        await interaction.response.send_modal(EditarVendaModal(interaction.message))        
+        await interaction.response.send_modal(EditarVendaModal(interaction.message))
+
+
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(
         label="Organização",
@@ -2327,57 +2386,38 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             )
             return
         
-        # =========================================================
-        # ================= PEGAR ORGANIZAÇÃO =====================
-        # =========================================================
-        
         org_nome = self.organizacao.value.strip().upper()
         config = ORGANIZACOES_CONFIG.get(
             org_nome,
             {"emoji": "🏷️", "cor": 0x1e3a8a}
         )
         
-        # =========================================================
-        # ================= GERAR NÚMERO DO PEDIDO ================
-        # =========================================================
-        
         numero_pedido = await proximo_pedido()
         
-        # =========================================================
-        # ================= CALCULAR ENTREGAS =====================
-        # =========================================================
-        
         LIMITE_DIARIO = 8000
-        
-        # Calcular entregas de PT
-        if pt == 0:
-            entregas_pt = 0
-        elif pt <= LIMITE_DIARIO:
-            entregas_pt = 1
-        else:
-            entregas_pt = (pt // LIMITE_DIARIO)
-            if pt % LIMITE_DIARIO != 0:
-                entregas_pt += 1
-        
-        # Calcular entregas de SUB
-        if sub == 0:
-            entregas_sub = 0
-        elif sub <= LIMITE_DIARIO:
-            entregas_sub = 1
-        else:
-            entregas_sub = (sub // LIMITE_DIARIO)
-            if sub % LIMITE_DIARIO != 0:
-                entregas_sub += 1
-        
-        # Total de entregas é o MAIOR entre PT e SUB
-        num_entregas = max(entregas_pt, entregas_sub)
-        if num_entregas == 0:
-            num_entregas = 1
         
         # =========================================================
         # ================= CRIAR LISTA DE ENTREGAS ===============
         # =========================================================
         
+        # Calcular quantas entregas de PT
+        if pt == 0:
+            entregas_pt = 0
+        else:
+            entregas_pt = (pt + LIMITE_DIARIO - 1) // LIMITE_DIARIO
+        
+        # Calcular quantas entregas de SUB
+        if sub == 0:
+            entregas_sub = 0
+        else:
+            entregas_sub = (sub + LIMITE_DIARIO - 1) // LIMITE_DIARIO
+        
+        # Total de entregas é o MAIOR
+        num_entregas = max(entregas_pt, entregas_sub)
+        if num_entregas == 0:
+            num_entregas = 1
+        
+        # Construir lista de entregas com valores REAIS
         entregas_lista = []
         pt_restante = pt
         sub_restante = sub
@@ -2409,16 +2449,13 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             })
         
         # =========================================================
-        # ================= PEGAR PRIMEIRA ENTREGA ================
+        # ================= SALVAR O TOTAL REAL ===================
         # =========================================================
         
-        primeira_entrega = entregas_lista[0]
-        pt_por_entrega = primeira_entrega["pt"]
-        sub_por_entrega = primeira_entrega["sub"]
-        
-        # =========================================================
-        # ================= REGISTRAR VENDA =======================
-        # =========================================================
+        # SALVAR A LISTA COMPLETA DE ENTREGAS NO BANCO
+        # Usamos um campo JSON para salvar a lista real
+        import json
+        entregas_json = json.dumps(entregas_lista)
         
         pacotes_pt_total = pt // 50
         pacotes_sub_total = sub // 50
@@ -2464,16 +2501,26 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         
         if num_entregas > 1:
             # Venda parcelada - salvar a PRIMEIRA entrega como referência
+            # E também salvar a lista completa em um campo separado
+            primeira_entrega = entregas_lista[0]
+            
             entrega_id = await salvar_entrega_parcelada(
                 pedido_original=numero_pedido,
                 total_entregas=num_entregas,
-                pt_por_entrega=pt_por_entrega,
-                sub_por_entrega=sub_por_entrega,
+                pt_por_entrega=primeira_entrega["pt"],
+                sub_por_entrega=primeira_entrega["sub"],
                 vendedor_id=str(interaction.user.id),
                 organizacao=org_nome,
                 observacoes=self.observacoes.value,
                 canal_id=str(CANAL_ENCOMENDAS_ID)
             )
+            
+            # Salvar a lista completa de entregas em uma tabela separada
+            async with get_db().acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO entregas_detalhes (entrega_id, entregas_json) VALUES ($1, $2) ON CONFLICT (entrega_id) DO UPDATE SET entregas_json = $2",
+                    entrega_id, entregas_json
+                )
             
             # Primeira entrega
             primeira = entregas_lista[0]
@@ -2507,7 +2554,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 f"💰 **Total:** R$ {valor_formatado}\n\n"
                 f"📋 **Entregas ({num_entregas} no total):**\n{resumo_entregas}\n"
                 f"✅ **Entrega 1/{num_entregas} criada!**\n"
-                f"📌 Próxima entrega: Quando esta for ENTREGUE"
+                f"📌 Próxima entrega: Clique em 'Criar Próxima Entrega' após entregar"
             )
             
             if grupo:
