@@ -2214,6 +2214,10 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         # =========================================================
         # ================= INTEGRAÇÃO COM GRUPOS =================
         # =========================================================
+
+
+        # PEGAR O NOME DA ORGANIZAÇÃO DO MODAL
+        org_nome = self.organizacao.value.strip().upper()
         
         grupo = await buscar_grupo_por_organizacao(org_nome)
         
