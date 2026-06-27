@@ -2024,14 +2024,10 @@ class StatusView(discord.ui.View):
         label="📦 Criar Próxima Entrega",
         style=discord.ButtonStyle.primary,
         custom_id="criar_proxima_entrega",
-        disabled=True  # Começa desabilitado
+        disabled=True
     )
     async def criar_proxima(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Cria a próxima entrega MANUALMENTE após clicar em Entregue"""
-        
-        # =========================================================
-        # ================= VERIFICAR SE PODE CRIAR ===============
-        # =========================================================
         
         if not self.entrega_id:
             await interaction.response.send_message(
@@ -2054,14 +2050,9 @@ class StatusView(discord.ui.View):
             )
             return
         
-        # =========================================================
-        # ================= CRIAR PRÓXIMA ENTREGA =================
-        # =========================================================
-        
         await interaction.response.defer(ephemeral=True)
         
         try:
-            # Buscar dados da entrega no banco
             async with get_db().acquire() as conn:
                 entrega = await conn.fetchrow(
                     "SELECT * FROM entregas_parceladas WHERE id = $1 AND ativo = true",
@@ -2078,13 +2069,11 @@ class StatusView(discord.ui.View):
             entrega_atual = entrega["entrega_atual"]
             total_entregas = entrega["total_entregas"]
             
-            # Verificar se já chegou na última
             if entrega_atual >= total_entregas:
                 await interaction.followup.send(
                     f"✅ **Todas as {total_entregas} entregas já foram concluídas!**",
                     ephemeral=True
                 )
-                # Desabilitar o botão
                 self.proxima_criada = True
                 for child in self.children:
                     if child.custom_id == "criar_proxima_entrega":
@@ -2094,17 +2083,59 @@ class StatusView(discord.ui.View):
                 return
             
             proxima_entrega_num = entrega_atual + 1
+            pedido_original = entrega["pedido_original"]
             
-            # Buscar a mensagem original para pegar o embed
-            embed = interaction.message.embeds[0]
-            
-            # Extrair informações do embed
-            titulo = embed.title
-            pedido_original = int(titulo.split("#")[1]) if "#" in titulo else 0
-            
-            # Pegar dados da entrega
             pt_por_entrega = entrega["pt_por_entrega"]
             sub_por_entrega = entrega["sub_por_entrega"]
+            
+            pt_total_original = pt_por_entrega * total_entregas
+            sub_total_original = sub_por_entrega * total_entregas
+            
+            entregas_feitas = entrega_atual - 1
+            
+            pt_ja_entregue = pt_por_entrega * entregas_feitas
+            sub_ja_entregue = sub_por_entrega * entregas_feitas
+            
+            pt_restante_total = pt_total_original - pt_ja_entregue
+            sub_restante_total = sub_total_original - sub_ja_entregue
+            
+            LIMITE_DIARIO = 8000
+            entregas_restantes = total_entregas - entregas_feitas
+            
+            entregas_lista = []
+            pt_restante = pt_restante_total
+            sub_restante = sub_restante_total
+            
+            for i in range(entregas_restantes):
+                entrega_num = i + 1
+                
+                if pt_restante > 0:
+                    if entrega_num == entregas_restantes:
+                        pt_entrega = pt_restante
+                    else:
+                        pt_entrega = min(LIMITE_DIARIO, pt_restante)
+                    pt_restante -= pt_entrega
+                else:
+                    pt_entrega = 0
+                
+                if sub_restante > 0:
+                    if entrega_num == entregas_restantes:
+                        sub_entrega = sub_restante
+                    else:
+                        sub_entrega = min(LIMITE_DIARIO, sub_restante)
+                    sub_restante -= sub_entrega
+                else:
+                    sub_entrega = 0
+                
+                entregas_lista.append({
+                    "pt": pt_entrega,
+                    "sub": sub_entrega
+                })
+            
+            entrega_atual_data = entregas_lista[0]
+            pt_entrega = entrega_atual_data["pt"]
+            sub_entrega = entrega_atual_data["sub"]
+            
             vendedor_id = entrega["vendedor_id"]
             organizacao = entrega["organizacao"]
             observacoes = entrega["observacoes"]
@@ -2125,57 +2156,6 @@ class StatusView(discord.ui.View):
             
             grupo = await buscar_grupo_por_organizacao(organizacao)
             
-            # =========================================================
-            # ================= CALCULAR ENTREGAS =====================
-            # =========================================================
-            
-            LIMITE_DIARIO = 8000
-            
-            # Calcular total original
-            total_entregas_calc = total_entregas
-            pt_total = pt_por_entrega * total_entregas_calc
-            sub_total = sub_por_entrega * total_entregas_calc
-            
-            # Construir lista de entregas
-            entregas_lista = []
-            pt_restante = pt_total
-            sub_restante = sub_total
-            
-            for i in range(total_entregas_calc):
-                entrega_num = i + 1
-                
-                if pt_restante > 0:
-                    if entrega_num == total_entregas_calc:
-                        pt_entrega = pt_restante
-                    else:
-                        pt_entrega = min(LIMITE_DIARIO, pt_restante)
-                    pt_restante -= pt_entrega
-                else:
-                    pt_entrega = 0
-                
-                if sub_restante > 0:
-                    if entrega_num == total_entregas_calc:
-                        sub_entrega = sub_restante
-                    else:
-                        sub_entrega = min(LIMITE_DIARIO, sub_restante)
-                    sub_restante -= sub_entrega
-                else:
-                    sub_entrega = 0
-                
-                entregas_lista.append({
-                    "pt": pt_entrega,
-                    "sub": sub_entrega
-                })
-            
-            # Pegar a entrega atual
-            entrega_atual_data = entregas_lista[proxima_entrega_num - 1]
-            pt_entrega = entrega_atual_data["pt"]
-            sub_entrega = entrega_atual_data["sub"]
-            
-            # =========================================================
-            # ================= CRIAR EMBED ===========================
-            # =========================================================
-            
             titulo_embed = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
             descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições"
             
@@ -2185,9 +2165,51 @@ class StatusView(discord.ui.View):
                 color=config["cor"]
             )
             
-            # Resumo das entregas
+            entregas_completas = []
+            
+            if pt_total_original == 0:
+                entregas_pt = 0
+            else:
+                entregas_pt = (pt_total_original + LIMITE_DIARIO - 1) // LIMITE_DIARIO
+            
+            if sub_total_original == 0:
+                entregas_sub = 0
+            else:
+                entregas_sub = (sub_total_original + LIMITE_DIARIO - 1) // LIMITE_DIARIO
+            
+            total_entregas_calc = max(entregas_pt, entregas_sub)
+            
+            pt_restante_completo = pt_total_original
+            sub_restante_completo = sub_total_original
+            
+            for i in range(total_entregas_calc):
+                entrega_num = i + 1
+                
+                if pt_restante_completo > 0:
+                    if entrega_num == total_entregas_calc:
+                        pt_valor = pt_restante_completo
+                    else:
+                        pt_valor = min(LIMITE_DIARIO, pt_restante_completo)
+                    pt_restante_completo -= pt_valor
+                else:
+                    pt_valor = 0
+                
+                if sub_restante_completo > 0:
+                    if entrega_num == total_entregas_calc:
+                        sub_valor = sub_restante_completo
+                    else:
+                        sub_valor = min(LIMITE_DIARIO, sub_restante_completo)
+                    sub_restante_completo -= sub_valor
+                else:
+                    sub_valor = 0
+                
+                entregas_completas.append({
+                    "pt": pt_valor,
+                    "sub": sub_valor
+                })
+            
             resumo = ""
-            for i, e in enumerate(entregas_lista, 1):
+            for i, e in enumerate(entregas_completas, 1):
                 if i < proxima_entrega_num:
                     status = "✅"
                 elif i == proxima_entrega_num:
@@ -2277,15 +2299,7 @@ class StatusView(discord.ui.View):
                 text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas} • ID: {self.entrega_id}"
             )
             
-            # =========================================================
-            # ================= ENVIAR MENSAGEM =======================
-            # =========================================================
-            
             msg = await canal.send(embed=embed_novo, view=StatusView(entrega_id=self.entrega_id))
-            
-            # =========================================================
-            # ================= ATUALIZAR BANCO =======================
-            # =========================================================
             
             await atualizar_entrega_parcelada(
                 entrega_id=self.entrega_id,
@@ -2293,10 +2307,6 @@ class StatusView(discord.ui.View):
                 mensagem_id=str(msg.id),
                 proxima_entrega=None
             )
-            
-            # =========================================================
-            # ================= MARCAR COMO CRIADA ====================
-            # =========================================================
             
             self.proxima_criada = True
             for child in self.children:
@@ -2310,14 +2320,6 @@ class StatusView(discord.ui.View):
                 f"✅ **Entrega {proxima_entrega_num}/{total_entregas} criada com sucesso!**\n"
                 f"📦 Conteúdo: PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições",
                 ephemeral=True
-            )
-            
-            # Notificar no canal
-            await canal.send(
-                f"📦 **Nova entrega criada!**\n"
-                f"Entrega {proxima_entrega_num}/{total_entregas} do pedido #{pedido_original:04d}\n"
-                f"📦 Conteúdo: PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições\n"
-                f"👤 Vendedor: <@{vendedor_id}>"
             )
             
         except Exception as e:
@@ -3048,17 +3050,7 @@ async def criar_proxima_entrega(entrega_id: int, guild: discord.Guild):
         
         print(f"✅ Entrega {proxima_entrega_num}/{total_entregas} criada para pedido #{pedido_original}")
         
-        # =========================================================
-        # ================= NOTIFICAR NO CANAL ====================
-        # =========================================================
-        
-        await canal.send(
-            f"📦 **Nova entrega criada!**\n"
-            f"Entrega {proxima_entrega_num}/{total_entregas} do pedido #{pedido_original:04d}\n"
-            f"📦 Conteúdo: PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições\n"
-            f"👤 Vendedor: <@{vendedor_id}>"
-        )
-        
+                
     except Exception as e:
         print(f"❌ Erro ao criar próxima entrega: {e}")
         import traceback
