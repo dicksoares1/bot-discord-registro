@@ -141,6 +141,7 @@ CANAL_GRUPOS_ID = 1448563544386961479  # Canal onde ficam os embeds
 # REGISTRO
 AGREGADO_ROLE_ID = 1422847202937536532
 CONVIDADO_ROLE_ID = 1337382961456353342
+EM_REGISTRO_ROLE_ID = 1337382961456353342
 STREAMER_ROLE_ID = 1229797158375653416
 LIVE_ROLE_ID = 1481616175476641922
 
@@ -1437,40 +1438,79 @@ class TipoRegistroSelect(discord.ui.Select):
         self.telefone = telefone
         
         options = [
-            discord.SelectOption(label="Agregado", description="Se for se tornar membro da fac", emoji="🕴️"),
-            discord.SelectOption(label="Amigos", description="Se está apenas para resenha", emoji="🤝")
+            discord.SelectOption(
+                label="Membro da 442",
+                description="Se tornar membro da facção",
+                emoji="🕴️"
+            ),
+            discord.SelectOption(
+                label="Amigo da 442",
+                description="Apenas para resenha ou reunião",
+                emoji="🤝"
+            )
         ]
-        super().__init__(placeholder="Escolha o tipo de acesso", min_values=1, max_values=1, options=options)
+        super().__init__(
+            placeholder="Escolha o tipo de acesso",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
     
     async def callback(self, interaction: discord.Interaction):
         guild = interaction.guild
         membro = interaction.user
         
+        # Cargos
         agregado = guild.get_role(AGREGADO_ROLE_ID)
         amigos = guild.get_role(1309121290241704046)
         convidado = guild.get_role(CONVIDADO_ROLE_ID)
+        em_registro = guild.get_role(EM_REGISTRO_ROLE_ID)
         
         escolha = self.values[0]
         
-        if escolha == "Agregado" and agregado:
-            await membro.add_roles(agregado)
-        if escolha == "Amigos" and amigos:
-            await membro.add_roles(amigos)
+        # Remover cargo "Em Registro"
+        if em_registro:
+            await membro.remove_roles(em_registro)
+            print(f"✅ Cargo 'Em Registro' removido de {membro.name}")
+        
+        # Adicionar cargo selecionado
+        if escolha == "Membro da 442":
+            if agregado:
+                await membro.add_roles(agregado)
+                print(f"✅ Cargo 'Agregado' adicionado para {membro.name}")
+        elif escolha == "Amigo da 442":
+            if amigos:
+                await membro.add_roles(amigos)
+                print(f"✅ Cargo 'Amigos' adicionado para {membro.name}")
+        
+        # Remover cargo convidado (se tiver)
         if convidado:
             await membro.remove_roles(convidado)
         
+        # Enviar log
         canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
         if canal_log:
-            embed = discord.Embed(title="📋 Novo Registro", color=0x2ecc71)
-            embed.add_field(name="Nome", value=self.nome)
-            embed.add_field(name="Passaporte", value=self.passaporte)
-            embed.add_field(name="Indicado por", value=self.indicado)
-            embed.add_field(name="Telefone", value=self.telefone)
-            embed.add_field(name="Tipo", value=escolha)
-            embed.add_field(name="Usuário", value=membro.mention)
+            embed = discord.Embed(
+                title="📋 Novo Registro",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.add_field(name="Nome", value=self.nome, inline=False)
+            embed.add_field(name="Passaporte", value=self.passaporte, inline=False)
+            embed.add_field(name="Indicado por", value=self.indicado or "Não informado", inline=False)
+            embed.add_field(name="Telefone", value=self.telefone, inline=False)
+            embed.add_field(name="Tipo", value=escolha, inline=False)
+            embed.add_field(name="Usuário", value=membro.mention, inline=False)
+            embed.set_footer(text=f"ID: {membro.id}")
             await canal_log.send(embed=embed)
         
-        await interaction.response.send_message(f"✅ Registro concluído como **{escolha}**", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ **Registro concluído com sucesso!**\n\n"
+            f"📋 Você foi registrado como: **{escolha}**\n"
+            f"👤 Nome: {self.nome}\n"
+            f"📱 Telefone: {self.telefone}",
+            ephemeral=True
+        )
 
 
 class TipoRegistroView(discord.ui.View):
@@ -1687,13 +1727,17 @@ async def on_member_update(before, after):
 
 @bot.event
 async def on_member_join(member):
+    """Quando um membro entra no servidor, dá o cargo 'Em Registro'"""
     if member.bot:
         return
     
-    if any(r.id == AGREGADO_ROLE_ID for r in member.roles):
-        await asyncio.sleep(2)
-        if str(member.id) not in metas_cache:
-            await criar_sala_meta(member)
+    try:
+        cargo_em_registro = member.guild.get_role(EM_REGISTRO_ROLE_ID)
+        if cargo_em_registro:
+            await member.add_roles(cargo_em_registro)
+            print(f"✅ Cargo 'Em Registro' adicionado para {member.name}")
+    except Exception as e:
+        print(f"❌ Erro ao adicionar cargo 'Em Registro' para {member.name}: {e}")
 
 
 @bot.event
