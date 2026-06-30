@@ -1758,10 +1758,10 @@ async def on_message(message: discord.Message):
     
     # Verificar se o canal é uma sala de meta
     if isinstance(canal, discord.TextChannel):
-        for uid, dados in metas_cache.items():
+        for uid, dados in list(metas_cache.items()):
             if dados["canal_id"] == canal.id:
                 try:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2)  # Esperar a mensagem ser enviada
                     await fixar_painel_meta_no_final(int(uid))
                 except Exception as e:
                     print(f"Erro ao fixar painel: {e}")
@@ -1993,11 +1993,23 @@ async def atualizar_categoria_meta(member):
 async def depositar_na_meta(user_id, valor, motivo):
     """Deposita dinheiro na meta do usuário"""
     async with get_db().acquire() as conn:
-        meta = await conn.fetchrow("SELECT dinheiro FROM metas WHERE user_id = $1", str(user_id))
+        meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", str(user_id))
         
         if meta:
             novo_valor = meta["dinheiro"] + valor
-            await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_valor, str(user_id))
+            
+            # Se for de ação, adicionar no campo específico
+            if "Ação" in motivo:
+                novo_acoes = (meta["dinheiro_acoes"] or 0) + valor
+                await conn.execute(
+                    "UPDATE metas SET dinheiro = $1, dinheiro_acoes = $2 WHERE user_id = $3",
+                    novo_valor, novo_acoes, str(user_id)
+                )
+            else:
+                await conn.execute(
+                    "UPDATE metas SET dinheiro = $1 WHERE user_id = $2",
+                    novo_valor, str(user_id)
+                )
             
             canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(user_id))
             if canal_id:
@@ -2018,7 +2030,10 @@ async def depositar_na_meta(user_id, valor, motivo):
             if member:
                 canal = await criar_sala_meta(member)
                 if canal:
-                    await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", valor, str(user_id))
+                    await conn.execute(
+                        "UPDATE metas SET dinheiro = $1 WHERE user_id = $2",
+                        valor, str(user_id)
+                    )
                     return True
             return False
 
@@ -2347,32 +2362,15 @@ async def atualizar_embed_meta(user_id):
         # ================= SEPARAR DINHEIRO ======================
         # =========================================================
         
-        # Buscar total de dinheiro de ações
-        async with get_db().acquire() as conn:
-            total_acoes = await conn.fetchval(
-                """
-                SELECT COALESCE(SUM(valor), 0) 
-                FROM acoes_semana 
-                WHERE resultado = 'ganhou' AND status = 'concluida'
-                """
-            ) or 0
-            
-            # Buscar depósitos de lavagem
-            total_lavagem = await conn.fetchval(
-                """
-                SELECT COALESCE(SUM(liquido), 0) 
-                FROM lavagens 
-                WHERE user_id = $1
-                """,
-                str(user_id)
-            ) or 0
-        
-        # Dinheiro da meta (total)
+        # Dinheiro total da meta (inclui tudo)
         dinheiro_total = meta["dinheiro"] or 0
         
-        # Dinheiro de ações (já está na meta)
-        # O valor que vem das ações é depositado pela função depositar_na_meta
-        # Vamos separar visualmente no embed
+        # Buscar dinheiro de ações (depósitos feitos pelo sistema de ações)
+        async with get_db().acquire() as conn:
+            # Buscar depósitos de ações no histórico (usando a tabela de metas_historico ou calculando)
+            # Como as ações depositam via depositar_na_meta, vamos buscar o valor que veio de ações
+            # Para simplificar, vamos calcular baseado nos depósitos feitos manualmente
+            pass
         
         embed = discord.Embed(
             title=f"📊 META DE {nome.upper()}",
@@ -2384,9 +2382,19 @@ async def atualizar_embed_meta(user_id):
         # ================= CAMPOS DO EMBED =======================
         # =========================================================
         
+        # Separar dinheiro de meta e dinheiro de ações
+        dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+        dinheiro_meta = dinheiro_total - dinheiro_acoes
+        
         embed.add_field(
-            name="💰 DINHEIRO TOTAL",
-            value=formatar_dinheiro(dinheiro_total),
+            name="💰 DINHEIRO SUJO (Meta)",
+            value=formatar_dinheiro(dinheiro_meta),
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🎯 DINHEIRO DE AÇÕES",
+            value=formatar_dinheiro(dinheiro_acoes),
             inline=True
         )
         
@@ -2574,80 +2582,42 @@ async def fixar_painel_meta_no_final(user_id):
         if not canal:
             return
         
-        # Buscar a última mensagem do bot no canal
-        ultima_msg = None
-        async for msg in canal.history(limit=10):
+        # Buscar a mensagem do painel
+        mensagem_painel = None
+        async for msg in canal.history(limit=30):
             if msg.author == bot.user and msg.embeds:
                 if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
-                    ultima_msg = msg
+                    mensagem_painel = msg
                     break
         
-        if not ultima_msg:
+        if not mensagem_painel:
+            # Se não encontrou, criar novo
+            await atualizar_embed_meta(user_id)
             return
         
-        # Verificar se o painel já é a última mensagem
-        async for msg in canal.history(limit=2):
-            if msg.id == ultima_msg.id:
-                # Já é a última, não precisa fazer nada
-                return
+        # Verificar se a última mensagem do canal é o painel
+        ultima_msg = None
+        async for msg in canal.history(limit=1):
+            ultima_msg = msg
             break
         
-        # Se não for a última, reenviar o painel
-        # Buscar dados da meta
-        async with get_db().acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
-        
-        if not meta:
+        if ultima_msg and ultima_msg.id == mensagem_painel.id:
+            # Já é a última mensagem
             return
         
-        user = await pegar_usuario(user_id)
-        nome = user.display_name if user else str(user_id)
-        
-        embed = discord.Embed(
-            title=f"📊 META DE {nome.upper()}",
-            color=0x3498db,
-            timestamp=agora()
-        )
-        
-        dinheiro_total = meta["dinheiro"] or 0
-        
-        embed.add_field(
-            name="💰 DINHEIRO TOTAL",
-            value=formatar_dinheiro(dinheiro_total),
-            inline=True
-        )
-        
-        embed.add_field(
-            name="💣 PÓLVORA",
-            value=f"{fmt_num(meta['polvora'])} unidades" if meta["polvora"] else "0 unidades",
-            inline=True
-        )
-        
-        if meta.get("acao"):
-            embed.add_field(
-                name="🎯 AÇÃO ATUAL",
-                value=meta["acao"],
-                inline=False
-            )
-        
-        embed.add_field(
-            name="📌 COMO USAR",
-            value=(
-                "**💣 Adicionar Pólvora** - Registre pólvora coletada\n"
-                "**💰 Adicionar Dinheiro Sujo** - Registre dinheiro lavado\n"
-                "**🔒 Fechar Meta** - Finalize a meta e envie para o relatório"
-            ),
-            inline=False
-        )
-        
-        embed.set_footer(text=f"ID: {user_id}")
-        
-        # Editar a mensagem existente
-        await ultima_msg.edit(embed=embed, view=MetaView(user_id))
-        print(f"📌 Painel de {nome} movido para o final")
+        # Se não for a última, deletar e reenviar
+        try:
+            await mensagem_painel.delete()
+            await asyncio.sleep(0.5)
+            await atualizar_embed_meta(user_id)
+            print(f"📌 Painel de meta recolocado no final para {user_id}")
+        except Exception as e:
+            print(f"Erro ao recolocar painel: {e}")
         
     except Exception as e:
         print(f"❌ Erro ao fixar painel: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # =========================================================
