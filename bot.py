@@ -1740,6 +1740,7 @@ async def on_reaction_add(reaction, user):
         print("Erro reação clip:", e)
 
 
+
 # =========================================================
 # ==================== EVENTO DE MENSAGEM (LAVAGEM) =======
 # =========================================================
@@ -1748,6 +1749,27 @@ async def on_reaction_add(reaction, user):
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+    
+    # =========================================================
+    # ================= MANTER PAINEL DE META NO FINAL ========
+    # =========================================================
+    
+    canal = message.channel
+    
+    # Verificar se o canal é uma sala de meta
+    if isinstance(canal, discord.TextChannel):
+        for uid, dados in metas_cache.items():
+            if dados["canal_id"] == canal.id:
+                try:
+                    await asyncio.sleep(1)
+                    await fixar_painel_meta_no_final(int(uid))
+                except Exception as e:
+                    print(f"Erro ao fixar painel: {e}")
+                break
+
+    # =========================================================
+    # ================= LAVAGEM (já existia) ==================
+    # =========================================================
     
     # LAVAGEM - captura print
     if message.channel.id == CANAL_INICIAR_LAVAGEM_ID:
@@ -2303,7 +2325,6 @@ async def atualizar_embed_meta(user_id):
     """Atualiza o embed da meta de um usuário"""
     try:
         if str(user_id) not in metas_cache:
-            print(f"⚠️ Usuário {user_id} não tem meta no cache")
             return
         
         dados = metas_cache[str(user_id)]
@@ -2313,28 +2334,59 @@ async def atualizar_embed_meta(user_id):
             print(f"❌ Canal da meta de {user_id} não encontrado")
             return
         
-        # Buscar dados atualizados
         async with get_db().acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
         
         if not meta:
-            print(f"❌ Meta de {user_id} não encontrada no banco")
             return
         
         user = await pegar_usuario(user_id)
         nome = user.display_name if user else str(user_id)
         
-        # Criar embed
+        # =========================================================
+        # ================= SEPARAR DINHEIRO ======================
+        # =========================================================
+        
+        # Buscar total de dinheiro de ações
+        async with get_db().acquire() as conn:
+            total_acoes = await conn.fetchval(
+                """
+                SELECT COALESCE(SUM(valor), 0) 
+                FROM acoes_semana 
+                WHERE resultado = 'ganhou' AND status = 'concluida'
+                """
+            ) or 0
+            
+            # Buscar depósitos de lavagem
+            total_lavagem = await conn.fetchval(
+                """
+                SELECT COALESCE(SUM(liquido), 0) 
+                FROM lavagens 
+                WHERE user_id = $1
+                """,
+                str(user_id)
+            ) or 0
+        
+        # Dinheiro da meta (total)
+        dinheiro_total = meta["dinheiro"] or 0
+        
+        # Dinheiro de ações (já está na meta)
+        # O valor que vem das ações é depositado pela função depositar_na_meta
+        # Vamos separar visualmente no embed
+        
         embed = discord.Embed(
             title=f"📊 META DE {nome.upper()}",
             color=0x3498db,
             timestamp=agora()
         )
         
-        # Saldo atual
+        # =========================================================
+        # ================= CAMPOS DO EMBED =======================
+        # =========================================================
+        
         embed.add_field(
-            name="💰 DINHEIRO SUJO",
-            value=formatar_dinheiro(meta["dinheiro"]) if meta["dinheiro"] else "R$ 0,00",
+            name="💰 DINHEIRO TOTAL",
+            value=formatar_dinheiro(dinheiro_total),
             inline=True
         )
         
@@ -2363,26 +2415,29 @@ async def atualizar_embed_meta(user_id):
         
         embed.set_footer(text=f"ID: {user_id}")
         
-        # Procurar mensagem existente do painel
+        # =========================================================
+        # ================= ENVIAR/ATUALIZAR MENSAGEM =============
+        # =========================================================
+        
+        # Procurar mensagem existente
         async for msg in canal.history(limit=30):
             if msg.author == bot.user and msg.embeds:
                 if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
                     try:
                         await msg.edit(embed=embed, view=MetaView(user_id))
-                        print(f"✅ Painel de meta de {nome} atualizado")
+                        print(f"✅ Meta de {nome} atualizada")
                         return
                     except Exception as e:
                         print(f"Erro ao atualizar embed da meta: {e}")
-                        # Se não conseguir editar, tentar deletar e criar novo
                         try:
                             await msg.delete()
                         except:
                             pass
                         break
         
-        # Se não encontrou, criar nova mensagem
+        # Se não encontrou, criar nova
         await canal.send(embed=embed, view=MetaView(user_id))
-        print(f"✅ Painel de meta de {nome} criado")
+        print(f"✅ Meta de {nome} criada")
         
     except Exception as e:
         print(f"❌ Erro ao atualizar embed da meta: {e}")
@@ -2506,6 +2561,93 @@ async def cmd_criar_painel_meta(ctx, member: discord.Member = None):
     except Exception as e:
         await ctx.send(f"❌ Erro: {e}")
         print(f"Erro ao criar painel para {member.display_name}: {e}")
+
+async def fixar_painel_meta_no_final(user_id):
+    """Garante que o painel de meta seja a última mensagem do canal"""
+    try:
+        if str(user_id) not in metas_cache:
+            return
+        
+        dados = metas_cache[str(user_id)]
+        canal = bot.get_channel(dados["canal_id"])
+        
+        if not canal:
+            return
+        
+        # Buscar a última mensagem do bot no canal
+        ultima_msg = None
+        async for msg in canal.history(limit=10):
+            if msg.author == bot.user and msg.embeds:
+                if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
+                    ultima_msg = msg
+                    break
+        
+        if not ultima_msg:
+            return
+        
+        # Verificar se o painel já é a última mensagem
+        async for msg in canal.history(limit=2):
+            if msg.id == ultima_msg.id:
+                # Já é a última, não precisa fazer nada
+                return
+            break
+        
+        # Se não for a última, reenviar o painel
+        # Buscar dados da meta
+        async with get_db().acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
+        
+        if not meta:
+            return
+        
+        user = await pegar_usuario(user_id)
+        nome = user.display_name if user else str(user_id)
+        
+        embed = discord.Embed(
+            title=f"📊 META DE {nome.upper()}",
+            color=0x3498db,
+            timestamp=agora()
+        )
+        
+        dinheiro_total = meta["dinheiro"] or 0
+        
+        embed.add_field(
+            name="💰 DINHEIRO TOTAL",
+            value=formatar_dinheiro(dinheiro_total),
+            inline=True
+        )
+        
+        embed.add_field(
+            name="💣 PÓLVORA",
+            value=f"{fmt_num(meta['polvora'])} unidades" if meta["polvora"] else "0 unidades",
+            inline=True
+        )
+        
+        if meta.get("acao"):
+            embed.add_field(
+                name="🎯 AÇÃO ATUAL",
+                value=meta["acao"],
+                inline=False
+            )
+        
+        embed.add_field(
+            name="📌 COMO USAR",
+            value=(
+                "**💣 Adicionar Pólvora** - Registre pólvora coletada\n"
+                "**💰 Adicionar Dinheiro Sujo** - Registre dinheiro lavado\n"
+                "**🔒 Fechar Meta** - Finalize a meta e envie para o relatório"
+            ),
+            inline=False
+        )
+        
+        embed.set_footer(text=f"ID: {user_id}")
+        
+        # Editar a mensagem existente
+        await ultima_msg.edit(embed=embed, view=MetaView(user_id))
+        print(f"📌 Painel de {nome} movido para o final")
+        
+    except Exception as e:
+        print(f"❌ Erro ao fixar painel: {e}")
 
 
 # =========================================================
@@ -7998,7 +8140,8 @@ async def on_ready():
             print("🧹 Loop de limpeza de cache de lives iniciado")
     except Exception as e:
         print("Erro ao iniciar loop de limpeza de cache:", e)
-    
+
+   
 
 
     # =========================================================
@@ -8013,6 +8156,15 @@ async def on_ready():
     
     # NÃO RESTAURAR GRUPOS AUTOMATICAMENTE para evitar rate limit
     print("📋 Sistema de grupos carregado. Use o botão '🔄 Atualizar' no embed para atualizar cada grupo.")
+
+        # Fixar painéis de metas no final de cada sala
+    try:
+        for uid in metas_cache.keys():
+            await fixar_painel_meta_no_final(int(uid))
+            await asyncio.sleep(0.5)
+        print("📌 Painéis de metas fixados no final")
+    except Exception as e:
+        print(f"Erro ao fixar painéis: {e}")
     
     # =========================================================
     # ================= FIM GRUPOS ============================
