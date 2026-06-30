@@ -1967,6 +1967,7 @@ async def zerar_todas_metas():
         rows = await conn.fetch("SELECT user_id, canal_id FROM metas")
         return rows
 
+
 class ZerarMetasView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
@@ -2049,15 +2050,6 @@ class ConfirmarZerarView(discord.ui.View):
     )
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
-    
-    # =========================================================
-    # ================= ENVIAR O PAINEL DA META ===============
-    # =========================================================
-    
-    await atualizar_embed_meta(member.id)
-    
-    print(f"📊 Sala e painel criados para {member.display_name}")
-    return canal
 
 
 async def atualizar_categoria_meta(member):
@@ -2152,6 +2144,8 @@ async def depositar_na_meta(user_id, valor, motivo):
                         )
                     return True
             return False
+
+
 # =========================================================
 # ==================== MODAIS DE METAS ====================
 # =========================================================
@@ -2377,6 +2371,7 @@ class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
         else:
             await interaction.followup.send(embed=embed, ephemeral=True)
 
+
 # =========================================================
 # ==================== PAINEL DE METAS ====================
 # =========================================================
@@ -2446,6 +2441,7 @@ class RelatorioMetasButton(discord.ui.Button):
     
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(RelatorioMetasModal())
+
 
 # =========================================================
 # ==================== FUNÇÕES DE METAS ====================
@@ -2554,6 +2550,7 @@ async def atualizar_embed_meta(user_id):
         import traceback
         traceback.print_exc()
 
+
 async def enviar_painel_relatorio_metas():
     """Envia o painel para gerar relatório de metas e zerar metas"""
     canal = bot.get_channel(1521495685092999279)
@@ -2583,7 +2580,7 @@ async def enviar_painel_relatorio_metas():
     # View com os dois botões
     view = discord.ui.View(timeout=None)
     view.add_item(RelatorioMetasButton())
-    view.add_item(ZerarMetasButton())  # Botão de zerar
+    view.add_item(ZerarMetasButton())
     
     await enviar_ou_atualizar_painel(
         "painel_relatorio_metas",
@@ -2621,6 +2618,7 @@ class ZerarMetasButton(discord.ui.Button):
             view=view,
             ephemeral=True
         )
+
 
 # =========================================================
 # ==================== COMANDOS DE METAS ==================
@@ -2698,6 +2696,7 @@ async def cmd_criar_painel_meta(ctx, member: discord.Member = None):
         await ctx.send(f"❌ Erro: {e}")
         print(f"Erro ao criar painel para {member.display_name}: {e}")
 
+
 async def fixar_painel_meta_no_final(user_id):
     """Garante que o painel de meta seja a última mensagem do canal"""
     try:
@@ -2746,7 +2745,6 @@ async def fixar_painel_meta_no_final(user_id):
         print(f"❌ Erro ao fixar painel: {e}")
         import traceback
         traceback.print_exc()
-
 
 # =========================================================
 # ==================== SISTEMA DE VENDAS ===================
