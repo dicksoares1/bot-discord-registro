@@ -7446,19 +7446,7 @@ async def on_ready():
     except Exception as e:
         print("Erro geral ao enviar painéis:", e)
     
-    # Botão reset ações
-    if guild:
-        try:
-            canal = guild.get_channel(CANAL_RELATORIO_ACOES_ID)
-            if canal:
-                async for msg in canal.history(limit=10):
-                    if msg.author == bot.user and msg.components:
-                        break
-                else:
-                    await canal.send("🔄 Controle de Ações:", view=ResetAcoesView())
-        except Exception as e:
-            print("Erro botão reset ações:", e)
-    
+      
     gc.collect()
     print("🧹 Limpeza de memória executada")
     print("=========================================")
