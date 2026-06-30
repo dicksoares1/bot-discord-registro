@@ -325,18 +325,28 @@ def pode_remover_ausencia(member):
 
 def obter_categoria_meta(member):
     """Retorna categoria apropriada para meta baseada no cargo"""
+    if not member:
+        return None
+    
     roles = [r.id for r in member.roles]
     
+    # Verificar cargos em ordem de prioridade (do maior para o menor)
     if CARGO_GERENTE_ID in roles:
         return CATEGORIA_META_GERENTE_ID
+    
     if any(r in roles for r in [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]):
         return CATEGORIA_META_RESPONSAVEIS_ID
+    
     if CARGO_SOLDADO_ID in roles:
         return CATEGORIA_META_SOLDADO_ID
+    
     if CARGO_MEMBRO_ID in roles:
         return CATEGORIA_META_MEMBRO_ID
+    
     if AGREGADO_ROLE_ID in roles:
         return CATEGORIA_META_AGREGADO_ID
+    
+    # Se não tem nenhum cargo específico, retorna None
     return None
 
 # =========================================================
@@ -1709,20 +1719,24 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_member_update(before, after):
+    """Quando o membro muda de cargo, atualiza a categoria da meta"""
     if after.bot:
         return
     
-    tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
-    tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
-    
-    if not tinha_agregado and tem_agregado:
-        await asyncio.sleep(2)
-        if str(after.id) not in metas_cache:
-            await criar_sala_meta(after)
+    # Verificar se o membro tem meta
+    if str(after.id) not in metas_cache:
+        # Se não tem meta e ganhou cargo de agregado, criar
+        tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
+        tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
+        
+        if not tinha_agregado and tem_agregado:
+            await asyncio.sleep(2)
+            if str(after.id) not in metas_cache:
+                await criar_sala_meta(after)
         return
     
-    if str(after.id) in metas_cache:
-        await atualizar_categoria_meta(after)
+    # Se tem meta, verificar se precisa atualizar a categoria
+    await atualizar_categoria_meta(after)
 
 
 @bot.event
@@ -1809,16 +1823,43 @@ async def criar_sala_meta(member: discord.Member):
 
 
 async def atualizar_categoria_meta(member):
-    if str(member.id) not in metas_cache:
-        return
-    
-    canal = member.guild.get_channel(metas_cache[str(member.id)]["canal_id"])
-    if not canal:
-        return
-    
-    nova = obter_categoria_meta(member)
-    if nova and canal.category_id != nova:
-        await canal.edit(category=member.guild.get_channel(nova))
+    """Atualiza a categoria da sala do membro baseada no cargo atual"""
+    try:
+        if str(member.id) not in metas_cache:
+            return
+        
+        dados = metas_cache[str(member.id)]
+        canal = member.guild.get_channel(dados["canal_id"])
+        
+        if not canal:
+            print(f"⚠️ Canal da meta de {member.name} não encontrado")
+            return
+        
+        nova_categoria_id = obter_categoria_meta(member)
+        
+        if not nova_categoria_id:
+            print(f"⚠️ Nenhuma categoria encontrada para {member.name}")
+            return
+        
+        nova_categoria = member.guild.get_channel(nova_categoria_id)
+        
+        if not nova_categoria:
+            print(f"⚠️ Categoria {nova_categoria_id} não encontrada")
+            return
+        
+        # Verificar se já está na categoria correta
+        if canal.category_id == nova_categoria_id:
+            print(f"✅ {member.name} já está na categoria correta")
+            return
+        
+        # Mover o canal para a nova categoria
+        await canal.edit(category=nova_categoria)
+        print(f"📁 Categoria de {member.name} movida para {nova_categoria.name}")
+        
+    except Exception as e:
+        print(f"❌ Erro ao atualizar categoria de {member.name}: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 async def depositar_na_meta(user_id, valor, motivo):
