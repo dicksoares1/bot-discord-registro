@@ -1939,6 +1939,106 @@ async def criar_sala_meta(member: discord.Member):
     
     # Salvar no banco
     await salvar_meta_db(member.id, canal.id, 0, 0, 0)
+
+async def zerar_todas_metas():
+    """Zera todas as metas (dinheiro e pólvora)"""
+    async with get_db().acquire() as conn:
+        # Resetar dinheiro e pólvora de todas as metas
+        await conn.execute(
+            """
+            UPDATE metas SET 
+                dinheiro = 0, 
+                dinheiro_acoes = 0, 
+                polvora = 0
+            """
+        )
+        
+        # Buscar todos os usuários com meta
+        rows = await conn.fetch("SELECT user_id, canal_id FROM metas")
+        return rows
+
+class ZerarMetasView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+    
+    @discord.ui.button(
+        label="⚠️ ZERAR TODAS AS METAS",
+        style=discord.ButtonStyle.danger,
+        custom_id="zerar_metas_btn",
+        emoji="⚠️"
+    )
+    async def zerar_metas(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Verificar permissão
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem zerar todas as metas!", ephemeral=True)
+            return
+        
+        # Confirmar com o usuário
+        view = ConfirmarZerarView()
+        await interaction.response.send_message(
+            "⚠️ **ATENÇÃO!** Você está prestes a zerar TODAS as metas.\n\n"
+            "Isso vai resetar o dinheiro e pólvora de TODOS os membros.\n"
+            "**Esta ação não pode ser desfeita!**\n\n"
+            "Clique em **'Sim, zerar tudo'** para confirmar.",
+            view=view,
+            ephemeral=True
+        )
+
+
+class ConfirmarZerarView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=30)
+    
+    @discord.ui.button(
+        label="✅ Sim, zerar tudo",
+        style=discord.ButtonStyle.danger,
+        emoji="✅"
+    )
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Zerar todas as metas
+            metas = await zerar_todas_metas()
+            
+            # Atualizar todos os painéis
+            atualizadas = 0
+            for meta in metas:
+                user_id = int(meta["user_id"])
+                await atualizar_embed_meta(user_id)
+                atualizadas += 1
+                await asyncio.sleep(0.5)
+            
+            await interaction.followup.send(
+                f"✅ **Todas as metas foram zeradas com sucesso!**\n\n"
+                f"📊 {atualizadas} metas resetadas.",
+                ephemeral=True
+            )
+            
+            # Log no canal de gerência
+            canal_gerencia = interaction.guild.get_channel(CANAL_GERENCIA_ID)
+            if canal_gerencia:
+                embed = discord.Embed(
+                    title="⚠️ METAS ZERADAS",
+                    description=f"Todas as metas foram resetadas por {interaction.user.mention}",
+                    color=0xe74c3c,
+                    timestamp=agora()
+                )
+                await canal_gerencia.send(embed=embed)
+            
+        except Exception as e:
+            await interaction.followup.send(f"❌ Erro ao zerar metas: {e}", ephemeral=True)
+    
+    @discord.ui.button(
+        label="❌ Cancelar",
+        style=discord.ButtonStyle.secondary,
+        emoji="❌"
+    )
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
     
     # =========================================================
     # ================= ENVIAR O PAINEL DA META ===============
@@ -1996,16 +2096,16 @@ async def depositar_na_meta(user_id, valor, motivo):
         meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", str(user_id))
         
         if meta:
-            novo_valor = meta["dinheiro"] + valor
-            
-            # Se for de ação, adicionar no campo específico
+            # Se for de ação, adicionar no campo dinheiro_acoes
             if "Ação" in motivo:
                 novo_acoes = (meta["dinheiro_acoes"] or 0) + valor
                 await conn.execute(
-                    "UPDATE metas SET dinheiro = $1, dinheiro_acoes = $2 WHERE user_id = $3",
-                    novo_valor, novo_acoes, str(user_id)
+                    "UPDATE metas SET dinheiro_acoes = $1 WHERE user_id = $2",
+                    novo_acoes, str(user_id)
                 )
             else:
+                # Se for depósito manual, adicionar no dinheiro normal
+                novo_valor = meta["dinheiro"] + valor
                 await conn.execute(
                     "UPDATE metas SET dinheiro = $1 WHERE user_id = $2",
                     novo_valor, str(user_id)
@@ -2030,13 +2130,18 @@ async def depositar_na_meta(user_id, valor, motivo):
             if member:
                 canal = await criar_sala_meta(member)
                 if canal:
-                    await conn.execute(
-                        "UPDATE metas SET dinheiro = $1 WHERE user_id = $2",
-                        valor, str(user_id)
-                    )
+                    if "Ação" in motivo:
+                        await conn.execute(
+                            "UPDATE metas SET dinheiro_acoes = $1 WHERE user_id = $2",
+                            valor, str(user_id)
+                        )
+                    else:
+                        await conn.execute(
+                            "UPDATE metas SET dinheiro = $1 WHERE user_id = $2",
+                            valor, str(user_id)
+                        )
                     return True
             return False
-
 # =========================================================
 # ==================== MODAIS DE METAS ====================
 # =========================================================
@@ -2359,18 +2464,11 @@ async def atualizar_embed_meta(user_id):
         nome = user.display_name if user else str(user_id)
         
         # =========================================================
-        # ================= SEPARAR DINHEIRO ======================
+        # ================= SEPARAR VALORES =======================
         # =========================================================
         
-        # Dinheiro total da meta (inclui tudo)
-        dinheiro_total = meta["dinheiro"] or 0
-        
-        # Buscar dinheiro de ações (depósitos feitos pelo sistema de ações)
-        async with get_db().acquire() as conn:
-            # Buscar depósitos de ações no histórico (usando a tabela de metas_historico ou calculando)
-            # Como as ações depositam via depositar_na_meta, vamos buscar o valor que veio de ações
-            # Para simplificar, vamos calcular baseado nos depósitos feitos manualmente
-            pass
+        dinheiro_meta = meta["dinheiro"] or 0
+        dinheiro_acoes = meta.get("dinheiro_acoes") or 0
         
         embed = discord.Embed(
             title=f"📊 META DE {nome.upper()}",
@@ -2381,10 +2479,6 @@ async def atualizar_embed_meta(user_id):
         # =========================================================
         # ================= CAMPOS DO EMBED =======================
         # =========================================================
-        
-        # Separar dinheiro de meta e dinheiro de ações
-        dinheiro_acoes = meta.get("dinheiro_acoes") or 0
-        dinheiro_meta = dinheiro_total - dinheiro_acoes
         
         embed.add_field(
             name="💰 DINHEIRO SUJO (Meta)",
@@ -2427,7 +2521,6 @@ async def atualizar_embed_meta(user_id):
         # ================= ENVIAR/ATUALIZAR MENSAGEM =============
         # =========================================================
         
-        # Procurar mensagem existente
         async for msg in canal.history(limit=30):
             if msg.author == bot.user and msg.embeds:
                 if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
@@ -2443,7 +2536,6 @@ async def atualizar_embed_meta(user_id):
                             pass
                         break
         
-        # Se não encontrou, criar nova
         await canal.send(embed=embed, view=MetaView(user_id))
         print(f"✅ Meta de {nome} criada")
         
@@ -2452,9 +2544,8 @@ async def atualizar_embed_meta(user_id):
         import traceback
         traceback.print_exc()
 
-
 async def enviar_painel_relatorio_metas():
-    """Envia o painel para gerar relatório de metas"""
+    """Envia o painel para gerar relatório de metas e zerar metas"""
     canal = bot.get_channel(1521495685092999279)
     
     if not canal:
@@ -2462,28 +2553,27 @@ async def enviar_painel_relatorio_metas():
         return
     
     embed = discord.Embed(
-        title="📊 RELATÓRIO DE METAS",
+        title="📊 GERENCIAMENTO DE METAS",
         description=(
-            "**Clique no botão abaixo para gerar um relatório de metas fechadas.**\n\n"
-            "📌 **Informe o período:**\n"
-            "• Data de INÍCIO (ex: 01/06/2026)\n"
-            "• Data de FIM (ex: 30/06/2026)\n\n"
-            "📋 **O relatório inclui:**\n"
-            "• Total de dinheiro sujo\n"
-            "• Total de pólvora\n"
-            "• Lista de metas fechadas no período"
+            "**Gerencie as metas de todos os membros.**\n\n"
+            "📌 **Opções disponíveis:**\n"
+            "• 📊 **Gerar Relatório** - Relatório de metas fechadas\n"
+            "• ⚠️ **Zerar Metas** - Resetar TODAS as metas (cuidado!)\n\n"
+            "⚠️ **Zerar metas** vai resetar o dinheiro e pólvora de TODOS os membros!"
         ),
         color=0x2ecc71
     )
     
     embed.add_field(
-        name="📌 EXEMPLO",
+        name="📌 EXEMPLO DE RELATÓRIO",
         value="**Data INÍCIO:** `01/06/2026`\n**Data FIM:** `30/06/2026`",
         inline=False
     )
     
+    # View com os dois botões
     view = discord.ui.View(timeout=None)
     view.add_item(RelatorioMetasButton())
+    view.add_item(ZerarMetasButton())  # Botão de zerar
     
     await enviar_ou_atualizar_painel(
         "painel_relatorio_metas",
@@ -2492,7 +2582,35 @@ async def enviar_painel_relatorio_metas():
         view
     )
     
-    print("📊 Painel de relatório de metas enviado")
+    print("📊 Painel de gerenciamento de metas enviado")
+
+
+class ZerarMetasButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="⚠️ Zerar Todas as Metas",
+            style=discord.ButtonStyle.danger,
+            custom_id="zerar_metas_btn_painel",
+            emoji="⚠️"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem zerar todas as metas!", ephemeral=True)
+            return
+        
+        view = ConfirmarZerarView()
+        await interaction.response.send_message(
+            "⚠️ **ATENÇÃO!** Você está prestes a zerar TODAS as metas.\n\n"
+            "Isso vai resetar o dinheiro e pólvora de TODOS os membros.\n"
+            "**Esta ação não pode ser desfeita!**\n\n"
+            "Clique em **'✅ Sim, zerar tudo'** para confirmar.",
+            view=view,
+            ephemeral=True
+        )
 
 # =========================================================
 # ==================== COMANDOS DE METAS ==================
