@@ -1939,6 +1939,16 @@ async def criar_sala_meta(member: discord.Member):
     
     # Salvar no banco
     await salvar_meta_db(member.id, canal.id, 0, 0, 0)
+    
+    # =========================================================
+    # ================= ENVIAR O PAINEL DA META ===============
+    # =========================================================
+    
+    await atualizar_embed_meta(member.id)
+    
+    print(f"📊 Sala e painel criados para {member.display_name}")
+    return canal
+
 
 async def zerar_todas_metas():
     """Zera todas as metas (dinheiro e pólvora)"""
@@ -8213,25 +8223,6 @@ async def on_ready():
     # Restaurar produções
     await restaurar_producoes()
 
-        # Iniciar loop de heartbeat para produções
-    try:
-        if not heartbeat_producoes.is_running():
-            heartbeat_producoes.start()
-            print("💚 Loop de heartbeat das produções iniciado")
-    except Exception as e:
-        print("Erro ao iniciar loop de heartbeat:", e)
-
-        # Iniciar loop de limpeza de cache de lives
-    try:
-        if not limpar_cache_lives.is_running():
-            limpar_cache_lives.start()
-            print("🧹 Loop de limpeza de cache de lives iniciado")
-    except Exception as e:
-        print("Erro ao iniciar loop de limpeza de cache:", e)
-
-   
-
-
     # =========================================================
     # ================= GRUPOS - SOMENTE O PAINEL =============
     # =========================================================
@@ -8245,7 +8236,7 @@ async def on_ready():
     # NÃO RESTAURAR GRUPOS AUTOMATICAMENTE para evitar rate limit
     print("📋 Sistema de grupos carregado. Use o botão '🔄 Atualizar' no embed para atualizar cada grupo.")
 
-        # Fixar painéis de metas no final de cada sala
+    # Fixar painéis de metas no final de cada sala
     try:
         for uid in metas_cache.keys():
             await fixar_painel_meta_no_final(int(uid))
@@ -8301,7 +8292,6 @@ async def on_ready():
     except Exception as e:
         print("Erro geral ao enviar painéis:", e)
     
-      
     gc.collect()
     print("🧹 Limpeza de memória executada")
     print("=========================================")
