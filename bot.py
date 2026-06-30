@@ -733,6 +733,76 @@ async def depositar_na_meta_db(user_id, valor):
             return True
         return False
 
+# =========================================================
+# ==================== METAS - NOVAS QUERIES ==============
+# =========================================================
+
+async def adicionar_polvora_meta(user_id, quantidade):
+    """Adiciona pólvora à meta do usuário"""
+    async with get_db().acquire() as conn:
+        meta = await conn.fetchrow("SELECT polvora FROM metas WHERE user_id = $1", str(user_id))
+        if meta:
+            novo_valor = meta["polvora"] + quantidade
+            await conn.execute("UPDATE metas SET polvora = $1 WHERE user_id = $2", novo_valor, str(user_id))
+            return True
+        return False
+
+async def adicionar_dinheiro_meta(user_id, valor):
+    """Adiciona dinheiro à meta do usuário"""
+    async with get_db().acquire() as conn:
+        meta = await conn.fetchrow("SELECT dinheiro FROM metas WHERE user_id = $1", str(user_id))
+        if meta:
+            novo_valor = meta["dinheiro"] + valor
+            await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_valor, str(user_id))
+            return True
+        return False
+
+async def fechar_meta(user_id, data_inicio, data_fim):
+    """Fecha uma meta e registra no histórico"""
+    async with get_db().acquire() as conn:
+        meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
+        if not meta:
+            return None
+        
+        # Registrar no histórico
+        await conn.execute(
+            """
+            INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, data_inicio, data_fim, data_fechamento)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            str(user_id), 
+            meta["dinheiro"], 
+            meta["polvora"], 
+            meta["acao"], 
+            data_inicio, 
+            data_fim, 
+            agora_db()
+        )
+        
+        # Resetar a meta
+        await conn.execute(
+            "UPDATE metas SET dinheiro = 0, polvora = 0 WHERE user_id = $1",
+            str(user_id)
+        )
+        
+        return {
+            "dinheiro": meta["dinheiro"],
+            "polvora": meta["polvora"],
+            "acao": meta["acao"]
+        }
+
+async def buscar_historico_metas(data_inicio, data_fim):
+    """Busca histórico de metas fechadas no período"""
+    async with get_db().acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT * FROM metas_historico 
+            WHERE data_fechamento BETWEEN $1 AND $2
+            ORDER BY data_fechamento DESC
+            """,
+            data_inicio, data_fim
+        )
+
 # --- AÇÕES ---
 async def salvar_acao_db(tipo, autor):
     async with get_db().acquire() as conn:
@@ -1893,6 +1963,414 @@ async def depositar_na_meta(user_id, valor, motivo):
                     await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", valor, str(user_id))
                     return True
             return False
+
+# =========================================================
+# ==================== MODAIS DE METAS ====================
+# =========================================================
+
+class AdicionarPolvoraModal(discord.ui.Modal, title="💣 Adicionar Pólvora"):
+    quantidade = discord.ui.TextInput(
+        label="Quantidade de Pólvora",
+        placeholder="Digite a quantidade (ex: 100)",
+        required=True
+    )
+    
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = user_id
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qtd = int(self.quantidade.value.strip())
+            if qtd <= 0:
+                raise ValueError
+        except:
+            await interaction.response.send_message("❌ Quantidade inválida!", ephemeral=True)
+            return
+        
+        sucesso = await adicionar_polvora_meta(self.user_id, qtd)
+        
+        if not sucesso:
+            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
+            return
+        
+        await atualizar_embed_meta(self.user_id)
+        
+        await interaction.response.send_message(
+            f"✅ **{fmt_num(qtd)} pólvora(s) adicionada(s) à meta!**",
+            ephemeral=True
+        )
+
+
+class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Sujo"):
+    quantidade = discord.ui.TextInput(
+        label="Valor do Dinheiro Sujo",
+        placeholder="Digite o valor (ex: 5000)",
+        required=True
+    )
+    
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = user_id
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            valor = int(self.quantidade.value.strip())
+            if valor <= 0:
+                raise ValueError
+        except:
+            await interaction.response.send_message("❌ Valor inválido!", ephemeral=True)
+            return
+        
+        sucesso = await adicionar_dinheiro_meta(self.user_id, valor)
+        
+        if not sucesso:
+            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
+            return
+        
+        await atualizar_embed_meta(self.user_id)
+        
+        await interaction.response.send_message(
+            f"✅ **{formatar_dinheiro(valor)} adicionado à meta!**",
+            ephemeral=True
+        )
+
+
+class FecharMetaModal(discord.ui.Modal, title="🔒 Fechar Meta"):
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data de INÍCIO da meta",
+        placeholder="Ex: 01/06/2026",
+        required=True
+    )
+    data_fim = discord.ui.TextInput(
+        label="📅 Data de FIM da meta",
+        placeholder="Ex: 30/06/2026",
+        required=True
+    )
+    
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = user_id
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
+        except ValueError:
+            await interaction.followup.send("❌ Formato de data inválido! Use DD/MM/AAAA", ephemeral=True)
+            return
+        
+        if fim < inicio:
+            await interaction.followup.send("❌ Data de FIM deve ser depois da data de INÍCIO!", ephemeral=True)
+            return
+        
+        resultado = await fechar_meta(self.user_id, inicio, fim)
+        
+        if not resultado:
+            await interaction.followup.send("❌ Meta não encontrada!", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="🔒 META FECHADA",
+            description=f"👤 <@{self.user_id}>",
+            color=0xe74c3c
+        )
+        
+        embed.add_field(
+            name="💰 Dinheiro Sujo",
+            value=formatar_dinheiro(resultado["dinheiro"]),
+            inline=True
+        )
+        
+        embed.add_field(
+            name="💣 Pólvora",
+            value=f"{fmt_num(resultado['polvora'])} unidades",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📅 Período",
+            value=f"{self.data_inicio.value} até {self.data_fim.value}",
+            inline=False
+        )
+        
+        embed.set_footer(text=f"Ação: {resultado['acao'] or 'N/A'}")
+        
+        canal = interaction.guild.get_channel(RESULTADOS_METAS_ID)
+        if canal:
+            await canal.send(embed=embed)
+        
+        await atualizar_embed_meta(self.user_id)
+        
+        await interaction.followup.send(
+            f"✅ **Meta fechada com sucesso!**\n\n"
+            f"💰 Dinheiro: {formatar_dinheiro(resultado['dinheiro'])}\n"
+            f"💣 Pólvora: {fmt_num(resultado['polvora'])} unidades",
+            ephemeral=True
+        )
+
+
+class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data INÍCIO",
+        placeholder="Ex: 01/06/2026",
+        required=True
+    )
+    data_fim = discord.ui.TextInput(
+        label="📅 Data FIM",
+        placeholder="Ex: 30/06/2026",
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
+            inicio_dt = inicio.replace(hour=0, minute=0, second=0)
+            fim_dt = fim.replace(hour=23, minute=59, second=59)
+        except ValueError:
+            await interaction.followup.send("❌ Formato de data inválido! Use DD/MM/AAAA", ephemeral=True)
+            return
+        
+        historico = await buscar_historico_metas(inicio_dt, fim_dt)
+        
+        if not historico:
+            await interaction.followup.send(
+                f"📭 Nenhuma meta fechada no período **{self.data_inicio.value}** a **{self.data_fim.value}**.",
+                ephemeral=True
+            )
+            return
+        
+        total_dinheiro = sum(r["dinheiro"] for r in historico)
+        total_polvora = sum(r["polvora"] for r in historico)
+        
+        embed = discord.Embed(
+            title="📊 RELATÓRIO DE METAS",
+            description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}",
+            color=0x2ecc71
+        )
+        
+        embed.add_field(
+            name="💰 TOTAL DINHEIRO SUJO",
+            value=formatar_dinheiro(total_dinheiro),
+            inline=True
+        )
+        
+        embed.add_field(
+            name="💣 TOTAL PÓLVORA",
+            value=f"{fmt_num(total_polvora)} unidades",
+            inline=True
+        )
+        
+        lista = ""
+        for item in historico[:15]:
+            user = await pegar_usuario(int(item["user_id"]))
+            nome = user.display_name if user else f"ID: {item['user_id']}"
+            data_fim = item["data_fim"].strftime('%d/%m') if item["data_fim"] else "N/A"
+            lista += f"👤 {nome} - 💰 {formatar_dinheiro(item['dinheiro'])} - 💣 {fmt_num(item['polvora'])}\n"
+        
+        if len(historico) > 15:
+            lista += f"\n*... e mais {len(historico) - 15} registros*"
+        
+        embed.add_field(name="📋 METAS FECHADAS", value=lista, inline=False)
+        embed.set_footer(text=f"Total: {len(historico)} metas fechadas")
+        
+        canal = interaction.guild.get_channel(RESULTADOS_METAS_ID)
+        if canal:
+            await canal.send(embed=embed)
+            await interaction.followup.send(
+                f"✅ Relatório enviado no canal <#{RESULTADOS_METAS_ID}>!",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+# =========================================================
+# ==================== PAINEL DE METAS ====================
+# =========================================================
+
+class MetaView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+    
+    @discord.ui.button(
+        label="💣 Adicionar Pólvora",
+        style=discord.ButtonStyle.primary,
+        custom_id="meta_adicionar_polvora",
+        emoji="💣"
+    )
+    async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_dono = interaction.user.id == self.user_id
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_dono and not is_gerente:
+            await interaction.response.send_message("❌ Apenas o dono ou gerentes podem adicionar pólvora!", ephemeral=True)
+            return
+        
+        await interaction.response.send_modal(AdicionarPolvoraModal(self.user_id))
+    
+    @discord.ui.button(
+        label="💰 Adicionar Dinheiro Sujo",
+        style=discord.ButtonStyle.success,
+        custom_id="meta_adicionar_dinheiro",
+        emoji="💰"
+    )
+    async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_dono = interaction.user.id == self.user_id
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_dono and not is_gerente:
+            await interaction.response.send_message("❌ Apenas o dono ou gerentes podem adicionar dinheiro!", ephemeral=True)
+            return
+        
+        await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
+    
+    @discord.ui.button(
+        label="🔒 Fechar Meta",
+        style=discord.ButtonStyle.danger,
+        custom_id="meta_fechar",
+        emoji="🔒"
+    )
+    async def fechar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_dono = interaction.user.id == self.user_id
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_dono and not is_gerente:
+            await interaction.response.send_message("❌ Apenas o dono ou gerentes podem fechar a meta!", ephemeral=True)
+            return
+        
+        await interaction.response.send_modal(FecharMetaModal(self.user_id))
+
+
+class RelatorioMetasButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="📊 Gerar Relatório de Metas",
+            style=discord.ButtonStyle.success,
+            custom_id="relatorio_metas_btn",
+            emoji="📊"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(RelatorioMetasModal())
+
+# =========================================================
+# ==================== FUNÇÕES DE METAS ====================
+# =========================================================
+
+async def atualizar_embed_meta(user_id):
+    """Atualiza o embed da meta de um usuário"""
+    try:
+        if str(user_id) not in metas_cache:
+            return
+        
+        dados = metas_cache[str(user_id)]
+        canal = bot.get_channel(dados["canal_id"])
+        
+        if not canal:
+            print(f"❌ Canal da meta de {user_id} não encontrado")
+            return
+        
+        async with get_db().acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
+        
+        if not meta:
+            return
+        
+        user = await pegar_usuario(user_id)
+        nome = user.display_name if user else str(user_id)
+        
+        embed = discord.Embed(
+            title=f"📊 META DE {nome.upper()}",
+            color=0x3498db,
+            timestamp=agora()
+        )
+        
+        embed.add_field(
+            name="💰 DINHEIRO SUJO",
+            value=formatar_dinheiro(meta["dinheiro"]) if meta["dinheiro"] else "R$ 0,00",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="💣 PÓLVORA",
+            value=f"{fmt_num(meta['polvora'])} unidades" if meta["polvora"] else "0 unidades",
+            inline=True
+        )
+        
+        if meta["acao"]:
+            embed.add_field(
+                name="🎯 AÇÃO",
+                value=meta["acao"],
+                inline=False
+            )
+        
+        embed.set_footer(text=f"ID: {user_id}")
+        
+        async for msg in canal.history(limit=30):
+            if msg.author == bot.user and msg.embeds:
+                if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
+                    try:
+                        await msg.edit(embed=embed, view=MetaView(user_id))
+                        print(f"✅ Meta de {nome} atualizada")
+                        return
+                    except Exception as e:
+                        print(f"Erro ao atualizar embed da meta: {e}")
+        
+        await canal.send(embed=embed, view=MetaView(user_id))
+        print(f"✅ Meta de {nome} criada")
+        
+    except Exception as e:
+        print(f"❌ Erro ao atualizar embed da meta: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+async def enviar_painel_relatorio_metas():
+    """Envia o painel para gerar relatório de metas"""
+    canal = bot.get_channel(1521495685092999279)
+    
+    if not canal:
+        print(f"❌ Canal de relatório de metas não encontrado: 1521495685092999279")
+        return
+    
+    embed = discord.Embed(
+        title="📊 RELATÓRIO DE METAS",
+        description=(
+            "**Clique no botão abaixo para gerar um relatório de metas fechadas.**\n\n"
+            "📌 **Informe o período:**\n"
+            "• Data de INÍCIO (ex: 01/06/2026)\n"
+            "• Data de FIM (ex: 30/06/2026)\n\n"
+            "📋 **O relatório inclui:**\n"
+            "• Total de dinheiro sujo\n"
+            "• Total de pólvora\n"
+            "• Lista de metas fechadas no período"
+        ),
+        color=0x2ecc71
+    )
+    
+    embed.add_field(
+        name="📌 EXEMPLO",
+        value="**Data INÍCIO:** `01/06/2026`\n**Data FIM:** `30/06/2026`",
+        inline=False
+    )
+    
+    view = discord.ui.View(timeout=None)
+    view.add_item(RelatorioMetasButton())
+    
+    await enviar_ou_atualizar_painel(
+        "painel_relatorio_metas",
+        1521495685092999279,
+        embed,
+        view
+    )
+    
+    print("📊 Painel de relatório de metas enviado")
 
 
 # =========================================================
@@ -7432,6 +7910,7 @@ async def on_ready():
             enviar_painel_solicitar_sala(),
             enviar_painel_botao_ausencia(),
             enviar_painel_registro_grupos(),
+            enviar_painel_relatorio_metas(),
         ]
         
         if guild:
