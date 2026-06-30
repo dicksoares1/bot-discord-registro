@@ -2431,6 +2431,82 @@ async def enviar_painel_relatorio_metas():
     
     print("📊 Painel de relatório de metas enviado")
 
+# =========================================================
+# ==================== COMANDOS DE METAS ==================
+# =========================================================
+
+@bot.command(name="atualizar_paineis_metas")
+async def cmd_atualizar_paineis_metas(ctx):
+    """Atualiza os painéis de metas em todas as salas existentes (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    await ctx.send("🔄 Atualizando painéis de metas em todas as salas...")
+    
+    try:
+        metas = await carregar_metas_db()
+        
+        if not metas:
+            await ctx.send("📭 Nenhuma meta encontrada.")
+            return
+        
+        atualizadas = 0
+        erros = 0
+        
+        for meta in metas:
+            user_id = int(meta["user_id"])
+            canal_id = int(meta["canal_id"])
+            
+            canal = ctx.guild.get_channel(canal_id)
+            if not canal:
+                print(f"❌ Canal {canal_id} não encontrado para usuário {user_id}")
+                erros += 1
+                continue
+            
+            try:
+                await atualizar_embed_meta(user_id)
+                atualizadas += 1
+                await asyncio.sleep(1)
+                print(f"✅ Painel atualizado para {canal.name}")
+            except Exception as e:
+                print(f"❌ Erro ao atualizar {canal.name}: {e}")
+                erros += 1
+        
+        await ctx.send(
+            f"✅ **{atualizadas} painéis atualizados!**\n"
+            f"❌ **{erros} erros** (verifique o console)"
+        )
+        
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro ao atualizar painéis: {e}")
+
+
+@bot.command(name="criar_painel_meta")
+async def cmd_criar_painel_meta(ctx, member: discord.Member = None):
+    """Cria/atualiza o painel de meta de um membro específico (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    if not member:
+        member = ctx.author
+    
+    await ctx.send(f"🔄 Criando painel de meta para {member.display_name}...")
+    
+    try:
+        if str(member.id) not in metas_cache:
+            await criar_sala_meta(member)
+            await ctx.send(f"✅ Sala e painel criados para {member.display_name}!")
+        else:
+            await atualizar_embed_meta(member.id)
+            await ctx.send(f"✅ Painel atualizado para {member.display_name}!")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro ao criar painel para {member.display_name}: {e}")
+
 
 # =========================================================
 # ==================== SISTEMA DE VENDAS ===================
