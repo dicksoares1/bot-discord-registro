@@ -1895,14 +1895,16 @@ async def on_guild_channel_delete(channel):
 # =========================================================
 
 async def criar_sala_meta(member: discord.Member):
-    """Cria a sala de meta para o membro com o painel"""
+    """Cria a sala de meta para o membro com o painel - VERSÃO CORRIGIDA"""
     guild = member.guild
     nome_canal = f"📁-{member.display_name}".lower()
+    
+    print(f"🏗️ Criando sala para {member.display_name}...")
     
     # Verificar se já existe um canal com esse nome
     for canal in guild.text_channels:
         if canal.name == nome_canal:
-            # Se já existe, atualizar o embed
+            print(f"📁 Canal já existe: {canal.name}")
             await atualizar_embed_meta(member.id)
             return canal
     
@@ -1921,6 +1923,7 @@ async def criar_sala_meta(member: discord.Member):
             break
     
     if canal_encontrado:
+        print(f"📁 Canal encontrado para {member.display_name}: {canal_encontrado.name}")
         await salvar_meta_db(member.id, canal_encontrado.id, 0, 0, 0)
         await atualizar_embed_meta(member.id)
         return canal_encontrado
@@ -1939,27 +1942,29 @@ async def criar_sala_meta(member: discord.Member):
     nick = member.display_name.lower().replace(" ", "-")
     nome_canal = f"📁・{nick}"
     
-    # Permissões do canal
+    # =========================================================
+    # ================= PERMISSÕES DO CANAL ===================
+    # =========================================================
+    
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
         member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
     
+    # Gerente vê a sala
     gerente = guild.get_role(CARGO_GERENTE_ID)
     if gerente:
         overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
     
-    # Cargos de responsáveis
-    cargos_responsaveis = [
-        CARGO_RESP_METAS_ID,
-        CARGO_RESP_ACAO_ID,
-        CARGO_RESP_VENDAS_ID,
-        CARGO_RESP_PRODUCAO_ID
-    ]
-    for cargo_id in cargos_responsaveis:
-        cargo = guild.get_role(cargo_id)
-        if cargo:
-            overwrites[cargo] = discord.PermissionOverwrite(view_channel=True)
+    # Gerente Geral vê a sala
+    gerente_geral = guild.get_role(CARGO_GERENTE_GERAL_ID)
+    if gerente_geral:
+        overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
+    
+    # ⚠️ RESPONSÁVEIS NÃO VEEM MAIS AS SALAS
+    # REMOVIDO: cargos_responsaveis
+    
+    print(f"📁 Criando canal: {nome_canal} na categoria {categoria.name}")
     
     # Criar o canal
     canal = await guild.create_text_channel(
@@ -1968,8 +1973,18 @@ async def criar_sala_meta(member: discord.Member):
         overwrites=overwrites
     )
     
+    print(f"✅ Canal criado: {canal.name} (ID: {canal.id})")
+    
     # Salvar no banco
     await salvar_meta_db(member.id, canal.id, 0, 0, 0)
+    
+    # Atualizar cache
+    metas_cache[str(member.id)] = {
+        "canal_id": canal.id,
+        "dinheiro": 0,
+        "polvora": 0,
+        "acao": None
+    }
     
     # Aguardar um pouco para o canal ser criado
     await asyncio.sleep(1)
@@ -1982,7 +1997,7 @@ async def criar_sala_meta(member: discord.Member):
     
     print(f"📊 Sala e painel criados para {member.display_name}")
     return canal
-
+    
 async def zerar_todas_metas():
     """Zera todas as metas (dinheiro e pólvora)"""
     async with get_db().acquire() as conn:
@@ -2485,18 +2500,35 @@ class RelatorioMetasButton(discord.ui.Button):
 # =========================================================
 
 async def atualizar_embed_meta(user_id):
-    """Atualiza o embed da meta de um usuário"""
+    """Atualiza o embed da meta de um usuário - VERSÃO CORRIGIDA"""
     try:
+        print(f"🔄 Atualizando meta de {user_id}...")
+        
+        # Verificar se está no cache
         if str(user_id) not in metas_cache:
-            print(f"⚠️ Usuário {user_id} não está no cache")
-            return
+            print(f"⚠️ Usuário {user_id} não está no cache, recarregando...")
+            # Recarregar cache
+            rows = await carregar_metas_db()
+            for r in rows:
+                metas_cache[str(r["user_id"])] = {
+                    "canal_id": int(r["canal_id"]),
+                    "dinheiro": r["dinheiro"],
+                    "polvora": r["polvora"],
+                    "acao": r["acao"]
+                }
+            
+            if str(user_id) not in metas_cache:
+                print(f"❌ Usuário {user_id} ainda não tem meta")
+                return
         
         dados = metas_cache[str(user_id)]
         canal = bot.get_channel(dados["canal_id"])
         
         if not canal:
-            print(f"❌ Canal da meta de {user_id} não encontrado")
+            print(f"❌ Canal da meta de {user_id} não encontrado (ID: {dados['canal_id']})")
             return
+        
+        print(f"✅ Canal encontrado: {canal.name} (ID: {canal.id})")
         
         # Buscar dados atualizados
         async with get_db().acquire() as conn:
@@ -2568,29 +2600,23 @@ async def atualizar_embed_meta(user_id):
         # ================= ENVIAR/ATUALIZAR MENSAGEM =============
         # =========================================================
         
-        # Procurar mensagem existente
-        mensagem_encontrada = False
+        # Primeiro, deletar mensagens antigas do bot no canal
+        mensagens_deletadas = 0
         async for msg in canal.history(limit=30):
-            if msg.author == bot.user and msg.embeds:
-                if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
-                    try:
-                        await msg.edit(embed=embed, view=MetaView(user_id))
-                        print(f"✅ Meta de {nome} atualizada")
-                        mensagem_encontrada = True
-                        break
-                    except Exception as e:
-                        print(f"Erro ao atualizar embed da meta: {e}")
-                        # Se não conseguir editar, deletar e criar novo
-                        try:
-                            await msg.delete()
-                        except:
-                            pass
-                        break
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    mensagens_deletadas += 1
+                    await asyncio.sleep(0.3)
+                except:
+                    pass
         
-        if not mensagem_encontrada:
-            # Se não encontrou, criar nova mensagem
-            await canal.send(embed=embed, view=MetaView(user_id))
-            print(f"✅ Meta de {nome} criada")
+        if mensagens_deletadas > 0:
+            print(f"🗑️ {mensagens_deletadas} mensagens antigas deletadas de {canal.name}")
+        
+        # Enviar nova mensagem com o painel
+        await canal.send(embed=embed, view=MetaView(user_id))
+        print(f"✅ Painel de meta criado para {nome} em {canal.name}")
         
     except Exception as e:
         print(f"❌ Erro ao atualizar embed da meta: {e}")
