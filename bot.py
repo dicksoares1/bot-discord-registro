@@ -1902,11 +1902,140 @@ async def on_guild_channel_delete(channel):
 # ==================== SISTEMA DE METAS ====================
 # =========================================================
 
-async def criar_sala_meta(member: discord.Member):    
+async def criar_sala_meta(member: discord.Member):
+    """Cria a sala de meta para o membro com o painel"""
+    guild = member.guild
+    nome_canal = f"📁-{member.display_name}".lower()
+    
+    print(f"🏗️ Criando sala para {member.display_name}...")
+    
+    # Verificar se já existe um canal com esse nome
+    for canal in guild.text_channels:
+        if canal.name == nome_canal:
+            print(f"📁 Canal já existe: {canal.name}")
+            if str(member.id) not in metas_cache:
+                await salvar_meta_db(member.id, canal.id, 0, 0, 0)
+                metas_cache[str(member.id)] = {
+                    "canal_id": canal.id,
+                    "dinheiro": 0,
+                    "polvora": 0,
+                    "acao": None
+                }
+            await atualizar_embed_meta(member.id)
+            return canal
+    
+    # Buscar no banco se tem meta com canal que não existe mais
+    async with get_db().acquire() as conn:
+        meta_existente = await conn.fetchrow(
+            "SELECT * FROM metas WHERE user_id = $1",
+            str(member.id)
+        )
+    
+    if meta_existente:
+        canal_id = int(meta_existente["canal_id"])
+        canal_existe = guild.get_channel(canal_id)
+        
+        if not canal_existe:
+            print(f"🗑️ Canal {canal_id} não existe mais, removendo meta do banco...")
+            async with get_db().acquire() as conn:
+                await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
+            if str(member.id) in metas_cache:
+                del metas_cache[str(member.id)]
+            print(f"✅ Meta antiga removida para {member.display_name}")
+        else:
+            print(f"📁 Canal existe: {canal_existe.name}")
+            metas_cache[str(member.id)] = {
+                "canal_id": canal_id,
+                "dinheiro": meta_existente["dinheiro"],
+                "polvora": meta_existente["polvora"],
+                "acao": meta_existente["acao"]
+            }
+            await atualizar_embed_meta(member.id)
+            return canal_existe
+    
+    # Procurar um canal existente que o membro já tenha acesso
+    canal_encontrado = None
+    for cat in guild.categories:
+        if not cat.name.lower().startswith("metas"):
+            continue
+        for c in cat.channels:
+            if not isinstance(c, discord.TextChannel):
+                continue
+            if c.overwrites_for(member).view_channel:
+                canal_encontrado = c
+                break
+        if canal_encontrado:
+            break
+    
+    if canal_encontrado:
+        print(f"📁 Canal encontrado para {member.display_name}: {canal_encontrado.name}")
+        await salvar_meta_db(member.id, canal_encontrado.id, 0, 0, 0)
+        metas_cache[str(member.id)] = {
+            "canal_id": canal_encontrado.id,
+            "dinheiro": 0,
+            "polvora": 0,
+            "acao": None
+        }
+        await atualizar_embed_meta(member.id)
+        return canal_encontrado
+    
+    # Se não encontrou, criar novo canal
+    categoria_id = obter_categoria_meta(member)
+    if not categoria_id:
+        print(f"❌ Nenhuma categoria encontrada para {member.display_name}")
+        return None
+    
+    categoria = guild.get_channel(categoria_id)
+    if not categoria:
+        print(f"❌ Categoria {categoria_id} não encontrada")
+        return None
+    
+    nick = member.display_name.lower().replace(" ", "-")
+    nome_canal = f"📁・{nick}"
+    
+    # Permissões do canal
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+    }
+    
+    gerente = guild.get_role(CARGO_GERENTE_ID)
+    if gerente:
+        overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
+    
+    gerente_geral = guild.get_role(CARGO_GERENTE_GERAL_ID)
+    if gerente_geral:
+        overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
+    
+    print(f"📁 Criando canal: {nome_canal} na categoria {categoria.name}")
+    
+    canal = await guild.create_text_channel(
+        nome_canal,
+        category=categoria,
+        overwrites=overwrites
+    )
+    
+    print(f"✅ Canal criado: {canal.name} (ID: {canal.id})")
+    
+    await salvar_meta_db(member.id, canal.id, 0, 0, 0)
+    
+    metas_cache[str(member.id)] = {
+        "canal_id": canal.id,
+        "dinheiro": 0,
+        "polvora": 0,
+        "acao": None
+    }
+    
+    await asyncio.sleep(1)
+    await atualizar_embed_meta(member.id)
+    
+    print(f"📊 Sala e painel criados para {member.display_name}")
+    return canal
+
+
 async def zerar_todas_metas():
     """Zera todas as metas (dinheiro e pólvora)"""
     async with get_db().acquire() as conn:
-        # Resetar dinheiro e pólvora de todas as metas
         await conn.execute(
             """
             UPDATE metas SET 
@@ -1915,8 +2044,6 @@ async def zerar_todas_metas():
                 polvora = 0
             """
         )
-        
-        # Buscar todos os usuários com meta
         rows = await conn.fetch("SELECT user_id, canal_id FROM metas")
         return rows
 
@@ -1932,7 +2059,6 @@ class ZerarMetasView(discord.ui.View):
         emoji="⚠️"
     )
     async def zerar_metas(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Verificar permissão
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
@@ -1940,7 +2066,6 @@ class ZerarMetasView(discord.ui.View):
             await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem zerar todas as metas!", ephemeral=True)
             return
         
-        # Confirmar com o usuário
         view = ConfirmarZerarView()
         await interaction.response.send_message(
             "⚠️ **ATENÇÃO!** Você está prestes a zerar TODAS as metas.\n\n"
@@ -1965,10 +2090,8 @@ class ConfirmarZerarView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         try:
-            # Zerar todas as metas
             metas = await zerar_todas_metas()
             
-            # Atualizar todos os painéis
             atualizadas = 0
             for meta in metas:
                 user_id = int(meta["user_id"])
@@ -1982,7 +2105,6 @@ class ConfirmarZerarView(discord.ui.View):
                 ephemeral=True
             )
             
-            # Log no canal de gerência
             canal_gerencia = interaction.guild.get_channel(CANAL_GERENCIA_ID)
             if canal_gerencia:
                 embed = discord.Embed(
@@ -2031,16 +2153,12 @@ async def atualizar_categoria_meta(member):
             print(f"⚠️ Categoria {nova_categoria_id} não encontrada")
             return
         
-        # Verificar se já está na categoria correta
         if canal.category_id == nova_categoria_id:
             print(f"✅ {member.name} já está na categoria correta")
             return
         
-        # Mover o canal para a nova categoria
         await canal.edit(category=nova_categoria)
         print(f"📁 Categoria de {member.name} movida para {nova_categoria.name}")
-        
-        # Atualizar o painel também
         await atualizar_embed_meta(member.id)
         
     except Exception as e:
@@ -2055,7 +2173,6 @@ async def depositar_na_meta(user_id, valor, motivo):
         meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", str(user_id))
         
         if meta:
-            # Se for de ação, adicionar no campo dinheiro_acoes
             if "Ação" in motivo:
                 novo_acoes = (meta["dinheiro_acoes"] or 0) + valor
                 await conn.execute(
@@ -2063,7 +2180,6 @@ async def depositar_na_meta(user_id, valor, motivo):
                     novo_acoes, str(user_id)
                 )
             else:
-                # Se for depósito manual, adicionar no dinheiro normal
                 novo_valor = meta["dinheiro"] + valor
                 await conn.execute(
                     "UPDATE metas SET dinheiro = $1 WHERE user_id = $2",
@@ -2101,8 +2217,7 @@ async def depositar_na_meta(user_id, valor, motivo):
                         )
                     return True
             return False
-
-
+            
 # =========================================================
 # ==================== MODAIS DE METAS ====================
 # =========================================================
