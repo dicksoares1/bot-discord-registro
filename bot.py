@@ -1824,12 +1824,43 @@ async def on_member_update(before, after):
         if not tinha_agregado and tem_agregado:
             await asyncio.sleep(2)
             if str(after.id) not in metas_cache:
-                await criar_sala_meta(after)
+                sala = await criar_sala_meta(after)
+                if sala:
+                    print(f"✅ Sala criada para {after.name} ao ganhar cargo Agregado")
         return
     
     # Se tem meta, verificar se precisa atualizar a categoria
     await atualizar_categoria_meta(after)
 
+@bot.command(name="forcar_painel_meta")
+async def cmd_forcar_painel_meta(ctx, member: discord.Member = None):
+    """Força a criação/atualização do painel de meta de um membro (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    if not member:
+        member = ctx.author
+    
+    await ctx.send(f"🔄 Forçando criação do painel para {member.display_name}...")
+    
+    try:
+        # Verificar se o membro tem meta
+        if str(member.id) not in metas_cache:
+            # Criar sala
+            sala = await criar_sala_meta(member)
+            if sala:
+                await ctx.send(f"✅ Sala e painel criados para {member.display_name}!")
+            else:
+                await ctx.send(f"❌ Erro ao criar sala para {member.display_name}!")
+        else:
+            # Forçar atualização do painel
+            await atualizar_embed_meta(member.id)
+            await ctx.send(f"✅ Painel atualizado para {member.display_name}!")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro ao criar painel para {member.display_name}: {e}")
 
 @bot.event
 async def on_member_join(member):
@@ -1940,6 +1971,9 @@ async def criar_sala_meta(member: discord.Member):
     # Salvar no banco
     await salvar_meta_db(member.id, canal.id, 0, 0, 0)
     
+    # Aguardar um pouco para o canal ser criado
+    await asyncio.sleep(1)
+    
     # =========================================================
     # ================= ENVIAR O PAINEL DA META ===============
     # =========================================================
@@ -1948,7 +1982,6 @@ async def criar_sala_meta(member: discord.Member):
     
     print(f"📊 Sala e painel criados para {member.display_name}")
     return canal
-
 
 async def zerar_todas_metas():
     """Zera todas as metas (dinheiro e pólvora)"""
@@ -2056,6 +2089,7 @@ async def atualizar_categoria_meta(member):
     """Atualiza a categoria da sala do membro baseada no cargo atual"""
     try:
         if str(member.id) not in metas_cache:
+            print(f"⚠️ {member.name} não tem meta no cache")
             return
         
         dados = metas_cache[str(member.id)]
@@ -2085,6 +2119,9 @@ async def atualizar_categoria_meta(member):
         # Mover o canal para a nova categoria
         await canal.edit(category=nova_categoria)
         print(f"📁 Categoria de {member.name} movida para {nova_categoria.name}")
+        
+        # Atualizar o painel também
+        await atualizar_embed_meta(member.id)
         
     except Exception as e:
         print(f"❌ Erro ao atualizar categoria de {member.name}: {e}")
@@ -2451,6 +2488,7 @@ async def atualizar_embed_meta(user_id):
     """Atualiza o embed da meta de um usuário"""
     try:
         if str(user_id) not in metas_cache:
+            print(f"⚠️ Usuário {user_id} não está no cache")
             return
         
         dados = metas_cache[str(user_id)]
@@ -2460,10 +2498,12 @@ async def atualizar_embed_meta(user_id):
             print(f"❌ Canal da meta de {user_id} não encontrado")
             return
         
+        # Buscar dados atualizados
         async with get_db().acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
         
         if not meta:
+            print(f"❌ Meta de {user_id} não encontrada no banco")
             return
         
         user = await pegar_usuario(user_id)
@@ -2475,16 +2515,18 @@ async def atualizar_embed_meta(user_id):
         
         dinheiro_meta = meta["dinheiro"] or 0
         dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+        polvora = meta["polvora"] or 0
+        acao = meta.get("acao") or "Nenhuma"
+        
+        # =========================================================
+        # ================= CRIAR EMBED ===========================
+        # =========================================================
         
         embed = discord.Embed(
             title=f"📊 META DE {nome.upper()}",
             color=0x3498db,
             timestamp=agora()
         )
-        
-        # =========================================================
-        # ================= CAMPOS DO EMBED =======================
-        # =========================================================
         
         embed.add_field(
             name="💰 DINHEIRO SUJO (Meta)",
@@ -2500,16 +2542,15 @@ async def atualizar_embed_meta(user_id):
         
         embed.add_field(
             name="💣 PÓLVORA",
-            value=f"{fmt_num(meta['polvora'])} unidades" if meta["polvora"] else "0 unidades",
+            value=f"{fmt_num(polvora)} unidades" if polvora > 0 else "0 unidades",
             inline=True
         )
         
-        if meta.get("acao"):
-            embed.add_field(
-                name="🎯 AÇÃO ATUAL",
-                value=meta["acao"],
-                inline=False
-            )
+        embed.add_field(
+            name="🎯 AÇÃO ATUAL",
+            value=acao,
+            inline=False
+        )
         
         embed.add_field(
             name="📌 COMO USAR",
@@ -2527,29 +2568,34 @@ async def atualizar_embed_meta(user_id):
         # ================= ENVIAR/ATUALIZAR MENSAGEM =============
         # =========================================================
         
+        # Procurar mensagem existente
+        mensagem_encontrada = False
         async for msg in canal.history(limit=30):
             if msg.author == bot.user and msg.embeds:
                 if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
                     try:
                         await msg.edit(embed=embed, view=MetaView(user_id))
                         print(f"✅ Meta de {nome} atualizada")
-                        return
+                        mensagem_encontrada = True
+                        break
                     except Exception as e:
                         print(f"Erro ao atualizar embed da meta: {e}")
+                        # Se não conseguir editar, deletar e criar novo
                         try:
                             await msg.delete()
                         except:
                             pass
                         break
         
-        await canal.send(embed=embed, view=MetaView(user_id))
-        print(f"✅ Meta de {nome} criada")
+        if not mensagem_encontrada:
+            # Se não encontrou, criar nova mensagem
+            await canal.send(embed=embed, view=MetaView(user_id))
+            print(f"✅ Meta de {nome} criada")
         
     except Exception as e:
         print(f"❌ Erro ao atualizar embed da meta: {e}")
         import traceback
         traceback.print_exc()
-
 
 async def enviar_painel_relatorio_metas():
     """Envia o painel para gerar relatório de metas e zerar metas"""
