@@ -2823,6 +2823,10 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
         total_dinheiro_acoes = sum(r["dinheiro_acoes"] for r in relatorio)
         total_geral = sum(r["total"] for r in relatorio)
         
+        # =========================================================
+        # ================= CRIAR EMBED PRINCIPAL =================
+        # =========================================================
+        
         embed = discord.Embed(
             title="📊 RELATÓRIO SEMANAL - METAS FECHADAS",
             description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}",
@@ -2830,56 +2834,106 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
             timestamp=agora()
         )
         
+        # =========================================================
+        # ================= RESUMO ================================
+        # =========================================================
+        
+        embed.add_field(
+            name="📊 RESUMO GERAL",
+            value=(
+                f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
+                f"🎯 **Dinheiro de Ações:** {formatar_dinheiro(total_dinheiro_acoes)}\n"
+                f"💣 **Pólvora:** {fmt_num(total_polvora)} unidades\n"
+                f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
+                f"👥 **Membros com meta:** {len(relatorio)}\n"
+                f"✅ **Pagaram:** {len([r for r in relatorio if r['total'] > 0])}\n"
+                f"❌ **Não pagaram:** {len([r for r in relatorio if r['total'] == 0])}"
+            ),
+            inline=False
+        )
+        
+        # =========================================================
+        # ================= QUEM PAGOU ============================
+        # =========================================================
+        
         if relatorio:
-            relatorio_ordenado = sorted(relatorio, key=lambda x: x["total"], reverse=True)
+            # Separar quem pagou e quem não pagou
+            pagaram = [r for r in relatorio if r["total"] > 0]
+            nao_pagaram = [r for r in relatorio if r["total"] == 0]
             
-            lista_pagaram = ""
-            for item in relatorio_ordenado:
-                user = await pegar_usuario(int(item["user_id"]))
-                nome = user.display_name if user else f"ID: {item['user_id']}"
-                
-                if item["total"] > 0:
+            # Ordenar por valor total (maior para menor)
+            pagaram_ordenado = sorted(pagaram, key=lambda x: x["total"], reverse=True)
+            
+            # =========================================================
+            # ================= LISTA DE QUEM PAGOU ===================
+            # =========================================================
+            
+            if pagaram_ordenado:
+                # Criar lista formatada com nome e valores
+                lista_pagaram = ""
+                for i, item in enumerate(pagaram_ordenado, 1):
+                    user = await pegar_usuario(int(item["user_id"]))
+                    nome = user.display_name if user else f"ID: {item['user_id']}"
+                    
+                    # Formatar de forma limpa
                     lista_pagaram += (
-                        f"👤 {nome}\n"
+                        f"**{i}.** {nome}\n"
                         f"   💰 Meta: {formatar_dinheiro(item['dinheiro'])}\n"
                         f"   🎯 Ações: {formatar_dinheiro(item['dinheiro_acoes'])}\n"
                         f"   💣 Pólvora: {fmt_num(item['polvora'])}\n"
-                        f"   📦 Total: {formatar_dinheiro(item['total'])}\n"
+                        f"   📦 **Total:** {formatar_dinheiro(item['total'])}\n"
+                    )
+                
+                # Limitar a 10 por campo para não estourar o limite
+                if len(pagaram_ordenado) <= 10:
+                    embed.add_field(
+                        name=f"✅ QUEM PAGOU ({len(pagaram)} membros)",
+                        value=lista_pagaram,
+                        inline=False
                     )
                 else:
-                    lista_pagaram += f"👤 {nome} - ⚠️ **ZERADO**\n"
+                    # Dividir em grupos de 10
+                    partes = [pagaram_ordenado[i:i+10] for i in range(0, len(pagaram_ordenado), 10)]
+                    for idx, parte in enumerate(partes, 1):
+                        lista = ""
+                        for i, item in enumerate(parte, 1 + (idx-1)*10):
+                            user = await pegar_usuario(int(item["user_id"]))
+                            nome = user.display_name if user else f"ID: {item['user_id']}"
+                            lista += (
+                                f"**{i}.** {nome}\n"
+                                f"   💰 {formatar_dinheiro(item['total'])}\n"
+                            )
+                        embed.add_field(
+                            name=f"✅ QUEM PAGOU ({len(parte)} membros) - Parte {idx}",
+                            value=lista,
+                            inline=False
+                        )
             
-            embed.add_field(
-                name=f"✅ QUEM PAGOU ({len([r for r in relatorio if r['total'] > 0])} membros)",
-                value=lista_pagaram[:1024] if lista_pagaram else "Nenhum",
-                inline=False
-            )
-            
-            nao_pagaram = [r for r in relatorio if r["total"] == 0]
+            # =========================================================
+            # ================= QUEM NÃO PAGOU =======================
+            # =========================================================
             
             if nao_pagaram:
                 lista_nao_pagaram = ""
-                for item in nao_pagaram:
+                for i, item in enumerate(nao_pagaram, 1):
                     user = await pegar_usuario(int(item["user_id"]))
                     nome = user.display_name if user else f"ID: {item['user_id']}"
-                    lista_nao_pagaram += f"👤 {nome} - ❌ **NÃO PAGOU**\n"
+                    lista_nao_pagaram += f"**{i}.** {nome} - ❌ **ZERADO**\n"
                 
                 embed.add_field(
                     name=f"❌ QUEM NÃO PAGOU ({len(nao_pagaram)} membros)",
                     value=lista_nao_pagaram[:1024] if lista_nao_pagaram else "Nenhum",
                     inline=False
                 )
-        else:
-            embed.add_field(
-                name="📭 METAS",
-                value="Nenhuma meta ativa para fechar.",
-                inline=False
-            )
+        
+        # =========================================================
+        # ================= MEMBROS SEM META ======================
+        # =========================================================
         
         if membros_sem_meta:
             lista_sem_meta = ""
-            for item in membros_sem_meta[:20]:
-                lista_sem_meta += f"👤 {item['menção']} - ❌ **SEM META**\n"
+            for i, item in enumerate(membros_sem_meta[:20], 1):
+                lista_sem_meta += f"**{i}.** {item['menção']} - ❌ **SEM META**\n"
             
             if len(membros_sem_meta) > 20:
                 lista_sem_meta += f"\n*... e mais {len(membros_sem_meta) - 20} membros*"
@@ -2890,21 +2944,31 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
                 inline=False
             )
         
-        embed.add_field(
-            name="📊 RESUMO",
-            value=(
-                f"💰 **Total Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
-                f"🎯 **Total Dinheiro de Ações:** {formatar_dinheiro(total_dinheiro_acoes)}\n"
-                f"💣 **Total Pólvora:** {fmt_num(total_polvora)} unidades\n"
-                f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
-                f"👥 **Membros com meta:** {len(relatorio)}\n"
-                f"✅ **Pagaram:** {len([r for r in relatorio if r['total'] > 0])}\n"
-                f"❌ **Não pagaram:** {len([r for r in relatorio if r['total'] == 0])}"
-            ),
-            inline=False
-        )
+        # =========================================================
+        # ================= RANKING DOS QUE MAIS PAGARAM ==========
+        # =========================================================
+        
+        if pagaram_ordenado and len(pagaram_ordenado) >= 3:
+            top3 = pagaram_ordenado[:3]
+            ranking = ""
+            emojis = ["🥇", "🥈", "🥉"]
+            
+            for i, item in enumerate(top3):
+                user = await pegar_usuario(int(item["user_id"]))
+                nome = user.display_name if user else f"ID: {item['user_id']}"
+                ranking += f"{emojis[i]} {nome} - {formatar_dinheiro(item['total'])}\n"
+            
+            embed.add_field(
+                name="🏆 TOP 3 QUE MAIS PAGARAM",
+                value=ranking,
+                inline=False
+            )
         
         embed.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
+        
+        # =========================================================
+        # ================= ENVIAR RELATÓRIO ======================
+        # =========================================================
         
         canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
         if canal_resultados:
@@ -2916,12 +2980,18 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
         else:
             await interaction.followup.send(embed=embed, ephemeral=True)
         
+        # Atualizar painéis
         for uid in metas_cache.keys():
             await atualizar_embed_meta(int(uid))
             await asyncio.sleep(0.3)
         
         print(f"📊 Relatório semanal gerado por {interaction.user.name}")
-
+        
+    except Exception as e:
+        print(f"❌ Erro ao fechar metas: {e}")
+        import traceback
+        traceback.print_exc()
+        await interaction.followup.send(f"❌ Erro ao fechar metas: {e}", ephemeral=True)
 
 # =========================================================
 # ==================== FUNÇÕES DE METAS ====================
