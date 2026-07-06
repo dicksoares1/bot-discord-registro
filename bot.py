@@ -3270,33 +3270,6 @@ async def cmd_verificar_paineis_metas(ctx):
         print(f"Erro ao verificar painéis: {e}")
 
 
-@bot.command(name="forcar_painel_meta")
-async def cmd_forcar_painel_meta(ctx, member: discord.Member = None):
-    """Força a criação/atualização do painel de meta de um membro (ADM apenas)"""
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Apenas ADM podem usar este comando!")
-        return
-    
-    if not member:
-        member = ctx.author
-    
-    await ctx.send(f"🔄 Forçando criação do painel para {member.display_name}...")
-    
-    try:
-        if str(member.id) not in metas_cache:
-            sala = await criar_sala_meta(member)
-            if sala:
-                await ctx.send(f"✅ Sala e painel criados para {member.display_name}!")
-            else:
-                await ctx.send(f"❌ Erro ao criar sala para {member.display_name}!")
-        else:
-            await atualizar_embed_meta(member.id)
-            await ctx.send(f"✅ Painel atualizado para {member.display_name}!")
-            
-    except Exception as e:
-        await ctx.send(f"❌ Erro: {e}")
-        print(f"Erro ao criar painel para {member.display_name}: {e}")
-
 
 async def fixar_painel_meta_no_final(user_id):
     """Garante que o painel de meta seja a última mensagem do canal"""
