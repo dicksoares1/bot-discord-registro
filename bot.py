@@ -2048,17 +2048,28 @@ async def cmd_resetar_meta(ctx, member: discord.Member = None):
 # =========================================================
 
 async def criar_sala_meta(member: discord.Member):
-    """Cria a sala de meta para o membro com o painel - VERSÃO CORRIGIDA"""
+    """Cria a sala de meta para o membro com o painel"""
     guild = member.guild
     nome_canal = f"📁-{member.display_name}".lower()
     
     print(f"🏗️ Criando sala para {member.display_name}...")
     
-    # =========================================================
-    # ================= REMOVER META ANTIGA SE EXISTIR ========
-    # =========================================================
+    # Verificar se já existe um canal com esse nome
+    for canal in guild.text_channels:
+        if canal.name == nome_canal:
+            print(f"📁 Canal já existe: {canal.name}")
+            if str(member.id) not in metas_cache:
+                await salvar_meta_db(member.id, canal.id, 0, 0, 0)
+                metas_cache[str(member.id)] = {
+                    "canal_id": canal.id,
+                    "dinheiro": 0,
+                    "polvora": 0,
+                    "acao": None
+                }
+            await atualizar_embed_meta(member.id)
+            return canal
     
-    # Verificar se o usuário tem uma meta no banco
+    # Buscar no banco se tem meta com canal que não existe mais
     async with get_db().acquire() as conn:
         meta_existente = await conn.fetchrow(
             "SELECT * FROM metas WHERE user_id = $1",
@@ -2070,46 +2081,50 @@ async def criar_sala_meta(member: discord.Member):
         canal_existe = guild.get_channel(canal_id)
         
         if not canal_existe:
-            # O canal não existe mais, remover a meta do banco
-            print(f"🗑️ Canal {canal_id} não existe, removendo meta do banco...")
+            print(f"🗑️ Canal {canal_id} não existe mais, removendo meta do banco...")
             async with get_db().acquire() as conn:
                 await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
-            
             if str(member.id) in metas_cache:
                 del metas_cache[str(member.id)]
-            
             print(f"✅ Meta antiga removida para {member.display_name}")
-    
-    # =========================================================
-    # ================= VERIFICAR SE JÁ EXISTE CANAL ==========
-    # =========================================================
-    
-    # Verificar se já existe um canal com esse nome
-    for canal in guild.text_channels:
-        if canal.name == nome_canal:
-            print(f"📁 Canal já existe: {canal.name}")
-            
-            # Verificar se a meta existe no banco
-            async with get_db().acquire() as conn:
-                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(member.id))
-            
-            if not meta:
-                await salvar_meta_db(member.id, canal.id, 0, 0, 0)
-            
+        else:
+            print(f"📁 Canal existe: {canal_existe.name}")
             metas_cache[str(member.id)] = {
-                "canal_id": canal.id,
-                "dinheiro": 0,
-                "polvora": 0,
-                "acao": None
+                "canal_id": canal_id,
+                "dinheiro": meta_existente["dinheiro"],
+                "polvora": meta_existente["polvora"],
+                "acao": meta_existente["acao"]
             }
-            
             await atualizar_embed_meta(member.id)
-            return canal
+            return canal_existe
     
-    # =========================================================
-    # ================= CRIAR NOVO CANAL ======================
-    # =========================================================
+    # Procurar um canal existente que o membro já tenha acesso
+    canal_encontrado = None
+    for cat in guild.categories:
+        if not cat.name.lower().startswith("metas"):
+            continue
+        for c in cat.channels:
+            if not isinstance(c, discord.TextChannel):
+                continue
+            if c.overwrites_for(member).view_channel:
+                canal_encontrado = c
+                break
+        if canal_encontrado:
+            break
     
+    if canal_encontrado:
+        print(f"📁 Canal encontrado para {member.display_name}: {canal_encontrado.name}")
+        await salvar_meta_db(member.id, canal_encontrado.id, 0, 0, 0)
+        metas_cache[str(member.id)] = {
+            "canal_id": canal_encontrado.id,
+            "dinheiro": 0,
+            "polvora": 0,
+            "acao": None
+        }
+        await atualizar_embed_meta(member.id)
+        return canal_encontrado
+    
+    # Se não encontrou, criar novo canal
     categoria_id = obter_categoria_meta(member)
     if not categoria_id:
         print(f"❌ Nenhuma categoria encontrada para {member.display_name}")
@@ -2146,7 +2161,6 @@ async def criar_sala_meta(member: discord.Member):
     
     print(f"✅ Canal criado: {canal.name} (ID: {canal.id})")
     
-    # Salvar no banco
     await salvar_meta_db(member.id, canal.id, 0, 0, 0)
     
     metas_cache[str(member.id)] = {
@@ -2161,6 +2175,7 @@ async def criar_sala_meta(member: discord.Member):
     
     print(f"📊 Sala e painel criados para {member.display_name}")
     return canal
+
 
 async def zerar_todas_metas():
     """Zera todas as metas (dinheiro e pólvora)"""
@@ -2346,7 +2361,92 @@ async def depositar_na_meta(user_id, valor, motivo):
                         )
                     return True
             return False
+
+
+async def fechar_todas_metas(data_inicio, data_fim):
+    """Fecha todas as metas ativas e retorna o relatório"""
+    async with get_db().acquire() as conn:
+        metas = await conn.fetch("SELECT * FROM metas")
+        
+        if not metas:
+            return None, []
+        
+        relatorio = []
+        
+        for meta in metas:
+            user_id = meta["user_id"]
+            dinheiro = meta["dinheiro"] or 0
+            polvora = meta["polvora"] or 0
+            acao = meta["acao"] or "N/A"
+            dinheiro_acoes = meta.get("dinheiro_acoes") or 0
             
+            await conn.execute(
+                """
+                INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                user_id, 
+                dinheiro, 
+                polvora, 
+                acao,
+                dinheiro_acoes,
+                data_inicio, 
+                data_fim, 
+                agora_db()
+            )
+            
+            await conn.execute(
+                "UPDATE metas SET dinheiro = 0, polvora = 0, dinheiro_acoes = 0 WHERE user_id = $1",
+                user_id
+            )
+            
+            relatorio.append({
+                "user_id": user_id,
+                "dinheiro": dinheiro,
+                "polvora": polvora,
+                "acao": acao,
+                "dinheiro_acoes": dinheiro_acoes,
+                "total": dinheiro + dinheiro_acoes
+            })
+        
+        # Buscar membros que NÃO têm meta
+        guild = bot.get_guild(GUILD_ID)
+        membros_sem_meta = []
+        
+        if guild:
+            cargos_meta = [
+                AGREGADO_ROLE_ID,
+                CARGO_MEMBRO_ID,
+                CARGO_SOLDADO_ID,
+                CARGO_01_ID,
+                CARGO_02_ID,
+                CARGO_GERENTE_ID,
+                CARGO_GERENTE_GERAL_ID,
+                CARGO_RESP_METAS_ID,
+                CARGO_RESP_ACAO_ID,
+                CARGO_RESP_VENDAS_ID,
+                CARGO_RESP_PRODUCAO_ID
+            ]
+            
+            for member in guild.members:
+                if member.bot:
+                    continue
+                
+                tem_cargo = any(r.id in cargos_meta for r in member.roles)
+                
+                if tem_cargo:
+                    tem_meta = any(m["user_id"] == str(member.id) for m in metas)
+                    
+                    if not tem_meta:
+                        membros_sem_meta.append({
+                            "user_id": str(member.id),
+                            "nome": member.display_name,
+                            "menção": member.mention
+                        })
+        
+        return relatorio, membros_sem_meta
+
+
 # =========================================================
 # ==================== MODAIS DE METAS ====================
 # =========================================================
@@ -2661,7 +2761,6 @@ class FecharTodasMetasButton(discord.ui.Button):
             await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem fechar todas as metas!", ephemeral=True)
             return
         
-        # Abrir modal para definir período
         await interaction.response.send_modal(FecharTodasMetasModal())
 
 
@@ -2691,16 +2790,11 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
             await interaction.followup.send("❌ Data de FIM deve ser depois da data de INÍCIO!", ephemeral=True)
             return
         
-        # Fechar todas as metas
         relatorio, membros_sem_meta = await fechar_todas_metas(inicio, fim)
         
         if not relatorio and not membros_sem_meta:
             await interaction.followup.send("📭 Nenhuma meta para fechar.", ephemeral=True)
             return
-        
-        # =========================================================
-        # ================= CRIAR RELATÓRIO =======================
-        # =========================================================
         
         total_dinheiro = sum(r["dinheiro"] for r in relatorio)
         total_polvora = sum(r["polvora"] for r in relatorio)
@@ -2714,12 +2808,7 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
             timestamp=agora()
         )
         
-        # =========================================================
-        # ================= QUEM PAGOU ============================
-        # =========================================================
-        
         if relatorio:
-            # Ordenar por valor total (maior para menor)
             relatorio_ordenado = sorted(relatorio, key=lambda x: x["total"], reverse=True)
             
             lista_pagaram = ""
@@ -2744,10 +2833,6 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
                 inline=False
             )
             
-            # =========================================================
-            # ================= QUEM NÃO PAGOU ========================
-            # =========================================================
-            
             nao_pagaram = [r for r in relatorio if r["total"] == 0]
             
             if nao_pagaram:
@@ -2769,10 +2854,6 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
                 inline=False
             )
         
-        # =========================================================
-        # ================= MEMBROS SEM META ======================
-        # =========================================================
-        
         if membros_sem_meta:
             lista_sem_meta = ""
             for item in membros_sem_meta[:20]:
@@ -2786,10 +2867,6 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
                 value=lista_sem_meta[:1024] if lista_sem_meta else "Nenhum",
                 inline=False
             )
-        
-        # =========================================================
-        # ================= RESUMO ================================
-        # =========================================================
         
         embed.add_field(
             name="📊 RESUMO",
@@ -2807,11 +2884,6 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
         
         embed.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
         
-        # =========================================================
-        # ================= ENVIAR RELATÓRIO ======================
-        # =========================================================
-        
-        # Enviar no canal de resultados
         canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
         if canal_resultados:
             await canal_resultados.send(embed=embed)
@@ -2822,22 +2894,11 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
         else:
             await interaction.followup.send(embed=embed, ephemeral=True)
         
-        # =========================================================
-        # ================= ATUALIZAR PAINÉIS =====================
-        # =========================================================
-        
-        # Atualizar todos os painéis
         for uid in metas_cache.keys():
             await atualizar_embed_meta(int(uid))
             await asyncio.sleep(0.3)
         
         print(f"📊 Relatório semanal gerado por {interaction.user.name}")
-        
-    except Exception as e:
-        print(f"❌ Erro ao fechar metas: {e}")
-        import traceback
-        traceback.print_exc()
-        await interaction.followup.send(f"❌ Erro ao fechar metas: {e}", ephemeral=True)
 
 
 # =========================================================
@@ -2845,11 +2906,10 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
 # =========================================================
 
 async def atualizar_embed_meta(user_id):
-    """Atualiza o embed da meta de um usuário - VERSÃO CORRIGIDA"""
+    """Atualiza o embed da meta de um usuário"""
     try:
         print(f"🔄 Atualizando meta de {user_id}...")
         
-        # Verificar se está no cache
         if str(user_id) not in metas_cache:
             print(f"⚠️ Usuário {user_id} não está no cache, recarregando...")
             rows = await carregar_metas_db()
@@ -2870,7 +2930,6 @@ async def atualizar_embed_meta(user_id):
         
         if not canal:
             print(f"❌ Canal da meta de {user_id} não encontrado (ID: {dados['canal_id']})")
-            # Remover do cache e banco se o canal não existe
             if str(user_id) in metas_cache:
                 del metas_cache[str(user_id)]
             async with get_db().acquire() as conn:
@@ -2880,13 +2939,11 @@ async def atualizar_embed_meta(user_id):
         
         print(f"✅ Canal encontrado: {canal.name} (ID: {canal.id})")
         
-        # Buscar dados atualizados
         async with get_db().acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
         
         if not meta:
             print(f"❌ Meta de {user_id} não encontrada no banco")
-            # Recriar meta
             await salvar_meta_db(user_id, canal.id, 0, 0, 0)
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
             if not meta:
@@ -2895,18 +2952,10 @@ async def atualizar_embed_meta(user_id):
         user = await pegar_usuario(user_id)
         nome = user.display_name if user else str(user_id)
         
-        # =========================================================
-        # ================= SEPARAR VALORES =======================
-        # =========================================================
-        
         dinheiro_meta = meta["dinheiro"] or 0
         dinheiro_acoes = meta.get("dinheiro_acoes") or 0
         polvora = meta["polvora"] or 0
         acao = meta.get("acao") or "Nenhuma"
-        
-        # =========================================================
-        # ================= CRIAR EMBED ===========================
-        # =========================================================
         
         embed = discord.Embed(
             title=f"📊 META DE {nome.upper()}",
@@ -2950,11 +2999,6 @@ async def atualizar_embed_meta(user_id):
         
         embed.set_footer(text=f"ID: {user_id}")
         
-        # =========================================================
-        # ================= ENVIAR/ATUALIZAR MENSAGEM =============
-        # =========================================================
-        
-        # Deletar mensagens antigas do bot no canal
         mensagens_deletadas = 0
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
@@ -2968,7 +3012,6 @@ async def atualizar_embed_meta(user_id):
         if mensagens_deletadas > 0:
             print(f"🗑️ {mensagens_deletadas} mensagens antigas deletadas de {canal.name}")
         
-        # Enviar nova mensagem com o painel
         await canal.send(embed=embed, view=MetaView(user_id))
         print(f"✅ Painel de meta criado para {nome} em {canal.name}")
         
@@ -2976,6 +3019,7 @@ async def atualizar_embed_meta(user_id):
         print(f"❌ Erro ao atualizar embed da meta: {e}")
         import traceback
         traceback.print_exc()
+
 
 async def enviar_painel_relatorio_metas():
     """Envia o painel para gerar relatório de metas e zerar metas"""
@@ -3029,6 +3073,7 @@ async def enviar_painel_relatorio_metas():
     )
     
     print("📊 Painel de gerenciamento de metas enviado")
+
 
 class ZerarMetasButton(discord.ui.Button):
     def __init__(self):
@@ -3135,6 +3180,124 @@ async def cmd_criar_painel_meta(ctx, member: discord.Member = None):
         print(f"Erro ao criar painel para {member.display_name}: {e}")
 
 
+@bot.command(name="verificar_paineis_metas")
+async def cmd_verificar_paineis_metas(ctx):
+    """Verifica quais salas de meta têm painel (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    await ctx.send("🔍 Verificando salas de metas...")
+    
+    try:
+        metas = await carregar_metas_db()
+        
+        if not metas:
+            await ctx.send("📭 Nenhuma meta encontrada.")
+            return
+        
+        com_painel = []
+        sem_painel = []
+        canais_nao_encontrados = []
+        
+        for meta in metas:
+            user_id = int(meta["user_id"])
+            canal_id = int(meta["canal_id"])
+            
+            canal = ctx.guild.get_channel(canal_id)
+            if not canal:
+                canais_nao_encontrados.append(f"Usuário {user_id} - Canal {canal_id}")
+                continue
+            
+            tem_painel = False
+            async for msg in canal.history(limit=30):
+                if msg.author == bot.user and msg.embeds:
+                    if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
+                        tem_painel = True
+                        break
+            
+            user = await pegar_usuario(user_id)
+            nome = user.display_name if user else str(user_id)
+            
+            if tem_painel:
+                com_painel.append(f"✅ {nome} - {canal.mention}")
+            else:
+                sem_painel.append(f"❌ {nome} - {canal.mention}")
+        
+        embed = discord.Embed(
+            title="📊 VERIFICAÇÃO DE PAINÉIS DE METAS",
+            color=0x3498db,
+            timestamp=agora()
+        )
+        
+        total = len(com_painel) + len(sem_painel) + len(canais_nao_encontrados)
+        embed.add_field(
+            name="📊 RESUMO",
+            value=f"**Total de metas:** {total}\n"
+                  f"✅ **Com painel:** {len(com_painel)}\n"
+                  f"❌ **Sem painel:** {len(sem_painel)}\n"
+                  f"⚠️ **Canais não encontrados:** {len(canais_nao_encontrados)}",
+            inline=False
+        )
+        
+        if com_painel:
+            embed.add_field(
+                name="✅ COM PAINEL",
+                value="\n".join(com_painel[:20]) if com_painel else "Nenhum",
+                inline=False
+            )
+        
+        if sem_painel:
+            embed.add_field(
+                name="❌ SEM PAINEL",
+                value="\n".join(sem_painel[:20]) if sem_painel else "Nenhum",
+                inline=False
+            )
+        
+        if canais_nao_encontrados:
+            embed.add_field(
+                name="⚠️ CANAIS NÃO ENCONTRADOS",
+                value="\n".join(canais_nao_encontrados[:10]) if canais_nao_encontrados else "Nenhum",
+                inline=False
+            )
+        
+        embed.set_footer(text="Use !atualizar_paineis_metas para corrigir os que estão sem painel")
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro ao verificar painéis: {e}")
+
+
+@bot.command(name="forcar_painel_meta")
+async def cmd_forcar_painel_meta(ctx, member: discord.Member = None):
+    """Força a criação/atualização do painel de meta de um membro (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    if not member:
+        member = ctx.author
+    
+    await ctx.send(f"🔄 Forçando criação do painel para {member.display_name}...")
+    
+    try:
+        if str(member.id) not in metas_cache:
+            sala = await criar_sala_meta(member)
+            if sala:
+                await ctx.send(f"✅ Sala e painel criados para {member.display_name}!")
+            else:
+                await ctx.send(f"❌ Erro ao criar sala para {member.display_name}!")
+        else:
+            await atualizar_embed_meta(member.id)
+            await ctx.send(f"✅ Painel atualizado para {member.display_name}!")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro ao criar painel para {member.display_name}: {e}")
+
+
 async def fixar_painel_meta_no_final(user_id):
     """Garante que o painel de meta seja a última mensagem do canal"""
     try:
@@ -3147,7 +3310,6 @@ async def fixar_painel_meta_no_final(user_id):
         if not canal:
             return
         
-        # Buscar a mensagem do painel
         mensagem_painel = None
         async for msg in canal.history(limit=30):
             if msg.author == bot.user and msg.embeds:
@@ -3156,21 +3318,17 @@ async def fixar_painel_meta_no_final(user_id):
                     break
         
         if not mensagem_painel:
-            # Se não encontrou, criar novo
             await atualizar_embed_meta(user_id)
             return
         
-        # Verificar se a última mensagem do canal é o painel
         ultima_msg = None
         async for msg in canal.history(limit=1):
             ultima_msg = msg
             break
         
         if ultima_msg and ultima_msg.id == mensagem_painel.id:
-            # Já é a última mensagem
             return
         
-        # Se não for a última, deletar e reenviar
         try:
             await mensagem_painel.delete()
             await asyncio.sleep(0.5)
@@ -3183,7 +3341,7 @@ async def fixar_painel_meta_no_final(user_id):
         print(f"❌ Erro ao fixar painel: {e}")
         import traceback
         traceback.print_exc()
-
+        
 @bot.command(name="historico_metas")
 async def cmd_historico_metas(ctx, data_inicio: str = None, data_fim: str = None):
     """Mostra o histórico de metas fechadas de um período"""
