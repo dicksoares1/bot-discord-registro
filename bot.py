@@ -764,6 +764,13 @@ async def fechar_meta(user_id, data_inicio, data_fim):
         if not meta:
             return None
         
+        # 🔥 CORREÇÃO: Converter acao para string
+        acao = meta.get("acao")
+        if acao is None:
+            acao = "N/A"
+        else:
+            acao = str(acao)  # ← GARANTE QUE É STRING
+        
         # Registrar no histórico
         await conn.execute(
             """
@@ -773,7 +780,7 @@ async def fechar_meta(user_id, data_inicio, data_fim):
             str(user_id), 
             meta["dinheiro"], 
             meta["polvora"], 
-            meta["acao"], 
+            acao,  # ← AGORA É STRING
             data_inicio, 
             data_fim, 
             agora_db()
@@ -788,9 +795,9 @@ async def fechar_meta(user_id, data_inicio, data_fim):
         return {
             "dinheiro": meta["dinheiro"],
             "polvora": meta["polvora"],
-            "acao": meta["acao"]
+            "acao": acao
         }
-
+        
 async def buscar_historico_metas(data_inicio, data_fim):
     """Busca histórico de metas fechadas no período"""
     async with get_db().acquire() as conn:
@@ -818,8 +825,14 @@ async def fechar_todas_metas(data_inicio, data_fim):
             user_id = meta["user_id"]
             dinheiro = meta["dinheiro"] or 0
             polvora = meta["polvora"] or 0
-            acao = meta["acao"] or "N/A"
             dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+            
+            # 🔥 CORREÇÃO: Converter acao para string
+            acao = meta.get("acao")
+            if acao is None:
+                acao = "N/A"
+            else:
+                acao = str(acao)  # ← GARANTE QUE É STRING
             
             # Registrar no histórico
             await conn.execute(
@@ -830,7 +843,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 user_id, 
                 dinheiro, 
                 polvora, 
-                acao,
+                acao,  # ← AGORA É STRING
                 dinheiro_acoes,
                 data_inicio, 
                 data_fim, 
@@ -852,13 +865,11 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 "total": dinheiro + dinheiro_acoes
             })
         
-        # Buscar membros que NÃO têm meta (não pagaram)
-        # Buscar todos os membros com cargo de Agregado ou superior
+        # Buscar membros que NÃO têm meta
         guild = bot.get_guild(GUILD_ID)
         membros_sem_meta = []
         
         if guild:
-            # Cargos que indicam que o membro deveria ter meta
             cargos_meta = [
                 AGREGADO_ROLE_ID,
                 CARGO_MEMBRO_ID,
@@ -877,11 +888,9 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 if member.bot:
                     continue
                 
-                # Verificar se tem algum cargo da lista
                 tem_cargo = any(r.id in cargos_meta for r in member.roles)
                 
                 if tem_cargo:
-                    # Verificar se tem meta
                     tem_meta = any(m["user_id"] == str(member.id) for m in metas)
                     
                     if not tem_meta:
@@ -2955,7 +2964,13 @@ async def atualizar_embed_meta(user_id):
         dinheiro_meta = meta["dinheiro"] or 0
         dinheiro_acoes = meta.get("dinheiro_acoes") or 0
         polvora = meta["polvora"] or 0
-        acao = meta.get("acao") or "Nenhuma"
+        
+        # 🔥 CORREÇÃO: Converter acao para string
+        acao = meta.get("acao")
+        if acao is None:
+            acao = "Nenhuma"
+        else:
+            acao = str(acao)
         
         embed = discord.Embed(
             title=f"📊 META DE {nome.upper()}",
@@ -2999,6 +3014,7 @@ async def atualizar_embed_meta(user_id):
         
         embed.set_footer(text=f"ID: {user_id}")
         
+        # Deletar mensagens antigas
         mensagens_deletadas = 0
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
