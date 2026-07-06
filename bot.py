@@ -803,6 +803,96 @@ async def buscar_historico_metas(data_inicio, data_fim):
             data_inicio, data_fim
         )
 
+async def fechar_todas_metas(data_inicio, data_fim):
+    """Fecha todas as metas ativas e retorna o relatório"""
+    async with get_db().acquire() as conn:
+        # Buscar todas as metas ativas
+        metas = await conn.fetch("SELECT * FROM metas")
+        
+        if not metas:
+            return None, []
+        
+        relatorio = []
+        
+        for meta in metas:
+            user_id = meta["user_id"]
+            dinheiro = meta["dinheiro"] or 0
+            polvora = meta["polvora"] or 0
+            acao = meta["acao"] or "N/A"
+            dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+            
+            # Registrar no histórico
+            await conn.execute(
+                """
+                INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                user_id, 
+                dinheiro, 
+                polvora, 
+                acao,
+                dinheiro_acoes,
+                data_inicio, 
+                data_fim, 
+                agora_db()
+            )
+            
+            # Resetar a meta
+            await conn.execute(
+                "UPDATE metas SET dinheiro = 0, polvora = 0, dinheiro_acoes = 0 WHERE user_id = $1",
+                user_id
+            )
+            
+            relatorio.append({
+                "user_id": user_id,
+                "dinheiro": dinheiro,
+                "polvora": polvora,
+                "acao": acao,
+                "dinheiro_acoes": dinheiro_acoes,
+                "total": dinheiro + dinheiro_acoes
+            })
+        
+        # Buscar membros que NÃO têm meta (não pagaram)
+        # Buscar todos os membros com cargo de Agregado ou superior
+        guild = bot.get_guild(GUILD_ID)
+        membros_sem_meta = []
+        
+        if guild:
+            # Cargos que indicam que o membro deveria ter meta
+            cargos_meta = [
+                AGREGADO_ROLE_ID,
+                CARGO_MEMBRO_ID,
+                CARGO_SOLDADO_ID,
+                CARGO_01_ID,
+                CARGO_02_ID,
+                CARGO_GERENTE_ID,
+                CARGO_GERENTE_GERAL_ID,
+                CARGO_RESP_METAS_ID,
+                CARGO_RESP_ACAO_ID,
+                CARGO_RESP_VENDAS_ID,
+                CARGO_RESP_PRODUCAO_ID
+            ]
+            
+            for member in guild.members:
+                if member.bot:
+                    continue
+                
+                # Verificar se tem algum cargo da lista
+                tem_cargo = any(r.id in cargos_meta for r in member.roles)
+                
+                if tem_cargo:
+                    # Verificar se tem meta
+                    tem_meta = any(m["user_id"] == str(member.id) for m in metas)
+                    
+                    if not tem_meta:
+                        membros_sem_meta.append({
+                            "user_id": str(member.id),
+                            "nome": member.display_name,
+                            "menção": member.mention
+                        })
+        
+        return relatorio, membros_sem_meta
+
 # --- AÇÕES ---
 async def salvar_acao_db(tipo, autor):
     async with get_db().acquire() as conn:
@@ -2554,6 +2644,202 @@ class RelatorioMetasButton(discord.ui.Button):
         await interaction.response.send_modal(RelatorioMetasModal())
 
 
+class FecharTodasMetasButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="🔒 Fechar Todas as Metas (Semanal)",
+            style=discord.ButtonStyle.danger,
+            custom_id="fechar_todas_metas_btn",
+            emoji="🔒"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem fechar todas as metas!", ephemeral=True)
+            return
+        
+        # Abrir modal para definir período
+        await interaction.response.send_modal(FecharTodasMetasModal())
+
+
+class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"):
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data de INÍCIO da semana",
+        placeholder="Ex: 01/07/2026",
+        required=True
+    )
+    data_fim = discord.ui.TextInput(
+        label="📅 Data de FIM da semana",
+        placeholder="Ex: 07/07/2026",
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
+        except ValueError:
+            await interaction.followup.send("❌ Formato de data inválido! Use DD/MM/AAAA", ephemeral=True)
+            return
+        
+        if fim < inicio:
+            await interaction.followup.send("❌ Data de FIM deve ser depois da data de INÍCIO!", ephemeral=True)
+            return
+        
+        # Fechar todas as metas
+        relatorio, membros_sem_meta = await fechar_todas_metas(inicio, fim)
+        
+        if not relatorio and not membros_sem_meta:
+            await interaction.followup.send("📭 Nenhuma meta para fechar.", ephemeral=True)
+            return
+        
+        # =========================================================
+        # ================= CRIAR RELATÓRIO =======================
+        # =========================================================
+        
+        total_dinheiro = sum(r["dinheiro"] for r in relatorio)
+        total_polvora = sum(r["polvora"] for r in relatorio)
+        total_dinheiro_acoes = sum(r["dinheiro_acoes"] for r in relatorio)
+        total_geral = sum(r["total"] for r in relatorio)
+        
+        embed = discord.Embed(
+            title="📊 RELATÓRIO SEMANAL - METAS FECHADAS",
+            description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        
+        # =========================================================
+        # ================= QUEM PAGOU ============================
+        # =========================================================
+        
+        if relatorio:
+            # Ordenar por valor total (maior para menor)
+            relatorio_ordenado = sorted(relatorio, key=lambda x: x["total"], reverse=True)
+            
+            lista_pagaram = ""
+            for item in relatorio_ordenado:
+                user = await pegar_usuario(int(item["user_id"]))
+                nome = user.display_name if user else f"ID: {item['user_id']}"
+                
+                if item["total"] > 0:
+                    lista_pagaram += (
+                        f"👤 {nome}\n"
+                        f"   💰 Meta: {formatar_dinheiro(item['dinheiro'])}\n"
+                        f"   🎯 Ações: {formatar_dinheiro(item['dinheiro_acoes'])}\n"
+                        f"   💣 Pólvora: {fmt_num(item['polvora'])}\n"
+                        f"   📦 Total: {formatar_dinheiro(item['total'])}\n"
+                    )
+                else:
+                    lista_pagaram += f"👤 {nome} - ⚠️ **ZERADO**\n"
+            
+            embed.add_field(
+                name=f"✅ QUEM PAGOU ({len([r for r in relatorio if r['total'] > 0])} membros)",
+                value=lista_pagaram[:1024] if lista_pagaram else "Nenhum",
+                inline=False
+            )
+            
+            # =========================================================
+            # ================= QUEM NÃO PAGOU ========================
+            # =========================================================
+            
+            nao_pagaram = [r for r in relatorio if r["total"] == 0]
+            
+            if nao_pagaram:
+                lista_nao_pagaram = ""
+                for item in nao_pagaram:
+                    user = await pegar_usuario(int(item["user_id"]))
+                    nome = user.display_name if user else f"ID: {item['user_id']}"
+                    lista_nao_pagaram += f"👤 {nome} - ❌ **NÃO PAGOU**\n"
+                
+                embed.add_field(
+                    name=f"❌ QUEM NÃO PAGOU ({len(nao_pagaram)} membros)",
+                    value=lista_nao_pagaram[:1024] if lista_nao_pagaram else "Nenhum",
+                    inline=False
+                )
+        else:
+            embed.add_field(
+                name="📭 METAS",
+                value="Nenhuma meta ativa para fechar.",
+                inline=False
+            )
+        
+        # =========================================================
+        # ================= MEMBROS SEM META ======================
+        # =========================================================
+        
+        if membros_sem_meta:
+            lista_sem_meta = ""
+            for item in membros_sem_meta[:20]:
+                lista_sem_meta += f"👤 {item['menção']} - ❌ **SEM META**\n"
+            
+            if len(membros_sem_meta) > 20:
+                lista_sem_meta += f"\n*... e mais {len(membros_sem_meta) - 20} membros*"
+            
+            embed.add_field(
+                name=f"⚠️ MEMBROS SEM META ({len(membros_sem_meta)} membros)",
+                value=lista_sem_meta[:1024] if lista_sem_meta else "Nenhum",
+                inline=False
+            )
+        
+        # =========================================================
+        # ================= RESUMO ================================
+        # =========================================================
+        
+        embed.add_field(
+            name="📊 RESUMO",
+            value=(
+                f"💰 **Total Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
+                f"🎯 **Total Dinheiro de Ações:** {formatar_dinheiro(total_dinheiro_acoes)}\n"
+                f"💣 **Total Pólvora:** {fmt_num(total_polvora)} unidades\n"
+                f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
+                f"👥 **Membros com meta:** {len(relatorio)}\n"
+                f"✅ **Pagaram:** {len([r for r in relatorio if r['total'] > 0])}\n"
+                f"❌ **Não pagaram:** {len([r for r in relatorio if r['total'] == 0])}"
+            ),
+            inline=False
+        )
+        
+        embed.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
+        
+        # =========================================================
+        # ================= ENVIAR RELATÓRIO ======================
+        # =========================================================
+        
+        # Enviar no canal de resultados
+        canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
+        if canal_resultados:
+            await canal_resultados.send(embed=embed)
+            await interaction.followup.send(
+                f"✅ **Relatório enviado no canal <#{RESULTADOS_METAS_ID}>!**",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        
+        # =========================================================
+        # ================= ATUALIZAR PAINÉIS =====================
+        # =========================================================
+        
+        # Atualizar todos os painéis
+        for uid in metas_cache.keys():
+            await atualizar_embed_meta(int(uid))
+            await asyncio.sleep(0.3)
+        
+        print(f"📊 Relatório semanal gerado por {interaction.user.name}")
+        
+    except Exception as e:
+        print(f"❌ Erro ao fechar metas: {e}")
+        import traceback
+        traceback.print_exc()
+        await interaction.followup.send(f"❌ Erro ao fechar metas: {e}", ephemeral=True)
+
+
 # =========================================================
 # ==================== FUNÇÕES DE METAS ====================
 # =========================================================
@@ -2704,22 +2990,35 @@ async def enviar_painel_relatorio_metas():
         description=(
             "**Gerencie as metas de todos os membros.**\n\n"
             "📌 **Opções disponíveis:**\n"
-            "• 📊 **Gerar Relatório** - Relatório de metas fechadas\n"
+            "• 📊 **Gerar Relatório** - Relatório de metas fechadas (individual)\n"
+            "• 🔒 **Fechar Metas Semanais** - Fecha TODAS as metas e gera relatório completo\n"
             "• ⚠️ **Zerar Metas** - Resetar TODAS as metas (cuidado!)\n\n"
-            "⚠️ **Zerar metas** vai resetar o dinheiro e pólvora de TODOS os membros!"
+            "📋 **O relatório semanal mostra:**\n"
+            "• Quem pagou e quanto\n"
+            "• Quem NÃO pagou\n"
+            "• Membros sem meta\n"
+            "• Totais gerais"
         ),
         color=0x2ecc71
     )
     
     embed.add_field(
-        name="📌 EXEMPLO DE RELATÓRIO",
-        value="**Data INÍCIO:** `01/06/2026`\n**Data FIM:** `30/06/2026`",
+        name="📌 COMO USAR",
+        value=(
+            "**Fechar Metas Semanais:**\n"
+            "• Informe a data de INÍCIO da semana\n"
+            "• Informe a data de FIM da semana\n"
+            "• O sistema vai fechar todas as metas e gerar relatório\n\n"
+            "**Exemplo:**\n"
+            "• Data INÍCIO: `01/07/2026`\n"
+            "• Data FIM: `07/07/2026`"
+        ),
         inline=False
     )
     
-    # View com os dois botões
     view = discord.ui.View(timeout=None)
     view.add_item(RelatorioMetasButton())
+    view.add_item(FecharTodasMetasButton())
     view.add_item(ZerarMetasButton())
     
     await enviar_ou_atualizar_painel(
@@ -2730,7 +3029,6 @@ async def enviar_painel_relatorio_metas():
     )
     
     print("📊 Painel de gerenciamento de metas enviado")
-
 
 class ZerarMetasButton(discord.ui.Button):
     def __init__(self):
@@ -2885,6 +3183,86 @@ async def fixar_painel_meta_no_final(user_id):
         print(f"❌ Erro ao fixar painel: {e}")
         import traceback
         traceback.print_exc()
+
+@bot.command(name="historico_metas")
+async def cmd_historico_metas(ctx, data_inicio: str = None, data_fim: str = None):
+    """Mostra o histórico de metas fechadas de um período"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    # Se não informar datas, pegar a semana passada
+    if not data_inicio or not data_fim:
+        hoje = agora()
+        # Semana passada: segunda à domingo
+        dias_para_segunda = hoje.weekday()  # 0=segunda, 6=domingo
+        inicio_semana = hoje - timedelta(days=dias_para_segunda + 7)
+        fim_semana = inicio_semana + timedelta(days=6)
+        
+        data_inicio = inicio_semana.strftime("%d/%m/%Y")
+        data_fim = fim_semana.strftime("%d/%m/%Y")
+        
+        await ctx.send(f"📅 Buscando histórico da semana passada: {data_inicio} a {data_fim}")
+    
+    try:
+        inicio = datetime.strptime(data_inicio, "%d/%m/%Y")
+        fim = datetime.strptime(data_fim, "%d/%m/%Y")
+        inicio_dt = inicio.replace(hour=0, minute=0, second=0)
+        fim_dt = fim.replace(hour=23, minute=59, second=59)
+    except ValueError:
+        await ctx.send("❌ Formato de data inválido! Use DD/MM/AAAA")
+        return
+    
+    # Buscar histórico
+    historico = await buscar_historico_metas(inicio_dt, fim_dt)
+    
+    if not historico:
+        await ctx.send(f"📭 Nenhuma meta fechada no período **{data_inicio}** a **{data_fim}**.")
+        return
+    
+    # Criar embed
+    total_dinheiro = sum(r["dinheiro"] for r in historico)
+    total_polvora = sum(r["polvora"] for r in historico)
+    total_acoes = sum(r.get("dinheiro_acoes") or 0 for r in historico)
+    
+    embed = discord.Embed(
+        title="📊 HISTÓRICO DE METAS",
+        description=f"📅 **Período:** {data_inicio} até {data_fim}",
+        color=0x3498db
+    )
+    
+    embed.add_field(
+        name="💰 TOTAL DINHEIRO SUJO",
+        value=formatar_dinheiro(total_dinheiro),
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🎯 TOTAL DINHEIRO AÇÕES",
+        value=formatar_dinheiro(total_acoes),
+        inline=True
+    )
+    
+    embed.add_field(
+        name="💣 TOTAL PÓLVORA",
+        value=f"{fmt_num(total_polvora)} unidades",
+        inline=True
+    )
+    
+    lista = ""
+    for item in historico[:20]:
+        user = await pegar_usuario(int(item["user_id"]))
+        nome = user.display_name if user else f"ID: {item['user_id']}"
+        total = item["dinheiro"] + (item.get("dinheiro_acoes") or 0)
+        lista += f"👤 {nome} - 💰 {formatar_dinheiro(total)} - 💣 {fmt_num(item['polvora'])}\n"
+    
+    if len(historico) > 20:
+        lista += f"\n*... e mais {len(historico) - 20} registros*"
+    
+    embed.add_field(name="📋 METAS FECHADAS", value=lista, inline=False)
+    embed.set_footer(text=f"Total: {len(historico)} metas fechadas")
+    
+    await ctx.send(embed=embed)
 
 # =========================================================
 # ==================== SISTEMA DE VENDAS ===================
