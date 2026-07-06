@@ -713,7 +713,12 @@ async def carregar_metas_db():
         return await conn.fetch("SELECT * FROM metas")
 
 async def salvar_meta_db(user_id, canal_id, dinheiro, polvora, acao):
+    """Salva meta no banco garantindo que acao seja string"""
     async with get_db().acquire() as conn:
+        # 🔥 CORREÇÃO: Garantir que acao seja string
+        if acao is not None:
+            acao = str(acao)
+        
         await conn.execute(
             """
             INSERT INTO metas (user_id, canal_id, dinheiro, polvora, acao)
@@ -768,8 +773,12 @@ async def fechar_meta(user_id, data_inicio, data_fim):
         acao = meta.get("acao")
         if acao is None:
             acao = "N/A"
+        elif isinstance(acao, (int, float)):
+            acao = str(acao)
         else:
-            acao = str(acao)  # ← GARANTE QUE É STRING
+            acao = str(acao)
+        
+        print(f"📝 Salvando acao como: {acao} (tipo: {type(acao)})")
         
         # Registrar no histórico
         await conn.execute(
@@ -827,33 +836,37 @@ async def fechar_todas_metas(data_inicio, data_fim):
             polvora = meta["polvora"] or 0
             dinheiro_acoes = meta.get("dinheiro_acoes") or 0
             
-            # 🔥 CORREÇÃO: Converter acao para string
+            # 🔥 CORREÇÃO: Converter acao para string com tratamento seguro
             acao = meta.get("acao")
             if acao is None:
                 acao = "N/A"
+            elif isinstance(acao, (int, float)):
+                acao = str(acao)  # Se for número, vira string
             else:
-                acao = str(acao)  # ← GARANTE QUE É STRING
+                acao = str(acao)  # Garantir que é string
             
-            # Registrar no histórico
+            print(f"📝 Salvando acao como: {acao} (tipo: {type(acao)})")
+            
+            # Registrar no histórico - usando $1, $2, etc com tipos corretos
             await conn.execute(
                 """
                 INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
-                user_id, 
-                dinheiro, 
-                polvora, 
-                acao,  # ← AGORA É STRING
-                dinheiro_acoes,
-                data_inicio, 
-                data_fim, 
-                agora_db()
+                str(user_id),  # $1 - string
+                dinheiro,      # $2 - int
+                polvora,       # $3 - int
+                acao,          # $4 - string (AGORA É STRING)
+                dinheiro_acoes, # $5 - int
+                data_inicio,   # $6 - date
+                data_fim,      # $7 - date
+                agora_db()     # $8 - datetime
             )
             
             # Resetar a meta
             await conn.execute(
                 "UPDATE metas SET dinheiro = 0, polvora = 0, dinheiro_acoes = 0 WHERE user_id = $1",
-                user_id
+                str(user_id)
             )
             
             relatorio.append({
