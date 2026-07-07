@@ -3245,8 +3245,8 @@ async def atualizar_embed_meta(user_id):
         embed.add_field(
             name="📌 COMO USAR",
             value=(
-                "**💣 Adicionar Pólvora** - Registre pólvora coletada\n"
-                "**💰 Adicionar Dinheiro Sujo** - Registre dinheiro lavado\n"
+                "**💣 Adicionar Pólvora** - Registre pólvora da meta\n"
+                "**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta\n"
             ),
             inline=False
         )
