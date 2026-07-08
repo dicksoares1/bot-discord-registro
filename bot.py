@@ -8729,7 +8729,7 @@ class GrupoView(discord.ui.View):
 
 
 class RegistrarGrupoView(discord.ui.View):
-    """View simples com botão para registrar grupo"""
+    """View com botão para registrar grupo e gerar relatório"""
     def __init__(self):
         super().__init__(timeout=None)
     
@@ -8741,7 +8741,6 @@ class RegistrarGrupoView(discord.ui.View):
     )
     async def registrar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Verificar permissão
             is_admin = interaction.user.guild_permissions.administrator
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             
@@ -8749,7 +8748,6 @@ class RegistrarGrupoView(discord.ui.View):
                 await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem registrar grupos!", ephemeral=True)
                 return
             
-            # Abrir o modal
             await interaction.response.send_modal(RegistrarGrupoModal())
             
         except Exception as e:
@@ -8758,7 +8756,125 @@ class RegistrarGrupoView(discord.ui.View):
                 await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
             except:
                 pass
-
+    
+    @discord.ui.button(
+        label="📊 Relatório de Grupos",
+        style=discord.ButtonStyle.primary,
+        custom_id="relatorio_grupos_btn",
+        emoji="📊"
+    )
+    async def relatorio_grupos(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Gera um relatório completo de todos os grupos cadastrados"""
+        try:
+            is_admin = interaction.user.guild_permissions.administrator
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            
+            if not is_admin and not is_gerente:
+                await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem gerar relatórios!", ephemeral=True)
+                return
+            
+            await interaction.response.defer(ephemeral=True)
+            
+            # Buscar todos os grupos
+            grupos = await carregar_grupos_db()
+            
+            if not grupos:
+                await interaction.followup.send("📭 Nenhum grupo cadastrado.", ephemeral=True)
+                return
+            
+            # =========================================================
+            # ================= GERAR RELATÓRIO =======================
+            # =========================================================
+            
+            # Criar um arquivo de texto com o relatório
+            import io
+            
+            relatorio = []
+            relatorio.append("=" * 80)
+            relatorio.append("RELATÓRIO COMPLETO DE GRUPOS CADASTRADOS")
+            relatorio.append("=" * 80)
+            relatorio.append(f"Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+            relatorio.append(f"Total de grupos: {len(grupos)}")
+            relatorio.append("=" * 80)
+            relatorio.append("")
+            
+            for i, grupo in enumerate(grupos, 1):
+                # Buscar compras do grupo
+                compras = await carregar_compras_grupo_db(grupo["grupo_id"])
+                total_pt = compras.get("PT", {}).get("quantidade", 0)
+                total_sub = compras.get("SUB", {}).get("quantidade", 0)
+                
+                relatorio.append(f"{'=' * 80}")
+                relatorio.append(f"GRUPO #{i}")
+                relatorio.append(f"{'=' * 80}")
+                relatorio.append(f"ID: {grupo['grupo_id']}")
+                relatorio.append(f"Organização: {grupo['nome_org'].upper()}")
+                relatorio.append(f"")
+                relatorio.append(f"--- INFORMAÇÕES DO LÍDER ---")
+                relatorio.append(f"Nome: {grupo['lider_nome']}")
+                relatorio.append(f"Telefone: {grupo['lider_telefone']}")
+                relatorio.append(f"")
+                relatorio.append(f"--- INFORMAÇÕES DO BRAÇO ---")
+                relatorio.append(f"Nome: {grupo['braco_nome'] or 'Não informado'}")
+                relatorio.append(f"Telefone: {grupo['braco_telefone'] or 'Não informado'}")
+                relatorio.append(f"")
+                relatorio.append(f"--- PRODUTO ---")
+                relatorio.append(f"Produto fornecido: {grupo['produto']}")
+                relatorio.append(f"")
+                relatorio.append(f"--- HISTÓRICO DE COMPRAS ---")
+                relatorio.append(f"PT: {fmt_num(total_pt)} pacotes")
+                relatorio.append(f"SUB: {fmt_num(total_sub)} pacotes")
+                relatorio.append(f"Total: {fmt_num(total_pt + total_sub)} pacotes")
+                relatorio.append(f"")
+                relatorio.append(f"--- DATAS ---")
+                relatorio.append(f"Criado em: {grupo['data_criacao'].strftime('%d/%m/%Y %H:%M')}")
+                if grupo.get('data_atualizacao'):
+                    relatorio.append(f"Atualizado em: {grupo['data_atualizacao'].strftime('%d/%m/%Y %H:%M')}")
+                relatorio.append(f"Status: ATIVO")
+                relatorio.append("")
+            
+            relatorio.append("=" * 80)
+            relatorio.append("FIM DO RELATÓRIO")
+            relatorio.append("=" * 80)
+            
+            # Criar arquivo de texto
+            texto = "\n".join(relatorio)
+            
+            # Enviar como arquivo
+            await interaction.followup.send(
+                "📊 **Relatório de Grupos**",
+                file=discord.File(io.StringIO(texto), filename=f"relatorio_grupos_{agora().strftime('%d%m%Y_%H%M')}.txt"),
+                ephemeral=True
+            )
+            
+            # Também enviar um resumo no chat
+            embed = discord.Embed(
+                title="📊 RELATÓRIO DE GRUPOS",
+                description=f"**Total de grupos:** {len(grupos)}",
+                color=0x2ecc71
+            )
+            
+            # Listar os grupos
+            lista = ""
+            for i, grupo in enumerate(grupos[:20], 1):
+                compras = await carregar_compras_grupo_db(grupo["grupo_id"])
+                total_pt = compras.get("PT", {}).get("quantidade", 0)
+                total_sub = compras.get("SUB", {}).get("quantidade", 0)
+                lista += f"**{i}.** {grupo['nome_org'].upper()} - PT: {fmt_num(total_pt)} | SUB: {fmt_num(total_sub)}\n"
+            
+            if len(grupos) > 20:
+                lista += f"\n*... e mais {len(grupos) - 20} grupos (veja o arquivo completo)*"
+            
+            embed.add_field(name="📋 LISTA DE GRUPOS", value=lista, inline=False)
+            embed.set_footer(text=f"Relatório gerado em {agora().strftime('%d/%m/%Y %H:%M')}")
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            print(f"❌ Erro ao gerar relatório de grupos: {e}")
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(f"❌ Erro ao gerar relatório: {e}", ephemeral=True)
 
 # =========================================================
 # ==================== FUNÇÕES DE GRUPOS ===================
@@ -8857,7 +8973,7 @@ async def enviar_embed_grupo(grupo_id):
     print(f"✅ Grupo {nome_org} criado")
 
 async def enviar_painel_registro_grupos():
-    """Envia o painel com botão para registrar grupos"""
+    """Envia o painel com botão para registrar grupos e gerar relatório"""
     
     canal = bot.get_channel(CANAL_REGISTRO_GRUPOS_ID)
     if not canal:
@@ -8868,18 +8984,21 @@ async def enviar_painel_registro_grupos():
     async for msg in canal.history(limit=20):
         if msg.author == bot.user and msg.embeds:
             if msg.embeds[0].title == "📋 REGISTRO DE GRUPOS":
-                # Atualizar a mensagem existente
                 try:
                     embed = discord.Embed(
                         title="📋 REGISTRO DE GRUPOS",
                         description=(
-                            "**Clique no botão abaixo para registrar um novo grupo de clientes.**\n\n"
-                            "📌 **Informações necessárias:**\n"
-                            "• 🏷️ Nome da Organização\n"
-                            "• 👤 Líder (Nome e Telefone)\n"
-                            "• 👤 Braço (Nome e Telefone - opcional)\n"
-                            "• 🔫 Produto que fornece\n\n"
-                            "✅ Após o registro, o grupo aparecerá no canal de grupos."
+                            "**Gerencie seus grupos de clientes aqui.**\n\n"
+                            "📌 **Opções disponíveis:**\n"
+                            "• 📋 **Registrar Novo Grupo** - Cadastre um novo grupo\n"
+                            "• 📊 **Relatório de Grupos** - Gere um relatório completo para impressão\n\n"
+                            "📋 **O relatório inclui:**\n"
+                            "• Nome da Organização\n"
+                            "• Líder (Nome e Telefone)\n"
+                            "• Braço (Nome e Telefone)\n"
+                            "• Produto fornecido\n"
+                            "• Histórico de compras (PT e SUB)\n"
+                            "• Datas de criação e atualização"
                         ),
                         color=0x2ecc71
                     )
@@ -8901,7 +9020,6 @@ async def enviar_painel_registro_grupos():
                     return
                 except Exception as e:
                     print(f"Erro ao atualizar painel: {e}")
-                    # Se não conseguir atualizar, deletar e criar novo
                     try:
                         await msg.delete()
                     except:
@@ -8912,13 +9030,17 @@ async def enviar_painel_registro_grupos():
     embed = discord.Embed(
         title="📋 REGISTRO DE GRUPOS",
         description=(
-            "**Clique no botão abaixo para registrar um novo grupo de clientes.**\n\n"
-            "📌 **Informações necessárias:**\n"
-            "• 🏷️ Nome da Organização\n"
-            "• 👤 Líder (Nome e Telefone)\n"
-            "• 👤 Braço (Nome e Telefone - opcional)\n"
-            "• 🔫 Produto que fornece\n\n"
-            "✅ Após o registro, o grupo aparecerá no canal de grupos."
+            "**Gerencie seus grupos de clientes aqui.**\n\n"
+            "📌 **Opções disponíveis:**\n"
+            "• 📋 **Registrar Novo Grupo** - Cadastre um novo grupo\n"
+            "• 📊 **Relatório de Grupos** - Gere um relatório completo para impressão\n\n"
+            "📋 **O relatório inclui:**\n"
+            "• Nome da Organização\n"
+            "• Líder (Nome e Telefone)\n"
+            "• Braço (Nome e Telefone)\n"
+            "• Produto fornecido\n"
+            "• Histórico de compras (PT e SUB)\n"
+            "• Datas de criação e atualização"
         ),
         color=0x2ecc71
     )
