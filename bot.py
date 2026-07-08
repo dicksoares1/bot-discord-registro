@@ -8596,6 +8596,7 @@ class ConfirmarExcluirView(discord.ui.View):
         super().__init__(timeout=60)
         self.grupo_id = grupo_id
         self.nome_org = nome_org
+        print(f"🔧 ConfirmarExcluirView: grupo_id={grupo_id}, nome_org={nome_org}")
     
     @discord.ui.button(
         label="✅ Sim, Excluir",
@@ -8607,6 +8608,10 @@ class ConfirmarExcluirView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         try:
+            if not self.grupo_id:
+                await interaction.followup.send("❌ ID do grupo não encontrado!", ephemeral=True)
+                return
+            
             await desativar_grupo_db(self.grupo_id)
             
             canal = interaction.guild.get_channel(CANAL_GRUPOS_ID)
@@ -8632,6 +8637,8 @@ class ConfirmarExcluirView(discord.ui.View):
             
         except Exception as e:
             print(f"❌ Erro ao excluir grupo: {e}")
+            import traceback
+            traceback.print_exc()
             await interaction.followup.send(f"❌ Erro ao excluir: {e}", ephemeral=True)
     
     @discord.ui.button(
@@ -8653,6 +8660,7 @@ class GrupoView(discord.ui.View):
         super().__init__(timeout=None)
         self.grupo_id = grupo_id
         self.nome_org = nome_org
+        print(f"🔧 GrupoView criada: grupo_id={grupo_id}, nome_org={nome_org}")
     
     @discord.ui.button(
         label="✏️ Editar Grupo",
@@ -8662,6 +8670,9 @@ class GrupoView(discord.ui.View):
     )
     async def editar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            print(f"🔧 Editando grupo: {self.grupo_id} - {self.nome_org}")
+            
+            # Verificar permissão
             is_admin = interaction.user.guild_permissions.administrator
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             
@@ -8669,17 +8680,26 @@ class GrupoView(discord.ui.View):
                 await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem editar grupos!", ephemeral=True)
                 return
             
+            # Verificar se grupo_id existe
+            if not self.grupo_id:
+                await interaction.response.send_message("❌ ID do grupo não encontrado!", ephemeral=True)
+                return
+            
+            # Buscar dados
             dados = await carregar_grupo_db(self.grupo_id)
             if not dados:
                 await interaction.response.send_message("❌ Grupo não encontrado!", ephemeral=True)
                 return
             
+            # Abrir modal
             await interaction.response.send_modal(EditarGrupoModal(self.grupo_id, dados))
             
         except Exception as e:
             print(f"❌ Erro ao editar grupo: {e}")
+            import traceback
+            traceback.print_exc()
             try:
-                await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
                 pass
     
@@ -8693,6 +8713,10 @@ class GrupoView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         try:
+            if not self.grupo_id:
+                await interaction.followup.send("❌ ID do grupo não encontrado!", ephemeral=True)
+                return
+            
             await enviar_embed_grupo(self.grupo_id)
             await interaction.followup.send(
                 f"✅ **Grupo {self.nome_org} atualizado com sucesso!**",
@@ -8713,11 +8737,17 @@ class GrupoView(discord.ui.View):
     )
     async def excluir_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            print(f"🔧 Excluindo grupo: {self.grupo_id} - {self.nome_org}")
+            
             is_admin = interaction.user.guild_permissions.administrator
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             
             if not is_admin and not is_gerente:
                 await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem excluir grupos!", ephemeral=True)
+                return
+            
+            if not self.grupo_id:
+                await interaction.response.send_message("❌ ID do grupo não encontrado!", ephemeral=True)
                 return
             
             view = ConfirmarExcluirView(self.grupo_id, self.nome_org)
@@ -8730,11 +8760,12 @@ class GrupoView(discord.ui.View):
             
         except Exception as e:
             print(f"❌ Erro ao excluir grupo: {e}")
+            import traceback
+            traceback.print_exc()
             try:
-                await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
                 pass
-
 
 # =========================================================
 # ==================== VIEWS DE GRUPOS ====================
@@ -8951,20 +8982,28 @@ async def enviar_embed_grupo(grupo_id):
     embed.add_field(name="📌 STATUS", value="🟢 **ATIVO**", inline=False)
     embed.set_footer(text=f"ID: {grupo_id} • CRIADO EM {dados['data_criacao'].strftime('%d/%m/%Y')}")
     
-    async for msg in canal.history(limit=50):
-        if msg.author == bot.user and msg.embeds:
-            for embed_msg in msg.embeds:
-                if embed_msg.footer and grupo_id in embed_msg.footer.text:
-                    try:
-                        await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
-                        print(f"✅ Grupo {nome_org} atualizado")
-                        return
-                    except Exception as e:
-                        print(f"Erro ao atualizar embed: {e}")
+    # =========================================================
+    # ================= PROCURAR MENSAGEM EXISTENTE ===========
+    # =========================================================
     
+    try:
+        async for msg in canal.history(limit=50):
+            if msg.author == bot.user and msg.embeds:
+                for embed_msg in msg.embeds:
+                    if embed_msg.footer and grupo_id in embed_msg.footer.text:
+                        try:
+                            # 🔥 PASSAR O grupo_id CORRETAMENTE
+                            await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
+                            print(f"✅ Grupo {nome_org} atualizado")
+                            return
+                        except Exception as e:
+                            print(f"Erro ao atualizar embed: {e}")
+    except Exception as e:
+        print(f"Erro ao buscar mensagem: {e}")
+    
+    # Se não encontrou mensagem, criar nova
     await canal.send(embed=embed, view=GrupoView(grupo_id, nome_org))
     print(f"✅ Grupo {nome_org} criado")
-
 
 # =========================================================
 # ==================== FUNÇÕES DE GRUPOS ===================
