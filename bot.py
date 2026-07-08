@@ -8588,32 +8588,56 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ Editar Grupo"):
 # =========================================================
 
 class ConfirmarExcluirView(discord.ui.View):
-    def __init__(self, grupo_id):
-        super().__init__(timeout=30)
+    def __init__(self, grupo_id, nome_org):
+        super().__init__(timeout=60)  # Aumentado para 60 segundos
         self.grupo_id = grupo_id
+        self.nome_org = nome_org
     
-    @discord.ui.button(label="✅ Sim, Excluir", style=discord.ButtonStyle.danger, emoji="✅")
+    @discord.ui.button(
+        label="✅ Sim, Excluir",
+        style=discord.ButtonStyle.danger,
+        custom_id=f"confirmar_excluir_{grupo_id}",  # ← ID ÚNICO
+        emoji="✅"
+    )
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         
-        await desativar_grupo_db(self.grupo_id)
-        
-        canal = interaction.guild.get_channel(CANAL_GRUPOS_ID)
-        if canal:
-            async for msg in canal.history(limit=50):
-                if msg.author == interaction.client.user and msg.embeds:
-                    for embed in msg.embeds:
-                        if embed.footer and self.grupo_id in embed.footer.text:
-                            try:
-                                await msg.delete()
-                                await interaction.followup.send("✅ **Grupo excluído com sucesso!**", ephemeral=True)
-                                return
-                            except:
-                                pass
-        
-        await interaction.followup.send("✅ **Grupo excluído do banco de dados!**", ephemeral=True)
+        try:
+            # Desativar grupo no banco
+            await desativar_grupo_db(self.grupo_id)
+            
+            # Buscar e deletar a mensagem do grupo
+            canal = interaction.guild.get_channel(CANAL_GRUPOS_ID)
+            if canal:
+                async for msg in canal.history(limit=50):
+                    if msg.author == interaction.client.user and msg.embeds:
+                        for embed in msg.embeds:
+                            if embed.footer and self.grupo_id in embed.footer.text:
+                                try:
+                                    await msg.delete()
+                                    await interaction.followup.send(
+                                        f"✅ **Grupo {self.nome_org} excluído com sucesso!**",
+                                        ephemeral=True
+                                    )
+                                    return
+                                except:
+                                    pass
+            
+            await interaction.followup.send(
+                f"✅ **Grupo {self.nome_org} excluído do banco de dados!**",
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            print(f"❌ Erro ao excluir grupo: {e}")
+            await interaction.followup.send(f"❌ Erro ao excluir: {e}", ephemeral=True)
     
-    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
+    @discord.ui.button(
+        label="❌ Cancelar",
+        style=discord.ButtonStyle.secondary,
+        custom_id=f"cancelar_excluir_{grupo_id}",  # ← ID ÚNICO
+        emoji="❌"
+    )
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
 
@@ -8627,28 +8651,39 @@ class GrupoView(discord.ui.View):
     @discord.ui.button(
         label="✏️ Editar Grupo",
         style=discord.ButtonStyle.primary,
-        custom_id="editar_grupo",
+        custom_id=f"editar_grupo_{grupo_id}",  # ← ID ÚNICO
         emoji="✏️"
     )
     async def editar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        
-        if not is_admin and not is_gerente:
-            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem editar grupos!", ephemeral=True)
-            return
-        
-        dados = await carregar_grupo_db(self.grupo_id)
-        if not dados:
-            await interaction.response.send_message("❌ Grupo não encontrado!", ephemeral=True)
-            return
-        
-        await interaction.response.send_modal(EditarGrupoModal(self.grupo_id, dados))
+        try:
+            # Verificar permissão
+            is_admin = interaction.user.guild_permissions.administrator
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            
+            if not is_admin and not is_gerente:
+                await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem editar grupos!", ephemeral=True)
+                return
+            
+            # Buscar dados do grupo
+            dados = await carregar_grupo_db(self.grupo_id)
+            if not dados:
+                await interaction.response.send_message("❌ Grupo não encontrado!", ephemeral=True)
+                return
+            
+            # Abrir modal de edição
+            await interaction.response.send_modal(EditarGrupoModal(self.grupo_id, dados))
+            
+        except Exception as e:
+            print(f"❌ Erro ao editar grupo: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+            except:
+                pass
     
     @discord.ui.button(
         label="🔄 Atualizar",
         style=discord.ButtonStyle.secondary,
-        custom_id="atualizar_grupo",
+        custom_id=f"atualizar_grupo_{grupo_id}",  # ← ID ÚNICO
         emoji="🔄"
     )
     async def atualizar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -8656,50 +8691,49 @@ class GrupoView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         try:
-            # Atualizar o embed do grupo
             await enviar_embed_grupo(self.grupo_id)
-            
             await interaction.followup.send(
                 f"✅ **Grupo {self.nome_org} atualizado com sucesso!**",
                 ephemeral=True
             )
-            
-        except discord.HTTPException as e:
-            if e.status == 429:
-                await interaction.followup.send(
-                    f"⏰ **Rate limit!** Aguarde alguns segundos e tente novamente.",
-                    ephemeral=True
-                )
-            else:
-                raise
         except Exception as e:
-            print(f"❌ Erro ao atualizar grupo {self.grupo_id}: {e}")
+            print(f"❌ Erro ao atualizar grupo: {e}")
             await interaction.followup.send(
-                f"❌ Erro ao atualizar o grupo: {e}",
+                f"❌ Erro ao atualizar: {e}",
                 ephemeral=True
             )
     
     @discord.ui.button(
         label="🗑️ Excluir Grupo",
         style=discord.ButtonStyle.danger,
-        custom_id="excluir_grupo",
+        custom_id=f"excluir_grupo_{grupo_id}",  # ← ID ÚNICO
         emoji="🗑️"
     )
     async def excluir_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        
-        if not is_admin and not is_gerente:
-            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem excluir grupos!", ephemeral=True)
-            return
-        
-        view = ConfirmarExcluirView(self.grupo_id)
-        await interaction.response.send_message(
-            f"⚠️ **Tem certeza que deseja excluir o grupo {self.nome_org}?**\n"
-            f"Esta ação não pode ser desfeita!",
-            view=view,
-            ephemeral=True
-        )
+        try:
+            # Verificar permissão
+            is_admin = interaction.user.guild_permissions.administrator
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            
+            if not is_admin and not is_gerente:
+                await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem excluir grupos!", ephemeral=True)
+                return
+            
+            # Abrir view de confirmação
+            view = ConfirmarExcluirView(self.grupo_id, self.nome_org)
+            await interaction.response.send_message(
+                f"⚠️ **Tem certeza que deseja excluir o grupo {self.nome_org}?**\n"
+                f"Esta ação não pode ser desfeita!",
+                view=view,
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            print(f"❌ Erro ao excluir grupo: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+            except:
+                pass
 
 
 class RegistrarGrupoView(discord.ui.View):
@@ -9003,6 +9037,8 @@ async def on_ready():
         bot.add_view(StatusView())
         bot.add_view(PainelAcoesView())
         bot.add_view(MetaView(0))
+        bot.add_view(GrupoView("placeholder", "placeholder"))
+        bot.add_view(ConfirmarExcluirView("placeholder", "placeholder"))
     except Exception as e:
         print(f"Erro ao registrar views: {e}")
     
