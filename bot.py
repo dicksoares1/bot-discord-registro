@@ -8657,16 +8657,18 @@ class GrupoView(discord.ui.View):
         super().__init__(timeout=None)
         self.grupo_id = grupo_id
         self.nome_org = nome_org
+        print(f"🔧 GrupoView criada: grupo_id={grupo_id}, nome_org={nome_org}")
     
     @discord.ui.button(
         label="✏️ Editar Grupo",
         style=discord.ButtonStyle.primary,
-        custom_id=f"editar_grupo_{grupo_id}",  # ← ID ÚNICO POR GRUPO
+        custom_id="editar_grupo",
         emoji="✏️"
     )
     async def editar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Verificar permissão
+            print(f"🔧 Editando grupo: {self.grupo_id} - {self.nome_org}")
+            
             is_admin = interaction.user.guild_permissions.administrator
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             
@@ -8674,13 +8676,15 @@ class GrupoView(discord.ui.View):
                 await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem editar grupos!", ephemeral=True)
                 return
             
-            # Buscar dados
-            dados = await carregar_grupo_db(self.grupo_id)
-            if not dados:
-                await interaction.response.send_message("❌ Grupo não encontrado!", ephemeral=True)
+            if not self.grupo_id:
+                await interaction.response.send_message("❌ ID do grupo não encontrado!", ephemeral=True)
                 return
             
-            # Abrir modal
+            dados = await carregar_grupo_db(self.grupo_id)
+            if not dados:
+                await interaction.response.send_message(f"❌ Grupo não encontrado! ID: {self.grupo_id}", ephemeral=True)
+                return
+            
             await interaction.response.send_modal(EditarGrupoModal(self.grupo_id, dados))
             
         except Exception as e:
@@ -8693,13 +8697,17 @@ class GrupoView(discord.ui.View):
     @discord.ui.button(
         label="🔄 Atualizar",
         style=discord.ButtonStyle.secondary,
-        custom_id=f"atualizar_grupo_{grupo_id}",  # ← ID ÚNICO POR GRUPO
+        custom_id="atualizar_grupo",
         emoji="🔄"
     )
     async def atualizar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         
         try:
+            if not self.grupo_id:
+                await interaction.followup.send("❌ ID do grupo não encontrado!", ephemeral=True)
+                return
+            
             await enviar_embed_grupo(self.grupo_id)
             await interaction.followup.send(
                 f"✅ **Grupo {self.nome_org} atualizado com sucesso!**",
@@ -8715,16 +8723,22 @@ class GrupoView(discord.ui.View):
     @discord.ui.button(
         label="🗑️ Excluir Grupo",
         style=discord.ButtonStyle.danger,
-        custom_id=f"excluir_grupo_{grupo_id}",  # ← ID ÚNICO POR GRUPO
+        custom_id="excluir_grupo",
         emoji="🗑️"
     )
     async def excluir_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            print(f"🔧 Excluindo grupo: {self.grupo_id} - {self.nome_org}")
+            
             is_admin = interaction.user.guild_permissions.administrator
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             
             if not is_admin and not is_gerente:
                 await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem excluir grupos!", ephemeral=True)
+                return
+            
+            if not self.grupo_id:
+                await interaction.response.send_message("❌ ID do grupo não encontrado!", ephemeral=True)
                 return
             
             view = ConfirmarExcluirView(self.grupo_id, self.nome_org)
@@ -8741,7 +8755,6 @@ class GrupoView(discord.ui.View):
                 await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
             except:
                 pass
-
 
 # =========================================================
 # ==================== VIEWS DE GRUPOS ====================
