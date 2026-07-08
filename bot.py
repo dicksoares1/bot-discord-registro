@@ -8508,6 +8508,10 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 Registrar Novo Grupo"):
         )
 
 
+# =========================================================
+# ==================== MODAIS DE GRUPOS ====================
+# =========================================================
+
 class EditarGrupoModal(discord.ui.Modal, title="✏️ Editar Grupo"):
     
     def __init__(self, grupo_id, dados):
@@ -8640,6 +8644,10 @@ class ConfirmarExcluirView(discord.ui.View):
         await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
 
 
+# =========================================================
+# ==================== VIEWS DE GRUPOS ====================
+# =========================================================
+
 class GrupoView(discord.ui.View):
     def __init__(self, grupo_id, nome_org):
         super().__init__(timeout=None)
@@ -8649,7 +8657,7 @@ class GrupoView(discord.ui.View):
     @discord.ui.button(
         label="✏️ Editar Grupo",
         style=discord.ButtonStyle.primary,
-        custom_id="editar_grupo",  # ← SEM GRUPO_ID
+        custom_id="editar_grupo",
         emoji="✏️"
     )
     async def editar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -8678,7 +8686,7 @@ class GrupoView(discord.ui.View):
     @discord.ui.button(
         label="🔄 Atualizar",
         style=discord.ButtonStyle.secondary,
-        custom_id="atualizar_grupo",  # ← SEM GRUPO_ID
+        custom_id="atualizar_grupo",
         emoji="🔄"
     )
     async def atualizar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -8700,7 +8708,7 @@ class GrupoView(discord.ui.View):
     @discord.ui.button(
         label="🗑️ Excluir Grupo",
         style=discord.ButtonStyle.danger,
-        custom_id="excluir_grupo",  # ← SEM GRUPO_ID
+        custom_id="excluir_grupo",
         emoji="🗑️"
     )
     async def excluir_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -8727,6 +8735,10 @@ class GrupoView(discord.ui.View):
             except:
                 pass
 
+
+# =========================================================
+# ==================== VIEWS DE GRUPOS ====================
+# =========================================================
 
 class RegistrarGrupoView(discord.ui.View):
     """View com botão para registrar grupo e gerar relatório"""
@@ -8775,18 +8787,12 @@ class RegistrarGrupoView(discord.ui.View):
             
             await interaction.response.defer(ephemeral=True)
             
-            # Buscar todos os grupos
             grupos = await carregar_grupos_db()
             
             if not grupos:
                 await interaction.followup.send("📭 Nenhum grupo cadastrado.", ephemeral=True)
                 return
             
-            # =========================================================
-            # ================= GERAR RELATÓRIO =======================
-            # =========================================================
-            
-            # Criar um arquivo de texto com o relatório
             import io
             
             relatorio = []
@@ -8799,7 +8805,6 @@ class RegistrarGrupoView(discord.ui.View):
             relatorio.append("")
             
             for i, grupo in enumerate(grupos, 1):
-                # Buscar compras do grupo
                 compras = await carregar_compras_grupo_db(grupo["grupo_id"])
                 total_pt = compras.get("PT", {}).get("quantidade", 0)
                 total_sub = compras.get("SUB", {}).get("quantidade", 0)
@@ -8837,24 +8842,20 @@ class RegistrarGrupoView(discord.ui.View):
             relatorio.append("FIM DO RELATÓRIO")
             relatorio.append("=" * 80)
             
-            # Criar arquivo de texto
             texto = "\n".join(relatorio)
             
-            # Enviar como arquivo
             await interaction.followup.send(
                 "📊 **Relatório de Grupos**",
                 file=discord.File(io.StringIO(texto), filename=f"relatorio_grupos_{agora().strftime('%d%m%Y_%H%M')}.txt"),
                 ephemeral=True
             )
             
-            # Também enviar um resumo no chat
             embed = discord.Embed(
                 title="📊 RELATÓRIO DE GRUPOS",
                 description=f"**Total de grupos:** {len(grupos)}",
                 color=0x2ecc71
             )
             
-            # Listar os grupos
             lista = ""
             for i, grupo in enumerate(grupos[:20], 1):
                 compras = await carregar_compras_grupo_db(grupo["grupo_id"])
@@ -8875,6 +8876,7 @@ class RegistrarGrupoView(discord.ui.View):
             import traceback
             traceback.print_exc()
             await interaction.followup.send(f"❌ Erro ao gerar relatório: {e}", ephemeral=True)
+
 
 # =========================================================
 # ==================== FUNÇÕES DE GRUPOS ===================
@@ -8949,7 +8951,6 @@ async def enviar_embed_grupo(grupo_id):
     embed.add_field(name="📌 STATUS", value="🟢 **ATIVO**", inline=False)
     embed.set_footer(text=f"ID: {grupo_id} • CRIADO EM {dados['data_criacao'].strftime('%d/%m/%Y')}")
     
-    # Tentar encontrar a mensagem existente
     async for msg in canal.history(limit=50):
         if msg.author == bot.user and msg.embeds:
             for embed_msg in msg.embeds:
@@ -8958,19 +8959,16 @@ async def enviar_embed_grupo(grupo_id):
                         await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
                         print(f"✅ Grupo {nome_org} atualizado")
                         return
-                    except discord.HTTPException as e:
-                        if e.status == 429:
-                            print(f"⏰ Rate limit ao atualizar {nome_org}, aguardando...")
-                            await asyncio.sleep(3)
-                            await msg.edit(embed=embed, view=GrupoView(grupo_id, nome_org))
-                            return
-                        raise
                     except Exception as e:
                         print(f"Erro ao atualizar embed: {e}")
     
-    # Se não encontrou mensagem, criar nova
     await canal.send(embed=embed, view=GrupoView(grupo_id, nome_org))
     print(f"✅ Grupo {nome_org} criado")
+
+
+# =========================================================
+# ==================== FUNÇÕES DE GRUPOS ===================
+# =========================================================
 
 async def enviar_painel_registro_grupos():
     """Envia o painel com botão para registrar grupos e gerar relatório"""
@@ -8980,7 +8978,6 @@ async def enviar_painel_registro_grupos():
         print(f"❌ Canal de registro de grupos não encontrado: {CANAL_REGISTRO_GRUPOS_ID}")
         return
     
-    # Verificar se já existe uma mensagem do bot no canal
     async for msg in canal.history(limit=20):
         if msg.author == bot.user and msg.embeds:
             if msg.embeds[0].title == "📋 REGISTRO DE GRUPOS":
@@ -9026,7 +9023,6 @@ async def enviar_painel_registro_grupos():
                         pass
                     break
     
-    # Criar nova mensagem
     embed = discord.Embed(
         title="📋 REGISTRO DE GRUPOS",
         description=(
@@ -9060,6 +9056,11 @@ async def enviar_painel_registro_grupos():
     await canal.send(embed=embed, view=RegistrarGrupoView())
     print(f"📋 Painel de registro de grupos enviado")
 
+
+# =========================================================
+# ==================== FUNÇÕES DE GRUPOS ===================
+# =========================================================
+
 async def restaurar_grupos():
     """Restaura os embeds dos grupos ativos após reinício"""
     try:
@@ -9081,8 +9082,7 @@ async def restaurar_grupos():
     except Exception as e:
         print(f"❌ Erro ao restaurar grupos: {e}")
         import traceback
-        traceback.print_exc()
-        
+        traceback.print_exc()        
 # =========================================================
 # ==================== ON_READY ===========================
 # =========================================================
