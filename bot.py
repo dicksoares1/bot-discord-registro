@@ -3668,11 +3668,20 @@ async def cmd_historico_metas(ctx, data_inicio: str = None, data_fim: str = None
 # =========================================================
 
 class StatusView(discord.ui.View):
-    def __init__(self, disabled: bool = False, entrega_id: int = None):
+    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
+        self.total_entregas = total_entregas
         self.entrega_ja_entregue = False
         self.proxima_criada = False
+        
+        # Se for venda parcelada, habilitar botão "Criar Próxima Entrega"
+        if total_entregas > 1:
+            for child in self.children:
+                if child.custom_id == "criar_proxima_entrega":
+                    child.disabled = False
+                    child.label = f"📦 Criar Próxima Entrega (2/{total_entregas})"
+        
         if disabled:
             for item in self.children:
                 item.disabled = True
@@ -3796,13 +3805,11 @@ class StatusView(discord.ui.View):
 
         self.entrega_ja_entregue = True
 
+        # Desabilitar APENAS o botão Entregue
         for child in self.children:
             if child.custom_id == "status_entregue":
                 child.disabled = True
                 child.label = "✅ Entregue (Concluído)"
-            if child.custom_id == "criar_proxima_entrega":
-                child.disabled = False
-                child.label = "📦 Criar Próxima Entrega"
 
         titulo = embed.title
         pedido_numero = int(titulo.split("#")[1]) if "#" in titulo else 0
@@ -3849,10 +3856,10 @@ class StatusView(discord.ui.View):
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
-    @discord.ui.button(label="📦 Criar Próxima Entrega", style=discord.ButtonStyle.primary, custom_id="criar_proxima_entrega", disabled=True)
+    @discord.ui.button(label="📦 Criar Próxima Entrega", style=discord.ButtonStyle.primary, custom_id="criar_proxima_entrega", disabled=False)
     async def criar_proxima(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Cria a próxima entrega MANUALMENTE após clicar em Entregue"""
-
+        """Cria a próxima entrega - SEMPRE DISPONÍVEL para vendas parceladas"""
+        
         if not self.entrega_id:
             await interaction.response.send_message(
                 "❌ Esta venda não tem entregas parceladas.",
@@ -3863,13 +3870,6 @@ class StatusView(discord.ui.View):
         if self.proxima_criada:
             await interaction.response.send_message(
                 "⚠️ **A próxima entrega já foi criada!**",
-                ephemeral=True
-            )
-            return
-
-        if not self.entrega_ja_entregue:
-            await interaction.response.send_message(
-                "⚠️ **Você precisa marcar como ENTREGUE primeiro!**",
                 ephemeral=True
             )
             return
@@ -3909,13 +3909,8 @@ class StatusView(discord.ui.View):
             proxima_entrega_num = entrega_atual + 1
             pedido_original = entrega["pedido_original"]
 
-            # =========================================================
-            # ================= BUSCAR LISTA DE ENTREGAS =============
-            # =========================================================
-
+            # Buscar lista de entregas
             import json
-
-            # Tentar buscar a lista completa de entregas salva
             async with get_db().acquire() as conn2:
                 detalhes = await conn2.fetchrow(
                     "SELECT entregas_json FROM entregas_detalhes WHERE entrega_id = $1",
@@ -3924,23 +3919,17 @@ class StatusView(discord.ui.View):
 
             if detalhes and detalhes["entregas_json"]:
                 entregas_lista = json.loads(detalhes["entregas_json"])
-                print(f"📊 Lista de entregas carregada do JSON: {entregas_lista}")
             else:
-                # Fallback: recalcular baseado na primeira entrega
+                # Fallback
                 async with get_db().acquire() as conn3:
                     primeira = await conn3.fetchrow(
                         "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
                         pedido_original
                     )
-
-                if primeira:
-                    pt_por_entrega = primeira["pt_por_entrega"]
-                    sub_por_entrega = primeira["sub_por_entrega"]
-                else:
-                    pt_por_entrega = entrega["pt_por_entrega"]
-                    sub_por_entrega = entrega["sub_por_entrega"]
-
-                # Reconstruir a lista
+                
+                pt_por_entrega = primeira["pt_por_entrega"] if primeira else entrega["pt_por_entrega"]
+                sub_por_entrega = primeira["sub_por_entrega"] if primeira else entrega["sub_por_entrega"]
+                
                 entregas_lista = []
                 LIMITE_DIARIO = 8000
                 pt_total = pt_por_entrega * total_entregas
@@ -3970,14 +3959,11 @@ class StatusView(discord.ui.View):
 
                     entregas_lista.append({"pt": pt_valor, "sub": sub_valor})
 
-            # =========================================================
-            # ================= PEGAR A PRÓXIMA ENTREGA ==============
-            # =========================================================
-
+            # Pegar próxima entrega
             idx = proxima_entrega_num - 1
             if idx >= len(entregas_lista):
                 await interaction.followup.send(
-                    f"❌ **Erro: Entrega {proxima_entrega_num} não encontrada na lista!**",
+                    f"❌ **Erro: Entrega {proxima_entrega_num} não encontrada!**",
                     ephemeral=True
                 )
                 return
@@ -3988,8 +3974,7 @@ class StatusView(discord.ui.View):
 
             if pt_entrega == 0 and sub_entrega == 0:
                 await interaction.followup.send(
-                    f"⚠️ **Esta entrega ({proxima_entrega_num}/{total_entregas}) não tem conteúdo!**\n"
-                    f"✅ Todas as entregas foram concluídas.",
+                    f"✅ **Todas as entregas foram concluídas!**",
                     ephemeral=True
                 )
                 self.proxima_criada = True
@@ -4000,6 +3985,7 @@ class StatusView(discord.ui.View):
                 await interaction.message.edit(view=self)
                 return
 
+            # Criar embed da próxima entrega
             vendedor_id = entrega["vendedor_id"]
             organizacao = entrega["organizacao"]
             observacoes = entrega["observacoes"]
@@ -4013,11 +3999,7 @@ class StatusView(discord.ui.View):
                 )
                 return
 
-            config = ORGANIZACOES_CONFIG.get(
-                organizacao,
-                {"emoji": "🏷️", "cor": 0x1e3a8a}
-            )
-
+            config = ORGANIZACOES_CONFIG.get(organizacao, {"emoji": "🏷️", "cor": 0x1e3a8a})
             grupo = await buscar_grupo_por_organizacao(organizacao)
 
             titulo_embed = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
@@ -4029,7 +4011,6 @@ class StatusView(discord.ui.View):
                 color=config["cor"]
             )
 
-            # Construir resumo completo
             resumo = ""
             for i, e in enumerate(entregas_lista, 1):
                 if i < proxima_entrega_num:
@@ -4040,52 +4021,20 @@ class StatusView(discord.ui.View):
                     status = "⏳"
                 resumo += f"{status} Entrega {i}/{total_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
 
-            embed_novo.add_field(
-                name="🚨 RESUMO DAS ENTREGAS",
-                value=resumo,
-                inline=False
-            )
-
-            embed_novo.add_field(
-                name="👤 Vendedor",
-                value=f"<@{vendedor_id}>",
-                inline=False
-            )
-
-            embed_novo.add_field(
-                name="🏷 Organização",
-                value=f"{config['emoji']} {organizacao}",
-                inline=False
-            )
+            embed_novo.add_field(name="🚨 RESUMO DAS ENTREGAS", value=resumo, inline=False)
+            embed_novo.add_field(name="👤 Vendedor", value=f"<@{vendedor_id}>", inline=False)
+            embed_novo.add_field(name="🏷 Organização", value=f"{config['emoji']} {organizacao}", inline=False)
 
             pacotes_pt = pt_entrega // 50
             pacotes_sub = sub_entrega // 50
 
-            embed_novo.add_field(
-                name="🔫 PT",
-                value=f"{fmt_num(pt_entrega)} munições\n📦 {pacotes_pt} pacotes",
-                inline=True
-            )
-
-            embed_novo.add_field(
-                name="🔫 SUB",
-                value=f"{fmt_num(sub_entrega)} munições\n📦 {pacotes_sub} pacotes",
-                inline=True
-            )
+            embed_novo.add_field(name="🔫 PT", value=f"{fmt_num(pt_entrega)} munições\n📦 {pacotes_pt} pacotes", inline=True)
+            embed_novo.add_field(name="🔫 SUB", value=f"{fmt_num(sub_entrega)} munições\n📦 {pacotes_sub} pacotes", inline=True)
 
             valor_entrega = (pt_entrega * 50) + (sub_entrega * 90)
-            valor_formatado = (
-                f"{valor_entrega:,.2f}"
-                .replace(",", "X")
-                .replace(".", ",")
-                .replace("X", ".")
-            )
+            valor_formatado = formatar_dinheiro(valor_entrega)
 
-            embed_novo.add_field(
-                name="💰 Valor (esta entrega)",
-                value=f"**R$ {valor_formatado}**",
-                inline=False
-            )
+            embed_novo.add_field(name="💰 Valor (esta entrega)", value=f"**{valor_formatado}**", inline=False)
 
             embed_novo.add_field(
                 name="📋 STATUS DAS ENTREGAS",
@@ -4097,18 +4046,10 @@ class StatusView(discord.ui.View):
                 inline=False
             )
 
-            embed_novo.add_field(
-                name="📌 Status",
-                value="📦 A Entregar\n⏳ Pagamento pendente",
-                inline=False
-            )
+            embed_novo.add_field(name="📌 Status", value="📦 A Entregar\n⏳ Pagamento pendente", inline=False)
 
             if observacoes:
-                embed_novo.add_field(
-                    name="📝 Observações",
-                    value=observacoes,
-                    inline=False
-                )
+                embed_novo.add_field(name="📝 Observações", value=observacoes, inline=False)
 
             if grupo:
                 embed_novo.add_field(
@@ -4121,21 +4062,22 @@ class StatusView(discord.ui.View):
                 text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas} • ID: {self.entrega_id}"
             )
 
-            msg = await canal.send(embed=embed_novo, view=StatusView(entrega_id=self.entrega_id))
+            # Enviar nova entrega com botão habilitado
+            msg = await canal.send(embed=embed_novo, view=StatusView(entrega_id=self.entrega_id, total_entregas=total_entregas))
 
-            async with get_db().acquire() as conn4:
-                await atualizar_entrega_parcelada(
-                    entrega_id=self.entrega_id,
-                    entrega_atual=proxima_entrega_num,
-                    mensagem_id=str(msg.id),
-                    proxima_entrega=None
-                )
+            # Atualizar banco
+            await atualizar_entrega_parcelada(
+                entrega_id=self.entrega_id,
+                entrega_atual=proxima_entrega_num,
+                mensagem_id=str(msg.id),
+                proxima_entrega=None
+            )
 
             self.proxima_criada = True
             for child in self.children:
                 if child.custom_id == "criar_proxima_entrega":
                     child.disabled = True
-                    child.label = "✅ Próxima criada"
+                    child.label = f"✅ Próxima criada ({proxima_entrega_num}/{total_entregas})"
 
             await interaction.message.edit(view=self)
 
@@ -4169,15 +4111,8 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⚠️ Este pedido já foi cancelado.", ephemeral=True)
             return
 
-        # =========================================================
-        # ================= VERIFICAR SE JÁ FOI ENTREGUE ==========
-        # =========================================================
-        
-        # Verificar se tem linha de "✅ Entregue" no status
+        # Verificar se já foi entregue para reverter estoque
         if self.entrega_ja_foi_entregue(linhas):
-            # Se já foi entregue, precisamos reverter o estoque
-            
-            # Extrair quantidades do embed
             pacotes_pt = 0
             pacotes_sub = 0
             
@@ -4199,31 +4134,15 @@ class StatusView(discord.ui.View):
                     except:
                         pass
             
-            # =========================================================
-            # ================= REVERTER ESTOQUE =====================
-            # =========================================================
-            
             if pacotes_pt > 0 or pacotes_sub > 0:
                 titulo = embed.title
                 pedido_numero = int(titulo.split("#")[1]) if "#" in titulo else 0
                 
-                # Reverter: adicionar de volta ao estoque
                 if pacotes_pt > 0:
                     await atualizar_estoque("PT", pacotes_pt, "adicionar")
-                    print(f"🔄 Estoque PT reabastecido: +{pacotes_pt} pacotes (pedido #{pedido_numero} cancelado)")
-                
                 if pacotes_sub > 0:
                     await atualizar_estoque("SUB", pacotes_sub, "adicionar")
-                    print(f"🔄 Estoque SUB reabastecido: +{pacotes_sub} pacotes (pedido #{pedido_numero} cancelado)")
                 
-                # Registrar no banco a reversão
-                async with get_db().acquire() as conn:
-                    await conn.execute(
-                        "INSERT INTO saida_estoque (pedido_numero, tipo, pacotes, retirado_por, data, observacao) VALUES ($1, $2, $3, $4, $5, $6)",
-                        pedido_numero, "REVERSÃO", pacotes_pt + pacotes_sub, str(interaction.user.id), agora_db(), f"CANCELAMENTO - Reversão de estoque"
-                    )
-                
-                # Enviar notificação no canal do baú
                 canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
                 if canal_bau:
                     try:
@@ -4237,15 +4156,10 @@ class StatusView(discord.ui.View):
                         await canal_bau.send(texto)
                     except Exception as e:
                         print("Erro envio baú reversão:", e)
-        
-        # =========================================================
-        # ================= ATUALIZAR EMBED =======================
-        # =========================================================
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
         
-        # Verificar se já tinha "✅ Entregue" para adicionar informação de reversão
         if self.entrega_ja_foi_entregue(linhas):
             linhas = [f"❌ Pedido cancelado por {user} • {agora_str}\n🔄 **ESTOQUE REVERTIDO**"]
         else:
@@ -4255,19 +4169,12 @@ class StatusView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
         await responder_interacao(interaction, defer=True)
 
-        # =========================================================
-        # ================= FINALIZAR ENTREGAS ====================
-        # =========================================================
-
         if self.entrega_id:
             await finalizar_entregas(self.entrega_id)
 
-        # =========================================================
-        # ================= ATUALIZAR PAINÉIS =====================
-        # =========================================================
-
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
+
     @discord.ui.button(label="✏️ Editar Venda", style=discord.ButtonStyle.secondary, custom_id="status_editar_venda")
     async def editar(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
@@ -4276,7 +4183,6 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⚠️ Pedido cancelado não pode ser editado.", ephemeral=True)
             return
         await interaction.response.send_modal(EditarVendaModal(interaction.message))
-
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(
         label="Organização",
@@ -4292,6 +4198,11 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         label="Quantidade SUB",
         placeholder="Digite a quantidade de munição SUB (ex: 16000)",
         required=True
+    )
+    total_entregas = discord.ui.TextInput(
+        label="Número de entregas",
+        placeholder="Ex: 2, 3, 4... (padrão: 1)",
+        required=False
     )
     observacoes = discord.ui.TextInput(
         label="Observações",
@@ -4321,6 +4232,14 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 ephemeral=True
             )
             return
+        
+        # Número de entregas (padrão: 1)
+        try:
+            total_entregas = int(self.total_entregas.value.strip()) if self.total_entregas.value else 1
+            if total_entregas < 1:
+                total_entregas = 1
+        except:
+            total_entregas = 1
         
         org_nome = self.organizacao.value.strip().upper()
         config = ORGANIZACOES_CONFIG.get(
@@ -4352,6 +4271,10 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         num_entregas = max(entregas_pt, entregas_sub)
         if num_entregas == 0:
             num_entregas = 1
+        
+        # Se o usuário especificou um número diferente, usar o maior
+        if total_entregas > num_entregas:
+            num_entregas = total_entregas
         
         # Construir lista de entregas com valores REAIS
         entregas_lista = []
@@ -4389,7 +4312,6 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         # =========================================================
         
         # SALVAR A LISTA COMPLETA DE ENTREGAS NO BANCO
-        # Usamos um campo JSON para salvar a lista real
         import json
         entregas_json = json.dumps(entregas_lista)
         
@@ -4404,12 +4326,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             numero_pedido
         )
         
-        valor_formatado = (
-            f"{total:,.2f}"
-            .replace(",", "X")
-            .replace(".", ",")
-            .replace("X", ".")
-        )
+        valor_formatado = formatar_dinheiro(total)
         
         # =========================================================
         # ================= INTEGRAÇÃO COM GRUPOS =================
@@ -4437,7 +4354,6 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         
         if num_entregas > 1:
             # Venda parcelada - salvar a PRIMEIRA entrega como referência
-            # E também salvar a lista completa em um campo separado
             primeira_entrega = entregas_lista[0]
             
             entrega_id = await salvar_entrega_parcelada(
@@ -4451,7 +4367,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 canal_id=str(CANAL_ENCOMENDAS_ID)
             )
             
-            # Salvar a lista completa de entregas em uma tabela separada
+            # Salvar a lista completa de entregas
             async with get_db().acquire() as conn:
                 await conn.execute(
                     "INSERT INTO entregas_detalhes (entrega_id, entregas_json) VALUES ($1, $2) ON CONFLICT (entrega_id) DO UPDATE SET entregas_json = $2",
