@@ -8657,7 +8657,6 @@ class GrupoView(discord.ui.View):
         super().__init__(timeout=None)
         self.grupo_id = grupo_id
         self.nome_org = nome_org
-        print(f"🔧 GrupoView criada: grupo_id={grupo_id}, nome_org={nome_org}")
     
     @discord.ui.button(
         label="✏️ Editar Grupo",
@@ -8667,8 +8666,6 @@ class GrupoView(discord.ui.View):
     )
     async def editar_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            print(f"🔧 Editando grupo: {self.grupo_id} - {self.nome_org}")
-            
             is_admin = interaction.user.guild_permissions.administrator
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             
@@ -8728,8 +8725,6 @@ class GrupoView(discord.ui.View):
     )
     async def excluir_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            print(f"🔧 Excluindo grupo: {self.grupo_id} - {self.nome_org}")
-            
             is_admin = interaction.user.guild_permissions.administrator
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             
@@ -8755,6 +8750,7 @@ class GrupoView(discord.ui.View):
                 await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
             except:
                 pass
+
 
 # =========================================================
 # ==================== VIEWS DE GRUPOS ====================
@@ -9113,179 +9109,6 @@ async def restaurar_grupos():
         print(f"❌ Erro ao restaurar grupos: {e}")
         import traceback
         traceback.print_exc()
-
-
-# =========================================================
-# ==================== COMANDOS DE GRUPOS ==================
-# =========================================================
-
-@bot.command(name="listar_grupos")
-async def cmd_listar_grupos(ctx):
-    """Lista todos os grupos cadastrados"""
-    
-    grupos = await carregar_grupos_db()
-    
-    if not grupos:
-        await ctx.send("📭 Nenhum grupo cadastrado.")
-        return
-    
-    embed = discord.Embed(
-        title="📋 GRUPOS CADASTRADOS",
-        description=f"Total: {len(grupos)} grupo(s)",
-        color=0x3498db
-    )
-    
-    for grupo in grupos:
-        compras = await carregar_compras_grupo_db(grupo["grupo_id"])
-        total_pt = compras.get("PT", {}).get("quantidade", 0)
-        total_sub = compras.get("SUB", {}).get("quantidade", 0)
-        
-        embed.add_field(
-            name=f"🏷️ {grupo['nome_org']}",
-            value=(
-                f"**👤 Líder:** {grupo['lider_nome']}\n"
-                f"**🔫 Produto:** {grupo['produto']}\n"
-                f"**📦 PT:** {fmt_num(total_pt)} pacotes\n"
-                f"**📦 SUB:** {fmt_num(total_sub)} pacotes"
-            ),
-            inline=False
-        )
-    
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="ver_grupo")
-async def cmd_ver_grupo(ctx, *, nome_org: str):
-    """Ver detalhes de um grupo específico"""
-    
-    grupos = await carregar_grupos_db()
-    
-    grupo_encontrado = None
-    for grupo in grupos:
-        if nome_org.lower() in grupo["nome_org"].lower():
-            grupo_encontrado = grupo
-            break
-    
-    if not grupo_encontrado:
-        await ctx.send(f"❌ Grupo **{nome_org}** não encontrado.")
-        return
-    
-    await enviar_embed_grupo(grupo_encontrado["grupo_id"])
-    await ctx.send(f"✅ Embed do grupo **{grupo_encontrado['nome_org']}** atualizado!")
-
-
-@bot.command(name="remover_grupo")
-async def cmd_remover_grupo(ctx, *, nome_org: str):
-    """Remove um grupo pelo nome (ADM apenas)"""
-    
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Apenas ADM podem usar este comando!")
-        return
-    
-    grupos = await carregar_grupos_db()
-    
-    grupo_encontrado = None
-    for grupo in grupos:
-        if nome_org.lower() in grupo["nome_org"].lower():
-            grupo_encontrado = grupo
-            break
-    
-    if not grupo_encontrado:
-        await ctx.send(f"❌ Grupo **{nome_org}** não encontrado.")
-        return
-    
-    await desativar_grupo_db(grupo_encontrado["grupo_id"])
-    
-    canal = ctx.guild.get_channel(CANAL_GRUPOS_ID)
-    if canal:
-        async for msg in canal.history(limit=50):
-            if msg.author == bot.user and msg.embeds:
-                for embed in msg.embeds:
-                    if embed.footer and grupo_encontrado["grupo_id"] in embed.footer.text:
-                        try:
-                            await msg.delete()
-                        except:
-                            pass
-    
-    await ctx.send(f"✅ Grupo **{grupo_encontrado['nome_org']}** removido com sucesso!")
-
-
-@bot.command(name="relatorio_grupos")
-async def cmd_relatorio_grupos(ctx):
-    """Gera um relatório completo de todos os grupos cadastrados"""
-    
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Apenas ADM podem usar este comando!")
-        return
-    
-    await ctx.send("📊 Gerando relatório...")
-    
-    try:
-        grupos = await carregar_grupos_db()
-        
-        if not grupos:
-            await ctx.send("📭 Nenhum grupo cadastrado.")
-            return
-        
-        import io
-        
-        relatorio = []
-        relatorio.append("=" * 80)
-        relatorio.append("RELATÓRIO COMPLETO DE GRUPOS CADASTRADOS")
-        relatorio.append("=" * 80)
-        relatorio.append(f"Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
-        relatorio.append(f"Total de grupos: {len(grupos)}")
-        relatorio.append("=" * 80)
-        relatorio.append("")
-        
-        for i, grupo in enumerate(grupos, 1):
-            compras = await carregar_compras_grupo_db(grupo["grupo_id"])
-            total_pt = compras.get("PT", {}).get("quantidade", 0)
-            total_sub = compras.get("SUB", {}).get("quantidade", 0)
-            
-            relatorio.append(f"{'=' * 80}")
-            relatorio.append(f"GRUPO #{i}")
-            relatorio.append(f"{'=' * 80}")
-            relatorio.append(f"ID: {grupo['grupo_id']}")
-            relatorio.append(f"Organização: {grupo['nome_org'].upper()}")
-            relatorio.append(f"")
-            relatorio.append(f"--- INFORMAÇÕES DO LÍDER ---")
-            relatorio.append(f"Nome: {grupo['lider_nome']}")
-            relatorio.append(f"Telefone: {grupo['lider_telefone']}")
-            relatorio.append(f"")
-            relatorio.append(f"--- INFORMAÇÕES DO BRAÇO ---")
-            relatorio.append(f"Nome: {grupo['braco_nome'] or 'Não informado'}")
-            relatorio.append(f"Telefone: {grupo['braco_telefone'] or 'Não informado'}")
-            relatorio.append(f"")
-            relatorio.append(f"--- PRODUTO ---")
-            relatorio.append(f"Produto fornecido: {grupo['produto']}")
-            relatorio.append(f"")
-            relatorio.append(f"--- HISTÓRICO DE COMPRAS ---")
-            relatorio.append(f"PT: {fmt_num(total_pt)} pacotes")
-            relatorio.append(f"SUB: {fmt_num(total_sub)} pacotes")
-            relatorio.append(f"Total: {fmt_num(total_pt + total_sub)} pacotes")
-            relatorio.append(f"")
-            relatorio.append(f"--- DATAS ---")
-            relatorio.append(f"Criado em: {grupo['data_criacao'].strftime('%d/%m/%Y %H:%M')}")
-            if grupo.get('data_atualizacao'):
-                relatorio.append(f"Atualizado em: {grupo['data_atualizacao'].strftime('%d/%m/%Y %H:%M')}")
-            relatorio.append(f"Status: ATIVO")
-            relatorio.append("")
-        
-        relatorio.append("=" * 80)
-        relatorio.append("FIM DO RELATÓRIO")
-        relatorio.append("=" * 80)
-        
-        texto = "\n".join(relatorio)
-        
-        await ctx.send(
-            "📊 **Relatório de Grupos**",
-            file=discord.File(io.StringIO(texto), filename=f"relatorio_grupos_{agora().strftime('%d%m%Y_%H%M')}.txt")
-        )
-        
-    except Exception as e:
-        await ctx.send(f"❌ Erro ao gerar relatório: {e}")
-        print(f"Erro ao gerar relatório: {e}")
         
 # =========================================================
 # ==================== ON_READY ===========================
