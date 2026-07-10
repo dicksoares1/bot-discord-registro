@@ -1752,28 +1752,104 @@ CACHE_LIVES_TTL = 120  # 2 minutos de cache
 # ============ CLASSE REGISTRO (MODAL E VIEWS) ============
 # =========================================================
 
-class RegistroModal(discord.ui.Modal, title="Registro de Entrada"):
-    nome = discord.ui.TextInput(label="Nome Completo")
-    passaporte = discord.ui.TextInput(label="Passaporte")
-    indicado = discord.ui.TextInput(label="Indicado por", required=False)
-    telefone = discord.ui.TextInput(label="Telefone In Game")
+class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
+    
+    passaporte = discord.ui.TextInput(
+        label="📋 Passaporte",
+        placeholder="Digite seu passaporte",
+        required=True
+    )
+    
+    nome = discord.ui.TextInput(
+        label="👤 Nome (igual está na cidade)",
+        placeholder="Ex: Rodrigo Santos",
+        required=True
+    )
+    
+    vulgo = discord.ui.TextInput(
+        label="🏷️ Vulgo (opcional)",
+        placeholder="Ex: Ruivo, Juca, Dreck, etc",
+        required=False
+    )
+    
+    telefone = discord.ui.TextInput(
+        label="📱 Telefone In Game",
+        placeholder="Ex: (11) 99999-9999",
+        required=True
+    )
+    
+    indicado = discord.ui.TextInput(
+        label="👤 Indicado por (opcional)",
+        placeholder="Nome de quem te indicou",
+        required=False
+    )
     
     async def on_submit(self, interaction: discord.Interaction):
+        
         membro = interaction.user
         guild = interaction.guild
         
-        await membro.edit(nick=f"{self.passaporte.value} - {self.nome.value}")
+        # =========================================================
+        # ================= FORMATAR NOME =========================
+        # =========================================================
         
-        view = TipoRegistroView(self.nome.value, self.passaporte.value, self.indicado.value, self.telefone.value)
-        await interaction.response.send_message("Selecione o tipo de entrada:", view=view, ephemeral=True)
-
+        def capitalizar_nome(texto):
+            if not texto:
+                return texto
+            palavras = texto.strip().split()
+            palavras_capitalizadas = []
+            for palavra in palavras:
+                if len(palavra) > 1:
+                    palavras_capitalizadas.append(palavra[0].upper() + palavra[1:].lower())
+                else:
+                    palavras_capitalizadas.append(palavra.upper())
+            return " ".join(palavras_capitalizadas)
+        
+        nome_formatado = capitalizar_nome(self.nome.value)
+        vulgo_formatado = capitalizar_nome(self.vulgo.value) if self.vulgo.value else None
+        
+        # =========================================================
+        # ================= ATUALIZAR NICK ========================
+        # =========================================================
+        
+        # 🔥 FORMATO: Passaporte - Nome | Vulgo
+        if vulgo_formatado:
+            nick = f"{self.passaporte.value} - {nome_formatado} | {vulgo_formatado}"
+        else:
+            nick = f"{self.passaporte.value} - {nome_formatado}"
+        
+        await membro.edit(nick=nick)
+        
+        # =========================================================
+        # ================= ABRIR SELECT ==========================
+        # =========================================================
+        
+        view = TipoRegistroView(
+            nome=nome_formatado,
+            passaporte=self.passaporte.value,
+            vulgo=vulgo_formatado,
+            telefone=self.telefone.value,
+            indicado=self.indicado.value if self.indicado.value else None
+        )
+        
+        await interaction.response.send_message(
+            "**Selecione o tipo de entrada:**\n\n"
+            f"📋 **Passaporte:** {self.passaporte.value}\n"
+            f"👤 **Nome:** {nome_formatado}\n"
+            f"🏷️ **Vulgo:** {vulgo_formatado or 'Não informado'}\n"
+            f"📱 **Telefone:** {self.telefone.value}\n"
+            f"👤 **Indicado por:** {self.indicado.value or 'Não informado'}",
+            view=view,
+            ephemeral=True
+        )
 
 class TipoRegistroSelect(discord.ui.Select):
-    def __init__(self, nome, passaporte, indicado, telefone):
+    def __init__(self, nome, passaporte, vulgo, telefone, indicado):
         self.nome = nome
         self.passaporte = passaporte
-        self.indicado = indicado
+        self.vulgo = vulgo
         self.telefone = telefone
+        self.indicado = indicado
         
         options = [
             discord.SelectOption(
@@ -1792,6 +1868,71 @@ class TipoRegistroSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        membro = interaction.user
+        
+        # Cargos
+        agregado = guild.get_role(AGREGADO_ROLE_ID)
+        amigos = guild.get_role(1309121290241704046)
+        convidado = guild.get_role(CONVIDADO_ROLE_ID)
+        em_registro = guild.get_role(EM_REGISTRO_ROLE_ID)
+        
+        escolha = self.values[0]
+        
+        # Remover cargo "Em Registro"
+        if em_registro:
+            await membro.remove_roles(em_registro)
+            print(f"✅ Cargo 'Em Registro' removido de {membro.name}")
+        
+        # Adicionar cargo selecionado
+        if escolha == "Membro da 442":
+            if agregado:
+                await membro.add_roles(agregado)
+                print(f"✅ Cargo 'Agregado' adicionado para {membro.name}")
+        elif escolha == "Amigo da 442":
+            if amigos:
+                await membro.add_roles(amigos)
+                print(f"✅ Cargo 'Amigos' adicionado para {membro.name}")
+        
+        # Remover cargo convidado (se tiver)
+        if convidado:
+            await membro.remove_roles(convidado)
+        
+        # =========================================================
+        # ================= ENVIAR LOG ===========================
+        # =========================================================
+        
+        canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
+        if canal_log:
+            embed = discord.Embed(
+                title="📋 Novo Registro",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.add_field(name="📋 Passaporte", value=self.passaporte, inline=False)
+            embed.add_field(name="👤 Nome", value=self.nome, inline=False)
+            embed.add_field(name="🏷️ Vulgo", value=self.vulgo or "Não informado", inline=False)
+            embed.add_field(name="📱 Telefone", value=self.telefone, inline=False)
+            embed.add_field(name="👤 Indicado por", value=self.indicado or "Não informado", inline=False)
+            embed.add_field(name="🎯 Tipo", value=escolha, inline=False)
+            embed.add_field(name="👤 Usuário", value=membro.mention, inline=False)
+            embed.set_footer(text=f"ID: {membro.id}")
+            await canal_log.send(embed=embed)
+        
+        # =========================================================
+        # ================= RESPOSTA ==============================
+        # =========================================================
+        
+        await interaction.response.send_message(
+            f"✅ **Registro concluído com sucesso!**\n\n"
+            f"📋 Você foi registrado como: **{escolha}**\n"
+            f"👤 Nome: {self.nome}\n"
+            f"🏷️ Vulgo: {self.vulgo or 'Não informado'}\n"
+            f"📱 Telefone: {self.telefone}",
+            ephemeral=True
         )
     
     async def callback(self, interaction: discord.Interaction):
@@ -1852,9 +1993,9 @@ class TipoRegistroSelect(discord.ui.Select):
 
 
 class TipoRegistroView(discord.ui.View):
-    def __init__(self, nome, passaporte, indicado, telefone):
+    def __init__(self, nome, passaporte, vulgo, telefone, indicado):
         super().__init__(timeout=300)
-        self.add_item(TipoRegistroSelect(nome, passaporte, indicado, telefone))
+        self.add_item(TipoRegistroSelect(nome, passaporte, vulgo, telefone, indicado))
 
 
 class RegistroView(discord.ui.View):
