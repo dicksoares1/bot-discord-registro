@@ -1812,7 +1812,6 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
         # ================= ATUALIZAR NICK ========================
         # =========================================================
         
-        # 🔥 FORMATO: Passaporte - Nome | Vulgo
         if vulgo_formatado:
             nick = f"{self.passaporte.value} - {nome_formatado} | {vulgo_formatado}"
         else:
@@ -1902,28 +1901,72 @@ class TipoRegistroSelect(discord.ui.Select):
             await membro.remove_roles(convidado)
         
         # =========================================================
-        # ================= ENVIAR LOG ===========================
+        # ================= EMBED DINÂMICO E BONITO ===============
         # =========================================================
         
         canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
         if canal_log:
+            
             embed = discord.Embed(
-                title="📋 Novo Registro",
+                title="🎉 NOVO MEMBRO REGISTRADO!",
+                description=f"**{membro.mention}** acabou de se registrar na **Vida Rasa**!",
                 color=0x2ecc71,
                 timestamp=agora()
             )
-            embed.add_field(name="📋 Passaporte", value=self.passaporte, inline=False)
-            embed.add_field(name="👤 Nome", value=self.nome, inline=False)
-            embed.add_field(name="🏷️ Vulgo", value=self.vulgo or "Não informado", inline=False)
-            embed.add_field(name="📱 Telefone", value=self.telefone, inline=False)
-            embed.add_field(name="👤 Indicado por", value=self.indicado or "Não informado", inline=False)
-            embed.add_field(name="🎯 Tipo", value=escolha, inline=False)
-            embed.add_field(name="👤 Usuário", value=membro.mention, inline=False)
-            embed.set_footer(text=f"ID: {membro.id}")
+            
+            if membro.display_avatar:
+                embed.set_thumbnail(url=membro.display_avatar.url)
+            
+            embed.set_author(
+                name=membro.display_name,
+                icon_url=membro.display_avatar.url if membro.display_avatar else None
+            )
+            
+            informacoes = (
+                f"**📋 Passaporte:** `{self.passaporte}`\n"
+                f"**👤 Nome:** {self.nome}\n"
+                f"**🏷️ Vulgo:** {self.vulgo or '❌ Não informado'}\n"
+                f"**📱 Telefone:** {self.telefone}\n"
+                f"**👤 Indicado por:** {self.indicado or '❌ Não informado'}\n"
+                f"**🎯 Tipo:** {escolha}"
+            )
+            
+            embed.add_field(
+                name="📋 INFORMAÇÕES DO MEMBRO",
+                value=informacoes,
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📌 STATUS",
+                value=(
+                    f"✅ **Registro concluído**\n"
+                    f"🔹 Cargo atribuído: **{escolha}**\n"
+                    f"🆔 ID: `{membro.id}`"
+                ),
+                inline=False
+            )
+            
+            if escolha == "Membro da 442":
+                cargo_emoji = "🕴️"
+            else:
+                cargo_emoji = "🤝"
+            
+            embed.add_field(
+                name="🎯 CARGO ATRIBUÍDO",
+                value=f"{cargo_emoji} **{escolha}**",
+                inline=False
+            )
+            
+            embed.set_footer(
+                text=f"Registro realizado com sucesso • Sistema Automático",
+                icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
+            )
+            
             await canal_log.send(embed=embed)
         
         # =========================================================
-        # ================= RESPOSTA ==============================
+        # ================= RESPOSTA AO USUÁRIO ===================
         # =========================================================
         
         await interaction.response.send_message(
@@ -1934,63 +1977,6 @@ class TipoRegistroSelect(discord.ui.Select):
             f"📱 Telefone: {self.telefone}",
             ephemeral=True
         )
-    
-    async def callback(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        membro = interaction.user
-        
-        # Cargos
-        agregado = guild.get_role(AGREGADO_ROLE_ID)
-        amigos = guild.get_role(1309121290241704046)
-        convidado = guild.get_role(CONVIDADO_ROLE_ID)
-        em_registro = guild.get_role(EM_REGISTRO_ROLE_ID)
-        
-        escolha = self.values[0]
-        
-        # Remover cargo "Em Registro"
-        if em_registro:
-            await membro.remove_roles(em_registro)
-            print(f"✅ Cargo 'Em Registro' removido de {membro.name}")
-        
-        # Adicionar cargo selecionado
-        if escolha == "Membro da 442":
-            if agregado:
-                await membro.add_roles(agregado)
-                print(f"✅ Cargo 'Agregado' adicionado para {membro.name}")
-        elif escolha == "Amigo da 442":
-            if amigos:
-                await membro.add_roles(amigos)
-                print(f"✅ Cargo 'Amigos' adicionado para {membro.name}")
-        
-        # Remover cargo convidado (se tiver)
-        if convidado:
-            await membro.remove_roles(convidado)
-        
-        # Enviar log
-        canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
-        if canal_log:
-            embed = discord.Embed(
-                title="📋 Novo Registro",
-                color=0x2ecc71,
-                timestamp=agora()
-            )
-            embed.add_field(name="Nome", value=self.nome, inline=False)
-            embed.add_field(name="Passaporte", value=self.passaporte, inline=False)
-            embed.add_field(name="Indicado por", value=self.indicado or "Não informado", inline=False)
-            embed.add_field(name="Telefone", value=self.telefone, inline=False)
-            embed.add_field(name="Tipo", value=escolha, inline=False)
-            embed.add_field(name="Usuário", value=membro.mention, inline=False)
-            embed.set_footer(text=f"ID: {membro.id}")
-            await canal_log.send(embed=embed)
-        
-        await interaction.response.send_message(
-            f"✅ **Registro concluído com sucesso!**\n\n"
-            f"📋 Você foi registrado como: **{escolha}**\n"
-            f"👤 Nome: {self.nome}\n"
-            f"📱 Telefone: {self.telefone}",
-            ephemeral=True
-        )
-
 
 class TipoRegistroView(discord.ui.View):
     def __init__(self, nome, passaporte, vulgo, telefone, indicado):
