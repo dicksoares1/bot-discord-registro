@@ -9761,6 +9761,7 @@ class SelecionarMensagemView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
         
+        # Botão 1 - Pedido Pronto (SUCESSO = verde)
         self.add_item(discord.ui.Button(
             label="📦 Pedido Pronto",
             style=discord.ButtonStyle.success,
@@ -9768,6 +9769,8 @@ class SelecionarMensagemView(discord.ui.View):
             emoji="📦",
             row=0
         ))
+        
+        # Botão 2 - Pedido Cancelado (DANGER = vermelho)
         self.add_item(discord.ui.Button(
             label="❌ Pedido Cancelado",
             style=discord.ButtonStyle.danger,
@@ -9775,6 +9778,8 @@ class SelecionarMensagemView(discord.ui.View):
             emoji="❌",
             row=0
         ))
+        
+        # Botão 3 - Pedido Finalizado (SUCESSO = verde)
         self.add_item(discord.ui.Button(
             label="✅ Pedido Finalizado",
             style=discord.ButtonStyle.success,
@@ -9782,13 +9787,18 @@ class SelecionarMensagemView(discord.ui.View):
             emoji="✅",
             row=0
         ))
+        
+        # Botão 4 - Pendência de Pagamento (PRIMARY = azul) 
+        # (mudei de warning para primary)
         self.add_item(discord.ui.Button(
             label="💰 Pendência de Pagamento",
-            style=discord.ButtonStyle.warning,
+            style=discord.ButtonStyle.primary,
             custom_id="msg_pendencia_pagamento",
             emoji="💰",
             row=1
         ))
+        
+        # Botão 5 - Pagamento Pendente (PRIMARY = azul)
         self.add_item(discord.ui.Button(
             label="⚠️ Pagamento Pendente",
             style=discord.ButtonStyle.primary,
@@ -9796,6 +9806,8 @@ class SelecionarMensagemView(discord.ui.View):
             emoji="⚠️",
             row=1
         ))
+        
+        # Botão 6 - Fechar (SECONDARY = cinza)
         self.add_item(discord.ui.Button(
             label="❌ Fechar",
             style=discord.ButtonStyle.secondary,
