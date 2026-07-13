@@ -3924,40 +3924,6 @@ async def cmd_historico_metas(ctx, data_inicio: str = None, data_fim: str = None
     await ctx.send(embed=embed)
 
 
-@bot.command(name="resetar_meta")
-async def cmd_resetar_meta(ctx, member: discord.Member = None):
-    """Reseta a meta de um usuário (remove do banco) (ADM apenas)"""
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Apenas ADM podem usar este comando!")
-        return
-    
-    if not member:
-        await ctx.send("❌ Use: !resetar_meta @membro")
-        return
-    
-    await ctx.send(f"🔄 Resetando meta de {member.display_name}...")
-    
-    try:
-        async with get_db().acquire() as conn:
-            await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
-        
-        if str(member.id) in metas_cache:
-            del metas_cache[str(member.id)]
-        
-        cargo_agregado = ctx.guild.get_role(AGREGADO_ROLE_ID)
-        if cargo_agregado and cargo_agregado in member.roles:
-            await member.remove_roles(cargo_agregado)
-            await asyncio.sleep(1)
-            await member.add_roles(cargo_agregado)
-            await ctx.send(f"✅ Cargo removido e readicionado para forçar recriação!")
-        
-        await ctx.send(f"✅ Meta de {member.display_name} resetada! A sala será recriada em breve.")
-        
-    except Exception as e:
-        await ctx.send(f"❌ Erro: {e}")
-        print(f"Erro ao resetar meta: {e}")
-
-
 async def fixar_painel_meta_no_final(user_id):
     """Garante que o painel de meta seja a última mensagem do canal"""
     try:
