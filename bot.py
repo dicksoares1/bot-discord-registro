@@ -1901,10 +1901,12 @@ class TipoRegistroSelect(discord.ui.Select):
             await membro.remove_roles(convidado)
         
         # =========================================================
-        # ================= EMBED DINÂMICO E BONITO ===============
+        # ================= ENVIAR EMBED PARA O HISTÓRICO =========
         # =========================================================
         
+        # 🔥 CANAL DE HISTÓRICO (LOG)
         canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
+        
         if canal_log:
             
             embed = discord.Embed(
@@ -1914,6 +1916,7 @@ class TipoRegistroSelect(discord.ui.Select):
                 timestamp=agora()
             )
             
+            # Thumbnail do usuário
             if membro.display_avatar:
                 embed.set_thumbnail(url=membro.display_avatar.url)
             
@@ -1922,6 +1925,7 @@ class TipoRegistroSelect(discord.ui.Select):
                 icon_url=membro.display_avatar.url if membro.display_avatar else None
             )
             
+            # Informações do Membro
             informacoes = (
                 f"**📋 Passaporte:** `{self.passaporte}`\n"
                 f"**👤 Nome:** {self.nome}\n"
@@ -1937,6 +1941,7 @@ class TipoRegistroSelect(discord.ui.Select):
                 inline=False
             )
             
+            # Status
             embed.add_field(
                 name="📌 STATUS",
                 value=(
@@ -1947,6 +1952,7 @@ class TipoRegistroSelect(discord.ui.Select):
                 inline=False
             )
             
+            # Cargo atribuído
             if escolha == "Membro da 442":
                 cargo_emoji = "🕴️"
             else:
@@ -1958,12 +1964,18 @@ class TipoRegistroSelect(discord.ui.Select):
                 inline=False
             )
             
+            # Footer
             embed.set_footer(
                 text=f"Registro realizado com sucesso • Sistema Automático",
                 icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
             )
             
+            # 🔥 ENVIAR PARA O CANAL DE HISTÓRICO
             await canal_log.send(embed=embed)
+            print(f"✅ Embed de registro enviado para o canal de histórico")
+        
+        else:
+            print(f"❌ Canal de histórico NÃO ENCONTRADO! ID: {CANAL_LOG_REGISTRO_ID}")
         
         # =========================================================
         # ================= RESPOSTA AO USUÁRIO ===================
@@ -1977,12 +1989,10 @@ class TipoRegistroSelect(discord.ui.Select):
             f"📱 Telefone: {self.telefone}",
             ephemeral=True
         )
-
 class TipoRegistroView(discord.ui.View):
     def __init__(self, nome, passaporte, vulgo, telefone, indicado):
         super().__init__(timeout=300)
         self.add_item(TipoRegistroSelect(nome, passaporte, vulgo, telefone, indicado))
-
 
 class RegistroView(discord.ui.View):
     def __init__(self):
