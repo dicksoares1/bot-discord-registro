@@ -2984,11 +2984,12 @@ class MetaView(discord.ui.View):
         emoji="💣"
     )
     async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_dono = interaction.user.id == self.user_id
+        # 🔥 CORREÇÃO: Verificar se é o dono da sala (compara o ID corretamente)
+        is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
         if not is_dono and not is_gerente:
-            await interaction.response.send_message("❌ Apenas o dono ou gerentes podem adicionar pólvora!", ephemeral=True)
+            await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem adicionar pólvora!", ephemeral=True)
             return
         
         await interaction.response.send_modal(AdicionarPolvoraModal(self.user_id))
@@ -3000,29 +3001,12 @@ class MetaView(discord.ui.View):
         emoji="💰"
     )
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_dono = interaction.user.id == self.user_id
+        # 🔥 CORREÇÃO: Verificar se é o dono da sala (compara o ID corretamente)
+        is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
         if not is_dono and not is_gerente:
-            await interaction.response.send_message("❌ Apenas o dono ou gerentes podem adicionar dinheiro!", ephemeral=True)
-            return
-        
-        await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
-    
-    # 🔥 BOTÃO FECHAR META REMOVIDO
-    
-    @discord.ui.button(
-        label="💰 Adicionar Dinheiro Sujo",
-        style=discord.ButtonStyle.success,
-        custom_id="meta_adicionar_dinheiro",
-        emoji="💰"
-    )
-    async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_dono = interaction.user.id == self.user_id
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        
-        if not is_dono and not is_gerente:
-            await interaction.response.send_message("❌ Apenas o dono ou gerentes podem adicionar dinheiro!", ephemeral=True)
+            await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem adicionar dinheiro!", ephemeral=True)
             return
         
         await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
@@ -3034,15 +3018,15 @@ class MetaView(discord.ui.View):
         emoji="🔒"
     )
     async def fechar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_dono = interaction.user.id == self.user_id
+        # 🔥 CORREÇÃO: Verificar se é o dono da sala (compara o ID corretamente)
+        is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
         if not is_dono and not is_gerente:
-            await interaction.response.send_message("❌ Apenas o dono ou gerentes podem fechar a meta!", ephemeral=True)
+            await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem fechar a meta!", ephemeral=True)
             return
         
         await interaction.response.send_modal(FecharMetaModal(self.user_id))
-
 
 class RelatorioMetasButton(discord.ui.Button):
     def __init__(self):
