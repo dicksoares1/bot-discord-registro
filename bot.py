@@ -7308,7 +7308,11 @@ def calcular_barra_progresso(data_fim, dias_totais):
 
 
 class AluguelModal(discord.ui.Modal, title="💰 Alugar Galpão"):
-    dias = discord.ui.TextInput(label="Quantos dias de aluguel?", placeholder="Digite o número de dias (ex: 15, 30, 7)", required=True)
+    dias = discord.ui.TextInput(
+        label="Quantos dias de aluguel?",
+        placeholder="Digite o número de dias (ex: 15, 30, 7)",
+        required=True
+    )
     
     def __init__(self, galpao, editando=False, user_id=None):
         super().__init__()
@@ -7317,6 +7321,7 @@ class AluguelModal(discord.ui.Modal, title="💰 Alugar Galpão"):
         self.user_id = user_id
     
     async def on_submit(self, interaction: discord.Interaction):
+        
         await interaction.response.defer(ephemeral=True)
         
         try:
@@ -7329,20 +7334,71 @@ class AluguelModal(discord.ui.Modal, title="💰 Alugar Galpão"):
         
         data_fim = agora() + timedelta(days=dias_aluguel)
         
-        if self.editando:
-            await renovar_aluguel_db(self.galpao, self.user_id, data_fim.replace(tzinfo=None), dias_aluguel)
-            alugueis_ativos[self.galpao] = {"user_id": self.user_id, "fim": data_fim, "dias": dias_aluguel}
-            await interaction.followup.send(f"✅ **{self.galpao}** atualizado com sucesso!\n👤 **Alugado por:** <@{self.user_id}>\n📅 **Dias:** {dias_aluguel} dia(s)\n⏰ **Vence em:** {data_fim.strftime('%d/%m/%Y às %H:%M')}", ephemeral=True)
-        else:
-            if self.galpao in alugueis_ativos:
-                await interaction.followup.send(f"❌ **{self.galpao}** já está alugado!\n👤 Alugado por: <@{alugueis_ativos[self.galpao]['user_id']}>\n⏰ Vence em: {alugueis_ativos[self.galpao]['fim'].strftime('%d/%m/%Y às %H:%M')}", ephemeral=True)
-                return
-            
-            await salvar_aluguel_db(self.galpao, interaction.user.id, data_fim.replace(tzinfo=None), dias_aluguel)
-            alugueis_ativos[self.galpao] = {"user_id": interaction.user.id, "fim": data_fim, "dias": dias_aluguel}
-            await interaction.followup.send(f"✅ **{self.galpao}** alugado com sucesso!\n👤 **Alugado por:** {interaction.user.mention}\n📅 **Dias:** {dias_aluguel} dia(s)\n⏰ **Vence em:** {data_fim.strftime('%d/%m/%Y às %H:%M')}", ephemeral=True)
+        # =========================================================
+        # ================= VERIFICAR SE ESTÁ ALUGADO =============
+        # =========================================================
         
-        await enviar_painel_alugueis()
+        # 🔥 CORREÇÃO: Verificar se está alugado e se ainda não expirou
+        if self.galpao in alugueis_ativos:
+            dados = alugueis_ativos[self.galpao]
+            # Se ainda não expirou, não pode alugar
+            if agora() < dados["fim"]:
+                await interaction.followup.send(
+                    f"❌ **{self.galpao}** já está alugado!\n"
+                    f"👤 Alugado por: <@{dados['user_id']}>\n"
+                    f"⏰ Vence em: {dados['fim'].strftime('%d/%m/%Y às %H:%M')}",
+                    ephemeral=True
+                )
+                return
+        
+        # =========================================================
+        # ================= SALVAR ALUGUEL =========================
+        # =========================================================
+        
+        if self.editando:
+            # Editando aluguel existente
+            await renovar_aluguel_db(self.galpao, self.user_id, data_fim.replace(tzinfo=None), dias_aluguel)
+            
+            alugueis_ativos[self.galpao] = {
+                "user_id": self.user_id,
+                "fim": data_fim,
+                "dias": dias_aluguel
+            }
+            
+            await interaction.followup.send(
+                f"✅ **{self.galpao}** atualizado com sucesso!\n"
+                f"👤 **Alugado por:** <@{self.user_id}>\n"
+                f"📅 **Dias:** {dias_aluguel} dia(s)\n"
+                f"⏰ **Vence em:** {data_fim.strftime('%d/%m/%Y às %H:%M')}",
+                ephemeral=True
+            )
+        else:
+            # 🔥 CORREÇÃO: Se já expirou, permite realugar (remove o antigo)
+            if self.galpao in alugueis_ativos:
+                # Remove o aluguel expirado
+                del alugueis_ativos[self.galpao]
+                await desativar_aluguel_db(self.galpao)
+                print(f"🗑️ Aluguel expirado removido para realugar: {self.galpao}")
+            
+            # Salvar novo aluguel
+            await salvar_aluguel_db(self.galpao, interaction.user.id, data_fim.replace(tzinfo=None), dias_aluguel)
+            
+            alugueis_ativos[self.galpao] = {
+                "user_id": interaction.user.id,
+                "fim": data_fim,
+                "dias": dias_aluguel
+            }
+            
+            await interaction.followup.send(
+                f"✅ **{self.galpao}** alugado com sucesso!\n"
+                f"👤 **Alugado por:** {interaction.user.mention}\n"
+                f"📅 **Dias:** {dias_aluguel} dia(s)\n"
+                f"⏰ **Vence em:** {data_fim.strftime('%d/%m/%Y às %H:%M')}",
+                ephemeral=True
+            )
+        
+        # Atualizar o painel
+        await atualizar_painel_alugueis()
 
 
 class EditarAluguelModal(discord.ui.Modal, title="✏️ Editar Aluguel"):
@@ -7426,6 +7482,7 @@ async def atualizar_contagem_alugueis():
 
 @tasks.loop(minutes=5)
 async def verificar_alugueis_expirados():
+    """Verifica e remove aluguéis expirados (SEM ENVIAR MENSAGENS)"""
     agora_br = agora()
     expirou = False
     
@@ -7435,12 +7492,13 @@ async def verificar_alugueis_expirados():
             expirou = True
             print(f"⏰ Aluguel expirado: {galpao}")
             
-            canal = bot.get_channel(CANAL_FABRICACAO_ID)
-            if canal:
-                await canal.send(f"⚠️ **{galpao}** - O aluguel EXPIRou!\n👤 Dono: <@{dados['user_id']}>\n📅 Venceu em: {dados['fim'].strftime('%d/%m/%Y às %H:%M')}\n\n💰 O galpão está disponível para um novo aluguel!")
+            # 🔥 REMOVIDO: Não envia mais mensagem no canal
+            # canal = bot.get_channel(CANAL_FABRICACAO_ID)
+            # if canal:
+            #     await canal.send(f"⚠️ **{galpao}** - O aluguel EXPIRou!")
     
     if expirou:
-        await enviar_painel_alugueis()
+        await atualizar_painel_alugueis()
 
 
 
@@ -8365,6 +8423,8 @@ async def enviar_painel_remover_ausencia():
 
 
 async def enviar_painel_alugueis():
+    """Envia o painel com contagem regressiva dos aluguéis"""
+    
     canal = bot.get_channel(CANAL_FABRICACAO_ID)
     if not canal:
         print("❌ Canal de fabricação não encontrado")
@@ -8372,30 +8432,115 @@ async def enviar_painel_alugueis():
     
     await carregar_alugueis_db()
     
-    embed = discord.Embed(title="🏭💰 CONTROLE DE ALUGUEL - GALPÕES", description="**Contagem regressiva atualizada automaticamente**", color=0x3498db)
+    embed = discord.Embed(
+        title="🏭💰 CONTROLE DE ALUGUEL - GALPÕES",
+        description="**Contagem regressiva atualizada automaticamente**",
+        color=0x3498db
+    )
+    
     view = AluguelView()
     
+    # ===== GALPÃO NORTE =====
     if "GALPÕES NORTE" in alugueis_ativos:
         dados = alugueis_ativos["GALPÕES NORTE"]
         data_fim = dados["fim"]
-        barra_prog = calcular_barra_progresso(data_fim, dados["dias"])
-        embed.add_field(name="🏭 GALPÕES NORTE", value=f"**STATUS:** 🔵 ALUGADO\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n**👤 Alugado Por:** <@{dados['user_id']}>\n**📅 Dias alugados:** {dados['dias']} dia(s)\n**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n**🕐 TEMPO RESTANTE:**\n{formatar_tempo_detalhado(data_fim)}\n{barra_prog}", inline=False)
-        view.adicionar_botoes_edicao("GALPÕES NORTE", dados['user_id'], dados['dias'])
+        
+        # 🔥 VERIFICAR SE JÁ EXPIR0U
+        if agora() >= data_fim:
+            # Se expirou, mostrar como disponível
+            embed.add_field(
+                name="🏭 GALPÕES NORTE",
+                value=(
+                    f"**STATUS:** 🟢 DISPONÍVEL\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"**💰 Clique no botão abaixo para alugar**\n"
+                    f"**📅 Aluguel mínimo:** 1 dia"
+                ),
+                inline=False
+            )
+            # Remover do cache ativo
+            del alugueis_ativos["GALPÕES NORTE"]
+        else:
+            barra_prog = calcular_barra_progresso(data_fim, dados["dias"])
+            embed.add_field(
+                name="🏭 GALPÕES NORTE",
+                value=(
+                    f"**STATUS:** 🔵 ALUGADO\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"**👤 Alugado Por:** <@{dados['user_id']}>\n"
+                    f"**📅 Dias alugados:** {dados['dias']} dia(s)\n"
+                    f"**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n"
+                    f"**🕐 TEMPO RESTANTE:**\n"
+                    f"{formatar_tempo_detalhado(data_fim)}\n"
+                    f"{barra_prog}"
+                ),
+                inline=False
+            )
+            view.adicionar_botoes_edicao("GALPÕES NORTE", dados['user_id'], dados['dias'])
     else:
-        embed.add_field(name="🏭 GALPÕES NORTE", value=f"**STATUS:** 🟢 DISPONÍVEL\n━━━━━━━━━━━━━━━━━━━━\n**💰 Clique no botão abaixo para alugar**\n**📅 Aluguel mínimo:** 1 dia", inline=False)
+        embed.add_field(
+            name="🏭 GALPÕES NORTE",
+            value=(
+                f"**STATUS:** 🟢 DISPONÍVEL\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"**💰 Clique no botão abaixo para alugar**\n"
+                f"**📅 Aluguel mínimo:** 1 dia"
+            ),
+            inline=False
+        )
     
+    # ===== GALPÃO SUL =====
     if "GALPÕES SUL" in alugueis_ativos:
         dados = alugueis_ativos["GALPÕES SUL"]
         data_fim = dados["fim"]
-        barra_prog = calcular_barra_progresso(data_fim, dados["dias"])
-        embed.add_field(name="🏭 GALPÕES SUL", value=f"**STATUS:** 🔵 ALUGADO\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n**👤 Alugado Por:** <@{dados['user_id']}>\n**📅 Dias alugados:** {dados['dias']} dia(s)\n**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n**🕐 TEMPO RESTANTE:**\n{formatar_tempo_detalhado(data_fim)}\n{barra_prog}", inline=False)
-        view.adicionar_botoes_edicao("GALPÕES SUL", dados['user_id'], dados['dias'])
+        
+        # 🔥 VERIFICAR SE JÁ EXPIR0U
+        if agora() >= data_fim:
+            # Se expirou, mostrar como disponível
+            embed.add_field(
+                name="🏭 GALPÕES SUL",
+                value=(
+                    f"**STATUS:** 🟢 DISPONÍVEL\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"**💰 Clique no botão abaixo para alugar**\n"
+                    f"**📅 Aluguel mínimo:** 1 dia"
+                ),
+                inline=False
+            )
+            # Remover do cache ativo
+            del alugueis_ativos["GALPÕES SUL"]
+        else:
+            barra_prog = calcular_barra_progresso(data_fim, dados["dias"])
+            embed.add_field(
+                name="🏭 GALPÕES SUL",
+                value=(
+                    f"**STATUS:** 🔵 ALUGADO\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"**👤 Alugado Por:** <@{dados['user_id']}>\n"
+                    f"**📅 Dias alugados:** {dados['dias']} dia(s)\n"
+                    f"**⏰ Vence em:** <t:{int(data_fim.timestamp())}:F>\n"
+                    f"**🕐 TEMPO RESTANTE:**\n"
+                    f"{formatar_tempo_detalhado(data_fim)}\n"
+                    f"{barra_prog}"
+                ),
+                inline=False
+            )
+            view.adicionar_botoes_edicao("GALPÕES SUL", dados['user_id'], dados['dias'])
     else:
-        embed.add_field(name="🏭 GALPÕES SUL", value=f"**STATUS:** 🟢 DISPONÍVEL\n━━━━━━━━━━━━━━━━━━━━\n**💰 Clique no botão abaixo para alugar**\n**📅 Aluguel mínimo:** 1 dia", inline=False)
+        embed.add_field(
+            name="🏭 GALPÕES SUL",
+            value=(
+                f"**STATUS:** 🟢 DISPONÍVEL\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"**💰 Clique no botão abaixo para alugar**\n"
+                f"**📅 Aluguel mínimo:** 1 dia"
+            ),
+            inline=False
+        )
     
     embed.set_footer(text="⏱️ Atualiza automaticamente a cada minuto")
+    
     await enviar_ou_atualizar_painel("painel_alugueis", CANAL_FABRICACAO_ID, embed, view)
-
 
 def formatar_tempo_detalhado(data_fim):
     agora_br = agora()
