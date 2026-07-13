@@ -9788,11 +9788,10 @@ class SelecionarMensagemView(discord.ui.View):
             row=0
         ))
         
-        # Botão 4 - Pendência de Pagamento (PRIMARY = azul) 
-        # (mudei de warning para primary)
+        # Botão 4 - Pendência de Pagamento (PRIMARY = azul) - CORRIGIDO!
         self.add_item(discord.ui.Button(
             label="💰 Pendência de Pagamento",
-            style=discord.ButtonStyle.primary,
+            style=discord.ButtonStyle.primary,  # ← AQUI ERA O ERRO!
             custom_id="msg_pendencia_pagamento",
             emoji="💰",
             row=1
@@ -9850,6 +9849,47 @@ class SelecionarMensagemView(discord.ui.View):
             return
         modal = MensagemPedidoProntoModal(interaction.user)
         await interaction.response.send_modal(modal)
+    
+    async def handle_pedido_cancelado(self, interaction: discord.Interaction):
+        if interaction.user.id in mensagens_em_andamento:
+            await interaction.response.send_message(
+                "⚠️ Você já tem uma mensagem em andamento! Finalize ou cancele a anterior.",
+                ephemeral=True
+            )
+            return
+        modal = MensagemPedidoCanceladoModal()
+        await interaction.response.send_modal(modal)
+    
+    async def handle_pedido_finalizado(self, interaction: discord.Interaction):
+        if interaction.user.id in mensagens_em_andamento:
+            await interaction.response.send_message(
+                "⚠️ Você já tem uma mensagem em andamento! Finalize ou cancele a anterior.",
+                ephemeral=True
+            )
+            return
+        modal = MensagemPedidoFinalizadoModal()
+        await interaction.response.send_modal(modal)
+    
+    async def handle_pendencia_pagamento(self, interaction: discord.Interaction):
+        if interaction.user.id in mensagens_em_andamento:
+            await interaction.response.send_message(
+                "⚠️ Você já tem uma mensagem em andamento! Finalize ou cancele a anterior.",
+                ephemeral=True
+            )
+            return
+        modal = MensagemPendenciaPagamentoModal()
+        await interaction.response.send_modal(modal)
+    
+    async def handle_pagamento_pendente(self, interaction: discord.Interaction):
+        if interaction.user.id in mensagens_em_andamento:
+            await interaction.response.send_message(
+                "⚠️ Você já tem uma mensagem em andamento! Finalize ou cancele a anterior.",
+                ephemeral=True
+            )
+            return
+        modal = MensagemPagamentoPendenteModal(interaction.user)
+        await interaction.response.send_modal(modal)
+
     
     async def handle_pedido_cancelado(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
