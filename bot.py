@@ -2369,7 +2369,8 @@ async def criar_sala_meta(member: discord.Member):
                     "canal_id": canal.id,
                     "dinheiro": 0,
                     "polvora": 0,
-                    "acao": None
+                    "acao": None,
+                    "dinheiro_acoes": 0
                 }
             await atualizar_embed_meta(member.id)
             return canal
@@ -2398,7 +2399,8 @@ async def criar_sala_meta(member: discord.Member):
                 "canal_id": canal_id,
                 "dinheiro": meta_existente["dinheiro"],
                 "polvora": meta_existente["polvora"],
-                "acao": meta_existente["acao"]
+                "acao": meta_existente["acao"],
+                "dinheiro_acoes": meta_existente.get("dinheiro_acoes") or 0
             }
             await atualizar_embed_meta(member.id)
             return canal_existe
@@ -2424,7 +2426,8 @@ async def criar_sala_meta(member: discord.Member):
             "canal_id": canal_encontrado.id,
             "dinheiro": 0,
             "polvora": 0,
-            "acao": None
+            "acao": None,
+            "dinheiro_acoes": 0
         }
         await atualizar_embed_meta(member.id)
         return canal_encontrado
@@ -2472,7 +2475,8 @@ async def criar_sala_meta(member: discord.Member):
         "canal_id": canal.id,
         "dinheiro": 0,
         "polvora": 0,
-        "acao": None
+        "acao": None,
+        "dinheiro_acoes": 0
     }
     
     await asyncio.sleep(1)
@@ -2668,6 +2672,82 @@ async def depositar_na_meta(user_id, valor, motivo):
             return False
 
 
+async def adicionar_polvora_meta(user_id, quantidade):
+    """Adiciona pólvora à meta do usuário"""
+    async with get_db().acquire() as conn:
+        meta = await conn.fetchrow("SELECT polvora FROM metas WHERE user_id = $1", str(user_id))
+        if meta:
+            novo_valor = meta["polvora"] + quantidade
+            await conn.execute("UPDATE metas SET polvora = $1 WHERE user_id = $2", novo_valor, str(user_id))
+            return True
+        return False
+
+
+async def adicionar_dinheiro_meta(user_id, valor):
+    """Adiciona dinheiro à meta do usuário"""
+    async with get_db().acquire() as conn:
+        meta = await conn.fetchrow("SELECT dinheiro FROM metas WHERE user_id = $1", str(user_id))
+        if meta:
+            novo_valor = meta["dinheiro"] + valor
+            await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_valor, str(user_id))
+            return True
+        return False
+
+
+async def fechar_meta(user_id, data_inicio, data_fim):
+    """Fecha uma meta e registra no histórico"""
+    async with get_db().acquire() as conn:
+        meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
+        if not meta:
+            return None
+        
+        acao = meta.get("acao")
+        if acao is None:
+            acao = "N/A"
+        else:
+            acao = str(acao)
+        
+        await conn.execute(
+            """
+            INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            str(user_id), 
+            meta["dinheiro"], 
+            meta["polvora"], 
+            acao,
+            meta.get("dinheiro_acoes") or 0,
+            data_inicio, 
+            data_fim, 
+            agora_db()
+        )
+        
+        await conn.execute(
+            "UPDATE metas SET dinheiro = 0, polvora = 0, dinheiro_acoes = 0 WHERE user_id = $1",
+            str(user_id)
+        )
+        
+        return {
+            "dinheiro": meta["dinheiro"],
+            "polvora": meta["polvora"],
+            "acao": acao,
+            "dinheiro_acoes": meta.get("dinheiro_acoes") or 0
+        }
+
+
+async def buscar_historico_metas(data_inicio, data_fim):
+    """Busca histórico de metas fechadas no período"""
+    async with get_db().acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT * FROM metas_historico 
+            WHERE data_fechamento BETWEEN $1 AND $2
+            ORDER BY data_fechamento DESC
+            """,
+            data_inicio, data_fim
+        )
+
+
 async def fechar_todas_metas(data_inicio, data_fim):
     """Fecha todas as metas ativas e retorna o relatório"""
     async with get_db().acquire() as conn:
@@ -2776,12 +2856,33 @@ class AdicionarPolvoraModal(discord.ui.Modal, title="💣 Adicionar Pólvora"):
             await interaction.response.send_message("❌ Quantidade inválida!", ephemeral=True)
             return
         
+        # 🔥 VERIFICAR SE O USUÁRIO TEM META
+        async with get_db().acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+        
+        if not meta:
+            # 🔥 CRIAR A META AUTOMATICAMENTE
+            guild = interaction.guild
+            member = guild.get_member(int(self.user_id))
+            if member:
+                await criar_sala_meta(member)
+                await asyncio.sleep(1)
+                await carregar_metas_cache()
+            else:
+                await interaction.response.send_message(
+                    "❌ **Meta não encontrada!**\n\n"
+                    "💡 Clique em '➕ Criar Minha Sala' no canal de solicitar sala.",
+                    ephemeral=True
+                )
+                return
+        
         sucesso = await adicionar_polvora_meta(self.user_id, qtd)
         
         if not sucesso:
-            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
+            await interaction.response.send_message("❌ Erro ao adicionar pólvora!", ephemeral=True)
             return
         
+        await carregar_metas_cache()
         await atualizar_embed_meta(self.user_id)
         
         await interaction.response.send_message(
@@ -2810,12 +2911,33 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
             await interaction.response.send_message("❌ Valor inválido!", ephemeral=True)
             return
         
+        # 🔥 VERIFICAR SE O USUÁRIO TEM META
+        async with get_db().acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+        
+        if not meta:
+            # 🔥 CRIAR A META AUTOMATICAMENTE
+            guild = interaction.guild
+            member = guild.get_member(int(self.user_id))
+            if member:
+                await criar_sala_meta(member)
+                await asyncio.sleep(1)
+                await carregar_metas_cache()
+            else:
+                await interaction.response.send_message(
+                    "❌ **Meta não encontrada!**\n\n"
+                    "💡 Clique em '➕ Criar Minha Sala' no canal de solicitar sala.",
+                    ephemeral=True
+                )
+                return
+        
         sucesso = await adicionar_dinheiro_meta(self.user_id, valor)
         
         if not sucesso:
-            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
+            await interaction.response.send_message("❌ Erro ao adicionar dinheiro!", ephemeral=True)
             return
         
+        await carregar_metas_cache()
         await atualizar_embed_meta(self.user_id)
         
         await interaction.response.send_message(
@@ -2873,6 +2995,12 @@ class FecharMetaModal(discord.ui.Modal, title="🔒 Fechar Meta"):
         )
         
         embed.add_field(
+            name="🎯 Dinheiro Ações",
+            value=formatar_dinheiro(resultado["dinheiro_acoes"]),
+            inline=True
+        )
+        
+        embed.add_field(
             name="💣 Pólvora",
             value=f"{fmt_num(resultado['polvora'])} unidades",
             inline=True
@@ -2895,6 +3023,7 @@ class FecharMetaModal(discord.ui.Modal, title="🔒 Fechar Meta"):
         await interaction.followup.send(
             f"✅ **Meta fechada com sucesso!**\n\n"
             f"💰 Dinheiro: {formatar_dinheiro(resultado['dinheiro'])}\n"
+            f"🎯 Ações: {formatar_dinheiro(resultado['dinheiro_acoes'])}\n"
             f"💣 Pólvora: {fmt_num(resultado['polvora'])} unidades",
             ephemeral=True
         )
@@ -2935,6 +3064,7 @@ class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
         
         total_dinheiro = sum(r["dinheiro"] for r in historico)
         total_polvora = sum(r["polvora"] for r in historico)
+        total_acoes = sum(r.get("dinheiro_acoes") or 0 for r in historico)
         
         embed = discord.Embed(
             title="📊 RELATÓRIO DE METAS",
@@ -2949,6 +3079,12 @@ class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
         )
         
         embed.add_field(
+            name="🎯 TOTAL DINHEIRO AÇÕES",
+            value=formatar_dinheiro(total_acoes),
+            inline=True
+        )
+        
+        embed.add_field(
             name="💣 TOTAL PÓLVORA",
             value=f"{fmt_num(total_polvora)} unidades",
             inline=True
@@ -2958,8 +3094,8 @@ class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
         for item in historico[:15]:
             user = await pegar_usuario(int(item["user_id"]))
             nome = user.display_name if user else f"ID: {item['user_id']}"
-            data_fim = item["data_fim"].strftime('%d/%m') if item["data_fim"] else "N/A"
-            lista += f"👤 {nome} - 💰 {formatar_dinheiro(item['dinheiro'])} - 💣 {fmt_num(item['polvora'])}\n"
+            total = item["dinheiro"] + (item.get("dinheiro_acoes") or 0)
+            lista += f"👤 {nome} - 💰 {formatar_dinheiro(total)} - 💣 {fmt_num(item['polvora'])}\n"
         
         if len(historico) > 15:
             lista += f"\n*... e mais {len(historico) - 15} registros*"
@@ -2994,13 +3130,39 @@ class MetaView(discord.ui.View):
         emoji="💣"
     )
     async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 CORREÇÃO: Verificar se é o dono da sala (compara o ID corretamente)
+        # 🔥 VERIFICAR SE É O DONO DA SALA (COMPARAÇÃO CORRETA)
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
         if not is_dono and not is_gerente:
             await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem adicionar pólvora!", ephemeral=True)
             return
+        
+        # 🔥 VERIFICAR SE O USUÁRIO TEM META
+        async with get_db().acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+        
+        if not meta:
+            # 🔥 CRIAR A META AUTOMATICAMENTE
+            guild = interaction.guild
+            member = guild.get_member(int(self.user_id))
+            if member:
+                await criar_sala_meta(member)
+                await asyncio.sleep(1)
+                await carregar_metas_cache()
+                await interaction.response.send_message(
+                    "✅ **Meta criada automaticamente!**\n"
+                    "💡 Tente novamente agora.",
+                    ephemeral=True
+                )
+                return
+            else:
+                await interaction.response.send_message(
+                    "❌ **Meta não encontrada!**\n\n"
+                    "💡 Clique em '➕ Criar Minha Sala' no canal de solicitar sala.",
+                    ephemeral=True
+                )
+                return
         
         await interaction.response.send_modal(AdicionarPolvoraModal(self.user_id))
     
@@ -3011,13 +3173,39 @@ class MetaView(discord.ui.View):
         emoji="💰"
     )
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 CORREÇÃO: Verificar se é o dono da sala (compara o ID corretamente)
+        # 🔥 VERIFICAR SE É O DONO DA SALA (COMPARAÇÃO CORRETA)
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
         if not is_dono and not is_gerente:
             await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem adicionar dinheiro!", ephemeral=True)
             return
+        
+        # 🔥 VERIFICAR SE O USUÁRIO TEM META
+        async with get_db().acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+        
+        if not meta:
+            # 🔥 CRIAR A META AUTOMATICAMENTE
+            guild = interaction.guild
+            member = guild.get_member(int(self.user_id))
+            if member:
+                await criar_sala_meta(member)
+                await asyncio.sleep(1)
+                await carregar_metas_cache()
+                await interaction.response.send_message(
+                    "✅ **Meta criada automaticamente!**\n"
+                    "💡 Tente novamente agora.",
+                    ephemeral=True
+                )
+                return
+            else:
+                await interaction.response.send_message(
+                    "❌ **Meta não encontrada!**\n\n"
+                    "💡 Clique em '➕ Criar Minha Sala' no canal de solicitar sala.",
+                    ephemeral=True
+                )
+                return
         
         await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
     
@@ -3028,7 +3216,7 @@ class MetaView(discord.ui.View):
         emoji="🔒"
     )
     async def fechar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 CORREÇÃO: Verificar se é o dono da sala (compara o ID corretamente)
+        # 🔥 VERIFICAR SE É O DONO DA SALA (COMPARAÇÃO CORRETA)
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
@@ -3037,6 +3225,7 @@ class MetaView(discord.ui.View):
             return
         
         await interaction.response.send_modal(FecharMetaModal(self.user_id))
+
 
 class RelatorioMetasButton(discord.ui.Button):
     def __init__(self):
@@ -3109,20 +3298,12 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
             total_dinheiro_acoes = sum(r["dinheiro_acoes"] for r in relatorio)
             total_geral = sum(r["total"] for r in relatorio)
             
-            # =========================================================
-            # ================= CRIAR EMBED PRINCIPAL =================
-            # =========================================================
-            
             embed = discord.Embed(
                 title="📊 RELATÓRIO SEMANAL - METAS FECHADAS",
                 description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}",
                 color=0x2ecc71,
                 timestamp=agora()
             )
-            
-            # =========================================================
-            # ================= RESUMO ================================
-            # =========================================================
             
             embed.add_field(
                 name="📊 RESUMO GERAL",
@@ -3138,18 +3319,10 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
                 inline=False
             )
             
-            # =========================================================
-            # ================= QUEM PAGOU ============================
-            # =========================================================
-            
             if relatorio:
                 pagaram = [r for r in relatorio if r["total"] > 0]
                 nao_pagaram = [r for r in relatorio if r["total"] == 0]
                 pagaram_ordenado = sorted(pagaram, key=lambda x: x["total"], reverse=True)
-                
-                # =========================================================
-                # ================= LISTA DE QUEM PAGOU ===================
-                # =========================================================
                 
                 if pagaram_ordenado:
                     lista_pagaram = ""
@@ -3188,10 +3361,6 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
                                 inline=False
                             )
                 
-                # =========================================================
-                # ================= QUEM NÃO PAGOU =======================
-                # =========================================================
-                
                 if nao_pagaram:
                     lista_nao_pagaram = ""
                     for i, item in enumerate(nao_pagaram, 1):
@@ -3204,10 +3373,6 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
                         value=lista_nao_pagaram[:1024] if lista_nao_pagaram else "Nenhum",
                         inline=False
                     )
-            
-            # =========================================================
-            # ================= MEMBROS SEM META ======================
-            # =========================================================
             
             if membros_sem_meta:
                 lista_sem_meta = ""
@@ -3222,10 +3387,6 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
                     value=lista_sem_meta[:1024] if lista_sem_meta else "Nenhum",
                     inline=False
                 )
-            
-            # =========================================================
-            # ================= RANKING DOS QUE MAIS PAGARAM ==========
-            # =========================================================
             
             if pagaram_ordenado and len(pagaram_ordenado) >= 3:
                 top3 = pagaram_ordenado[:3]
@@ -3245,10 +3406,6 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
             
             embed.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
             
-            # =========================================================
-            # ================= ENVIAR RELATÓRIO ======================
-            # =========================================================
-            
             canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
             if canal_resultados:
                 await canal_resultados.send(embed=embed)
@@ -3259,7 +3416,6 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
             else:
                 await interaction.followup.send(embed=embed, ephemeral=True)
             
-            # Atualizar painéis
             for uid in metas_cache.keys():
                 await atualizar_embed_meta(int(uid))
                 await asyncio.sleep(0.3)
@@ -3272,28 +3428,76 @@ class FecharTodasMetasModal(discord.ui.Modal, title="🔒 Fechar Metas Semanais"
             traceback.print_exc()
             await interaction.followup.send(f"❌ Erro ao fechar metas: {e}", ephemeral=True)
 
+
+class ZerarMetasButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="⚠️ Zerar Todas as Metas",
+            style=discord.ButtonStyle.danger,
+            custom_id="zerar_metas_btn_painel",
+            emoji="⚠️"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem zerar todas as metas!", ephemeral=True)
+            return
+        
+        view = ConfirmarZerarView()
+        await interaction.response.send_message(
+            "⚠️ **ATENÇÃO!** Você está prestes a zerar TODAS as metas.\n\n"
+            "Isso vai resetar o dinheiro e pólvora de TODOS os membros.\n"
+            "**Esta ação não pode ser desfeita!**\n\n"
+            "Clique em **'✅ Sim, zerar tudo'** para confirmar.",
+            view=view,
+            ephemeral=True
+        )
+
+
 # =========================================================
 # ==================== FUNÇÕES DE METAS ====================
 # =========================================================
 
+async def carregar_metas_cache():
+    """Recarrega o cache de metas do banco"""
+    global metas_cache
+    try:
+        rows = await carregar_metas_db()
+        metas_cache = {}
+        for r in rows:
+            metas_cache[str(r["user_id"])] = {
+                "canal_id": int(r["canal_id"]),
+                "dinheiro": r["dinheiro"],
+                "polvora": r["polvora"],
+                "acao": r["acao"],
+                "dinheiro_acoes": r.get("dinheiro_acoes") or 0
+            }
+        print(f"📊 Cache de metas recarregado: {len(metas_cache)} metas")
+        return True
+    except Exception as e:
+        print(f"❌ Erro ao recarregar cache de metas: {e}")
+        return False
+
+
 async def atualizar_embed_meta(user_id):
-    """Atualiza o embed da meta de um usuário - SEM DUPLICAÇÃO"""
+    """Atualiza o embed da meta de um usuário"""
     try:
         print(f"🔄 Atualizando meta de {user_id}...")
         
         if str(user_id) not in metas_cache:
             print(f"⚠️ Usuário {user_id} não está no cache, recarregando...")
-            rows = await carregar_metas_db()
-            for r in rows:
-                metas_cache[str(r["user_id"])] = {
-                    "canal_id": int(r["canal_id"]),
-                    "dinheiro": r["dinheiro"],
-                    "polvora": r["polvora"],
-                    "acao": r["acao"]
-                }
+            await carregar_metas_cache()
             
             if str(user_id) not in metas_cache:
-                print(f"❌ Usuário {user_id} ainda não tem meta")
+                print(f"❌ Usuário {user_id} não tem meta no cache")
+                guild = bot.get_guild(GUILD_ID)
+                member = guild.get_member(int(user_id))
+                if member:
+                    await criar_sala_meta(member)
+                    await carregar_metas_cache()
                 return
         
         dados = metas_cache[str(user_id)]
@@ -3314,11 +3518,20 @@ async def atualizar_embed_meta(user_id):
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
         
         if not meta:
-            print(f"❌ Meta de {user_id} não encontrada no banco")
+            print(f"❌ Meta de {user_id} não encontrada no banco, criando...")
             await salvar_meta_db(user_id, canal.id, 0, 0, 0)
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
             if not meta:
+                print(f"❌ Falha ao criar meta para {user_id}")
                 return
+            metas_cache[str(user_id)] = {
+                "canal_id": canal.id,
+                "dinheiro": 0,
+                "polvora": 0,
+                "acao": None,
+                "dinheiro_acoes": 0
+            }
+            print(f"✅ Meta criada para {user_id}")
         
         user = await pegar_usuario(user_id)
         nome = user.display_name if user else str(user_id)
@@ -3374,10 +3587,6 @@ async def atualizar_embed_meta(user_id):
         
         embed.set_footer(text=f"ID: {user_id}")
         
-        # =========================================================
-        # ================= DELETAR TODAS AS MENSAGENS DO BOT =====
-        # =========================================================
-        
         mensagens_deletadas = 0
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
@@ -3391,16 +3600,8 @@ async def atualizar_embed_meta(user_id):
         if mensagens_deletadas > 0:
             print(f"🗑️ {mensagens_deletadas} mensagens antigas deletadas de {canal.name}")
         
-        # =========================================================
-        # ================= ENVIAR UMA ÚNICA MENSAGEM =============
-        # =========================================================
-        
         await canal.send(embed=embed, view=MetaView(user_id))
         print(f"✅ Painel de meta criado para {nome} em {canal.name}")
-        
-        # =========================================================
-        # ================= VERIFICAR META CONCLUÍDA ==============
-        # =========================================================
         
         total = dinheiro_meta + dinheiro_acoes
         await verificar_meta_concluida(user_id, total)
@@ -3409,6 +3610,7 @@ async def atualizar_embed_meta(user_id):
         print(f"❌ Erro ao atualizar embed da meta: {e}")
         import traceback
         traceback.print_exc()
+
 
 async def enviar_painel_relatorio_metas():
     """Envia o painel para gerar relatório de metas e zerar metas"""
@@ -3462,34 +3664,6 @@ async def enviar_painel_relatorio_metas():
     )
     
     print("📊 Painel de gerenciamento de metas enviado")
-
-
-class ZerarMetasButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="⚠️ Zerar Todas as Metas",
-            style=discord.ButtonStyle.danger,
-            custom_id="zerar_metas_btn_painel",
-            emoji="⚠️"
-        )
-    
-    async def callback(self, interaction: discord.Interaction):
-        is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        
-        if not is_admin and not is_gerente:
-            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem zerar todas as metas!", ephemeral=True)
-            return
-        
-        view = ConfirmarZerarView()
-        await interaction.response.send_message(
-            "⚠️ **ATENÇÃO!** Você está prestes a zerar TODAS as metas.\n\n"
-            "Isso vai resetar o dinheiro e pólvora de TODOS os membros.\n"
-            "**Esta ação não pode ser desfeita!**\n\n"
-            "Clique em **'✅ Sim, zerar tudo'** para confirmar.",
-            view=view,
-            ephemeral=True
-        )
 
 
 # =========================================================
@@ -3659,6 +3833,142 @@ async def cmd_verificar_paineis_metas(ctx):
         print(f"Erro ao verificar painéis: {e}")
 
 
+@bot.command(name="forcar_painel_meta")
+async def cmd_forcar_painel_meta(ctx, member: discord.Member = None):
+    """Força a criação/atualização do painel de meta de um membro (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    if not member:
+        member = ctx.author
+    
+    await ctx.send(f"🔄 Forçando criação do painel para {member.display_name}...")
+    
+    try:
+        if str(member.id) not in metas_cache:
+            sala = await criar_sala_meta(member)
+            if sala:
+                await ctx.send(f"✅ Sala e painel criados para {member.display_name}!")
+            else:
+                await ctx.send(f"❌ Erro ao criar sala para {member.display_name}!")
+        else:
+            await atualizar_embed_meta(member.id)
+            await ctx.send(f"✅ Painel atualizado para {member.display_name}!")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro ao criar painel para {member.display_name}: {e}")
+
+
+@bot.command(name="historico_metas")
+async def cmd_historico_metas(ctx, data_inicio: str = None, data_fim: str = None):
+    """Mostra o histórico de metas fechadas de um período (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    if not data_inicio or not data_fim:
+        hoje = agora()
+        dias_para_segunda = hoje.weekday()
+        inicio_semana = hoje - timedelta(days=dias_para_segunda + 7)
+        fim_semana = inicio_semana + timedelta(days=6)
+        data_inicio = inicio_semana.strftime("%d/%m/%Y")
+        data_fim = fim_semana.strftime("%d/%m/%Y")
+        await ctx.send(f"📅 Buscando histórico da semana passada: {data_inicio} a {data_fim}")
+    
+    try:
+        inicio = datetime.strptime(data_inicio, "%d/%m/%Y")
+        fim = datetime.strptime(data_fim, "%d/%m/%Y")
+        inicio_dt = inicio.replace(hour=0, minute=0, second=0)
+        fim_dt = fim.replace(hour=23, minute=59, second=59)
+    except ValueError:
+        await ctx.send("❌ Formato de data inválido! Use DD/MM/AAAA")
+        return
+    
+    historico = await buscar_historico_metas(inicio_dt, fim_dt)
+    
+    if not historico:
+        await ctx.send(f"📭 Nenhuma meta fechada no período **{data_inicio}** a **{data_fim}**.")
+        return
+    
+    total_dinheiro = sum(r["dinheiro"] for r in historico)
+    total_acoes = sum(r.get("dinheiro_acoes") or 0 for r in historico)
+    total_polvora = sum(r["polvora"] for r in historico)
+    
+    embed = discord.Embed(
+        title="📊 HISTÓRICO DE METAS",
+        description=f"📅 **Período:** {data_inicio} até {data_fim}",
+        color=0x3498db
+    )
+    
+    embed.add_field(
+        name="💰 TOTAL DINHEIRO SUJO",
+        value=formatar_dinheiro(total_dinheiro),
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🎯 TOTAL DINHEIRO AÇÕES",
+        value=formatar_dinheiro(total_acoes),
+        inline=True
+    )
+    
+    embed.add_field(
+        name="💣 TOTAL PÓLVORA",
+        value=f"{fmt_num(total_polvora)} unidades",
+        inline=True
+    )
+    
+    lista = ""
+    for item in historico[:20]:
+        user = await pegar_usuario(int(item["user_id"]))
+        nome = user.display_name if user else f"ID: {item['user_id']}"
+        total = item["dinheiro"] + (item.get("dinheiro_acoes") or 0)
+        lista += f"👤 {nome} - 💰 {formatar_dinheiro(total)} - 💣 {fmt_num(item['polvora'])}\n"
+    
+    if len(historico) > 20:
+        lista += f"\n*... e mais {len(historico) - 20} registros*"
+    
+    embed.add_field(name="📋 METAS FECHADAS", value=lista, inline=False)
+    embed.set_footer(text=f"Total: {len(historico)} metas fechadas")
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="resetar_meta")
+async def cmd_resetar_meta(ctx, member: discord.Member = None):
+    """Reseta a meta de um usuário (remove do banco) (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    if not member:
+        await ctx.send("❌ Use: !resetar_meta @membro")
+        return
+    
+    await ctx.send(f"🔄 Resetando meta de {member.display_name}...")
+    
+    try:
+        async with get_db().acquire() as conn:
+            await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
+        
+        if str(member.id) in metas_cache:
+            del metas_cache[str(member.id)]
+        
+        cargo_agregado = ctx.guild.get_role(AGREGADO_ROLE_ID)
+        if cargo_agregado and cargo_agregado in member.roles:
+            await member.remove_roles(cargo_agregado)
+            await asyncio.sleep(1)
+            await member.add_roles(cargo_agregado)
+            await ctx.send(f"✅ Cargo removido e readicionado para forçar recriação!")
+        
+        await ctx.send(f"✅ Meta de {member.display_name} resetada! A sala será recriada em breve.")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro ao resetar meta: {e}")
+
 
 async def fixar_painel_meta_no_final(user_id):
     """Garante que o painel de meta seja a última mensagem do canal"""
@@ -3703,87 +4013,102 @@ async def fixar_painel_meta_no_final(user_id):
         print(f"❌ Erro ao fixar painel: {e}")
         import traceback
         traceback.print_exc()
-        
-@bot.command(name="historico_metas")
-async def cmd_historico_metas(ctx, data_inicio: str = None, data_fim: str = None):
-    """Mostra o histórico de metas fechadas de um período"""
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Apenas ADM podem usar este comando!")
-        return
-    
-    # Se não informar datas, pegar a semana passada
-    if not data_inicio or not data_fim:
-        hoje = agora()
-        # Semana passada: segunda à domingo
-        dias_para_segunda = hoje.weekday()  # 0=segunda, 6=domingo
-        inicio_semana = hoje - timedelta(days=dias_para_segunda + 7)
-        fim_semana = inicio_semana + timedelta(days=6)
-        
-        data_inicio = inicio_semana.strftime("%d/%m/%Y")
-        data_fim = fim_semana.strftime("%d/%m/%Y")
-        
-        await ctx.send(f"📅 Buscando histórico da semana passada: {data_inicio} a {data_fim}")
-    
-    try:
-        inicio = datetime.strptime(data_inicio, "%d/%m/%Y")
-        fim = datetime.strptime(data_fim, "%d/%m/%Y")
-        inicio_dt = inicio.replace(hour=0, minute=0, second=0)
-        fim_dt = fim.replace(hour=23, minute=59, second=59)
-    except ValueError:
-        await ctx.send("❌ Formato de data inválido! Use DD/MM/AAAA")
-        return
-    
-    # Buscar histórico
-    historico = await buscar_historico_metas(inicio_dt, fim_dt)
-    
-    if not historico:
-        await ctx.send(f"📭 Nenhuma meta fechada no período **{data_inicio}** a **{data_fim}**.")
-        return
-    
-    # Criar embed
-    total_dinheiro = sum(r["dinheiro"] for r in historico)
-    total_polvora = sum(r["polvora"] for r in historico)
-    total_acoes = sum(r.get("dinheiro_acoes") or 0 for r in historico)
-    
-    embed = discord.Embed(
-        title="📊 HISTÓRICO DE METAS",
-        description=f"📅 **Período:** {data_inicio} até {data_fim}",
-        color=0x3498db
-    )
-    
-    embed.add_field(
-        name="💰 TOTAL DINHEIRO SUJO",
-        value=formatar_dinheiro(total_dinheiro),
-        inline=True
-    )
-    
-    embed.add_field(
-        name="🎯 TOTAL DINHEIRO AÇÕES",
-        value=formatar_dinheiro(total_acoes),
-        inline=True
-    )
-    
-    embed.add_field(
-        name="💣 TOTAL PÓLVORA",
-        value=f"{fmt_num(total_polvora)} unidades",
-        inline=True
-    )
-    
-    lista = ""
-    for item in historico[:20]:
-        user = await pegar_usuario(int(item["user_id"]))
-        nome = user.display_name if user else f"ID: {item['user_id']}"
-        total = item["dinheiro"] + (item.get("dinheiro_acoes") or 0)
-        lista += f"👤 {nome} - 💰 {formatar_dinheiro(total)} - 💣 {fmt_num(item['polvora'])}\n"
-    
-    if len(historico) > 20:
-        lista += f"\n*... e mais {len(historico) - 20} registros*"
-    
-    embed.add_field(name="📋 METAS FECHADAS", value=lista, inline=False)
-    embed.set_footer(text=f"Total: {len(historico)} metas fechadas")
-    
-    await ctx.send(embed=embed)
 
+
+async def verificar_meta_concluida(user_id, valor_total):
+    """Verifica se a meta atingiu R$ 300.000 e envia aviso"""
+    if valor_total >= 300000:
+        async with get_db().acquire() as conn:
+            ja_avisado = await conn.fetchval(
+                "SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'concluida' AND data > NOW() - INTERVAL '1 day'",
+                str(user_id)
+            )
+            
+            if not ja_avisado:
+                await conn.execute(
+                    "INSERT INTO metas_avisos (user_id, tipo, data) VALUES ($1, 'concluida', $2)",
+                    str(user_id), agora_db()
+                )
+                
+                canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(user_id))
+                if canal_id:
+                    canal = bot.get_channel(int(canal_id))
+                    if canal:
+                        user = await pegar_usuario(user_id)
+                        embed = discord.Embed(
+                            title="🎉 META SEMANAL CONCLUÍDA!",
+                            description=f"{user.mention} **parabéns!** Sua meta semanal de **R$ 300.000,00** foi atingida! 🎉",
+                            color=0x2ecc71
+                        )
+                        embed.add_field(
+                            name="💰 Total atingido",
+                            value=formatar_dinheiro(valor_total),
+                            inline=True
+                        )
+                        embed.add_field(
+                            name="📅 Data",
+                            value=agora().strftime('%d/%m/%Y %H:%M'),
+                            inline=True
+                        )
+                        await canal.send(embed=embed)
+                        return True
+        return False
+    return False
+
+
+async def verificar_avisos_quarta():
+    """Verifica na quarta-feira se membros não fizeram depósitos"""
+    hoje = agora()
+    
+    if hoje.weekday() != 2:
+        return
+    
+    async with get_db().acquire() as conn:
+        metas = await conn.fetch("SELECT * FROM metas")
+        
+        for meta in metas:
+            user_id = meta["user_id"]
+            dinheiro = meta["dinheiro"] or 0
+            dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+            total = dinheiro + dinheiro_acoes
+            
+            if total == 0:
+                ja_avisado = await conn.fetchval(
+                    "SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'quarta' AND data::date = $2",
+                    str(user_id), hoje.date()
+                )
+                
+                if not ja_avisado:
+                    await conn.execute(
+                        "INSERT INTO metas_avisos (user_id, tipo, data) VALUES ($1, 'quarta', $2)",
+                        str(user_id), agora_db()
+                    )
+                    
+                    canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(user_id))
+                    if canal_id:
+                        canal = bot.get_channel(int(canal_id))
+                        if canal:
+                            user = await pegar_usuario(user_id)
+                            embed = discord.Embed(
+                                title="⚠️ AVISO DE META SEMANAL",
+                                description=f"{user.mention} **atenção!**",
+                                color=0xe74c3c
+                            )
+                            embed.add_field(
+                                name="📌 Você ainda NÃO fez nenhum depósito na sua meta esta semana!",
+                                value=(
+                                    "⏰ **Você tem até domingo para completar sua meta!**\n\n"
+                                    "⚠️ **Consequências:**\n"
+                                    "• Se NÃO fechar a meta: **REBAIXAMENTO** na facção\n"
+                                    "• Se atrasar 2 vezes: **REMOÇÃO** da facção\n\n"
+                                    "💪 **Corra atrás do prejuízo!**"
+                                ),
+                                inline=False
+                            )
+                            embed.set_footer(text="Meta semanal • Vida Rasa")
+                            await canal.send(embed=embed)
+                            return True
+    return False
 # =========================================================
 # ==================== SISTEMA DE VENDAS ===================
 # =========================================================
