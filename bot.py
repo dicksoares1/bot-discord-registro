@@ -2205,6 +2205,7 @@ async def on_message(message: discord.Message):
 # =========================================================
 
 @bot.event
+@bot.event
 async def on_member_update(before, after):
     """Quando o membro muda de cargo, atualiza a categoria da meta"""
     if after.bot:
@@ -2218,34 +2219,36 @@ async def on_member_update(before, after):
         await asyncio.sleep(2)
         print(f"🔵 {after.name} ganhou cargo de Agregado, criando sala...")
         
-        # Verificar se já tem meta
-        if str(after.id) in metas_cache:
-            # Verificar se o canal existe
-            dados = metas_cache[str(after.id)]
-            canal = after.guild.get_channel(dados["canal_id"])
-            
-            if not canal:
-                # Canal não existe, remover do cache
-                print(f"🗑️ Canal não existe para {after.name}, removendo do cache...")
-                del metas_cache[str(after.id)]
-                
-                # Remover do banco
-                async with get_db().acquire() as conn:
-                    await conn.execute("DELETE FROM metas WHERE user_id = $1", str(after.id))
+        # 🔥 VERIFICAR SE JÁ TEM META (MESMO SEM SALA)
+        async with get_db().acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(after.id))
         
-        # Criar sala
-        sala = await criar_sala_meta(after)
-        if sala:
-            print(f"✅ Sala criada para {after.name}")
+        # Se não tem meta, criar
+        if not meta:
+            sala = await criar_sala_meta(after)
+            if sala:
+                print(f"✅ Sala criada para {after.name}")
+            else:
+                print(f"❌ Erro ao criar sala para {after.name}")
         else:
-            print(f"❌ Erro ao criar sala para {after.name}")
+            # Se tem meta, verificar se o canal existe
+            canal = after.guild.get_channel(meta["canal_id"])
+            if not canal:
+                # Canal não existe, recriar
+                sala = await criar_sala_meta(after)
+                if sala:
+                    print(f"✅ Sala recriada para {after.name}")
+            else:
+                # Só atualizar o painel
+                await atualizar_embed_meta(after.id)
+                print(f"📊 Painel atualizado para {after.name}")
         
         return
     
     # Se tem meta, verificar se precisa atualizar a categoria
     if str(after.id) in metas_cache:
         await atualizar_categoria_meta(after)
-
+        
 @bot.command(name="forcar_painel_meta")
 async def cmd_forcar_painel_meta(ctx, member: discord.Member = None):
     """Força a criação/atualização do painel de meta de um membro (ADM apenas)"""
@@ -2359,42 +2362,20 @@ async def criar_sala_meta(member: discord.Member):
     
     print(f"🏗️ Criando sala para {member.display_name}...")
     
-    # Verificar se já existe um canal com esse nome
-    for canal in guild.text_channels:
-        if canal.name == nome_canal:
-            print(f"📁 Canal já existe: {canal.name}")
-            if str(member.id) not in metas_cache:
-                await salvar_meta_db(member.id, canal.id, 0, 0, 0)
-                metas_cache[str(member.id)] = {
-                    "canal_id": canal.id,
-                    "dinheiro": 0,
-                    "polvora": 0,
-                    "acao": None,
-                    "dinheiro_acoes": 0
-                }
-            await atualizar_embed_meta(member.id)
-            return canal
-    
-    # Buscar no banco se tem meta com canal que não existe mais
+    # 🔥 PRIMEIRO: VERIFICAR SE O MEMBRO JÁ TEM META NO BANCO
     async with get_db().acquire() as conn:
         meta_existente = await conn.fetchrow(
             "SELECT * FROM metas WHERE user_id = $1",
             str(member.id)
         )
     
+    # Se já tem meta no banco, só atualizar o painel
     if meta_existente:
         canal_id = int(meta_existente["canal_id"])
         canal_existe = guild.get_channel(canal_id)
         
-        if not canal_existe:
-            print(f"🗑️ Canal {canal_id} não existe mais, removendo meta do banco...")
-            async with get_db().acquire() as conn:
-                await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
-            if str(member.id) in metas_cache:
-                del metas_cache[str(member.id)]
-            print(f"✅ Meta antiga removida para {member.display_name}")
-        else:
-            print(f"📁 Canal existe: {canal_existe.name}")
+        if canal_existe:
+            print(f"📁 Meta já existe para {member.display_name}, atualizando painel...")
             metas_cache[str(member.id)] = {
                 "canal_id": canal_id,
                 "dinheiro": meta_existente["dinheiro"],
@@ -2404,35 +2385,33 @@ async def criar_sala_meta(member: discord.Member):
             }
             await atualizar_embed_meta(member.id)
             return canal_existe
+        else:
+            # Canal não existe mais, remover meta do banco
+            await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
+            if str(member.id) in metas_cache:
+                del metas_cache[str(member.id)]
     
-    # Procurar um canal existente que o membro já tenha acesso
-    canal_encontrado = None
-    for cat in guild.categories:
-        if not cat.name.lower().startswith("metas"):
-            continue
-        for c in cat.channels:
-            if not isinstance(c, discord.TextChannel):
-                continue
-            if c.overwrites_for(member).view_channel:
-                canal_encontrado = c
-                break
-        if canal_encontrado:
-            break
+    # 🔥 VERIFICAR SE O MEMBRO JÁ TEM UMA SALA (MESMO SEM META NO BANCO)
+    for canal in guild.text_channels:
+        if member.display_name.lower() in canal.name.lower() and "📁" in canal.name:
+            print(f"📁 Sala encontrada para {member.display_name}: {canal.name}")
+            
+            # 🔥 SALVAR A META NO BANCO AGORA!
+            await salvar_meta_db(member.id, canal.id, 0, 0, 0)
+            
+            metas_cache[str(member.id)] = {
+                "canal_id": canal.id,
+                "dinheiro": 0,
+                "polvora": 0,
+                "acao": None,
+                "dinheiro_acoes": 0
+            }
+            
+            await atualizar_embed_meta(member.id)
+            print(f"✅ Meta salva no banco para {member.display_name} usando sala existente!")
+            return canal
     
-    if canal_encontrado:
-        print(f"📁 Canal encontrado para {member.display_name}: {canal_encontrado.name}")
-        await salvar_meta_db(member.id, canal_encontrado.id, 0, 0, 0)
-        metas_cache[str(member.id)] = {
-            "canal_id": canal_encontrado.id,
-            "dinheiro": 0,
-            "polvora": 0,
-            "acao": None,
-            "dinheiro_acoes": 0
-        }
-        await atualizar_embed_meta(member.id)
-        return canal_encontrado
-    
-    # Se não encontrou, criar novo canal
+    # Se não encontrou sala, criar uma nova
     categoria_id = obter_categoria_meta(member)
     if not categoria_id:
         print(f"❌ Nenhuma categoria encontrada para {member.display_name}")
@@ -2469,6 +2448,7 @@ async def criar_sala_meta(member: discord.Member):
     
     print(f"✅ Canal criado: {canal.name} (ID: {canal.id})")
     
+    # 🔥 SALVAR A META NO BANCO IMEDIATAMENTE
     await salvar_meta_db(member.id, canal.id, 0, 0, 0)
     
     metas_cache[str(member.id)] = {
@@ -2957,6 +2937,7 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
             ephemeral=True
         )
 
+
 class FecharMetaModal(discord.ui.Modal, title="🔒 Fechar Meta"):
     data_inicio = discord.ui.TextInput(
         label="📅 Data de INÍCIO da meta",
@@ -3141,7 +3122,7 @@ class MetaView(discord.ui.View):
         emoji="💣"
     )
     async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 VERIFICAR SE É O DONO DA SALA (COMPARAÇÃO CORRETA)
+        # 🔥 VERIFICAR SE É O DONO DA SALA
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
@@ -3184,7 +3165,7 @@ class MetaView(discord.ui.View):
         emoji="💰"
     )
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 VERIFICAR SE É O DONO DA SALA (COMPARAÇÃO CORRETA)
+        # 🔥 VERIFICAR SE É O DONO DA SALA
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
@@ -3227,7 +3208,7 @@ class MetaView(discord.ui.View):
         emoji="🔒"
     )
     async def fechar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 VERIFICAR SE É O DONO DA SALA (COMPARAÇÃO CORRETA)
+        # 🔥 VERIFICAR SE É O DONO DA SALA
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
@@ -3678,8 +3659,64 @@ async def enviar_painel_relatorio_metas():
 
 
 # =========================================================
-# ==================== COMANDOS DE METAS ==================
+# ==================== COMANDOS DE METAS ===================
 # =========================================================
+
+@bot.command(name="forcar_meta")
+async def cmd_forcar_meta(ctx, member: discord.Member = None):
+    """Força a criação da meta no banco para um membro que já tem sala (ADM apenas)"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Apenas ADM podem usar este comando!")
+        return
+    
+    if not member:
+        member = ctx.author
+    
+    await ctx.send(f"🔄 Forçando criação da meta para {member.display_name}...")
+    
+    try:
+        # Verificar se o membro já tem meta no banco
+        async with get_db().acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(member.id))
+        
+        if meta:
+            await ctx.send(f"✅ {member.display_name} já tem meta no banco! (ID: {meta['canal_id']})")
+            await atualizar_embed_meta(member.id)
+            return
+        
+        # Procurar uma sala existente
+        sala_encontrada = None
+        for canal in ctx.guild.text_channels:
+            if member.display_name.lower() in canal.name.lower() and "📁" in canal.name:
+                sala_encontrada = canal
+                break
+        
+        if sala_encontrada:
+            # Salvar meta no banco
+            await salvar_meta_db(member.id, sala_encontrada.id, 0, 0, 0)
+            
+            metas_cache[str(member.id)] = {
+                "canal_id": sala_encontrada.id,
+                "dinheiro": 0,
+                "polvora": 0,
+                "acao": None,
+                "dinheiro_acoes": 0
+            }
+            
+            await atualizar_embed_meta(member.id)
+            await ctx.send(f"✅ Meta criada para {member.display_name} usando sala existente: {sala_encontrada.mention}")
+        else:
+            # Criar sala
+            sala = await criar_sala_meta(member)
+            if sala:
+                await ctx.send(f"✅ Sala e meta criadas para {member.display_name}!")
+            else:
+                await ctx.send(f"❌ Erro ao criar meta para {member.display_name}!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+        print(f"Erro ao forçar meta: {e}")
+
 
 @bot.command(name="atualizar_paineis_metas")
 async def cmd_atualizar_paineis_metas(ctx):
@@ -3842,22 +3879,6 @@ async def cmd_verificar_paineis_metas(ctx):
     except Exception as e:
         await ctx.send(f"❌ Erro: {e}")
         print(f"Erro ao verificar painéis: {e}")
-
- 
-    try:
-        if str(member.id) not in metas_cache:
-            sala = await criar_sala_meta(member)
-            if sala:
-                await ctx.send(f"✅ Sala e painel criados para {member.display_name}!")
-            else:
-                await ctx.send(f"❌ Erro ao criar sala para {member.display_name}!")
-        else:
-            await atualizar_embed_meta(member.id)
-            await ctx.send(f"✅ Painel atualizado para {member.display_name}!")
-            
-    except Exception as e:
-        await ctx.send(f"❌ Erro: {e}")
-        print(f"Erro ao criar painel para {member.display_name}: {e}")
 
 
 @bot.command(name="historico_metas")
@@ -4074,6 +4095,11 @@ async def verificar_avisos_quarta():
                             await canal.send(embed=embed)
                             return True
     return False
+
+# =========================================================
+# ==================== FIM DO SISTEMA DE METAS ============
+# =========================================================
+
 # =========================================================
 # ==================== SISTEMA DE VENDAS ===================
 # =========================================================
@@ -8629,13 +8655,43 @@ class SolicitarSalaView(discord.ui.View):
     
     @discord.ui.button(label="➕ Criar Minha Sala", style=discord.ButtonStyle.success, custom_id="criar_sala_manual")
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) in metas_cache:
-            await interaction.response.send_message("Você já possui uma sala.", ephemeral=True)
-            return
         await interaction.response.defer(ephemeral=True)
+        
+        # 🔥 VERIFICAR SE JÁ TEM META
+        async with get_db().acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(interaction.user.id))
+        
+        if meta:
+            canal = interaction.guild.get_channel(meta["canal_id"])
+            if canal:
+                await interaction.followup.send(f"✅ Você já possui uma sala! {canal.mention}", ephemeral=True)
+                await atualizar_embed_meta(interaction.user.id)
+                return
+            else:
+                # Canal não existe, remover meta e recriar
+                await conn.execute("DELETE FROM metas WHERE user_id = $1", str(interaction.user.id))
+                if str(interaction.user.id) in metas_cache:
+                    del metas_cache[str(interaction.user.id)]
+        
+        # 🔥 VERIFICAR SE JÁ TEM UMA SALA (MESMO SEM META)
+        for canal in interaction.guild.text_channels:
+            if interaction.user.display_name.lower() in canal.name.lower() and "📁" in canal.name:
+                # Salvar meta no banco
+                await salvar_meta_db(interaction.user.id, canal.id, 0, 0, 0)
+                metas_cache[str(interaction.user.id)] = {
+                    "canal_id": canal.id,
+                    "dinheiro": 0,
+                    "polvora": 0,
+                    "acao": None,
+                    "dinheiro_acoes": 0
+                }
+                await atualizar_embed_meta(interaction.user.id)
+                await interaction.followup.send(f"✅ Sala encontrada e meta criada! {canal.mention}", ephemeral=True)
+                return
+        
+        # Criar nova sala
         await criar_sala_meta(interaction.user)
-        await interaction.followup.send("Sua sala foi criada com sucesso!", ephemeral=True)
-
+        await interaction.followup.send("✅ Sua sala foi criada com sucesso!", ephemeral=True)
 
 async def enviar_painel_solicitar_sala():
     canal = bot.get_channel(CANAL_SOLICITAR_SALA_ID)
