@@ -3832,19 +3832,7 @@ async def cmd_verificar_paineis_metas(ctx):
         await ctx.send(f"❌ Erro: {e}")
         print(f"Erro ao verificar painéis: {e}")
 
-
-@bot.command(name="forcar_painel_meta")
-async def cmd_forcar_painel_meta(ctx, member: discord.Member = None):
-    """Força a criação/atualização do painel de meta de um membro (ADM apenas)"""
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Apenas ADM podem usar este comando!")
-        return
-    
-    if not member:
-        member = ctx.author
-    
-    await ctx.send(f"🔄 Forçando criação do painel para {member.display_name}...")
-    
+ 
     try:
         if str(member.id) not in metas_cache:
             sala = await criar_sala_meta(member)
