@@ -2868,6 +2868,12 @@ class AdicionarPolvoraModal(discord.ui.Modal, title="💣 Adicionar Pólvora"):
                 await criar_sala_meta(member)
                 await asyncio.sleep(1)
                 await carregar_metas_cache()
+                await interaction.response.send_message(
+                    "✅ **Meta criada automaticamente!**\n"
+                    "💡 Tente novamente agora.",
+                    ephemeral=True
+                )
+                return
             else:
                 await interaction.response.send_message(
                     "❌ **Meta não encontrada!**\n\n"
@@ -2923,6 +2929,12 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
                 await criar_sala_meta(member)
                 await asyncio.sleep(1)
                 await carregar_metas_cache()
+                await interaction.response.send_message(
+                    "✅ **Meta criada automaticamente!**\n"
+                    "💡 Tente novamente agora.",
+                    ephemeral=True
+                )
+                return
             else:
                 await interaction.response.send_message(
                     "❌ **Meta não encontrada!**\n\n"
@@ -2944,7 +2956,6 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
             f"✅ **{formatar_dinheiro(valor)} adicionado à meta!**",
             ephemeral=True
         )
-
 
 class FecharMetaModal(discord.ui.Modal, title="🔒 Fechar Meta"):
     data_inicio = discord.ui.TextInput(
