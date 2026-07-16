@@ -1814,9 +1814,23 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
         # =========================================================
         
         if vulgo_formatado:
-            nick = f"{self.passaporte.value} - {nome_formatado} | {vulgo_formatado}"
+            # 🔥 FORMATO: Passaporte Nome | Vulgo (sem " - ")
+            nick = f"{self.passaporte.value} {nome_formatado} | {vulgo_formatado}"
         else:
-            nick = f"{self.passaporte.value} - {nome_formatado}"
+            nick = f"{self.passaporte.value} {nome_formatado}"
+        
+        # 🔥 GARANTIR QUE NÃO ULTRAPASSA 32 CARACTERES
+        if len(nick) > 32:
+            # Se passar, cortar o nome
+            nome_cortado = nome_formatado[:20]
+            if vulgo_formatado:
+                nick = f"{self.passaporte.value} {nome_cortado} | {vulgo_formatado}"
+            else:
+                nick = f"{self.passaporte.value} {nome_cortado}"
+            
+            # Se ainda passar, cortar mais
+            if len(nick) > 32:
+                nick = nick[:32]
         
         await membro.edit(nick=nick)
         
@@ -1842,7 +1856,6 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
             view=view,
             ephemeral=True
         )
-
 class TipoRegistroSelect(discord.ui.Select):
     def __init__(self, nome, passaporte, vulgo, telefone, indicado):
         self.nome = nome
