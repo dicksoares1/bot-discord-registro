@@ -3561,10 +3561,14 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         
         try:
+            # 🔥 CORREÇÃO: Converter para datas sem timezone (NAIVE) para o banco
+            data_inicio_naive = self.data_inicio.replace(tzinfo=None)
+            data_fim_naive = self.data_fim.replace(tzinfo=None)
+            
             # USAR A MESMA FUNÇÃO QUE JÁ EXISTE NO SEU CÓDIGO
             relatorio, membros_sem_meta = await fechar_todas_metas(
-                self.data_inicio,
-                self.data_fim
+                data_inicio_naive,
+                data_fim_naive
             )
             
             if not relatorio and not membros_sem_meta:
