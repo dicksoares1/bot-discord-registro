@@ -72,6 +72,8 @@ def datetime_para_str(dt):
             dt = dt.replace(tzinfo=BRASIL)
         return dt.isoformat()
     return str(dt)
+
+
 # =========================================================
 # ==================== IDS DOS CANAIS =====================
 # =========================================================
@@ -285,6 +287,34 @@ def barra(pct, size=20):
     else:
         cor = "🔵"
     return cor + " " + ("▓" * cheio) + ("░" * (size - cheio))
+
+# =========================================================
+# ==================== FUNÇÃO CALCULAR SEMANA ANTERIOR =====
+# =========================================================
+
+def calcular_semana_anterior():
+    """
+    Calcula a semana anterior completa (Segunda a Domingo)
+    SEMPRE retorna a semana anterior, independente do dia atual
+    """
+    hoje = agora()
+    
+    # Descobrir quantos dias voltar para chegar no domingo anterior
+    dia_semana = hoje.weekday()  # 0 = Segunda, 6 = Domingo
+    
+    # Se hoje for Segunda (0), voltar 7 dias para o domingo anterior
+    # Se hoje for Terça (1), voltar 8 dias
+    # Se hoje for Domingo (6), voltar 13 dias
+    dias_para_voltar = dia_semana + 7  # Sempre a semana anterior
+    
+    domingo_anterior = hoje - timedelta(days=dias_para_voltar)
+    segunda_anterior = domingo_anterior - timedelta(days=6)
+    
+    # Ajustar para meia-noite
+    segunda_anterior = segunda_anterior.replace(hour=0, minute=0, second=0, microsecond=0)
+    domingo_anterior = domingo_anterior.replace(hour=23, minute=59, second=59, microsecond=0)
+    
+    return segunda_anterior, domingo_anterior
 
 def detectar_plataforma(link):
     """Detecta plataforma de streaming pelo link"""
@@ -3462,6 +3492,188 @@ class ZerarMetasButton(discord.ui.Button):
             ephemeral=True
         )
 
+# =========================================================
+# ==================== BOTÃO FECHAR METAS AUTOMÁTICO ======
+# =========================================================
+
+class FecharMetasAutomaticoButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="🔒 Fechar Metas (Automático - Semana Anterior)",
+            style=discord.ButtonStyle.success,
+            custom_id="fechar_metas_automatico_btn",
+            emoji="🔒"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem fechar todas as metas!", ephemeral=True)
+            return
+        
+        # CALCULAR A SEMANA ANTERIOR AUTOMATICAMENTE
+        data_inicio, data_fim = calcular_semana_anterior()
+        
+        data_inicio_str = data_inicio.strftime("%d/%m/%Y")
+        data_fim_str = data_fim.strftime("%d/%m/%Y")
+        
+        # Confirmar com o usuário
+        view = ConfirmarFechamentoAutomaticoView(data_inicio, data_fim, data_inicio_str, data_fim_str)
+        
+        embed = discord.Embed(
+            title="🔒 FECHAR METAS - SEMANA ANTERIOR",
+            description=(
+                f"📅 **Período a ser fechado:**\n"
+                f"**{data_inicio_str}** a **{data_fim_str}**\n\n"
+                f"⚠️ **ATENÇÃO:** Esta ação irá:\n"
+                f"• Fechar TODAS as metas deste período\n"
+                f"• Gerar o relatório completo\n"
+                f"• Resetar as metas dos membros\n\n"
+                f"🔄 **Esta semana é calculada automaticamente!**\n"
+                f"📌 Sempre a semana anterior (Segunda a Domingo)"
+            ),
+            color=0xe67e22
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+# =========================================================
+# ==================== CONFIRMAÇÃO FECHAMENTO AUTOMÁTICO ==
+# =========================================================
+
+class ConfirmarFechamentoAutomaticoView(discord.ui.View):
+    def __init__(self, data_inicio, data_fim, data_inicio_str, data_fim_str):
+        super().__init__(timeout=60)
+        self.data_inicio = data_inicio
+        self.data_fim = data_fim
+        self.data_inicio_str = data_inicio_str
+        self.data_fim_str = data_fim_str
+    
+    @discord.ui.button(
+        label="✅ Confirmar Fechamento",
+        style=discord.ButtonStyle.danger,
+        custom_id="confirmar_fechamento_auto",
+        emoji="✅"
+    )
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # USAR A MESMA FUNÇÃO QUE JÁ EXISTE NO SEU CÓDIGO
+            relatorio, membros_sem_meta = await fechar_todas_metas(
+                self.data_inicio,
+                self.data_fim
+            )
+            
+            if not relatorio and not membros_sem_meta:
+                await interaction.followup.send("📭 Nenhuma meta para fechar.", ephemeral=True)
+                return
+            
+            total_dinheiro = sum(r["dinheiro"] for r in relatorio)
+            total_polvora = sum(r["polvora"] for r in relatorio)
+            total_dinheiro_acoes = sum(r["dinheiro_acoes"] for r in relatorio)
+            total_geral = sum(r["total"] for r in relatorio)
+            
+            embed = discord.Embed(
+                title="📊 RELATÓRIO SEMANAL - METAS FECHADAS",
+                description=f"📅 **Período:** {self.data_inicio_str} até {self.data_fim_str}",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            
+            embed.add_field(
+                name="📊 RESUMO GERAL",
+                value=(
+                    f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
+                    f"🎯 **Dinheiro de Ações:** {formatar_dinheiro(total_dinheiro_acoes)}\n"
+                    f"💣 **Pólvora:** {fmt_num(total_polvora)} unidades\n"
+                    f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
+                    f"👥 **Membros com meta:** {len(relatorio)}\n"
+                    f"✅ **Pagaram:** {len([r for r in relatorio if r['total'] > 0])}\n"
+                    f"❌ **Não pagaram:** {len([r for r in relatorio if r['total'] == 0])}"
+                ),
+                inline=False
+            )
+            
+            if relatorio:
+                pagaram = [r for r in relatorio if r["total"] > 0]
+                nao_pagaram = [r for r in relatorio if r["total"] == 0]
+                pagaram_ordenado = sorted(pagaram, key=lambda x: x["total"], reverse=True)
+                
+                if pagaram_ordenado:
+                    lista_pagaram = ""
+                    for i, item in enumerate(pagaram_ordenado[:10], 1):
+                        user = await pegar_usuario(int(item["user_id"]))
+                        nome = user.display_name if user else f"ID: {item['user_id']}"
+                        lista_pagaram += f"**{i}.** {nome} - 💰 {formatar_dinheiro(item['total'])}\n"
+                    
+                    embed.add_field(
+                        name=f"✅ QUEM PAGOU ({len(pagaram)} membros)",
+                        value=lista_pagaram[:1024],
+                        inline=False
+                    )
+                
+                if nao_pagaram:
+                    lista_nao_pagaram = ""
+                    for i, item in enumerate(nao_pagaram[:10], 1):
+                        user = await pegar_usuario(int(item["user_id"]))
+                        nome = user.display_name if user else f"ID: {item['user_id']}"
+                        lista_nao_pagaram += f"**{i}.** {nome} - ❌ **ZERADO**\n"
+                    
+                    embed.add_field(
+                        name=f"❌ QUEM NÃO PAGOU ({len(nao_pagaram)} membros)",
+                        value=lista_nao_pagaram[:1024],
+                        inline=False
+                    )
+            
+            if membros_sem_meta:
+                lista_sem_meta = ""
+                for i, item in enumerate(membros_sem_meta[:10], 1):
+                    lista_sem_meta += f"**{i}.** {item['menção']} - ❌ **SEM META**\n"
+                
+                embed.add_field(
+                    name=f"⚠️ MEMBROS SEM META ({len(membros_sem_meta)} membros)",
+                    value=lista_sem_meta[:1024],
+                    inline=False
+                )
+            
+            embed.set_footer(text=f"Relatório gerado por {interaction.user.display_name} • Fechamento Automático")
+            
+            canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
+            if canal_resultados:
+                await canal_resultados.send(embed=embed)
+                await interaction.followup.send(
+                    f"✅ **Relatório enviado no canal <#{RESULTADOS_METAS_ID}>!**\n"
+                    f"📅 Período: {self.data_inicio_str} a {self.data_fim_str}",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            
+            # Atualizar painéis de metas
+            for uid in metas_cache.keys():
+                await atualizar_embed_meta(int(uid))
+                await asyncio.sleep(0.3)
+            
+            print(f"📊 Relatório semanal automático gerado por {interaction.user.name}")
+            
+        except Exception as e:
+            print(f"❌ Erro ao fechar metas automático: {e}")
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(f"❌ Erro ao fechar metas: {e}", ephemeral=True)
+    
+    @discord.ui.button(
+        label="❌ Cancelar",
+        style=discord.ButtonStyle.secondary,
+        custom_id="cancelar_fechamento_auto",
+        emoji="❌"
+    )
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
+
 
 # =========================================================
 # ==================== FUNÇÕES DE METAS ====================
@@ -3632,7 +3844,8 @@ async def enviar_painel_relatorio_metas():
             "**Gerencie as metas de todos os membros.**\n\n"
             "📌 **Opções disponíveis:**\n"
             "• 📊 **Gerar Relatório** - Relatório de metas fechadas (individual)\n"
-            "• 🔒 **Fechar Metas Semanais** - Fecha TODAS as metas e gera relatório completo\n"
+            "• 🔒 **Fechar Metas Semanais** - Fecha TODAS as metas (com datas)\n"
+            "• 🔒 **Fechar Metas (Automático)** - Fecha a semana anterior automaticamente\n"
             "• ⚠️ **Zerar Metas** - Resetar TODAS as metas (cuidado!)\n\n"
             "📋 **O relatório semanal mostra:**\n"
             "• Quem pagou e quanto\n"
@@ -3644,9 +3857,24 @@ async def enviar_painel_relatorio_metas():
     )
     
     embed.add_field(
-        name="📌 COMO USAR",
+        name="📌 COMO USAR - FECHAR METAS (AUTOMÁTICO)",
         value=(
-            "**Fechar Metas Semanais:**\n"
+            "**Clique no botão verde e confirme:**\n"
+            "• O sistema calcula a SEMANA ANTERIOR (Segunda a Domingo)\n"
+            "• Fecha todas as metas do período\n"
+            "• Gera o relatório automaticamente\n\n"
+            "**Exemplo:**\n"
+            "• Se fechar hoje (20/07/2026) → Fecha 13/07 a 19/07\n"
+            "• Se fechar amanhã (21/07/2026) → Fecha 13/07 a 19/07\n"
+            "• Sempre a SEMANA ANTERIOR completa!"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📌 COMO USAR - FECHAR METAS (MANUAL)",
+        value=(
+            "**Fechar Metas Semanais (Manual):**\n"
             "• Informe a data de INÍCIO da semana\n"
             "• Informe a data de FIM da semana\n"
             "• O sistema vai fechar todas as metas e gerar relatório\n\n"
@@ -3660,6 +3888,7 @@ async def enviar_painel_relatorio_metas():
     view = discord.ui.View(timeout=None)
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharTodasMetasButton())
+    view.add_item(FecharMetasAutomaticoButton())  # ← NOVO BOTÃO
     view.add_item(ZerarMetasButton())
     
     await enviar_ou_atualizar_painel(
