@@ -299,15 +299,19 @@ def calcular_semana_anterior():
     """
     hoje = agora()
     
-    # Descobrir quantos dias voltar para chegar no domingo anterior
-    dia_semana = hoje.weekday()  # 0 = Segunda, 6 = Domingo
+    # Descobrir em que dia da semana estamos
+    # 0 = Segunda, 1 = Terça, 2 = Quarta, 3 = Quinta, 4 = Sexta, 5 = Sábado, 6 = Domingo
+    dia_semana = hoje.weekday()
     
-    # Se hoje for Segunda (0), voltar 7 dias para o domingo anterior
-    # Se hoje for Terça (1), voltar 8 dias
-    # Se hoje for Domingo (6), voltar 13 dias
-    dias_para_voltar = dia_semana + 7  # Sempre a semana anterior
+    # Calcular quantos dias voltar para chegar no domingo anterior
+    # Se hoje é Segunda (0), voltar 1 dia para o domingo anterior
+    # Se hoje é Terça (1), voltar 2 dias
+    # Se hoje é Quarta (2), voltar 3 dias
+    # ...
+    # Se hoje é Domingo (6), voltar 7 dias
+    dias_para_domingo_anterior = dia_semana + 1
     
-    domingo_anterior = hoje - timedelta(days=dias_para_voltar)
+    domingo_anterior = hoje - timedelta(days=dias_para_domingo_anterior)
     segunda_anterior = domingo_anterior - timedelta(days=6)
     
     # Ajustar para meia-noite
