@@ -10578,38 +10578,70 @@ async def enviar_painel_mensagens():
 
 # ================ 15.2 CONFIGURAÇÕES ====================
 ITENS_DISPONIVEIS = [
-    "🛡️ COLETE",
-    "💉 VITACORE",
-    "🔫 MUNIÇÃO PT",
-    "🔫 MUNIÇÃO SUB",
-    "🔫 MUNIÇÃO FUZIL",
-    "🔧 TRAVA DIGITAL",
-    "📋 PLACAS",
-    "💣 C4",
-    "💊 DROGAS",
-    "🔧 KIT REPARO COMUM",
-    "🔧 KIT REPARO ÉPICO",
-    "🔧 KIT REPARO LENDÁRIO",
-    "🔧 KIT REPARO RARO",
-    "💊 SUPERDROGA",
-    "📡 RASTREADOR",
-    "🚫 BLOQUEADOR",
-    "🔧 PNEU KIT REPARO",
-    "💳 CARTÃO",
-    "💾 PENDRIVE",
-    "🔑 LOCKPICK",
-    "🔑 MASTERPICK",
-    "♻️ MATERIAL RECICLAGEM",
-    "🔫 FUZIL",
-    "🔫 SUBMETRALHADORA",
-    "🔫 PISTOLA",
-    "💰 DINHEIRO SUJO",
-    "👝 BOLSO",
-    "🎒 MOCHILA",
-    "📿 PULSEIRA HPI",
-    "🚫 BLOQUEADOR VEÍCULO",
-    "🥪 LANCHEIRA",
-    "📦 OUTRO ITEM"
+    # 🔫 PISTOLAS
+    "🔫 FIVE SEVEN",
+    "🔫 GLOCK",
+    
+    # 🔫 SUBMETRALHADORAS
+    "🔫 TRIZZ",
+    "🔫 AUG",
+    "🔫 EVO",
+    "🔫 TEC",
+    "🔫 GLOCK RAJADA",
+    "🔫 MPX",
+    "🔫 UZI",
+    "🔫 AKA COMPACT",
+    "🔫 SKORPION",
+    
+    # 🔫 FUZIS
+    "🔫 SIG SAUER",
+    "🔫 M4",
+    "🔫 PARAFAL",
+    "🔫 AK 103",
+    "🔫 AK 74",
+    "🔫 G36",
+    "🔫 L95",
+    "🔫 TAR",
+    "🔫 QBZ",
+    "🔫 SCAR",
+    "🔫 W110",
+    
+    # 💉 SAÚDE
+    "🩸 VITACORE",
+    "💉 ADRENALINA",
+    "🚑 PULSEIRA",
+    
+    # 🧨 EXPLOSIVOS E EQUIPAMENTOS
+    "🧨 C4",
+    "👕 COLETE",
+    "🧪 ALCOOL GEL",
+    "🎭 CAPUZ",
+    "🔑 ALGEMA",
+    "📵 BLOCK DE CELULAR",
+    "📍 RASTREADOR DE CELULAR",
+    
+    # 🧰 KITS DE REPARO
+    "🧰 KIT REPAROS COMUM",
+    "🧰 KIT REPAROS RARO",
+    "🧰 KIT REPARO ÉPICO",
+    "🧰 KIT REPARO LENDARIO",
+    "🔧 KIT SABOTAGEM PNEU",
+    "🔧 KIT SABOTAGEM RODA",
+    "🔧 KIT SABOTAGEM EXPLOSÃO",
+    
+    # 🍬 MUNIÇÕES
+    "🍬 MUNIÇÃO PT",
+    "🍬 MUNIÇÃO SUB",
+    "🍬 MUNIÇÃO FUZIL",
+    "🍬 MUNIÇÃO SNIPER",
+    "💣 GRANADA",
+    "🔥 MOLOTOV",
+    
+    # 🚀 VEÍCULOS E ACESSÓRIOS
+    "🚀 NITRO",
+    "🚨 BLOCK DE CARRO",
+    "🔒 TRAVA",
+    "🚧 PLACA"
 ]
 
 # ================ 15.3 BANCO DE DADOS ===================
@@ -10666,7 +10698,9 @@ async def criar_tabelas_controle():
             )
         """)
         
+        # Inicializar estoque com todos os itens
         for item in ITENS_DISPONIVEIS:
+            # Remove o emoji e espaço para salvar no banco
             item_nome = item.split(" ", 1)[1] if " " in item else item
             await conn.execute("""
                 INSERT INTO bau_estoque (item_nome, quantidade)
@@ -10704,7 +10738,6 @@ async def buscar_armas_emprestadas():
         """)
 
 async def remover_arma_emprestada(membro_nome, arma_nome):
-    """Remove uma arma da lista de emprestadas (manual)"""
     async with get_db().acquire() as conn:
         await conn.execute("""
             UPDATE armas_emprestadas 
@@ -10752,7 +10785,6 @@ class ControleArmasView(discord.ui.View):
     
     @discord.ui.button(label="➕ ADICIONAR MANUAL", style=discord.ButtonStyle.primary, custom_id="armas_adicionar_manual", emoji="➕")
     async def adicionar_manual(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 VERIFICAR SE É GERENTE OU ADM
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
         
@@ -10763,7 +10795,6 @@ class ControleArmasView(discord.ui.View):
             )
             return
         
-        # Abrir modal para adicionar manual
         await interaction.response.send_modal(AdicionarArmaManualModal())
 
 async def enviar_painel_armas():
@@ -10865,7 +10896,6 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
         arma_nome = self.arma_nome.value.strip().upper()
         observacao = self.observacao.value.strip().upper() if self.observacao.value else ""
         
-        # Buscar ID do membro
         membro_id = None
         guild = interaction.guild
         for member in guild.members:
@@ -10873,7 +10903,6 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
                 membro_id = str(member.id)
                 break
         
-        # Registrar como saída (emprestar arma)
         await registrar_arma(
             "saiu",
             arma_nome,
