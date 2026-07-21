@@ -10844,7 +10844,7 @@ async def registrar_arma(tipo, arma_nome, quantidade, responsavel, observacao=""
                 INSERT INTO armas_emprestadas (arma_nome, quantidade, responsavel, observacao)
                 VALUES ($1, $2, $3, $4)
             """, arma_nome.upper(), quantidade, responsavel.upper(), observacao.upper() if observacao else "")
-
+            
 async def buscar_armas_emprestadas():
     async with get_db().acquire() as conn:
         return await conn.fetch("""
@@ -10860,7 +10860,7 @@ async def remover_arma_emprestada(arma_nome, responsavel):
             SET ativo = false, data_prevista_devolucao = NOW()
             WHERE LOWER(arma_nome) = LOWER($1) AND LOWER(responsavel) = LOWER($2) AND ativo = true
         """, arma_nome, responsavel)
-
+        
 # ================ 15.7 FUNÇÕES DE BAÚ ===================
 async def registrar_item_bau(item_nome, quantidade, tipo_movimento, responsavel, observacao=""):
     async with get_db().acquire() as conn:
