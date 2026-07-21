@@ -10578,44 +10578,43 @@ async def enviar_painel_mensagens():
 
 # ================ 15.2 CONFIGURAÇÕES ====================
 ITENS_DISPONIVEIS = [
-    "🛡️ Colete",
-    "💉 Vitacore",
-    "🔫 Munição PT",
-    "🔫 Munição SUB",
-    "🔫 Munição Fuzil",
-    "🔧 Trava Digital",
-    "📋 Placas",
+    "🛡️ COLETE",
+    "💉 VITACORE",
+    "🔫 MUNIÇÃO PT",
+    "🔫 MUNIÇÃO SUB",
+    "🔫 MUNIÇÃO FUZIL",
+    "🔧 TRAVA DIGITAL",
+    "📋 PLACAS",
     "💣 C4",
-    "💊 Drogas",
-    "🔧 Kit Reparo Comum",
-    "🔧 Kit Reparo Épico",
-    "🔧 Kit Reparo Lendário",
-    "🔧 Kit Reparo Raro",
-    "💊 Superdroga",
-    "📡 Rastreador",
-    "🚫 Bloqueador",
-    "🔧 Pneu Kit Reparo",
-    "💳 Cartão",
-    "💾 Pendrive",
-    "🔑 Lockpick",
-    "🔑 Masterpick",
-    "♻️ Material Reciclagem",
-    "🔫 Fuzil",
-    "🔫 Submetralhadora",
-    "🔫 Pistola",
-    "💰 Dinheiro Sujo",
-    "👝 Bolso",
-    "🎒 Mochila",
-    "📿 Pulseira HPI",
-    "🚫 Bloqueador Veículo",
-    "🥪 Lancheira",
-    "📦 Outro Item"
+    "💊 DROGAS",
+    "🔧 KIT REPARO COMUM",
+    "🔧 KIT REPARO ÉPICO",
+    "🔧 KIT REPARO LENDÁRIO",
+    "🔧 KIT REPARO RARO",
+    "💊 SUPERDROGA",
+    "📡 RASTREADOR",
+    "🚫 BLOQUEADOR",
+    "🔧 PNEU KIT REPARO",
+    "💳 CARTÃO",
+    "💾 PENDRIVE",
+    "🔑 LOCKPICK",
+    "🔑 MASTERPICK",
+    "♻️ MATERIAL RECICLAGEM",
+    "🔫 FUZIL",
+    "🔫 SUBMETRALHADORA",
+    "🔫 PISTOLA",
+    "💰 DINHEIRO SUJO",
+    "👝 BOLSO",
+    "🎒 MOCHILA",
+    "📿 PULSEIRA HPI",
+    "🚫 BLOQUEADOR VEÍCULO",
+    "🥪 LANCHEIRA",
+    "📦 OUTRO ITEM"
 ]
 
 # ================ 15.3 BANCO DE DADOS ===================
 async def criar_tabelas_controle():
     async with get_db().acquire() as conn:
-        # Tabela de armas
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS armas_controle (
                 id SERIAL PRIMARY KEY,
@@ -10630,7 +10629,6 @@ async def criar_tabelas_controle():
             )
         """)
         
-        # Tabela de armas emprestadas
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS armas_emprestadas (
                 id SERIAL PRIMARY KEY,
@@ -10646,7 +10644,6 @@ async def criar_tabelas_controle():
             )
         """)
         
-        # Tabela de itens do baú
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS bau_itens (
                 id SERIAL PRIMARY KEY,
@@ -10660,7 +10657,6 @@ async def criar_tabelas_controle():
             )
         """)
         
-        # Tabela de estoque do baú
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS bau_estoque (
                 id SERIAL PRIMARY KEY,
@@ -10670,14 +10666,14 @@ async def criar_tabelas_controle():
             )
         """)
         
-        # Inicializar estoque
+        # Inicializar estoque com itens em MAIÚSCULO
         for item in ITENS_DISPONIVEIS:
             item_nome = item.split(" ", 1)[1] if " " in item else item
             await conn.execute("""
                 INSERT INTO bau_estoque (item_nome, quantidade)
                 VALUES ($1, 0)
                 ON CONFLICT (item_nome) DO NOTHING
-            """, item_nome)
+            """, item_nome.upper())
 
 # ================ 15.4 FUNÇÕES DE ARMAS =================
 async def registrar_arma(tipo, arma_nome, quantidade, responsavel, membro_nome, membro_id=None, observacao=""):
@@ -10685,19 +10681,19 @@ async def registrar_arma(tipo, arma_nome, quantidade, responsavel, membro_nome, 
         await conn.execute("""
             INSERT INTO armas_controle (tipo, arma_nome, quantidade, responsavel, membro_nome, membro_id, observacao)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """, tipo, arma_nome, quantidade, responsavel, membro_nome, membro_id, observacao)
+        """, tipo, arma_nome.upper(), quantidade, responsavel.upper(), membro_nome.upper(), membro_id, observacao.upper() if observacao else "")
         
         if tipo == "saiu":
             await conn.execute("""
                 INSERT INTO armas_emprestadas (arma_nome, quantidade, membro_nome, membro_id, responsavel, observacao)
                 VALUES ($1, $2, $3, $4, $5, $6)
-            """, arma_nome, quantidade, membro_nome, membro_id, responsavel, observacao)
+            """, arma_nome.upper(), quantidade, membro_nome.upper(), membro_id, responsavel.upper(), observacao.upper() if observacao else "")
         
         elif tipo == "entrou":
             await conn.execute("""
                 UPDATE armas_emprestadas 
                 SET ativo = false, data_prevista_devolucao = NOW()
-                WHERE membro_nome = $1 AND arma_nome = $2 AND ativo = true
+                WHERE LOWER(membro_nome) = LOWER($1) AND LOWER(arma_nome) = LOWER($2) AND ativo = true
             """, membro_nome, arma_nome)
 
 async def buscar_armas_emprestadas():
@@ -10714,7 +10710,7 @@ async def registrar_item_bau(item_nome, quantidade, tipo_movimento, responsavel,
         await conn.execute("""
             INSERT INTO bau_itens (item_nome, quantidade, tipo_movimento, responsavel, membro_nome, observacao)
             VALUES ($1, $2, $3, $4, $5, $6)
-        """, item_nome, quantidade, tipo_movimento, responsavel, membro_nome, observacao)
+        """, item_nome.upper(), quantidade, tipo_movimento, responsavel.upper(), membro_nome.upper() if membro_nome else None, observacao.upper() if observacao else "")
         
         if tipo_movimento == "entrada":
             await conn.execute("""
@@ -10723,12 +10719,12 @@ async def registrar_item_bau(item_nome, quantidade, tipo_movimento, responsavel,
                 ON CONFLICT (item_nome) DO UPDATE SET 
                     quantidade = bau_estoque.quantidade + $2,
                     ultima_atualizacao = NOW()
-            """, item_nome, quantidade)
+            """, item_nome.upper(), quantidade)
         elif tipo_movimento == "saida":
             await conn.execute("""
                 UPDATE bau_estoque 
                 SET quantidade = quantidade - $2, ultima_atualizacao = NOW()
-                WHERE item_nome = $1
+                WHERE LOWER(item_nome) = LOWER($1)
             """, item_nome, quantidade)
 
 async def buscar_estoque_bau():
@@ -10740,14 +10736,13 @@ class ControleArmasView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="armas_atualizar", emoji="🔄")
+    @discord.ui.button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="armas_atualizar", emoji="🔄")
     async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        await atualizar_painel_armas()
-        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+        await enviar_painel_armas()
+        await interaction.followup.send("✅ PAINEL ATUALIZADO!", ephemeral=True)
 
-async def atualizar_painel_armas():
-    """ATUALIZA O PAINEL DE CONTROLE DE ARMAS - Mostra Nome | Arma | Tempo"""
+async def enviar_painel_armas():
     canal = bot.get_channel(CANAL_CONTROLE_ARMAS_ID)
     if not canal:
         print("❌ Canal de controle de armas não encontrado")
@@ -10757,7 +10752,7 @@ async def atualizar_painel_armas():
     
     embed = discord.Embed(
         title="🔫 CONTROLE DE ARMAS",
-        description="**Membros com armas emprestadas**\n\n📌 **Formato:** Nome | Arma | Tempo",
+        description="**MEMBROS COM ARMAS EMPRESTADAS**\n\n📌 **FORMATO:** NOME | ARMA | TEMPO",
         color=0x34495e,
         timestamp=agora()
     )
@@ -10777,37 +10772,41 @@ async def atualizar_painel_armas():
             else:
                 cor = "🟢"
             
-            texto += f"{cor} **{arma['membro_nome']}** | {arma['arma_nome']} | {dias} dia(s)\n"
+            texto += f"{cor} **{arma['membro_nome']}** | {arma['arma_nome']} | {dias} DIA(S)\n"
         
         embed.add_field(name="📋 ARMAS EMPRESTADAS", value=texto, inline=False)
         embed.add_field(
             name="📊 TOTAL",
-            value=f"🔫 {len(armas_emprestadas)} empréstimos ativos",
+            value=f"🔫 {len(armas_emprestadas)} EMPRÉSTIMOS ATIVOS",
             inline=False
         )
     else:
-        embed.add_field(name="📋 ARMAS EMPRESTADAS", value="✅ Nenhuma arma emprestada no momento", inline=False)
+        embed.add_field(name="📋 ARMAS EMPRESTADAS", value="✅ NENHUMA ARMA EMPRESTADA NO MOMENTO", inline=False)
     
-    embed.set_footer(text="🟢 < 3 dias | 🟡 3-7 dias | 🔴 > 7 dias")
+    embed.set_footer(text="🟢 < 3 DIAS | 🟡 3-7 DIAS | 🔴 > 7 DIAS")
     
-    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
-    # Deletar todas as mensagens do bot no canal
-    async for msg in canal.history(limit=100):
-        if msg.author == bot.user:
-            try:
-                await msg.delete()
-            except:
-                pass
-    
-    # Enviar o painel como última mensagem
-    await canal.send(embed=embed, view=ControleArmasView())
+    try:
+        async for msg in canal.history(limit=200):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.2)
+                except:
+                    pass
+        
+        await asyncio.sleep(0.5)
+        await canal.send(embed=embed, view=ControleArmasView())
+        print(f"📌 Painel de armas enviado como última mensagem")
+        
+    except Exception as e:
+        print(f"❌ Erro ao enviar painel de armas: {e}")
 
 # ================ 15.7 PAINEL ARMAS ENTROU ==============
 class ArmasEntrouView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="📥 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="armas_entrou_btn", emoji="📥")
+    @discord.ui.button(label="📥 REGISTRAR ENTRADA", style=discord.ButtonStyle.success, custom_id="armas_entrou_btn", emoji="📥")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarArmaEntrouModal())
 
@@ -10819,47 +10818,53 @@ async def enviar_painel_armas_entrou():
     
     embed = discord.Embed(
         title="📥 ARMAS - REGISTRO DE ENTRADA",
-        description="**Clique no botão abaixo para registrar ENTRADA de armas**\n\n"
-                   "📌 **Informações:**\n"
-                   "• Nome do membro\n"
-                   "• Nome da arma\n"
-                   "• Quantidade de munição\n"
-                   "• Motivo",
+        description="**CLIQUE NO BOTÃO ABAIXO PARA REGISTRAR ENTRADA DE ARMAS**\n\n"
+                   "📌 **INFORMAÇÕES:**\n"
+                   "• NOME DO MEMBRO\n"
+                   "• NOME DA ARMA\n"
+                   "• QUANTIDADE DE MUNIÇÃO\n"
+                   "• MOTIVO",
         color=0x2ecc71
     )
     
-    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
-    async for msg in canal.history(limit=100):
-        if msg.author == bot.user:
-            try:
-                await msg.delete()
-            except:
-                pass
-    
-    await canal.send(embed=embed, view=ArmasEntrouView())
+    try:
+        async for msg in canal.history(limit=200):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.2)
+                except:
+                    pass
+        
+        await asyncio.sleep(0.5)
+        await canal.send(embed=embed, view=ArmasEntrouView())
+        print(f"📌 Painel de armas entrou enviado como última mensagem")
+        
+    except Exception as e:
+        print(f"❌ Erro ao enviar painel de armas entrou: {e}")
 
 class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
     membro_nome = discord.ui.TextInput(
-        label="👤 Nome do membro",
-        placeholder="Nome do membro que trouxe",
+        label="👤 NOME DO MEMBRO",
+        placeholder="NOME DO MEMBRO QUE TROUXE",
         required=True
     )
     
     arma_nome = discord.ui.TextInput(
-        label="🔫 Nome da arma",
-        placeholder="Ex: Fuzil, Pistola, Submetralhadora",
+        label="🔫 NOME DA ARMA",
+        placeholder="EX: FUZIL, PISTOLA, SUBMETRALHADORA",
         required=True
     )
     
     quantidade = discord.ui.TextInput(
-        label="📦 Quantidade de munição",
-        placeholder="Digite a quantidade",
+        label="📦 QUANTIDADE DE MUNIÇÃO",
+        placeholder="DIGITE A QUANTIDADE",
         required=True
     )
     
     motivo = discord.ui.TextInput(
-        label="📝 Motivo",
-        placeholder="Ex: Devolução, Compra, etc",
+        label="📝 MOTIVO",
+        placeholder="EX: DEVOLUÇÃO, COMPRA, ETC",
         required=True
     )
     
@@ -10869,17 +10874,17 @@ class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
             if qtd <= 0:
                 raise ValueError
         except:
-            await interaction.response.send_message("❌ Quantidade inválida!", ephemeral=True)
+            await interaction.response.send_message("❌ QUANTIDADE INVÁLIDA!", ephemeral=True)
             return
         
-        membro_nome = self.membro_nome.value.strip()
-        arma_nome = self.arma_nome.value.strip()
+        membro_nome = self.membro_nome.value.strip().upper()
+        arma_nome = self.arma_nome.value.strip().upper()
+        motivo = self.motivo.value.strip().upper()
         
-        # Buscar ID do membro
         membro_id = None
         guild = interaction.guild
         for member in guild.members:
-            if member.display_name.lower() == membro_nome.lower():
+            if member.display_name.upper() == membro_nome:
                 membro_id = str(member.id)
                 break
         
@@ -10887,10 +10892,10 @@ class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
             "entrou",
             arma_nome,
             qtd,
-            interaction.user.display_name,
+            interaction.user.display_name.upper(),
             membro_nome,
             membro_id,
-            self.motivo.value.strip()
+            motivo
         )
         
         canal = interaction.guild.get_channel(CANAL_ARMAS_ENTROU_ID)
@@ -10900,32 +10905,33 @@ class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
                 color=0x2ecc71,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 Membro", value=f"**{membro_nome}**", inline=True)
-            embed.add_field(name="🔫 Arma", value=f"**{arma_nome}**", inline=True)
-            embed.add_field(name="📦 Munição", value=f"**{fmt_num(qtd)}**", inline=True)
-            embed.add_field(name="📝 Motivo", value=self.motivo.value.strip(), inline=False)
-            embed.add_field(name="📌 Registrado por", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"Registrado por {interaction.user.display_name}")
+            embed.add_field(name="👤 MEMBRO", value=f"**{membro_nome}**", inline=True)
+            embed.add_field(name="🔫 ARMA", value=f"**{arma_nome}**", inline=True)
+            embed.add_field(name="📦 MUNIÇÃO", value=f"**{fmt_num(qtd)}**", inline=True)
+            embed.add_field(name="📝 MOTIVO", value=motivo, inline=False)
+            embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
+            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
-            f"✅ **Entrada registrada com sucesso!**\n"
-            f"👤 Membro: {membro_nome}\n"
-            f"🔫 Arma: {arma_nome}\n"
-            f"📦 Munição: {fmt_num(qtd)}",
+            f"✅ **ENTRADA REGISTRADA COM SUCESSO!**\n"
+            f"👤 MEMBRO: {membro_nome}\n"
+            f"🔫 ARMA: {arma_nome}\n"
+            f"📦 MUNIÇÃO: {fmt_num(qtd)}",
             ephemeral=True
         )
         
-        await atualizar_painel_armas()
-        await fixar_painel_controle_no_final()
+        await asyncio.sleep(2)
+        await enviar_painel_armas_entrou()
+        await enviar_painel_armas()
 
 # ================ 15.8 PAINEL ARMAS SAIU ================
 class ArmasSaiuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="📤 Registrar Saída", style=discord.ButtonStyle.primary, custom_id="armas_saiu_btn", emoji="📤")
+    @discord.ui.button(label="📤 REGISTRAR SAÍDA", style=discord.ButtonStyle.primary, custom_id="armas_saiu_btn", emoji="📤")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarArmaSaiuModal())
 
@@ -10937,47 +10943,53 @@ async def enviar_painel_armas_saiu():
     
     embed = discord.Embed(
         title="📤 ARMAS - REGISTRO DE SAÍDA",
-        description="**Clique no botão abaixo para registrar SAÍDA de armas**\n\n"
-                   "📌 **Informações:**\n"
-                   "• Nome do membro\n"
-                   "• Nome da arma\n"
-                   "• Quantidade de munição\n"
-                   "• Motivo",
+        description="**CLIQUE NO BOTÃO ABAIXO PARA REGISTRAR SAÍDA DE ARMAS**\n\n"
+                   "📌 **INFORMAÇÕES:**\n"
+                   "• NOME DO MEMBRO\n"
+                   "• NOME DA ARMA\n"
+                   "• QUANTIDADE DE MUNIÇÃO\n"
+                   "• MOTIVO",
         color=0x3498db
     )
     
-    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
-    async for msg in canal.history(limit=100):
-        if msg.author == bot.user:
-            try:
-                await msg.delete()
-            except:
-                pass
-    
-    await canal.send(embed=embed, view=ArmasSaiuView())
+    try:
+        async for msg in canal.history(limit=200):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.2)
+                except:
+                    pass
+        
+        await asyncio.sleep(0.5)
+        await canal.send(embed=embed, view=ArmasSaiuView())
+        print(f"📌 Painel de armas saiu enviado como última mensagem")
+        
+    except Exception as e:
+        print(f"❌ Erro ao enviar painel de armas saiu: {e}")
 
 class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
     membro_nome = discord.ui.TextInput(
-        label="👤 Nome do membro",
-        placeholder="Nome do membro que pegou",
+        label="👤 NOME DO MEMBRO",
+        placeholder="NOME DO MEMBRO QUE PEGOU",
         required=True
     )
     
     arma_nome = discord.ui.TextInput(
-        label="🔫 Nome da arma",
-        placeholder="Ex: Fuzil, Pistola, Submetralhadora",
+        label="🔫 NOME DA ARMA",
+        placeholder="EX: FUZIL, PISTOLA, SUBMETRALHADORA",
         required=True
     )
     
     quantidade = discord.ui.TextInput(
-        label="📦 Quantidade de munição",
-        placeholder="Digite a quantidade",
+        label="📦 QUANTIDADE DE MUNIÇÃO",
+        placeholder="DIGITE A QUANTIDADE",
         required=True
     )
     
     motivo = discord.ui.TextInput(
-        label="📝 Motivo",
-        placeholder="Ex: Missão, Patrulha, etc",
+        label="📝 MOTIVO",
+        placeholder="EX: MISSÃO, PATRULHA, ETC",
         required=True
     )
     
@@ -10987,17 +10999,17 @@ class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
             if qtd <= 0:
                 raise ValueError
         except:
-            await interaction.response.send_message("❌ Quantidade inválida!", ephemeral=True)
+            await interaction.response.send_message("❌ QUANTIDADE INVÁLIDA!", ephemeral=True)
             return
         
-        membro_nome = self.membro_nome.value.strip()
-        arma_nome = self.arma_nome.value.strip()
+        membro_nome = self.membro_nome.value.strip().upper()
+        arma_nome = self.arma_nome.value.strip().upper()
+        motivo = self.motivo.value.strip().upper()
         
-        # Buscar ID do membro
         membro_id = None
         guild = interaction.guild
         for member in guild.members:
-            if member.display_name.lower() == membro_nome.lower():
+            if member.display_name.upper() == membro_nome:
                 membro_id = str(member.id)
                 break
         
@@ -11005,10 +11017,10 @@ class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
             "saiu",
             arma_nome,
             qtd,
-            interaction.user.display_name,
+            interaction.user.display_name.upper(),
             membro_nome,
             membro_id,
-            self.motivo.value.strip()
+            motivo
         )
         
         canal = interaction.guild.get_channel(CANAL_ARMAS_SAIU_ID)
@@ -11018,32 +11030,33 @@ class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
                 color=0x3498db,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 Membro", value=f"**{membro_nome}**", inline=True)
-            embed.add_field(name="🔫 Arma", value=f"**{arma_nome}**", inline=True)
-            embed.add_field(name="📦 Munição", value=f"**{fmt_num(qtd)}**", inline=True)
-            embed.add_field(name="📝 Motivo", value=self.motivo.value.strip(), inline=False)
-            embed.add_field(name="📌 Registrado por", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"Registrado por {interaction.user.display_name}")
+            embed.add_field(name="👤 MEMBRO", value=f"**{membro_nome}**", inline=True)
+            embed.add_field(name="🔫 ARMA", value=f"**{arma_nome}**", inline=True)
+            embed.add_field(name="📦 MUNIÇÃO", value=f"**{fmt_num(qtd)}**", inline=True)
+            embed.add_field(name="📝 MOTIVO", value=motivo, inline=False)
+            embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
+            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
-            f"✅ **Saída registrada com sucesso!**\n"
-            f"👤 Membro: {membro_nome}\n"
-            f"🔫 Arma: {arma_nome}\n"
-            f"📦 Munição: {fmt_num(qtd)}",
+            f"✅ **SAÍDA REGISTRADA COM SUCESSO!**\n"
+            f"👤 MEMBRO: {membro_nome}\n"
+            f"🔫 ARMA: {arma_nome}\n"
+            f"📦 MUNIÇÃO: {fmt_num(qtd)}",
             ephemeral=True
         )
         
-        await atualizar_painel_armas()
-        await fixar_painel_controle_no_final()
+        await asyncio.sleep(2)
+        await enviar_painel_armas_saiu()
+        await enviar_painel_armas()
 
 # ================ 15.9 PAINEL ARMAS PERDEU ==============
 class ArmasPerdeuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="💀 Registrar Perda", style=discord.ButtonStyle.danger, custom_id="armas_perdeu_btn", emoji="💀")
+    @discord.ui.button(label="💀 REGISTRAR PERDA", style=discord.ButtonStyle.danger, custom_id="armas_perdeu_btn", emoji="💀")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarArmaPerdeuModal())
 
@@ -11055,54 +11068,60 @@ async def enviar_painel_armas_perdeu():
     
     embed = discord.Embed(
         title="💀 ARMAS - REGISTRO DE PERDA",
-        description="**Clique no botão abaixo para registrar PERDA de armas**\n\n"
-                   "📌 **Informações:**\n"
-                   "• Nome da arma\n"
-                   "• Perdeu como:\n"
-                   "• Observação",
+        description="**CLIQUE NO BOTÃO ABAIXO PARA REGISTRAR PERDA DE ARMAS**\n\n"
+                   "📌 **INFORMAÇÕES:**\n"
+                   "• NOME DA ARMA\n"
+                   "• PERDEU COMO:\n"
+                   "• OBSERVAÇÃO",
         color=0xe74c3c
     )
     
-    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
-    async for msg in canal.history(limit=100):
-        if msg.author == bot.user:
-            try:
-                await msg.delete()
-            except:
-                pass
-    
-    await canal.send(embed=embed, view=ArmasPerdeuView())
+    try:
+        async for msg in canal.history(limit=200):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.2)
+                except:
+                    pass
+        
+        await asyncio.sleep(0.5)
+        await canal.send(embed=embed, view=ArmasPerdeuView())
+        print(f"📌 Painel de armas perdeu enviado como última mensagem")
+        
+    except Exception as e:
+        print(f"❌ Erro ao enviar painel de armas perdeu: {e}")
 
 class RegistrarArmaPerdeuModal(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
     arma_nome = discord.ui.TextInput(
-        label="🔫 Nome da arma",
-        placeholder="Ex: Fuzil, Pistola, Submetralhadora",
+        label="🔫 NOME DA ARMA",
+        placeholder="EX: FUZIL, PISTOLA, SUBMETRALHADORA",
         required=True
     )
     
     perdeu_como = discord.ui.TextInput(
-        label="💀 Perdeu como:",
-        placeholder="Ex: Morreu, Perdeu no mato, etc",
+        label="💀 PERDEU COMO:",
+        placeholder="EX: MORREU, PERDEU NO MATO, ETC",
         required=True
     )
     
     observacao = discord.ui.TextInput(
-        label="📝 Observação",
+        label="📝 OBSERVAÇÃO",
         style=discord.TextStyle.paragraph,
         required=False,
-        placeholder="Detalhes adicionais sobre a perda"
+        placeholder="DETALHES ADICIONAIS SOBRE A PERDA"
     )
     
     async def on_submit(self, interaction: discord.Interaction):
-        arma_nome = self.arma_nome.value.strip()
-        perdeu_como = self.perdeu_como.value.strip()
-        observacao = self.observacao.value.strip() if self.observacao.value else ""
+        arma_nome = self.arma_nome.value.strip().upper()
+        perdeu_como = self.perdeu_como.value.strip().upper()
+        observacao = self.observacao.value.strip().upper() if self.observacao.value else ""
         
         await registrar_arma(
             "perdeu",
             arma_nome,
             1,
-            interaction.user.display_name,
+            interaction.user.display_name.upper(),
             perdeu_como,
             None,
             observacao
@@ -11115,31 +11134,32 @@ class RegistrarArmaPerdeuModal(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
                 color=0xe74c3c,
                 timestamp=agora()
             )
-            embed.add_field(name="🔫 Arma", value=f"**{arma_nome}**", inline=True)
-            embed.add_field(name="💀 Perdeu como:", value=f"**{perdeu_como}**", inline=True)
+            embed.add_field(name="🔫 ARMA", value=f"**{arma_nome}**", inline=True)
+            embed.add_field(name="💀 PERDEU COMO:", value=f"**{perdeu_como}**", inline=True)
             if observacao:
-                embed.add_field(name="📝 Observação", value=observacao, inline=False)
-            embed.add_field(name="📌 Registrado por", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"Registrado por {interaction.user.display_name}")
+                embed.add_field(name="📝 OBSERVAÇÃO", value=observacao, inline=False)
+            embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
+            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
-            f"✅ **Perda registrada com sucesso!**\n"
-            f"🔫 Arma: {arma_nome}\n"
-            f"💀 Perdeu como: {perdeu_como}",
+            f"✅ **PERDA REGISTRADA COM SUCESSO!**\n"
+            f"🔫 ARMA: {arma_nome}\n"
+            f"💀 PERDEU COMO: {perdeu_como}",
             ephemeral=True
         )
         
-        await atualizar_painel_armas()
-        await fixar_painel_controle_no_final()
+        await asyncio.sleep(2)
+        await enviar_painel_armas_perdeu()
+        await enviar_painel_armas()
 
 # ================ 15.10 PAINEL BAÚ ENTROU ================
 class BauEntrouView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="📥 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="bau_entrou_btn", emoji="📥")
+    @discord.ui.button(label="📥 REGISTRAR ENTRADA", style=discord.ButtonStyle.success, custom_id="bau_entrou_btn", emoji="📥")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarItemBaúModal("entrada"))
 
@@ -11153,7 +11173,7 @@ async def enviar_painel_bau_entrou():
     
     embed = discord.Embed(
         title="📥 BAÚ - ESTOQUE ATUAL",
-        description="**Itens disponíveis no baú**",
+        description="**ITENS DISPONÍVEIS NO BAÚ**",
         color=0x2ecc71,
         timestamp=agora()
     )
@@ -11171,31 +11191,37 @@ async def enviar_painel_bau_entrou():
     if texto:
         embed.add_field(name="📋 ITENS NO BAÚ", value=texto, inline=False)
     else:
-        embed.add_field(name="📋 ITENS NO BAÚ", value="📭 Baú vazio", inline=False)
+        embed.add_field(name="📋 ITENS NO BAÚ", value="📭 BAÚ VAZIO", inline=False)
     
     embed.add_field(
         name="📌 COMO USAR",
-        value="**Clique no botão abaixo para registrar ENTRADA de itens**",
+        value="**CLIQUE NO BOTÃO ABAIXO PARA REGISTRAR ENTRADA DE ITENS**",
         inline=False
     )
-    embed.set_footer(text="Clique em 'Registrar Entrada' para adicionar itens")
+    embed.set_footer(text="CLIQUE EM 'REGISTRAR ENTRADA' PARA ADICIONAR ITENS")
     
-    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
-    async for msg in canal.history(limit=100):
-        if msg.author == bot.user:
-            try:
-                await msg.delete()
-            except:
-                pass
-    
-    await canal.send(embed=embed, view=BauEntrouView())
+    try:
+        async for msg in canal.history(limit=200):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.2)
+                except:
+                    pass
+        
+        await asyncio.sleep(0.5)
+        await canal.send(embed=embed, view=BauEntrouView())
+        print(f"📌 Painel de baú entrou enviado como última mensagem")
+        
+    except Exception as e:
+        print(f"❌ Erro ao enviar painel de baú entrou: {e}")
 
 # ================ 15.11 PAINEL BAÚ SAIU ==================
 class BauSaiuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="📤 Registrar Saída", style=discord.ButtonStyle.primary, custom_id="bau_saiu_btn", emoji="📤")
+    @discord.ui.button(label="📤 REGISTRAR SAÍDA", style=discord.ButtonStyle.primary, custom_id="bau_saiu_btn", emoji="📤")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarItemBaúModal("saida"))
 
@@ -11209,7 +11235,7 @@ async def enviar_painel_bau_saiu():
     
     embed = discord.Embed(
         title="📤 BAÚ - REGISTRO DE SAÍDA",
-        description="**Itens disponíveis para retirada**",
+        description="**ITENS DISPONÍVEIS PARA RETIRADA**",
         color=0x3498db,
         timestamp=agora()
     )
@@ -11227,66 +11253,72 @@ async def enviar_painel_bau_saiu():
     if texto:
         embed.add_field(name="📋 ITENS DISPONÍVEIS", value=texto, inline=False)
     else:
-        embed.add_field(name="📋 ITENS DISPONÍVEIS", value="📭 Baú vazio", inline=False)
+        embed.add_field(name="📋 ITENS DISPONÍVEIS", value="📭 BAÚ VAZIO", inline=False)
     
     embed.add_field(
         name="📌 COMO USAR",
-        value="**Clique no botão abaixo para registrar SAÍDA de itens**",
+        value="**CLIQUE NO BOTÃO ABAIXO PARA REGISTRAR SAÍDA DE ITENS**",
         inline=False
     )
-    embed.set_footer(text="Clique em 'Registrar Saída' para retirar itens")
+    embed.set_footer(text="CLIQUE EM 'REGISTRAR SAÍDA' PARA RETIRAR ITENS")
     
-    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
-    async for msg in canal.history(limit=100):
-        if msg.author == bot.user:
-            try:
-                await msg.delete()
-            except:
-                pass
-    
-    await canal.send(embed=embed, view=BauSaiuView())
+    try:
+        async for msg in canal.history(limit=200):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.2)
+                except:
+                    pass
+        
+        await asyncio.sleep(0.5)
+        await canal.send(embed=embed, view=BauSaiuView())
+        print(f"📌 Painel de baú saiu enviado como última mensagem")
+        
+    except Exception as e:
+        print(f"❌ Erro ao enviar painel de baú saiu: {e}")
 
 # ================ 15.12 MODAL DE ITEM DO BAÚ ============
 class RegistrarItemBaúModal(discord.ui.Modal):
     def __init__(self, tipo_movimento):
-        super().__init__(title=f"📦 Registrar Item - {tipo_movimento.upper()}")
+        super().__init__(title=f"📦 REGISTRAR ITEM - {tipo_movimento.upper()}")
         self.tipo_movimento = tipo_movimento
         
         titulos = {
             "entrada": "📥 ENTRADA DE ITEM",
             "saida": "📤 SAÍDA DE ITEM"
         }
-        self.title = titulos.get(tipo_movimento, "Registrar Item")
+        self.title = titulos.get(tipo_movimento, "REGISTRAR ITEM")
     
     item_nome = discord.ui.TextInput(
-        label="📦 Nome do item",
-        placeholder="Ex: Colete, Munição PT, Kit Reparo",
+        label="📦 NOME DO ITEM",
+        placeholder="EX: COLETE, MUNIÇÃO PT, KIT REPARO",
         required=True
     )
     
     quantidade = discord.ui.TextInput(
-        label="📦 Quantidade",
-        placeholder="Digite a quantidade",
+        label="📦 QUANTIDADE",
+        placeholder="DIGITE A QUANTIDADE",
         required=True
     )
     
     responsavel = discord.ui.TextInput(
-        label="👤 Responsável",
-        placeholder="Seu nome ou passaporte",
+        label="👤 RESPONSÁVEL",
+        placeholder="SEU NOME OU PASSAPORTE",
         required=True
     )
     
     membro_nome = discord.ui.TextInput(
-        label="👤 Membro que pegou (se for saída)",
-        placeholder="Nome do membro (opcional)",
+        label="👤 MEMBRO QUE PEGOU (SE FOR SAÍDA)",
+        placeholder="NOME DO MEMBRO (OPCIONAL)",
         required=False
     )
     
     observacao = discord.ui.TextInput(
-        label="📝 Observação",
+        label="📝 OBSERVAÇÃO",
         style=discord.TextStyle.paragraph,
         required=False,
-        placeholder="Ex: Motivo, local, etc"
+        placeholder="EX: MOTIVO, LOCAL, ETC"
     )
     
     async def on_submit(self, interaction: discord.Interaction):
@@ -11295,16 +11327,16 @@ class RegistrarItemBaúModal(discord.ui.Modal):
             if qtd <= 0:
                 raise ValueError
         except:
-            await interaction.response.send_message("❌ Quantidade inválida!", ephemeral=True)
+            await interaction.response.send_message("❌ QUANTIDADE INVÁLIDA!", ephemeral=True)
             return
         
         await registrar_item_bau(
-            self.item_nome.value.strip(),
+            self.item_nome.value.strip().upper(),
             qtd,
             self.tipo_movimento,
-            self.responsavel.value.strip(),
-            self.membro_nome.value.strip() if self.membro_nome.value else None,
-            self.observacao.value if self.observacao.value else ""
+            self.responsavel.value.strip().upper(),
+            self.membro_nome.value.strip().upper() if self.membro_nome.value else None,
+            self.observacao.value.strip().upper() if self.observacao.value else ""
         )
         
         canal_destino = CANAL_BAU_ENTROU_ID if self.tipo_movimento == "entrada" else CANAL_BAU_SAIU_ID
@@ -11317,103 +11349,41 @@ class RegistrarItemBaúModal(discord.ui.Modal):
             
             embed = discord.Embed(
                 title=f"{emojis[self.tipo_movimento]} ITEM DO BAÚ - {titulos[self.tipo_movimento]}",
-                description=f"**{self.item_nome.value.strip()}**",
+                description=f"**{self.item_nome.value.strip().upper()}**",
                 color=cores[self.tipo_movimento],
                 timestamp=agora()
             )
-            embed.add_field(name="📦 Quantidade", value=f"**{fmt_num(qtd)}**", inline=True)
-            embed.add_field(name="👤 Responsável", value=self.responsavel.value.strip(), inline=True)
+            embed.add_field(name="📦 QUANTIDADE", value=f"**{fmt_num(qtd)}**", inline=True)
+            embed.add_field(name="👤 RESPONSÁVEL", value=self.responsavel.value.strip().upper(), inline=True)
             if self.membro_nome.value:
-                embed.add_field(name="👤 Membro", value=self.membro_nome.value.strip(), inline=True)
+                embed.add_field(name="👤 MEMBRO", value=self.membro_nome.value.strip().upper(), inline=True)
             if self.observacao.value:
-                embed.add_field(name="📝 Obs", value=self.observacao.value, inline=False)
-            embed.add_field(name="📌 Registrado por", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"Registrado por {interaction.user.display_name}")
+                embed.add_field(name="📝 OBS", value=self.observacao.value.strip().upper(), inline=False)
+            embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
+            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
-            f"✅ **Item registrado com sucesso!**\n"
-            f"📦 Item: {self.item_nome.value.strip()}\n"
-            f"📦 Quantidade: {fmt_num(qtd)}\n"
-            f"📌 Tipo: {self.tipo_movimento.upper()}",
+            f"✅ **ITEM REGISTRADO COM SUCESSO!**\n"
+            f"📦 ITEM: {self.item_nome.value.strip().upper()}\n"
+            f"📦 QUANTIDADE: {fmt_num(qtd)}\n"
+            f"📌 TIPO: {self.tipo_movimento.upper()}",
             ephemeral=True
         )
         
-        # Atualizar os painéis do baú
+        await asyncio.sleep(2)
         await enviar_painel_bau_entrou()
         await enviar_painel_bau_saiu()
-        await atualizar_painel_armas()
-        await fixar_painel_controle_no_final()
+        await enviar_painel_armas()
 
-# ================ 15.13 FUNÇÃO DE FIXAR PAINEL NO FINAL ================
-
-async def fixar_painel_controle_no_final():
-    """Garante que os painéis fiquem no final de cada canal"""
-    try:
-        # Lista de canais para verificar
-        canais = [
-            (CANAL_CONTROLE_ARMAS_ID, "🔫 CONTROLE DE ARMAS", atualizar_painel_armas),
-            (CANAL_ARMAS_ENTROU_ID, "📥 ARMAS - REGISTRO DE ENTRADA", enviar_painel_armas_entrou),
-            (CANAL_ARMAS_SAIU_ID, "📤 ARMAS - REGISTRO DE SAÍDA", enviar_painel_armas_saiu),
-            (CANAL_ARMAS_PERDEU_ID, "💀 ARMAS - REGISTRO DE PERDA", enviar_painel_armas_perdeu),
-            (CANAL_BAU_ENTROU_ID, "📥 BAÚ - ESTOQUE ATUAL", enviar_painel_bau_entrou),
-            (CANAL_BAU_SAIU_ID, "📤 BAÚ - REGISTRO DE SAÍDA", enviar_painel_bau_saiu)
-        ]
-        
-        for canal_id, titulo, func in canais:
-            canal = bot.get_channel(canal_id)
-            if not canal:
-                continue
-            
-            # Procurar a mensagem do painel
-            mensagem_painel = None
-            async for msg in canal.history(limit=100):
-                if msg.author == bot.user and msg.embeds:
-                    if msg.embeds[0].title == titulo:
-                        mensagem_painel = msg
-                        break
-            
-            if not mensagem_painel:
-                # Se não tem painel, criar
-                await func()
-                continue
-            
-            # Verificar se é a última mensagem do BOT
-            ultima_msg_bot = None
-            async for msg in canal.history(limit=100):
-                if msg.author == bot.user:
-                    ultima_msg_bot = msg
-                    break
-            
-            # Se o painel não for a última mensagem do bot, deletar e recriar
-            if ultima_msg_bot and ultima_msg_bot.id != mensagem_painel.id:
-                try:
-                    # Deletar todas as mensagens do bot
-                    async for msg in canal.history(limit=100):
-                        if msg.author == bot.user:
-                            try:
-                                await msg.delete()
-                            except:
-                                pass
-                    
-                    await asyncio.sleep(0.5)
-                    await func()
-                    print(f"📌 Painel recolocado no final do canal {canal.name}")
-                except Exception as e:
-                    print(f"Erro ao recolocar painel em {canal.name}: {e}")
-        
-    except Exception as e:
-        print(f"❌ Erro ao fixar painéis: {e}")
-
-# ================ 15.14 FUNÇÃO PARA VERIFICAR MENSAGENS ================
+# ================ 15.13 FUNÇÃO PARA VERIFICAR MENSAGENS ================
 
 async def on_message_controle(message: discord.Message):
     """Garante que os painéis fiquem no final após cada mensagem"""
     if message.author.bot:
         return
     
-    # Lista de canais de controle
     canais_controle = [
         CANAL_CONTROLE_ARMAS_ID,
         CANAL_ARMAS_ENTROU_ID,
@@ -11425,16 +11395,44 @@ async def on_message_controle(message: discord.Message):
     
     if message.channel.id in canais_controle:
         await asyncio.sleep(3)
-        await fixar_painel_controle_no_final()
+        
+        canal = message.channel
+        try:
+            async for msg in canal.history(limit=200):
+                if msg.author == bot.user:
+                    try:
+                        await msg.delete()
+                        await asyncio.sleep(0.2)
+                    except:
+                        pass
+            
+            await asyncio.sleep(0.5)
+            
+            if canal.id == CANAL_CONTROLE_ARMAS_ID:
+                await enviar_painel_armas()
+            elif canal.id == CANAL_ARMAS_ENTROU_ID:
+                await enviar_painel_armas_entrou()
+            elif canal.id == CANAL_ARMAS_SAIU_ID:
+                await enviar_painel_armas_saiu()
+            elif canal.id == CANAL_ARMAS_PERDEU_ID:
+                await enviar_painel_armas_perdeu()
+            elif canal.id == CANAL_BAU_ENTROU_ID:
+                await enviar_painel_bau_entrou()
+            elif canal.id == CANAL_BAU_SAIU_ID:
+                await enviar_painel_bau_saiu()
+                
+            print(f"📌 Painel recolocado no final do canal {canal.name}")
+            
+        except Exception as e:
+            print(f"❌ Erro ao recolocar painel: {e}")
 
-# ================ 15.15 FUNÇÃO PRINCIPAL ================
+# ================ 15.14 FUNÇÃO PRINCIPAL ================
 
 async def enviar_painel_controle():
     """Envia todos os painéis de controle"""
     await criar_tabelas_controle()
     
-    # Enviar cada painel
-    await atualizar_painel_armas()
+    await enviar_painel_armas()
     await enviar_painel_armas_entrou()
     await enviar_painel_armas_saiu()
     await enviar_painel_armas_perdeu()
