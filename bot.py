@@ -11121,7 +11121,7 @@ class ControleView(discord.ui.View):
             ephemeral=True
         )
     
-    @discord.ui.button(label="🚁 Helicrash", style=discord.ButtonStyle.warning, custom_id="controle_hc", emoji="🚁")
+    @discord.ui.button(label="🚁 Helicrash", style=discord.ButtonStyle.primary, custom_id="controle_hc", emoji="🚁")  # ← CORRIGIDO! era warning, agora é primary
     async def helicrash(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarHCModal())
     
@@ -11219,7 +11219,7 @@ class ControleView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await atualizar_painel_controle()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
-
+        
 class SelecionarMembroView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
