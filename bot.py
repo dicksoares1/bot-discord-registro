@@ -10862,25 +10862,26 @@ class SelecionarItemView(discord.ui.View):
         
         select_categoria = discord.ui.Select(
             placeholder="📂 Selecione a categoria...",
-            options=options_categoria
+            options=options_categoria,
+            custom_id="select_categoria"  # ← ADICIONEI UM custom_id ÚNICO
         )
         select_categoria.callback = self.categoria_callback
         self.add_item(select_categoria)
         
-        # Botão para item personalizado
+        # Botão para item personalizado - custom_id ÚNICO
         self.add_item(discord.ui.Button(
             label="🎯 Item Personalizado",
             style=discord.ButtonStyle.secondary,
-            custom_id="item_personalizado",
+            custom_id="item_personalizado_btn",  # ← custom_id ÚNICO
             emoji="🎯",
             row=1
         ))
         
-        # Botão de cancelar
+        # Botão de cancelar - custom_id ÚNICO
         self.add_item(discord.ui.Button(
             label="❌ Cancelar",
             style=discord.ButtonStyle.danger,
-            custom_id="cancelar_item",
+            custom_id="cancelar_item_btn",  # ← custom_id ÚNICO
             emoji="❌",
             row=1
         ))
@@ -10917,16 +10918,17 @@ class SelecionarItemEspecificoView(discord.ui.View):
         
         select = discord.ui.Select(
             placeholder="🔍 Selecione o item...",
-            options=options[:25]
+            options=options[:25],
+            custom_id="select_item_especifico"  # ← custom_id ÚNICO
         )
         select.callback = self.item_callback
         self.add_item(select)
         
-        # Botão voltar
+        # Botão voltar - custom_id ÚNICO
         self.add_item(discord.ui.Button(
             label="⬅️ Voltar",
             style=discord.ButtonStyle.secondary,
-            custom_id="voltar_categorias",
+            custom_id="voltar_categorias_btn",  # ← custom_id ÚNICO
             emoji="⬅️",
             row=1
         ))
@@ -10945,14 +10947,14 @@ class SelecionarItemEspecificoView(discord.ui.View):
             RegistrarItemBaúModalComItem(item_selecionado, emoji, self.tipo_movimento)
         )
     
-    @discord.ui.button(label="⬅️ Voltar", style=discord.ButtonStyle.secondary, custom_id="voltar_categorias", emoji="⬅️", row=1)
+    @discord.ui.button(label="⬅️ Voltar", style=discord.ButtonStyle.secondary, custom_id="voltar_categorias_btn", emoji="⬅️", row=1)
     async def voltar(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = SelecionarItemView(self.tipo_movimento)
         await interaction.response.edit_message(
             content="**📂 Selecione a categoria do item:**",
             view=view
         )
-
+        
 class RegistrarItemBaúModalComItem(discord.ui.Modal, title="📦 Registrar Item no Baú"):
     def __init__(self, item_nome, emoji="📦", tipo_movimento=None):
         super().__init__()
@@ -11084,7 +11086,7 @@ class RegistrarItemBaúModalComItem(discord.ui.Modal, title="📦 Registrar Item
         )
         
         await atualizar_painel_controle()
-
+        
 # ================ 15.6 VIEWS PRINCIPAIS =============================
 
 class ControleView(discord.ui.View):
