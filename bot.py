@@ -10949,7 +10949,15 @@ class SelecionarOpcaoView(discord.ui.View):
         elif modal_class == "bau":
             modal = RegistrarItemBaúModalComOpcao(opcao_escolhida, dados.get("tipo_movimento"))
         elif modal_class == "manual":
-            modal = AdicionarArmaManualModalComOpcao(opcao_escolhida)
+            # 🔥 PASSAR OS DADOS ADICIONAIS
+            modal = AdicionarArmaManualModalComOpcao(
+                opcao_escolhida,
+                {
+                    "quem_pegou": dados.get("quem_pegou"),
+                    "quantidade": dados.get("quantidade"),
+                    "observacao": dados.get("observacao")
+                }
+            )
         else:
             await interaction.followup.send("❌ ERRO AO PROCESSAR!", ephemeral=True)
             return
@@ -10985,6 +10993,7 @@ class ControleArmasView(discord.ui.View):
             )
             return
         
+        # 🔥 ABRIR O MODAL DIRETO (SEM PRECISAR DE OUTRO BOTÃO)
         await interaction.response.send_modal(AdicionarArmaManualModal())
 
 async def enviar_painel_armas():
@@ -11048,6 +11057,12 @@ async def enviar_painel_armas():
 
 # ================ 15.10 MODAL ADICIONAR MANUAL ===========
 class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUAL"):
+    quem_pegou = discord.ui.TextInput(
+        label="👤 QUEM PEGOU A ARMA",
+        placeholder="EX: BARRY, 820 - LEON, ETC",
+        required=True
+    )
+    
     arma_nome = discord.ui.TextInput(
         label="🔫 NOME DA ARMA (OU APELIDO)",
         placeholder="EX: FUZIL, M4, SIG, AK, GLOCK",
@@ -11082,7 +11097,10 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
         if opcoes and len(opcoes) > 1:
             callback_data = {
                 "tipo": "manual",
-                "modal_class": "manual"
+                "modal_class": "manual",
+                "quem_pegou": self.quem_pegou.value.strip().upper(),
+                "quantidade": qtd,
+                "observacao": self.observacao.value.strip().upper() if self.observacao.value else ""
             }
             view = SelecionarOpcaoView(opcoes, callback_data)
             
@@ -11095,16 +11113,15 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
             return
         
         arma_normalizada = normalizar_nome(arma_digitada)
+        quem_pegou = self.quem_pegou.value.strip().upper()
         observacao = self.observacao.value.strip().upper() if self.observacao.value else ""
-        
-        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
-        responsavel = interaction.user.display_name.upper()
+        responsavel = interaction.user.display_name.upper()  # QUEM REGISTROU
         
         await registrar_arma(
             "saiu",
             arma_normalizada,
             qtd,
-            responsavel,
+            quem_pegou,  # 🔥 RESPONSÁVEL = QUEM PEGOU A ARMA
             f"MANUAL - {observacao}" if observacao else "MANUAL"
         )
         
@@ -11115,7 +11132,8 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
                 color=0x9b59b6,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
+            embed.add_field(name="👤 QUEM PEGOU", value=f"**{quem_pegou}**", inline=True)
+            embed.add_field(name="👤 REGISTRADO POR", value=f"**{responsavel}**", inline=True)
             embed.add_field(name="🔫 ARMA", value=f"**{arma_normalizada}**", inline=True)
             embed.add_field(name="📦 QUANTIDADE", value=f"**{fmt_num(qtd)}**", inline=True)
             if observacao:
@@ -11127,7 +11145,8 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
         
         await interaction.response.send_message(
             f"✅ **ARMA ADICIONADA MANUALMENTE COM SUCESSO!**\n"
-            f"👤 RESPONSÁVEL: {responsavel}\n"
+            f"👤 QUEM PEGOU: {quem_pegou}\n"
+            f"👤 REGISTRADO POR: {responsavel}\n"
             f"🔫 ARMA: {arma_normalizada}\n"
             f"📦 QUANTIDADE: {fmt_num(qtd)}",
             ephemeral=True
@@ -11137,9 +11156,16 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
         await enviar_painel_armas()
 
 class AdicionarArmaManualModalComOpcao(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUAL"):
-    def __init__(self, arma_escolhida):
+    def __init__(self, arma_escolhida, dados_adicionais=None):
         super().__init__()
         self.arma_escolhida = arma_escolhida
+        self.dados_adicionais = dados_adicionais or {}
+    
+    quem_pegou = discord.ui.TextInput(
+        label="👤 QUEM PEGOU A ARMA",
+        placeholder="EX: BARRY, 820 - LEON, ETC",
+        required=True
+    )
     
     quantidade = discord.ui.TextInput(
         label="📦 QUANTIDADE",
@@ -11164,16 +11190,15 @@ class AdicionarArmaManualModalComOpcao(discord.ui.Modal, title="➕ ADICIONAR AR
             return
         
         arma_normalizada = self.arma_escolhida.upper()
+        quem_pegou = self.quem_pegou.value.strip().upper()
         observacao = self.observacao.value.strip().upper() if self.observacao.value else ""
-        
-        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
         responsavel = interaction.user.display_name.upper()
         
         await registrar_arma(
             "saiu",
             arma_normalizada,
             qtd,
-            responsavel,
+            quem_pegou,
             f"MANUAL - {observacao}" if observacao else "MANUAL"
         )
         
@@ -11184,7 +11209,8 @@ class AdicionarArmaManualModalComOpcao(discord.ui.Modal, title="➕ ADICIONAR AR
                 color=0x9b59b6,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
+            embed.add_field(name="👤 QUEM PEGOU", value=f"**{quem_pegou}**", inline=True)
+            embed.add_field(name="👤 REGISTRADO POR", value=f"**{responsavel}**", inline=True)
             embed.add_field(name="🔫 ARMA", value=f"**{arma_normalizada}**", inline=True)
             embed.add_field(name="📦 QUANTIDADE", value=f"**{fmt_num(qtd)}**", inline=True)
             if observacao:
@@ -11196,7 +11222,8 @@ class AdicionarArmaManualModalComOpcao(discord.ui.Modal, title="➕ ADICIONAR AR
         
         await interaction.response.send_message(
             f"✅ **ARMA ADICIONADA MANUALMENTE COM SUCESSO!**\n"
-            f"👤 RESPONSÁVEL: {responsavel}\n"
+            f"👤 QUEM PEGOU: {quem_pegou}\n"
+            f"👤 REGISTRADO POR: {responsavel}\n"
             f"🔫 ARMA: {arma_normalizada}\n"
             f"📦 QUANTIDADE: {fmt_num(qtd)}",
             ephemeral=True
