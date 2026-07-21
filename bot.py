@@ -10576,6 +10576,14 @@ async def enviar_painel_mensagens():
 # ================ 15. SISTEMA DE CONTROLE DE BAÚ ========
 # =========================================================
 
+# ================ 15.1 IDS DOS CANAIS ===================
+CANAL_CONTROLE_ARMAS_ID = 1528938987362848972
+CANAL_ARMAS_ENTROU_ID = 1500983878045798430
+CANAL_ARMAS_SAIU_ID = 1500983930533187734
+CANAL_ARMAS_PERDEU_ID = 1500984222104686693
+CANAL_BAU_ENTROU_ID = 1337358932158578719
+CANAL_BAU_SAIU_ID = 1337358898784632882
+
 # ================ 15.2 CONFIGURAÇÕES ====================
 ITENS_DISPONIVEIS = [
     # 🔫 PISTOLAS
@@ -10607,7 +10615,7 @@ ITENS_DISPONIVEIS = [
     "🔫 W110",
     
     # 💉 SAÚDE
-    "🩸 SORO",
+    "🩸 VITACORE",
     "💉 ADRENALINA",
     "🚑 PULSEIRA",
     
@@ -10645,7 +10653,6 @@ ITENS_DISPONIVEIS = [
 ]
 
 # ================ 15.3 MAPEAMENTO DE ALIASES ============
-# Mapeamento de apelidos para nomes padronizados
 ALIASES = {
     # 🔫 PISTOLAS
     "five": "FIVE SEVEN",
@@ -10669,7 +10676,7 @@ ALIASES = {
     "sig sauer": "SIG SAUER",
     "m4": "M4",
     "parafal": "PARAFAL",
-    "ak": "AK 103",  # Padrão, mas vai pedir especificar
+    "ak": "AK 103",
     "ak 103": "AK 103",
     "ak 74": "AK 74",
     "g36": "G36",
@@ -10692,7 +10699,7 @@ ALIASES = {
     "capuz": "CAPUZ",
     "algema": "ALGEMA",
     "block celular": "BLOCK DE CELULAR",
-    "block": "BLOCK DE CELULAR",  # Padrão, mas vai pedir especificar
+    "block": "BLOCK DE CELULAR",
     "rastreador": "RASTREADOR DE CELULAR",
     "rastreador de celular": "RASTREADOR DE CELULAR",
     
@@ -10730,7 +10737,6 @@ ALIASES = {
     "placa": "PLACA"
 }
 
-# Itens que têm mais de uma opção (precisa especificar)
 ITENS_COM_OPCOES = {
     "ak": ["AK 103", "AK 74"],
     "block": ["BLOCK DE CELULAR", "BLOCK DE CARRO"],
@@ -10739,37 +10745,29 @@ ITENS_COM_OPCOES = {
 
 # ================ 15.4 FUNÇÃO DE NORMALIZAÇÃO ===========
 def normalizar_nome(texto_digitado):
-    """Converte o texto digitado para o nome padronizado"""
     if not texto_digitado:
         return None
     
     texto = texto_digitado.lower().strip()
     
-    # Verificar se é um alias
     if texto in ALIASES:
         return ALIASES[texto]
     
-    # Verificar se o texto já existe na lista de itens (case insensitive)
     for item in ITENS_DISPONIVEIS:
         item_nome = item.split(" ", 1)[1] if " " in item else item
         if item_nome.lower() == texto:
             return item_nome.upper()
     
-    # Se não encontrou, retorna o texto em maiúsculo
     return texto.upper()
 
 def verificar_opcoes(texto_digitado):
-    """Verifica se o texto tem múltiplas opções e retorna a lista"""
     texto = texto_digitado.lower().strip()
     
-    # Verificar se o texto é um alias com múltiplas opções
     if texto in ITENS_COM_OPCOES:
         return ITENS_COM_OPCOES[texto]
     
-    # Verificar se o texto é um alias que mapeia para um item com múltiplas opções
     if texto in ALIASES:
         nome_convertido = ALIASES[texto]
-        # Verificar se o nome convertido tem múltiplas opções
         for chave, opcoes in ITENS_COM_OPCOES.items():
             if nome_convertido in opcoes:
                 return opcoes
@@ -10786,8 +10784,6 @@ async def criar_tabelas_controle():
                 arma_nome VARCHAR(50) NOT NULL,
                 quantidade INT NOT NULL,
                 responsavel VARCHAR(100),
-                membro_nome VARCHAR(100) NOT NULL,
-                membro_id VARCHAR(30),
                 observacao TEXT,
                 data TIMESTAMP DEFAULT NOW()
             )
@@ -10798,8 +10794,6 @@ async def criar_tabelas_controle():
                 id SERIAL PRIMARY KEY,
                 arma_nome VARCHAR(50) NOT NULL,
                 quantidade INT NOT NULL,
-                membro_nome VARCHAR(100) NOT NULL,
-                membro_id VARCHAR(30),
                 responsavel VARCHAR(100),
                 data_retirada TIMESTAMP DEFAULT NOW(),
                 data_prevista_devolucao TIMESTAMP,
@@ -10815,7 +10809,6 @@ async def criar_tabelas_controle():
                 quantidade INT NOT NULL,
                 tipo_movimento VARCHAR(10) NOT NULL,
                 responsavel VARCHAR(100),
-                membro_nome VARCHAR(100),
                 observacao TEXT,
                 data TIMESTAMP DEFAULT NOW()
             )
@@ -10839,25 +10832,18 @@ async def criar_tabelas_controle():
             """, item_nome.upper())
 
 # ================ 15.6 FUNÇÕES DE ARMAS =================
-async def registrar_arma(tipo, arma_nome, quantidade, responsavel, membro_nome, membro_id=None, observacao=""):
+async def registrar_arma(tipo, arma_nome, quantidade, responsavel, observacao=""):
     async with get_db().acquire() as conn:
         await conn.execute("""
-            INSERT INTO armas_controle (tipo, arma_nome, quantidade, responsavel, membro_nome, membro_id, observacao)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """, tipo, arma_nome.upper(), quantidade, responsavel.upper(), membro_nome.upper(), membro_id, observacao.upper() if observacao else "")
+            INSERT INTO armas_controle (tipo, arma_nome, quantidade, responsavel, observacao)
+            VALUES ($1, $2, $3, $4, $5)
+        """, tipo, arma_nome.upper(), quantidade, responsavel.upper(), observacao.upper() if observacao else "")
         
         if tipo == "saiu":
             await conn.execute("""
-                INSERT INTO armas_emprestadas (arma_nome, quantidade, membro_nome, membro_id, responsavel, observacao)
-                VALUES ($1, $2, $3, $4, $5, $6)
-            """, arma_nome.upper(), quantidade, membro_nome.upper(), membro_id, responsavel.upper(), observacao.upper() if observacao else "")
-        
-        elif tipo == "entrou":
-            await conn.execute("""
-                UPDATE armas_emprestadas 
-                SET ativo = false, data_prevista_devolucao = NOW()
-                WHERE LOWER(membro_nome) = LOWER($1) AND LOWER(arma_nome) = LOWER($2) AND ativo = true
-            """, membro_nome, arma_nome)
+                INSERT INTO armas_emprestadas (arma_nome, quantidade, responsavel, observacao)
+                VALUES ($1, $2, $3, $4)
+            """, arma_nome.upper(), quantidade, responsavel.upper(), observacao.upper() if observacao else "")
 
 async def buscar_armas_emprestadas():
     async with get_db().acquire() as conn:
@@ -10867,21 +10853,21 @@ async def buscar_armas_emprestadas():
             ORDER BY data_retirada DESC
         """)
 
-async def remover_arma_emprestada(membro_nome, arma_nome):
+async def remover_arma_emprestada(arma_nome, responsavel):
     async with get_db().acquire() as conn:
         await conn.execute("""
             UPDATE armas_emprestadas 
             SET ativo = false, data_prevista_devolucao = NOW()
-            WHERE LOWER(membro_nome) = LOWER($1) AND LOWER(arma_nome) = LOWER($2) AND ativo = true
-        """, membro_nome, arma_nome)
+            WHERE LOWER(arma_nome) = LOWER($1) AND LOWER(responsavel) = LOWER($2) AND ativo = true
+        """, arma_nome, responsavel)
 
 # ================ 15.7 FUNÇÕES DE BAÚ ===================
-async def registrar_item_bau(item_nome, quantidade, tipo_movimento, responsavel, membro_nome=None, observacao=""):
+async def registrar_item_bau(item_nome, quantidade, tipo_movimento, responsavel, observacao=""):
     async with get_db().acquire() as conn:
         await conn.execute("""
-            INSERT INTO bau_itens (item_nome, quantidade, tipo_movimento, responsavel, membro_nome, observacao)
-            VALUES ($1, $2, $3, $4, $5, $6)
-        """, item_nome.upper(), quantidade, tipo_movimento, responsavel.upper(), membro_nome.upper() if membro_nome else None, observacao.upper() if observacao else "")
+            INSERT INTO bau_itens (item_nome, quantidade, tipo_movimento, responsavel, observacao)
+            VALUES ($1, $2, $3, $4, $5)
+        """, item_nome.upper(), quantidade, tipo_movimento, responsavel.upper(), observacao.upper() if observacao else "")
         
         if tipo_movimento == "entrada":
             await conn.execute("""
@@ -10910,7 +10896,6 @@ class SelecionarOpcaoView(discord.ui.View):
         self.callback_data = callback_data
         
         for opcao in opcoes:
-            # Buscar emoji do item
             emoji = "📦"
             for item in ITENS_DISPONIVEIS:
                 if opcao in item:
@@ -10945,25 +10930,22 @@ class SelecionarOpcaoView(discord.ui.View):
         if custom_id.startswith("opcao_"):
             opcao_escolhida = custom_id.replace("opcao_", "").replace("_", " ")
             await interaction.response.defer()
-            
-            # Processar a escolha
             await self.processar_escolha(interaction, opcao_escolhida)
             return False
         
         return True
     
     async def processar_escolha(self, interaction: discord.Interaction, opcao_escolhida):
-        # Buscar o callback_data armazenado
         dados = self.callback_data
-        tipo = dados.get("tipo")
         modal_class = dados.get("modal_class")
         canal_destino = dados.get("canal_destino")
         
-        # Criar o modal com a opção escolhida
-        if modal_class == "arma":
+        if modal_class == "arma_entrou":
             modal = RegistrarArmaEntrouModalComOpcao(opcao_escolhida, canal_destino)
         elif modal_class == "arma_saiu":
             modal = RegistrarArmaSaiuModalComOpcao(opcao_escolhida, canal_destino)
+        elif modal_class == "arma_perdeu":
+            modal = RegistrarArmaPerdeuModalComOpcao(opcao_escolhida)
         elif modal_class == "bau":
             modal = RegistrarItemBaúModalComOpcao(opcao_escolhida, dados.get("tipo_movimento"))
         elif modal_class == "manual":
@@ -11015,7 +10997,7 @@ async def enviar_painel_armas():
     
     embed = discord.Embed(
         title="🔫 CONTROLE DE ARMAS",
-        description="**MEMBROS COM ARMAS EMPRESTADAS**\n\n📌 **FORMATO:** NOME | ARMA | TEMPO",
+        description="**MEMBROS COM ARMAS EMPRESTADAS**\n\n📌 **FORMATO:** RESPONSÁVEL | ARMA | TEMPO",
         color=0x34495e,
         timestamp=agora()
     )
@@ -11035,7 +11017,7 @@ async def enviar_painel_armas():
             else:
                 cor = "🟢"
             
-            texto += f"{cor} **{arma['membro_nome']}** | {arma['arma_nome']} | {dias} DIA(S)\n"
+            texto += f"{cor} **{arma['responsavel']}** | {arma['arma_nome']} | {dias} DIA(S)\n"
         
         embed.add_field(name="📋 ARMAS EMPRESTADAS", value=texto, inline=False)
         embed.add_field(
@@ -11066,12 +11048,6 @@ async def enviar_painel_armas():
 
 # ================ 15.10 MODAL ADICIONAR MANUAL ===========
 class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUAL"):
-    membro_nome = discord.ui.TextInput(
-        label="👤 NOME DO MEMBRO",
-        placeholder="EX: 820 - LEON",
-        required=True
-    )
-    
     arma_nome = discord.ui.TextInput(
         label="🔫 NOME DA ARMA (OU APELIDO)",
         placeholder="EX: FUZIL, M4, SIG, AK, GLOCK",
@@ -11101,19 +11077,15 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
             return
         
         arma_digitada = self.arma_nome.value.strip()
-        
-        # 🔥 VERIFICAR SE TEM MÚLTIPLAS OPÇÕES
         opcoes = verificar_opcoes(arma_digitada)
         
         if opcoes and len(opcoes) > 1:
-            # Tem múltiplas opções, mostrar select
             callback_data = {
                 "tipo": "manual",
                 "modal_class": "manual"
             }
             view = SelecionarOpcaoView(opcoes, callback_data)
             
-            # Salvar os dados temporariamente para processar depois
             await interaction.response.send_message(
                 f"⚠️ **'{arma_digitada.upper()}' TEM MÚLTIPLAS OPÇÕES!**\n\n"
                 f"**SELECIONE UMA DAS OPÇÕES ABAIXO:**",
@@ -11122,25 +11094,17 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
             )
             return
         
-        # Normalizar o nome
         arma_normalizada = normalizar_nome(arma_digitada)
-        membro_nome = self.membro_nome.value.strip().upper()
         observacao = self.observacao.value.strip().upper() if self.observacao.value else ""
         
-        membro_id = None
-        guild = interaction.guild
-        for member in guild.members:
-            if member.display_name.upper() == membro_nome:
-                membro_id = str(member.id)
-                break
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
         
         await registrar_arma(
             "saiu",
             arma_normalizada,
             qtd,
-            interaction.user.display_name.upper(),
-            membro_nome,
-            membro_id,
+            responsavel,
             f"MANUAL - {observacao}" if observacao else "MANUAL"
         )
         
@@ -11151,19 +11115,19 @@ class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUA
                 color=0x9b59b6,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 MEMBRO", value=f"**{membro_nome}**", inline=True)
+            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
             embed.add_field(name="🔫 ARMA", value=f"**{arma_normalizada}**", inline=True)
             embed.add_field(name="📦 QUANTIDADE", value=f"**{fmt_num(qtd)}**", inline=True)
             if observacao:
                 embed.add_field(name="📝 OBSERVAÇÃO", value=observacao, inline=False)
             embed.add_field(name="📌 ADICIONADO POR", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"ADIÇÃO MANUAL • {interaction.user.display_name.upper()}")
+            embed.set_footer(text=f"ADIÇÃO MANUAL • {responsavel}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
             f"✅ **ARMA ADICIONADA MANUALMENTE COM SUCESSO!**\n"
-            f"👤 MEMBRO: {membro_nome}\n"
+            f"👤 RESPONSÁVEL: {responsavel}\n"
             f"🔫 ARMA: {arma_normalizada}\n"
             f"📦 QUANTIDADE: {fmt_num(qtd)}",
             ephemeral=True
@@ -11176,12 +11140,6 @@ class AdicionarArmaManualModalComOpcao(discord.ui.Modal, title="➕ ADICIONAR AR
     def __init__(self, arma_escolhida):
         super().__init__()
         self.arma_escolhida = arma_escolhida
-    
-    membro_nome = discord.ui.TextInput(
-        label="👤 NOME DO MEMBRO",
-        placeholder="EX: 820 - LEON",
-        required=True
-    )
     
     quantidade = discord.ui.TextInput(
         label="📦 QUANTIDADE",
@@ -11206,23 +11164,16 @@ class AdicionarArmaManualModalComOpcao(discord.ui.Modal, title="➕ ADICIONAR AR
             return
         
         arma_normalizada = self.arma_escolhida.upper()
-        membro_nome = self.membro_nome.value.strip().upper()
         observacao = self.observacao.value.strip().upper() if self.observacao.value else ""
         
-        membro_id = None
-        guild = interaction.guild
-        for member in guild.members:
-            if member.display_name.upper() == membro_nome:
-                membro_id = str(member.id)
-                break
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
         
         await registrar_arma(
             "saiu",
             arma_normalizada,
             qtd,
-            interaction.user.display_name.upper(),
-            membro_nome,
-            membro_id,
+            responsavel,
             f"MANUAL - {observacao}" if observacao else "MANUAL"
         )
         
@@ -11233,19 +11184,19 @@ class AdicionarArmaManualModalComOpcao(discord.ui.Modal, title="➕ ADICIONAR AR
                 color=0x9b59b6,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 MEMBRO", value=f"**{membro_nome}**", inline=True)
+            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
             embed.add_field(name="🔫 ARMA", value=f"**{arma_normalizada}**", inline=True)
             embed.add_field(name="📦 QUANTIDADE", value=f"**{fmt_num(qtd)}**", inline=True)
             if observacao:
                 embed.add_field(name="📝 OBSERVAÇÃO", value=observacao, inline=False)
             embed.add_field(name="📌 ADICIONADO POR", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"ADIÇÃO MANUAL • {interaction.user.display_name.upper()}")
+            embed.set_footer(text=f"ADIÇÃO MANUAL • {responsavel}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
             f"✅ **ARMA ADICIONADA MANUALMENTE COM SUCESSO!**\n"
-            f"👤 MEMBRO: {membro_nome}\n"
+            f"👤 RESPONSÁVEL: {responsavel}\n"
             f"🔫 ARMA: {arma_normalizada}\n"
             f"📦 QUANTIDADE: {fmt_num(qtd)}",
             ephemeral=True
@@ -11273,10 +11224,10 @@ async def enviar_painel_armas_entrou():
         title="📥 ARMAS - REGISTRO DE ENTRADA",
         description="**CLIQUE NO BOTÃO ABAIXO PARA REGISTRAR ENTRADA DE ARMAS**\n\n"
                    "📌 **INFORMAÇÕES:**\n"
-                   "• NOME DO MEMBRO\n"
                    "• NOME DA ARMA (PODE USAR APELIDO: SIG, M4, AK, ETC)\n"
                    "• QUANTIDADE DE MUNIÇÃO\n"
-                   "• MOTIVO",
+                   "• MOTIVO\n\n"
+                   "👤 **QUEM REGISTRA É MARCADO AUTOMATICAMENTE**",
         color=0x2ecc71
     )
     
@@ -11297,12 +11248,6 @@ async def enviar_painel_armas_entrou():
         print(f"❌ Erro ao enviar painel de armas entrou: {e}")
 
 class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
-    membro_nome = discord.ui.TextInput(
-        label="👤 NOME DO MEMBRO",
-        placeholder="NOME DO MEMBRO QUE TROUXE",
-        required=True
-    )
-    
     arma_nome = discord.ui.TextInput(
         label="🔫 NOME DA ARMA (OU APELIDO)",
         placeholder="EX: FUZIL, M4, SIG, AK, GLOCK",
@@ -11331,14 +11276,12 @@ class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
             return
         
         arma_digitada = self.arma_nome.value.strip()
-        
-        # 🔥 VERIFICAR SE TEM MÚLTIPLAS OPÇÕES
         opcoes = verificar_opcoes(arma_digitada)
         
         if opcoes and len(opcoes) > 1:
             callback_data = {
                 "tipo": "entrada",
-                "modal_class": "arma",
+                "modal_class": "arma_entrou",
                 "canal_destino": CANAL_ARMAS_ENTROU_ID
             }
             view = SelecionarOpcaoView(opcoes, callback_data)
@@ -11352,23 +11295,16 @@ class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
             return
         
         arma_normalizada = normalizar_nome(arma_digitada)
-        membro_nome = self.membro_nome.value.strip().upper()
         motivo = self.motivo.value.strip().upper()
         
-        membro_id = None
-        guild = interaction.guild
-        for member in guild.members:
-            if member.display_name.upper() == membro_nome:
-                membro_id = str(member.id)
-                break
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
         
         await registrar_arma(
             "entrou",
             arma_normalizada,
             qtd,
-            interaction.user.display_name.upper(),
-            membro_nome,
-            membro_id,
+            responsavel,
             motivo
         )
         
@@ -11379,18 +11315,18 @@ class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
                 color=0x2ecc71,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 MEMBRO", value=f"**{membro_nome}**", inline=True)
+            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
             embed.add_field(name="🔫 ARMA", value=f"**{arma_normalizada}**", inline=True)
             embed.add_field(name="📦 MUNIÇÃO", value=f"**{fmt_num(qtd)}**", inline=True)
             embed.add_field(name="📝 MOTIVO", value=motivo, inline=False)
             embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
+            embed.set_footer(text=f"REGISTRADO POR {responsavel}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
             f"✅ **ENTRADA REGISTRADA COM SUCESSO!**\n"
-            f"👤 MEMBRO: {membro_nome}\n"
+            f"👤 RESPONSÁVEL: {responsavel}\n"
             f"🔫 ARMA: {arma_normalizada}\n"
             f"📦 MUNIÇÃO: {fmt_num(qtd)}",
             ephemeral=True
@@ -11405,12 +11341,6 @@ class RegistrarArmaEntrouModalComOpcao(discord.ui.Modal, title="📥 ENTRADA DE 
         super().__init__()
         self.arma_escolhida = arma_escolhida
         self.canal_destino = canal_destino
-    
-    membro_nome = discord.ui.TextInput(
-        label="👤 NOME DO MEMBRO",
-        placeholder="NOME DO MEMBRO QUE TROUXE",
-        required=True
-    )
     
     quantidade = discord.ui.TextInput(
         label="📦 QUANTIDADE DE MUNIÇÃO",
@@ -11434,23 +11364,16 @@ class RegistrarArmaEntrouModalComOpcao(discord.ui.Modal, title="📥 ENTRADA DE 
             return
         
         arma_normalizada = self.arma_escolhida.upper()
-        membro_nome = self.membro_nome.value.strip().upper()
         motivo = self.motivo.value.strip().upper()
         
-        membro_id = None
-        guild = interaction.guild
-        for member in guild.members:
-            if member.display_name.upper() == membro_nome:
-                membro_id = str(member.id)
-                break
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
         
         await registrar_arma(
             "entrou",
             arma_normalizada,
             qtd,
-            interaction.user.display_name.upper(),
-            membro_nome,
-            membro_id,
+            responsavel,
             motivo
         )
         
@@ -11461,18 +11384,18 @@ class RegistrarArmaEntrouModalComOpcao(discord.ui.Modal, title="📥 ENTRADA DE 
                 color=0x2ecc71,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 MEMBRO", value=f"**{membro_nome}**", inline=True)
+            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
             embed.add_field(name="🔫 ARMA", value=f"**{arma_normalizada}**", inline=True)
             embed.add_field(name="📦 MUNIÇÃO", value=f"**{fmt_num(qtd)}**", inline=True)
             embed.add_field(name="📝 MOTIVO", value=motivo, inline=False)
             embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
+            embed.set_footer(text=f"REGISTRADO POR {responsavel}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
             f"✅ **ENTRADA REGISTRADA COM SUCESSO!**\n"
-            f"👤 MEMBRO: {membro_nome}\n"
+            f"👤 RESPONSÁVEL: {responsavel}\n"
             f"🔫 ARMA: {arma_normalizada}\n"
             f"📦 MUNIÇÃO: {fmt_num(qtd)}",
             ephemeral=True
@@ -11501,10 +11424,10 @@ async def enviar_painel_armas_saiu():
         title="📤 ARMAS - REGISTRO DE SAÍDA",
         description="**CLIQUE NO BOTÃO ABAIXO PARA REGISTRAR SAÍDA DE ARMAS**\n\n"
                    "📌 **INFORMAÇÕES:**\n"
-                   "• NOME DO MEMBRO\n"
                    "• NOME DA ARMA (PODE USAR APELIDO: SIG, M4, AK, ETC)\n"
                    "• QUANTIDADE DE MUNIÇÃO\n"
-                   "• MOTIVO",
+                   "• MOTIVO\n\n"
+                   "👤 **QUEM REGISTRA É MARCADO AUTOMATICAMENTE**",
         color=0x3498db
     )
     
@@ -11525,12 +11448,6 @@ async def enviar_painel_armas_saiu():
         print(f"❌ Erro ao enviar painel de armas saiu: {e}")
 
 class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
-    membro_nome = discord.ui.TextInput(
-        label="👤 NOME DO MEMBRO",
-        placeholder="NOME DO MEMBRO QUE PEGOU",
-        required=True
-    )
-    
     arma_nome = discord.ui.TextInput(
         label="🔫 NOME DA ARMA (OU APELIDO)",
         placeholder="EX: FUZIL, M4, SIG, AK, GLOCK",
@@ -11559,8 +11476,6 @@ class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
             return
         
         arma_digitada = self.arma_nome.value.strip()
-        
-        # 🔥 VERIFICAR SE TEM MÚLTIPLAS OPÇÕES
         opcoes = verificar_opcoes(arma_digitada)
         
         if opcoes and len(opcoes) > 1:
@@ -11580,23 +11495,16 @@ class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
             return
         
         arma_normalizada = normalizar_nome(arma_digitada)
-        membro_nome = self.membro_nome.value.strip().upper()
         motivo = self.motivo.value.strip().upper()
         
-        membro_id = None
-        guild = interaction.guild
-        for member in guild.members:
-            if member.display_name.upper() == membro_nome:
-                membro_id = str(member.id)
-                break
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
         
         await registrar_arma(
             "saiu",
             arma_normalizada,
             qtd,
-            interaction.user.display_name.upper(),
-            membro_nome,
-            membro_id,
+            responsavel,
             motivo
         )
         
@@ -11607,18 +11515,18 @@ class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
                 color=0x3498db,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 MEMBRO", value=f"**{membro_nome}**", inline=True)
+            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
             embed.add_field(name="🔫 ARMA", value=f"**{arma_normalizada}**", inline=True)
             embed.add_field(name="📦 MUNIÇÃO", value=f"**{fmt_num(qtd)}**", inline=True)
             embed.add_field(name="📝 MOTIVO", value=motivo, inline=False)
             embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
+            embed.set_footer(text=f"REGISTRADO POR {responsavel}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
             f"✅ **SAÍDA REGISTRADA COM SUCESSO!**\n"
-            f"👤 MEMBRO: {membro_nome}\n"
+            f"👤 RESPONSÁVEL: {responsavel}\n"
             f"🔫 ARMA: {arma_normalizada}\n"
             f"📦 MUNIÇÃO: {fmt_num(qtd)}",
             ephemeral=True
@@ -11633,12 +11541,6 @@ class RegistrarArmaSaiuModalComOpcao(discord.ui.Modal, title="📤 SAÍDA DE ARM
         super().__init__()
         self.arma_escolhida = arma_escolhida
         self.canal_destino = canal_destino
-    
-    membro_nome = discord.ui.TextInput(
-        label="👤 NOME DO MEMBRO",
-        placeholder="NOME DO MEMBRO QUE PEGOU",
-        required=True
-    )
     
     quantidade = discord.ui.TextInput(
         label="📦 QUANTIDADE DE MUNIÇÃO",
@@ -11662,23 +11564,16 @@ class RegistrarArmaSaiuModalComOpcao(discord.ui.Modal, title="📤 SAÍDA DE ARM
             return
         
         arma_normalizada = self.arma_escolhida.upper()
-        membro_nome = self.membro_nome.value.strip().upper()
         motivo = self.motivo.value.strip().upper()
         
-        membro_id = None
-        guild = interaction.guild
-        for member in guild.members:
-            if member.display_name.upper() == membro_nome:
-                membro_id = str(member.id)
-                break
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
         
         await registrar_arma(
             "saiu",
             arma_normalizada,
             qtd,
-            interaction.user.display_name.upper(),
-            membro_nome,
-            membro_id,
+            responsavel,
             motivo
         )
         
@@ -11689,18 +11584,18 @@ class RegistrarArmaSaiuModalComOpcao(discord.ui.Modal, title="📤 SAÍDA DE ARM
                 color=0x3498db,
                 timestamp=agora()
             )
-            embed.add_field(name="👤 MEMBRO", value=f"**{membro_nome}**", inline=True)
+            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
             embed.add_field(name="🔫 ARMA", value=f"**{arma_normalizada}**", inline=True)
             embed.add_field(name="📦 MUNIÇÃO", value=f"**{fmt_num(qtd)}**", inline=True)
             embed.add_field(name="📝 MOTIVO", value=motivo, inline=False)
             embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
+            embed.set_footer(text=f"REGISTRADO POR {responsavel}")
             
             await canal.send(embed=embed)
         
         await interaction.response.send_message(
             f"✅ **SAÍDA REGISTRADA COM SUCESSO!**\n"
-            f"👤 MEMBRO: {membro_nome}\n"
+            f"👤 RESPONSÁVEL: {responsavel}\n"
             f"🔫 ARMA: {arma_normalizada}\n"
             f"📦 MUNIÇÃO: {fmt_num(qtd)}",
             ephemeral=True
@@ -11731,7 +11626,8 @@ async def enviar_painel_armas_perdeu():
                    "📌 **INFORMAÇÕES:**\n"
                    "• NOME DA ARMA (PODE USAR APELIDO: SIG, M4, AK, ETC)\n"
                    "• PERDEU COMO:\n"
-                   "• OBSERVAÇÃO",
+                   "• OBSERVAÇÃO\n\n"
+                   "👤 **QUEM REGISTRA É MARCADO AUTOMATICAMENTE**",
         color=0xe74c3c
     )
     
@@ -11773,14 +11669,12 @@ class RegistrarArmaPerdeuModal(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
     
     async def on_submit(self, interaction: discord.Interaction):
         arma_digitada = self.arma_nome.value.strip()
-        
-        # 🔥 VERIFICAR SE TEM MÚLTIPLAS OPÇÕES
         opcoes = verificar_opcoes(arma_digitada)
         
         if opcoes and len(opcoes) > 1:
             callback_data = {
                 "tipo": "perda",
-                "modal_class": "perda"
+                "modal_class": "arma_perdeu"
             }
             view = SelecionarOpcaoView(opcoes, callback_data)
             
@@ -11796,13 +11690,14 @@ class RegistrarArmaPerdeuModal(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
         perdeu_como = self.perdeu_como.value.strip().upper()
         observacao = self.observacao.value.strip().upper() if self.observacao.value else ""
         
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
+        
         await registrar_arma(
             "perdeu",
             arma_normalizada,
             1,
-            interaction.user.display_name.upper(),
-            perdeu_como,
-            None,
+            responsavel,
             observacao
         )
         
@@ -11818,7 +11713,68 @@ class RegistrarArmaPerdeuModal(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
             if observacao:
                 embed.add_field(name="📝 OBSERVAÇÃO", value=observacao, inline=False)
             embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
+            embed.set_footer(text=f"REGISTRADO POR {responsavel}")
+            
+            await canal.send(embed=embed)
+        
+        await interaction.response.send_message(
+            f"✅ **PERDA REGISTRADA COM SUCESSO!**\n"
+            f"🔫 ARMA: {arma_normalizada}\n"
+            f"💀 PERDEU COMO: {perdeu_como}",
+            ephemeral=True
+        )
+        
+        await asyncio.sleep(2)
+        await enviar_painel_armas_perdeu()
+        await enviar_painel_armas()
+
+class RegistrarArmaPerdeuModalComOpcao(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
+    def __init__(self, arma_escolhida):
+        super().__init__()
+        self.arma_escolhida = arma_escolhida
+    
+    perdeu_como = discord.ui.TextInput(
+        label="💀 PERDEU COMO:",
+        placeholder="EX: MORREU, PERDEU NO MATO, ETC",
+        required=True
+    )
+    
+    observacao = discord.ui.TextInput(
+        label="📝 OBSERVAÇÃO",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        placeholder="DETALHES ADICIONAIS SOBRE A PERDA"
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        arma_normalizada = self.arma_escolhida.upper()
+        perdeu_como = self.perdeu_como.value.strip().upper()
+        observacao = self.observacao.value.strip().upper() if self.observacao.value else ""
+        
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
+        
+        await registrar_arma(
+            "perdeu",
+            arma_normalizada,
+            1,
+            responsavel,
+            observacao
+        )
+        
+        canal = interaction.guild.get_channel(CANAL_ARMAS_PERDEU_ID)
+        if canal:
+            embed = discord.Embed(
+                title="💀 PERDA DE ARMA",
+                color=0xe74c3c,
+                timestamp=agora()
+            )
+            embed.add_field(name="🔫 ARMA", value=f"**{arma_normalizada}**", inline=True)
+            embed.add_field(name="💀 PERDEU COMO:", value=f"**{perdeu_como}**", inline=True)
+            if observacao:
+                embed.add_field(name="📝 OBSERVAÇÃO", value=observacao, inline=False)
+            embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
+            embed.set_footer(text=f"REGISTRADO POR {responsavel}")
             
             await canal.send(embed=embed)
         
@@ -11877,7 +11833,8 @@ async def enviar_painel_bau_entrou():
         value="**CLIQUE NO BOTÃO ABAIXO PARA REGISTRAR ENTRADA DE ITENS**\n\n"
               "💡 **DICA:** VOCÊ PODE USAR APELIDOS!\n"
               "EX: 'kit comum' → KIT REPAROS COMUM\n"
-              "EX: 'block' → VAI PERGUNTAR QUAL",
+              "EX: 'block' → VAI PERGUNTAR QUAL\n\n"
+              "👤 **QUEM REGISTRA É MARCADO AUTOMATICAMENTE**",
         inline=False
     )
     embed.set_footer(text="CLIQUE EM 'REGISTRAR ENTRADA' PARA ADICIONAR ITENS")
@@ -11942,7 +11899,8 @@ async def enviar_painel_bau_saiu():
         value="**CLIQUE NO BOTÃO ABAIXO PARA REGISTRAR SAÍDA DE ITENS**\n\n"
               "💡 **DICA:** VOCÊ PODE USAR APELIDOS!\n"
               "EX: 'kit raro' → KIT REPAROS RARO\n"
-              "EX: 'block' → VAI PERGUNTAR QUAL",
+              "EX: 'block' → VAI PERGUNTAR QUAL\n\n"
+              "👤 **QUEM REGISTRA É MARCADO AUTOMATICAMENTE**",
         inline=False
     )
     embed.set_footer(text="CLIQUE EM 'REGISTRAR SAÍDA' PARA RETIRAR ITENS")
@@ -11987,18 +11945,6 @@ class RegistrarItemBaúModal(discord.ui.Modal):
         required=True
     )
     
-    responsavel = discord.ui.TextInput(
-        label="👤 RESPONSÁVEL",
-        placeholder="SEU NOME OU PASSAPORTE",
-        required=True
-    )
-    
-    membro_nome = discord.ui.TextInput(
-        label="👤 MEMBRO QUE PEGOU (SE FOR SAÍDA)",
-        placeholder="NOME DO MEMBRO (OPCIONAL)",
-        required=False
-    )
-    
     observacao = discord.ui.TextInput(
         label="📝 OBSERVAÇÃO",
         style=discord.TextStyle.paragraph,
@@ -12016,8 +11962,6 @@ class RegistrarItemBaúModal(discord.ui.Modal):
             return
         
         item_digitado = self.item_nome.value.strip()
-        
-        # 🔥 VERIFICAR SE TEM MÚLTIPLAS OPÇÕES
         opcoes = verificar_opcoes(item_digitado)
         
         if opcoes and len(opcoes) > 1:
@@ -12038,12 +11982,14 @@ class RegistrarItemBaúModal(discord.ui.Modal):
         
         item_normalizado = normalizar_nome(item_digitado)
         
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
+        
         await registrar_item_bau(
             item_normalizado,
             qtd,
             self.tipo_movimento,
-            self.responsavel.value.strip().upper(),
-            self.membro_nome.value.strip().upper() if self.membro_nome.value else None,
+            responsavel,
             self.observacao.value.strip().upper() if self.observacao.value else ""
         )
         
@@ -12062,13 +12008,11 @@ class RegistrarItemBaúModal(discord.ui.Modal):
                 timestamp=agora()
             )
             embed.add_field(name="📦 QUANTIDADE", value=f"**{fmt_num(qtd)}**", inline=True)
-            embed.add_field(name="👤 RESPONSÁVEL", value=self.responsavel.value.strip().upper(), inline=True)
-            if self.membro_nome.value:
-                embed.add_field(name="👤 MEMBRO", value=self.membro_nome.value.strip().upper(), inline=True)
+            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
             if self.observacao.value:
                 embed.add_field(name="📝 OBS", value=self.observacao.value.strip().upper(), inline=False)
             embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
+            embed.set_footer(text=f"REGISTRADO POR {responsavel}")
             
             await canal.send(embed=embed)
         
@@ -12076,7 +12020,8 @@ class RegistrarItemBaúModal(discord.ui.Modal):
             f"✅ **ITEM REGISTRADO COM SUCESSO!**\n"
             f"📦 ITEM: {item_normalizado}\n"
             f"📦 QUANTIDADE: {fmt_num(qtd)}\n"
-            f"📌 TIPO: {self.tipo_movimento.upper()}",
+            f"📌 TIPO: {self.tipo_movimento.upper()}\n"
+            f"👤 RESPONSÁVEL: {responsavel}",
             ephemeral=True
         )
         
@@ -12103,18 +12048,6 @@ class RegistrarItemBaúModalComOpcao(discord.ui.Modal, title="📦 REGISTRAR ITE
         required=True
     )
     
-    responsavel = discord.ui.TextInput(
-        label="👤 RESPONSÁVEL",
-        placeholder="SEU NOME OU PASSAPORTE",
-        required=True
-    )
-    
-    membro_nome = discord.ui.TextInput(
-        label="👤 MEMBRO QUE PEGOU (SE FOR SAÍDA)",
-        placeholder="NOME DO MEMBRO (OPCIONAL)",
-        required=False
-    )
-    
     observacao = discord.ui.TextInput(
         label="📝 OBSERVAÇÃO",
         style=discord.TextStyle.paragraph,
@@ -12133,12 +12066,14 @@ class RegistrarItemBaúModalComOpcao(discord.ui.Modal, title="📦 REGISTRAR ITE
         
         item_normalizado = self.item_escolhido.upper()
         
+        # 🔥 RESPONSÁVEL = QUEM ESTÁ FAZENDO A AÇÃO
+        responsavel = interaction.user.display_name.upper()
+        
         await registrar_item_bau(
             item_normalizado,
             qtd,
             self.tipo_movimento,
-            self.responsavel.value.strip().upper(),
-            self.membro_nome.value.strip().upper() if self.membro_nome.value else None,
+            responsavel,
             self.observacao.value.strip().upper() if self.observacao.value else ""
         )
         
@@ -12157,13 +12092,11 @@ class RegistrarItemBaúModalComOpcao(discord.ui.Modal, title="📦 REGISTRAR ITE
                 timestamp=agora()
             )
             embed.add_field(name="📦 QUANTIDADE", value=f"**{fmt_num(qtd)}**", inline=True)
-            embed.add_field(name="👤 RESPONSÁVEL", value=self.responsavel.value.strip().upper(), inline=True)
-            if self.membro_nome.value:
-                embed.add_field(name="👤 MEMBRO", value=self.membro_nome.value.strip().upper(), inline=True)
+            embed.add_field(name="👤 RESPONSÁVEL", value=f"**{responsavel}**", inline=True)
             if self.observacao.value:
                 embed.add_field(name="📝 OBS", value=self.observacao.value.strip().upper(), inline=False)
             embed.add_field(name="📌 REGISTRADO POR", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"REGISTRADO POR {interaction.user.display_name.upper()}")
+            embed.set_footer(text=f"REGISTRADO POR {responsavel}")
             
             await canal.send(embed=embed)
         
@@ -12171,7 +12104,8 @@ class RegistrarItemBaúModalComOpcao(discord.ui.Modal, title="📦 REGISTRAR ITE
             f"✅ **ITEM REGISTRADO COM SUCESSO!**\n"
             f"📦 ITEM: {item_normalizado}\n"
             f"📦 QUANTIDADE: {fmt_num(qtd)}\n"
-            f"📌 TIPO: {self.tipo_movimento.upper()}",
+            f"📌 TIPO: {self.tipo_movimento.upper()}\n"
+            f"👤 RESPONSÁVEL: {responsavel}",
             ephemeral=True
         )
         
@@ -12183,7 +12117,6 @@ class RegistrarItemBaúModalComOpcao(discord.ui.Modal, title="📦 REGISTRAR ITE
 # ================ 15.17 FUNÇÃO PARA VERIFICAR MENSAGENS ================
 
 async def on_message_controle(message: discord.Message):
-    """Garante que os painéis fiquem no final após cada mensagem"""
     if message.author.bot:
         return
     
@@ -12232,7 +12165,6 @@ async def on_message_controle(message: discord.Message):
 # ================ 15.18 FUNÇÃO PRINCIPAL ================
 
 async def enviar_painel_controle():
-    """Envia todos os painéis de controle"""
     await criar_tabelas_controle()
     
     await enviar_painel_armas()
