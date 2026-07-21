@@ -10666,7 +10666,6 @@ async def criar_tabelas_controle():
             )
         """)
         
-        # Inicializar estoque com itens em MAIÚSCULO
         for item in ITENS_DISPONIVEIS:
             item_nome = item.split(" ", 1)[1] if " " in item else item
             await conn.execute("""
@@ -10703,6 +10702,15 @@ async def buscar_armas_emprestadas():
             WHERE ativo = true 
             ORDER BY data_retirada DESC
         """)
+
+async def remover_arma_emprestada(membro_nome, arma_nome):
+    """Remove uma arma da lista de emprestadas (manual)"""
+    async with get_db().acquire() as conn:
+        await conn.execute("""
+            UPDATE armas_emprestadas 
+            SET ativo = false, data_prevista_devolucao = NOW()
+            WHERE LOWER(membro_nome) = LOWER($1) AND LOWER(arma_nome) = LOWER($2) AND ativo = true
+        """, membro_nome, arma_nome)
 
 # ================ 15.5 FUNÇÕES DE BAÚ ===================
 async def registrar_item_bau(item_nome, quantidade, tipo_movimento, responsavel, membro_nome=None, observacao=""):
@@ -10741,6 +10749,22 @@ class ControleArmasView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_armas()
         await interaction.followup.send("✅ PAINEL ATUALIZADO!", ephemeral=True)
+    
+    @discord.ui.button(label="➕ ADICIONAR MANUAL", style=discord.ButtonStyle.primary, custom_id="armas_adicionar_manual", emoji="➕")
+    async def adicionar_manual(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 🔥 VERIFICAR SE É GERENTE OU ADM
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        is_admin = interaction.user.guild_permissions.administrator
+        
+        if not is_gerente and not is_admin:
+            await interaction.response.send_message(
+                "❌ **APENAS GERENTES E ADM PODEM USAR ESTE RECURSO!**",
+                ephemeral=True
+            )
+            return
+        
+        # Abrir modal para adicionar manual
+        await interaction.response.send_modal(AdicionarArmaManualModal())
 
 async def enviar_painel_armas():
     canal = bot.get_channel(CANAL_CONTROLE_ARMAS_ID)
@@ -10801,7 +10825,94 @@ async def enviar_painel_armas():
     except Exception as e:
         print(f"❌ Erro ao enviar painel de armas: {e}")
 
-# ================ 15.7 PAINEL ARMAS ENTROU ==============
+# ================ 15.7 MODAL ADICIONAR MANUAL ===========
+class AdicionarArmaManualModal(discord.ui.Modal, title="➕ ADICIONAR ARMA MANUAL"):
+    membro_nome = discord.ui.TextInput(
+        label="👤 NOME DO MEMBRO",
+        placeholder="EX: 820 - LEON",
+        required=True
+    )
+    
+    arma_nome = discord.ui.TextInput(
+        label="🔫 NOME DA ARMA",
+        placeholder="EX: FUZIL, PISTOLA, SUBMETRALHADORA",
+        required=True
+    )
+    
+    quantidade = discord.ui.TextInput(
+        label="📦 QUANTIDADE",
+        placeholder="DIGITE A QUANTIDADE",
+        required=True
+    )
+    
+    observacao = discord.ui.TextInput(
+        label="📝 OBSERVAÇÃO",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        placeholder="EX: MOTIVO, LOCAL, ETC"
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qtd = int(self.quantidade.value.strip())
+            if qtd <= 0:
+                raise ValueError
+        except:
+            await interaction.response.send_message("❌ QUANTIDADE INVÁLIDA!", ephemeral=True)
+            return
+        
+        membro_nome = self.membro_nome.value.strip().upper()
+        arma_nome = self.arma_nome.value.strip().upper()
+        observacao = self.observacao.value.strip().upper() if self.observacao.value else ""
+        
+        # Buscar ID do membro
+        membro_id = None
+        guild = interaction.guild
+        for member in guild.members:
+            if member.display_name.upper() == membro_nome:
+                membro_id = str(member.id)
+                break
+        
+        # Registrar como saída (emprestar arma)
+        await registrar_arma(
+            "saiu",
+            arma_nome,
+            qtd,
+            interaction.user.display_name.upper(),
+            membro_nome,
+            membro_id,
+            f"MANUAL - {observacao}" if observacao else "MANUAL"
+        )
+        
+        canal = interaction.guild.get_channel(CANAL_ARMAS_SAIU_ID)
+        if canal:
+            embed = discord.Embed(
+                title="➕ ADIÇÃO MANUAL DE ARMA",
+                color=0x9b59b6,
+                timestamp=agora()
+            )
+            embed.add_field(name="👤 MEMBRO", value=f"**{membro_nome}**", inline=True)
+            embed.add_field(name="🔫 ARMA", value=f"**{arma_nome}**", inline=True)
+            embed.add_field(name="📦 QUANTIDADE", value=f"**{fmt_num(qtd)}**", inline=True)
+            if observacao:
+                embed.add_field(name="📝 OBSERVAÇÃO", value=observacao, inline=False)
+            embed.add_field(name="📌 ADICIONADO POR", value=interaction.user.mention, inline=False)
+            embed.set_footer(text=f"ADIÇÃO MANUAL • {interaction.user.display_name.upper()}")
+            
+            await canal.send(embed=embed)
+        
+        await interaction.response.send_message(
+            f"✅ **ARMA ADICIONADA MANUALMENTE COM SUCESSO!**\n"
+            f"👤 MEMBRO: {membro_nome}\n"
+            f"🔫 ARMA: {arma_nome}\n"
+            f"📦 QUANTIDADE: {fmt_num(qtd)}",
+            ephemeral=True
+        )
+        
+        await asyncio.sleep(2)
+        await enviar_painel_armas()
+
+# ================ 15.8 PAINEL ARMAS ENTROU ==============
 class ArmasEntrouView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -10926,7 +11037,7 @@ class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
         await enviar_painel_armas_entrou()
         await enviar_painel_armas()
 
-# ================ 15.8 PAINEL ARMAS SAIU ================
+# ================ 15.9 PAINEL ARMAS SAIU ================
 class ArmasSaiuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -11051,7 +11162,7 @@ class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
         await enviar_painel_armas_saiu()
         await enviar_painel_armas()
 
-# ================ 15.9 PAINEL ARMAS PERDEU ==============
+# ================ 15.10 PAINEL ARMAS PERDEU ==============
 class ArmasPerdeuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -11154,7 +11265,7 @@ class RegistrarArmaPerdeuModal(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
         await enviar_painel_armas_perdeu()
         await enviar_painel_armas()
 
-# ================ 15.10 PAINEL BAÚ ENTROU ================
+# ================ 15.11 PAINEL BAÚ ENTROU ================
 class BauEntrouView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -11216,7 +11327,7 @@ async def enviar_painel_bau_entrou():
     except Exception as e:
         print(f"❌ Erro ao enviar painel de baú entrou: {e}")
 
-# ================ 15.11 PAINEL BAÚ SAIU ==================
+# ================ 15.12 PAINEL BAÚ SAIU ==================
 class BauSaiuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -11278,7 +11389,7 @@ async def enviar_painel_bau_saiu():
     except Exception as e:
         print(f"❌ Erro ao enviar painel de baú saiu: {e}")
 
-# ================ 15.12 MODAL DE ITEM DO BAÚ ============
+# ================ 15.13 MODAL DE ITEM DO BAÚ ============
 class RegistrarItemBaúModal(discord.ui.Modal):
     def __init__(self, tipo_movimento):
         super().__init__(title=f"📦 REGISTRAR ITEM - {tipo_movimento.upper()}")
@@ -11377,7 +11488,7 @@ class RegistrarItemBaúModal(discord.ui.Modal):
         await enviar_painel_bau_saiu()
         await enviar_painel_armas()
 
-# ================ 15.13 FUNÇÃO PARA VERIFICAR MENSAGENS ================
+# ================ 15.14 FUNÇÃO PARA VERIFICAR MENSAGENS ================
 
 async def on_message_controle(message: discord.Message):
     """Garante que os painéis fiquem no final após cada mensagem"""
@@ -11426,7 +11537,7 @@ async def on_message_controle(message: discord.Message):
         except Exception as e:
             print(f"❌ Erro ao recolocar painel: {e}")
 
-# ================ 15.14 FUNÇÃO PRINCIPAL ================
+# ================ 15.15 FUNÇÃO PRINCIPAL ================
 
 async def enviar_painel_controle():
     """Envia todos os painéis de controle"""
