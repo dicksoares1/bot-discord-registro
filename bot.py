@@ -10576,14 +10576,6 @@ async def enviar_painel_mensagens():
 # ================ 15. SISTEMA DE CONTROLE DE BAÚ ========
 # =========================================================
 
-# ================ 15.1 IDS DOS CANAIS ===================
-CANAL_CONTROLE_ARMAS_ID = 1528938987362848972
-CANAL_ARMAS_ENTROU_ID = 1500983878045798430
-CANAL_ARMAS_SAIU_ID = 1500983930533187734
-CANAL_ARMAS_PERDEU_ID = 1500984222104686693
-CANAL_BAU_ENTROU_ID = 1337358932158578719
-CANAL_BAU_SAIU_ID = 1337358898784632882
-
 # ================ 15.2 CONFIGURAÇÕES ====================
 ITENS_DISPONIVEIS = [
     "🛡️ Colete",
@@ -10765,7 +10757,7 @@ async def atualizar_painel_armas():
     
     embed = discord.Embed(
         title="🔫 CONTROLE DE ARMAS",
-        description="**Membros com armas emprestadas**",
+        description="**Membros com armas emprestadas**\n\n📌 **Formato:** Nome | Arma | Tempo",
         color=0x34495e,
         timestamp=agora()
     )
@@ -10798,14 +10790,16 @@ async def atualizar_painel_armas():
     
     embed.set_footer(text="🟢 < 3 dias | 🟡 3-7 dias | 🔴 > 7 dias")
     
-    # Deletar mensagens antigas do painel
-    async for msg in canal.history(limit=50):
-        if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "🔫 CONTROLE DE ARMAS":
+    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
+    # Deletar todas as mensagens do bot no canal
+    async for msg in canal.history(limit=100):
+        if msg.author == bot.user:
             try:
                 await msg.delete()
             except:
                 pass
     
+    # Enviar o painel como última mensagem
     await canal.send(embed=embed, view=ControleArmasView())
 
 # ================ 15.7 PAINEL ARMAS ENTROU ==============
@@ -10834,9 +10828,9 @@ async def enviar_painel_armas_entrou():
         color=0x2ecc71
     )
     
-    # Deletar mensagens antigas do painel
-    async for msg in canal.history(limit=50):
-        if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "📥 ARMAS - REGISTRO DE ENTRADA":
+    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
+    async for msg in canal.history(limit=100):
+        if msg.author == bot.user:
             try:
                 await msg.delete()
             except:
@@ -10910,6 +10904,7 @@ class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
             embed.add_field(name="🔫 Arma", value=f"**{arma_nome}**", inline=True)
             embed.add_field(name="📦 Munição", value=f"**{fmt_num(qtd)}**", inline=True)
             embed.add_field(name="📝 Motivo", value=self.motivo.value.strip(), inline=False)
+            embed.add_field(name="📌 Registrado por", value=interaction.user.mention, inline=False)
             embed.set_footer(text=f"Registrado por {interaction.user.display_name}")
             
             await canal.send(embed=embed)
@@ -10923,6 +10918,7 @@ class RegistrarArmaEntrouModal(discord.ui.Modal, title="📥 ENTRADA DE ARMAS"):
         )
         
         await atualizar_painel_armas()
+        await fixar_painel_controle_no_final()
 
 # ================ 15.8 PAINEL ARMAS SAIU ================
 class ArmasSaiuView(discord.ui.View):
@@ -10950,9 +10946,9 @@ async def enviar_painel_armas_saiu():
         color=0x3498db
     )
     
-    # Deletar mensagens antigas do painel
-    async for msg in canal.history(limit=50):
-        if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "📤 ARMAS - REGISTRO DE SAÍDA":
+    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
+    async for msg in canal.history(limit=100):
+        if msg.author == bot.user:
             try:
                 await msg.delete()
             except:
@@ -11026,6 +11022,7 @@ class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
             embed.add_field(name="🔫 Arma", value=f"**{arma_nome}**", inline=True)
             embed.add_field(name="📦 Munição", value=f"**{fmt_num(qtd)}**", inline=True)
             embed.add_field(name="📝 Motivo", value=self.motivo.value.strip(), inline=False)
+            embed.add_field(name="📌 Registrado por", value=interaction.user.mention, inline=False)
             embed.set_footer(text=f"Registrado por {interaction.user.display_name}")
             
             await canal.send(embed=embed)
@@ -11039,6 +11036,7 @@ class RegistrarArmaSaiuModal(discord.ui.Modal, title="📤 SAÍDA DE ARMAS"):
         )
         
         await atualizar_painel_armas()
+        await fixar_painel_controle_no_final()
 
 # ================ 15.9 PAINEL ARMAS PERDEU ==============
 class ArmasPerdeuView(discord.ui.View):
@@ -11065,9 +11063,9 @@ async def enviar_painel_armas_perdeu():
         color=0xe74c3c
     )
     
-    # Deletar mensagens antigas do painel
-    async for msg in canal.history(limit=50):
-        if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "💀 ARMAS - REGISTRO DE PERDA":
+    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
+    async for msg in canal.history(limit=100):
+        if msg.author == bot.user:
             try:
                 await msg.delete()
             except:
@@ -11103,7 +11101,7 @@ class RegistrarArmaPerdeuModal(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
         await registrar_arma(
             "perdeu",
             arma_nome,
-            1,  # Quantidade padrão 1
+            1,
             interaction.user.display_name,
             perdeu_como,
             None,
@@ -11121,6 +11119,7 @@ class RegistrarArmaPerdeuModal(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
             embed.add_field(name="💀 Perdeu como:", value=f"**{perdeu_como}**", inline=True)
             if observacao:
                 embed.add_field(name="📝 Observação", value=observacao, inline=False)
+            embed.add_field(name="📌 Registrado por", value=interaction.user.mention, inline=False)
             embed.set_footer(text=f"Registrado por {interaction.user.display_name}")
             
             await canal.send(embed=embed)
@@ -11133,6 +11132,7 @@ class RegistrarArmaPerdeuModal(discord.ui.Modal, title="💀 PERDA DE ARMAS"):
         )
         
         await atualizar_painel_armas()
+        await fixar_painel_controle_no_final()
 
 # ================ 15.10 PAINEL BAÚ ENTROU ================
 class BauEntrouView(discord.ui.View):
@@ -11180,9 +11180,9 @@ async def enviar_painel_bau_entrou():
     )
     embed.set_footer(text="Clique em 'Registrar Entrada' para adicionar itens")
     
-    # Deletar mensagens antigas do painel
-    async for msg in canal.history(limit=50):
-        if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "📥 BAÚ - ESTOQUE ATUAL":
+    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
+    async for msg in canal.history(limit=100):
+        if msg.author == bot.user:
             try:
                 await msg.delete()
             except:
@@ -11236,9 +11236,9 @@ async def enviar_painel_bau_saiu():
     )
     embed.set_footer(text="Clique em 'Registrar Saída' para retirar itens")
     
-    # Deletar mensagens antigas do painel
-    async for msg in canal.history(limit=50):
-        if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "📤 BAÚ - REGISTRO DE SAÍDA":
+    # 🔥 GARANTIR QUE O PAINEL SEJA A ÚLTIMA MENSAGEM
+    async for msg in canal.history(limit=100):
+        if msg.author == bot.user:
             try:
                 await msg.delete()
             except:
@@ -11327,6 +11327,7 @@ class RegistrarItemBaúModal(discord.ui.Modal):
                 embed.add_field(name="👤 Membro", value=self.membro_nome.value.strip(), inline=True)
             if self.observacao.value:
                 embed.add_field(name="📝 Obs", value=self.observacao.value, inline=False)
+            embed.add_field(name="📌 Registrado por", value=interaction.user.mention, inline=False)
             embed.set_footer(text=f"Registrado por {interaction.user.display_name}")
             
             await canal.send(embed=embed)
@@ -11343,6 +11344,7 @@ class RegistrarItemBaúModal(discord.ui.Modal):
         await enviar_painel_bau_entrou()
         await enviar_painel_bau_saiu()
         await atualizar_painel_armas()
+        await fixar_painel_controle_no_final()
 
 # ================ 15.13 FUNÇÃO DE FIXAR PAINEL NO FINAL ================
 
@@ -11366,7 +11368,7 @@ async def fixar_painel_controle_no_final():
             
             # Procurar a mensagem do painel
             mensagem_painel = None
-            async for msg in canal.history(limit=50):
+            async for msg in canal.history(limit=100):
                 if msg.author == bot.user and msg.embeds:
                     if msg.embeds[0].title == titulo:
                         mensagem_painel = msg
@@ -11377,23 +11379,29 @@ async def fixar_painel_controle_no_final():
                 await func()
                 continue
             
-            # Verificar se é a última mensagem
-            ultima_msg = None
-            async for msg in canal.history(limit=1):
-                ultima_msg = msg
-                break
+            # Verificar se é a última mensagem do BOT
+            ultima_msg_bot = None
+            async for msg in canal.history(limit=100):
+                if msg.author == bot.user:
+                    ultima_msg_bot = msg
+                    break
             
-            if ultima_msg and ultima_msg.id == mensagem_painel.id:
-                continue
-            
-            # Se não for a última, deletar e recriar
-            try:
-                await mensagem_painel.delete()
-                await asyncio.sleep(0.5)
-                await func()
-                print(f"📌 Painel recolocado no final do canal {canal.name}")
-            except Exception as e:
-                print(f"Erro ao recolocar painel em {canal.name}: {e}")
+            # Se o painel não for a última mensagem do bot, deletar e recriar
+            if ultima_msg_bot and ultima_msg_bot.id != mensagem_painel.id:
+                try:
+                    # Deletar todas as mensagens do bot
+                    async for msg in canal.history(limit=100):
+                        if msg.author == bot.user:
+                            try:
+                                await msg.delete()
+                            except:
+                                pass
+                    
+                    await asyncio.sleep(0.5)
+                    await func()
+                    print(f"📌 Painel recolocado no final do canal {canal.name}")
+                except Exception as e:
+                    print(f"Erro ao recolocar painel em {canal.name}: {e}")
         
     except Exception as e:
         print(f"❌ Erro ao fixar painéis: {e}")
@@ -11416,7 +11424,7 @@ async def on_message_controle(message: discord.Message):
     ]
     
     if message.channel.id in canais_controle:
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         await fixar_painel_controle_no_final()
 
 # ================ 15.15 FUNÇÃO PRINCIPAL ================
