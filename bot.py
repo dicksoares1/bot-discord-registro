@@ -1856,23 +1856,9 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
         # =========================================================
         
         if vulgo_formatado:
-            # 🔥 FORMATO: Passaporte Nome | Vulgo (sem " - ")
-            nick = f"{self.passaporte.value} {nome_formatado} | {vulgo_formatado}"
+            nick = f"{self.passaporte.value} - {nome_formatado} | {vulgo_formatado}"
         else:
-            nick = f"{self.passaporte.value} {nome_formatado}"
-        
-        # 🔥 GARANTIR QUE NÃO ULTRAPASSA 32 CARACTERES
-        if len(nick) > 32:
-            # Se passar, cortar o nome
-            nome_cortado = nome_formatado[:20]
-            if vulgo_formatado:
-                nick = f"{self.passaporte.value} {nome_cortado} | {vulgo_formatado}"
-            else:
-                nick = f"{self.passaporte.value} {nome_cortado}"
-            
-            # Se ainda passar, cortar mais
-            if len(nick) > 32:
-                nick = nick[:32]
+            nick = f"{self.passaporte.value} - {nome_formatado}"
         
         await membro.edit(nick=nick)
         
@@ -1898,6 +1884,7 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
             view=view,
             ephemeral=True
         )
+
 class TipoRegistroSelect(discord.ui.Select):
     def __init__(self, nome, passaporte, vulgo, telefone, indicado):
         self.nome = nome
@@ -1908,12 +1895,12 @@ class TipoRegistroSelect(discord.ui.Select):
         
         options = [
             discord.SelectOption(
-                label="Membro da 442",
+                label="Agregado",
                 description="Se tornar membro da facção",
                 emoji="🕴️"
             ),
             discord.SelectOption(
-                label="Amigo da 442",
+                label="Amigo",
                 description="Apenas para resenha ou reunião",
                 emoji="🤝"
             )
@@ -1929,7 +1916,10 @@ class TipoRegistroSelect(discord.ui.Select):
         guild = interaction.guild
         membro = interaction.user
         
-        # Cargos
+        # =========================================================
+        # ================= PEGAR CARGOS ==========================
+        # =========================================================
+        
         agregado = guild.get_role(AGREGADO_ROLE_ID)
         amigos = guild.get_role(1309121290241704046)
         convidado = guild.get_role(CONVIDADO_ROLE_ID)
@@ -1937,114 +1927,190 @@ class TipoRegistroSelect(discord.ui.Select):
         
         escolha = self.values[0]
         
-        # Remover cargo "Em Registro"
+        # =========================================================
+        # ================= REMOVER CARGO EM REGISTRO =============
+        # =========================================================
+        
         if em_registro:
-            await membro.remove_roles(em_registro)
-            print(f"✅ Cargo 'Em Registro' removido de {membro.name}")
+            try:
+                await membro.remove_roles(em_registro)
+                print(f"✅ Cargo 'Em Registro' removido de {membro.name}")
+            except Exception as e:
+                print(f"❌ Erro ao remover cargo 'Em Registro': {e}")
         
-        # Adicionar cargo selecionado
-        if escolha == "Membro da 442":
+        # =========================================================
+        # ================= ADICIONAR CARGO SELECIONADO ===========
+        # =========================================================
+        
+        if escolha == "Agregado":
             if agregado:
-                await membro.add_roles(agregado)
-                print(f"✅ Cargo 'Agregado' adicionado para {membro.name}")
-        elif escolha == "Amigo da 442":
+                try:
+                    await membro.add_roles(agregado)
+                    print(f"✅ Cargo 'Agregado' adicionado para {membro.name}")
+                except Exception as e:
+                    print(f"❌ Erro ao adicionar cargo 'Agregado': {e}")
+        elif escolha == "Amigo":
             if amigos:
-                await membro.add_roles(amigos)
-                print(f"✅ Cargo 'Amigos' adicionado para {membro.name}")
+                try:
+                    await membro.add_roles(amigos)
+                    print(f"✅ Cargo 'Amigos' adicionado para {membro.name}")
+                except Exception as e:
+                    print(f"❌ Erro ao adicionar cargo 'Amigos': {e}")
         
-        # Remover cargo convidado (se tiver)
+        # =========================================================
+        # ================= REMOVER CARGO CONVIDADO ===============
+        # =========================================================
+        
         if convidado:
-            await membro.remove_roles(convidado)
+            try:
+                await membro.remove_roles(convidado)
+            except:
+                pass
+        
+        # =========================================================
+        # ================= SALVAR NO BANCO DE DADOS =============
+        # =========================================================
+        
+        try:
+            async with get_db().acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO registros_historico (
+                        user_id, user_name, passaporte, nome, vulgo, 
+                        telefone, indicado, tipo, data_registro
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """, 
+                    str(membro.id),
+                    membro.name,
+                    self.passaporte,
+                    self.nome,
+                    self.vulgo,
+                    self.telefone,
+                    self.indicado,
+                    escolha,
+                    agora_db()
+                )
+                print(f"✅ Registro salvo no banco para {membro.name}")
+        except Exception as e:
+            print(f"❌ Erro ao salvar registro no banco: {e}")
         
         # =========================================================
         # ================= ENVIAR EMBED PARA O HISTÓRICO =========
         # =========================================================
         
-        # 🔥 CANAL DE HISTÓRICO (LOG)
-        canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
+        # 🔥 PEGAR O CANAL DE HISTÓRICO
+        canal_log = interaction.guild.get_channel(CANAL_LOG_REGISTRO_ID)
         
-        if canal_log:
-            
-            embed = discord.Embed(
-                title="🎉 NOVO MEMBRO REGISTRADO!",
-                description=f"**{membro.mention}** acabou de se registrar na **Vida Rasa**!",
-                color=0x2ecc71,
-                timestamp=agora()
+        # 🔥 VERIFICAR SE O CANAL EXISTE
+        if not canal_log:
+            print(f"❌❌❌ CANAL DE HISTÓRICO NÃO ENCONTRADO! ID: {CANAL_LOG_REGISTRO_ID}")
+            await interaction.response.send_message(
+                "⚠️ **Registro concluído, mas NÃO foi possível enviar para o histórico!**\n"
+                "Por favor, avise um administrador.",
+                ephemeral=True
             )
-            
-            # Thumbnail do usuário
-            if membro.display_avatar:
-                embed.set_thumbnail(url=membro.display_avatar.url)
-            
-            embed.set_author(
-                name=membro.display_name,
-                icon_url=membro.display_avatar.url if membro.display_avatar else None
-            )
-            
-            # Informações do Membro
-            informacoes = (
-                f"**📋 Passaporte:** `{self.passaporte}`\n"
-                f"**👤 Nome:** {self.nome}\n"
-                f"**🏷️ Vulgo:** {self.vulgo or '❌ Não informado'}\n"
-                f"**📱 Telefone:** {self.telefone}\n"
-                f"**👤 Indicado por:** {self.indicado or '❌ Não informado'}\n"
-                f"**🎯 Tipo:** {escolha}"
-            )
-            
-            embed.add_field(
-                name="📋 INFORMAÇÕES DO MEMBRO",
-                value=informacoes,
-                inline=False
-            )
-            
-            # Status
-            embed.add_field(
-                name="📌 STATUS",
-                value=(
-                    f"✅ **Registro concluído**\n"
-                    f"🔹 Cargo atribuído: **{escolha}**\n"
-                    f"🆔 ID: `{membro.id}`"
-                ),
-                inline=False
-            )
-            
-            # Cargo atribuído
-            if escolha == "Membro da 442":
-                cargo_emoji = "🕴️"
-            else:
-                cargo_emoji = "🤝"
-            
-            embed.add_field(
-                name="🎯 CARGO ATRIBUÍDO",
-                value=f"{cargo_emoji} **{escolha}**",
-                inline=False
-            )
-            
-            # Footer
-            embed.set_footer(
-                text=f"Registro realizado com sucesso • Sistema Automático",
-                icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
-            )
-            
-            # 🔥 ENVIAR PARA O CANAL DE HISTÓRICO
-            await canal_log.send(embed=embed)
-            print(f"✅ Embed de registro enviado para o canal de histórico")
+            return
         
+        # 🔥 CRIAR O EMBED
+        embed = discord.Embed(
+            title="🎉 NOVO MEMBRO REGISTRADO!",
+            description=f"**{membro.mention}** acabou de se registrar na **Vida Rasa**!",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        
+        if membro.display_avatar:
+            embed.set_thumbnail(url=membro.display_avatar.url)
+        
+        embed.set_author(
+            name=membro.display_name,
+            icon_url=membro.display_avatar.url if membro.display_avatar else None
+        )
+        
+        # Informações do Membro
+        informacoes = (
+            f"**📋 Passaporte:** `{self.passaporte}`\n"
+            f"**👤 Nome:** {self.nome}\n"
+            f"**🏷️ Vulgo:** {self.vulgo or '❌ Não informado'}\n"
+            f"**📱 Telefone:** {self.telefone}\n"
+            f"**👤 Indicado por:** {self.indicado or '❌ Não informado'}\n"
+            f"**🎯 Tipo:** {escolha}"
+        )
+        
+        embed.add_field(
+            name="📋 INFORMAÇÕES DO MEMBRO",
+            value=informacoes,
+            inline=False
+        )
+        
+        # Status
+        embed.add_field(
+            name="📌 STATUS",
+            value=(
+                f"✅ **Registro concluído**\n"
+                f"🔹 Cargo atribuído: **{escolha}**\n"
+                f"🆔 ID: `{membro.id}`\n"
+                f"👤 Nome de usuário: `{membro.name}`"
+            ),
+            inline=False
+        )
+        
+        # Cargo atribuído
+        if escolha == "Agregado":
+            cargo_emoji = "🕴️"
         else:
-            print(f"❌ Canal de histórico NÃO ENCONTRADO! ID: {CANAL_LOG_REGISTRO_ID}")
+            cargo_emoji = "🤝"
+        
+        embed.add_field(
+            name="🎯 CARGO ATRIBUÍDO",
+            value=f"{cargo_emoji} **{escolha}**",
+            inline=False
+        )
+        
+        embed.set_footer(
+            text=f"Registro realizado com sucesso • Sistema Automático",
+            icon_url=bot.user.display_avatar.url if bot.user.display_avatar else None
+        )
+        
+        # 🔥🔥🔥 ENVIAR PARA O CANAL DE HISTÓRICO (COM RETRY) 🔥🔥🔥
+        enviado = False
+        tentativas = 0
+        
+        while not enviado and tentativas < 3:
+            try:
+                await canal_log.send(embed=embed)
+                enviado = True
+                print(f"✅✅✅ Embed de registro ENVIADO com sucesso para {membro.name}!")
+            except Exception as e:
+                tentativas += 1
+                print(f"❌ Tentativa {tentativas} falhou ao enviar embed: {e}")
+                await asyncio.sleep(1)
         
         # =========================================================
         # ================= RESPOSTA AO USUÁRIO ===================
         # =========================================================
         
-        await interaction.response.send_message(
-            f"✅ **Registro concluído com sucesso!**\n\n"
-            f"📋 Você foi registrado como: **{escolha}**\n"
-            f"👤 Nome: {self.nome}\n"
-            f"🏷️ Vulgo: {self.vulgo or 'Não informado'}\n"
-            f"📱 Telefone: {self.telefone}",
-            ephemeral=True
-        )
+        if enviado:
+            await interaction.response.send_message(
+                f"✅ **Registro concluído com sucesso!**\n\n"
+                f"📋 Você foi registrado como: **{escolha}**\n"
+                f"👤 Nome: {self.nome}\n"
+                f"🏷️ Vulgo: {self.vulgo or 'Não informado'}\n"
+                f"📱 Telefone: {self.telefone}\n\n"
+                f"📨 Seu registro foi enviado para o histórico!",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"✅ **Registro concluído com sucesso!**\n\n"
+                f"📋 Você foi registrado como: **{escolha}**\n"
+                f"👤 Nome: {self.nome}\n"
+                f"🏷️ Vulgo: {self.vulgo or 'Não informado'}\n"
+                f"📱 Telefone: {self.telefone}\n\n"
+                f"⚠️ **Mas houve um erro ao enviar para o histórico!**\n"
+                f"Por favor, avise um administrador.",
+                ephemeral=True
+            )
+
 class TipoRegistroView(discord.ui.View):
     def __init__(self, nome, passaporte, vulgo, telefone, indicado):
         super().__init__(timeout=300)
@@ -2056,8 +2122,22 @@ class RegistroView(discord.ui.View):
     
     @discord.ui.button(label="📋 Fazer Registro", style=discord.ButtonStyle.success, custom_id="registro_fazer")
     async def registro(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Verificar se o usuário já está registrado
+        async with get_db().acquire() as conn:
+            existe = await conn.fetchval(
+                "SELECT 1 FROM registros_historico WHERE user_id = $1",
+                str(interaction.user.id)
+            )
+        
+        if existe:
+            await interaction.response.send_message(
+                "❌ **Você já está registrado!**\n"
+                "Caso precise atualizar seus dados, procure um administrador.",
+                ephemeral=True
+            )
+            return
+        
         await interaction.response.send_modal(RegistroModal())
-
 
 # =========================================================
 # ==================== FUNÇÕES DE SAÍDA ====================
