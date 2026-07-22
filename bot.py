@@ -3081,7 +3081,6 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
             ephemeral=True
         )
 
-
 class FecharMetaModal(discord.ui.Modal, title="🔒 Fechar Meta"):
     data_inicio = discord.ui.TextInput(
         label="📅 Data de INÍCIO da meta",
@@ -3266,14 +3265,7 @@ class MetaView(discord.ui.View):
         emoji="💣"
     )
     async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 VERIFICAR SE É O DONO DA SALA
-        is_dono = str(interaction.user.id) == str(self.user_id)
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        
-        if not is_dono and not is_gerente:
-            await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem adicionar pólvora!", ephemeral=True)
-            return
-        
+        # 🔥 REMOVIDA A VERIFICAÇÃO - QUALQUER UM PODE ADICIONAR
         # 🔥 VERIFICAR SE O USUÁRIO TEM META
         async with get_db().acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
@@ -3309,14 +3301,7 @@ class MetaView(discord.ui.View):
         emoji="💰"
     )
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 VERIFICAR SE É O DONO DA SALA
-        is_dono = str(interaction.user.id) == str(self.user_id)
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        
-        if not is_dono and not is_gerente:
-            await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem adicionar dinheiro!", ephemeral=True)
-            return
-        
+        # 🔥 REMOVIDA A VERIFICAÇÃO - QUALQUER UM PODE ADICIONAR
         # 🔥 VERIFICAR SE O USUÁRIO TEM META
         async with get_db().acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
@@ -3352,12 +3337,15 @@ class MetaView(discord.ui.View):
         emoji="🔒"
     )
     async def fechar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 🔥 VERIFICAR SE É O DONO DA SALA
+        # 🔥 MANTER A VERIFICAÇÃO APENAS PARA FECHAR META (mais seguro)
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         
         if not is_dono and not is_gerente:
-            await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem fechar a meta!", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Apenas o dono da sala ou gerentes podem fechar a meta!",
+                ephemeral=True
+            )
             return
         
         await interaction.response.send_modal(FecharMetaModal(self.user_id))
