@@ -1466,235 +1466,6 @@ async def checar_twitch(canal):
         print(f"Erro Twitch API para {canal}: {e}")
         return False, None, None, None
 
-async def checar_kick(canal):
-    """Verifica se um canal da Kick está ao vivo - VERSÃO MELHORADA"""
-    try:
-        # Verificar cache primeiro
-        cache_key = f"kick_{canal}"
-        agora_ts = time_module.time()
-        
-        if cache_key in cache_lives:
-            dados, timestamp = cache_lives[cache_key]
-            if agora_ts - timestamp < CACHE_LIVES_TTL:
-                print(f"📦 Cache Kick: {canal} = {dados[0]}")
-                return dados
-        
-        # =========================================================
-        # ================= TENTATIVA 1: API OFICIAL ==============
-        # =========================================================
-        
-        url_api = f"https://kick.com/api/v2/channels/{canal}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
-        }
-        
-        try:
-            async with http_session.get(url_api, headers=headers, timeout=10) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    if data.get("livestream"):
-                        livestream = data["livestream"]
-                        titulo = livestream.get("session_title", f"Live na Kick - {canal}")
-                        
-                        thumbnail = None
-                        if livestream.get("thumbnail"):
-                            thumbnail = livestream["thumbnail"].get("url")
-                        elif data.get("user", {}).get("profile_pic"):
-                            thumbnail = data["user"]["profile_pic"]
-                        
-                        categoria = data.get("category", {})
-                        jogo = categoria.get("name") if categoria else None
-                        
-                        resultado = (True, titulo, jogo, thumbnail)
-                        cache_lives[cache_key] = (resultado, agora_ts)
-                        print(f"✅ Kick API: {canal} está AO VIVO!")
-                        return resultado
-                    else:
-                        print(f"📴 Kick API: {canal} está OFFLINE")
-                else:
-                    print(f"⚠️ Kick API status {r.status}, tentando fallback")
-        except asyncio.TimeoutError:
-            print(f"⏰ Timeout na API Kick para {canal}, tentando fallback")
-        except Exception as e:
-            print(f"⚠️ Erro na API Kick para {canal}: {e}, tentando fallback")
-        
-        # =========================================================
-        # ================= TENTATIVA 2: SCRAPING HTML ============
-        # =========================================================
-        
-        try:
-            url_page = f"https://kick.com/{canal}"
-            headers_html = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-            }
-            
-            async with http_session.get(url_page, headers=headers_html, timeout=15) as r:
-                if r.status == 200:
-                    html = await r.text()
-                    
-                    # Múltiplos padrões de busca
-                    padroes = [
-                        r'"isLive":\s*true',
-                        r'"livestream":\s*\{',
-                        r'"live":\s*true',
-                        r'isLive:true'
-                    ]
-                    
-                    ao_vivo = False
-                    for padrao in padroes:
-                        if re.search(padrao, html, re.IGNORECASE):
-                            ao_vivo = True
-                            break
-                    
-                    if ao_vivo:
-                        # Tentar extrair título
-                        titulo_match = re.search(r'"sessionTitle":"([^"]+)"', html)
-                        titulo = titulo_match.group(1) if titulo_match else f"Live na Kick - {canal}"
-                        
-                        # Tentar extrair thumbnail
-                        thumb_match = re.search(r'"thumbnail":"([^"]+)"', html)
-                        thumbnail = thumb_match.group(1) if thumb_match else None
-                        
-                        # Tentar extrair jogo
-                        jogo_match = re.search(r'"category":"([^"]+)"', html)
-                        jogo = jogo_match.group(1) if jogo_match else None
-                        
-                        resultado = (True, titulo, jogo, thumbnail)
-                        cache_lives[cache_key] = (resultado, agora_ts)
-                        print(f"✅ Kick HTML: {canal} está AO VIVO!")
-                        return resultado
-                    else:
-                        print(f"📴 Kick HTML: {canal} está OFFLINE")
-                else:
-                    print(f"❌ Kick HTML: status {r.status} para {canal}")
-        except asyncio.TimeoutError:
-            print(f"⏰ Timeout no HTML Kick para {canal}")
-        except Exception as e:
-            print(f"⚠️ Erro no HTML Kick para {canal}: {e}")
-        
-        # =========================================================
-        # ================= TENTATIVA 3: FALLBACK FINAL ===========
-        # =========================================================
-        
-        # Se todas as tentativas falharem, considerar OFFLINE
-        resultado = (False, None, None, None)
-        cache_lives[cache_key] = (resultado, agora_ts)
-        print(f"📴 Kick: {canal} - OFFLINE (fallback final)")
-        return resultado
-        
-    except Exception as e:
-        print(f"❌ Erro ao verificar Kick para {canal}: {e}")
-        import traceback
-        traceback.print_exc()
-        return False, None, None, None
-
-async def checar_tiktok(username):
-    """Verifica se um canal do TikTok está ao vivo - VERSÃO MELHORADA"""
-    try:
-        username = username.lower().replace("@", "").strip()
-        
-        # Verificar cache primeiro
-        cache_key = f"tiktok_{username}"
-        agora_ts = time_module.time()
-        
-        if cache_key in cache_lives:
-            dados, timestamp = cache_lives[cache_key]
-            if agora_ts - timestamp < CACHE_LIVES_TTL:
-                print(f"📦 Cache TikTok: {username} = {dados[0]}")
-                return dados
-        
-        # =========================================================
-        # ================= TENTATIVA 1: API TIKTOK ===============
-        # =========================================================
-        
-        # TikTok tem API pública limitada, mas vamos tentar
-        try:
-            url_api = f"https://www.tiktok.com/api/v1/live/detail/?aid=1988&room_id=&uniqueId={username}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json",
-            }
-            
-            async with http_session.get(url_api, headers=headers, timeout=10) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    if data.get("status_code") == 0 and data.get("data", {}).get("room_id"):
-                        titulo = data.get("data", {}).get("title", f"Live no TikTok - @{username}")
-                        jogo = "TikTok"
-                        thumbnail = data.get("data", {}).get("cover_url")
-                        resultado = (True, titulo, jogo, thumbnail)
-                        cache_lives[cache_key] = (resultado, agora_ts)
-                        print(f"✅ TikTok API: {username} está AO VIVO!")
-                        return resultado
-        except Exception as e:
-            print(f"⚠️ Erro na API TikTok para {username}: {e}")
-        
-        # =========================================================
-        # ================= TENTATIVA 2: SCRAPING =================
-        # =========================================================
-        
-        try:
-            url = f"https://www.tiktok.com/@{username}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-            }
-            
-            async with http_session.get(url, headers=headers, timeout=15) as response:
-                if response.status != 200:
-                    print(f"⚠️ TikTok status {response.status} para {username}")
-                    resultado = (False, None, None, None)
-                    cache_lives[cache_key] = (resultado, agora_ts)
-                    return resultado
-                
-                html = await response.text()
-                
-                # Múltiplos padrões de busca
-                padroes = [
-                    r'"isLive":\s*true',
-                    r'"liveStatus":\s*1',
-                    r'"room_id":"\d+"',
-                    r'"status":\s*1',
-                ]
-                
-                ao_vivo = False
-                for padrao in padroes:
-                    if re.search(padrao, html, re.IGNORECASE):
-                        ao_vivo = True
-                        break
-                
-                if ao_vivo:
-                    titulo_match = re.search(r'"title":"([^"]+)"', html)
-                    titulo = titulo_match.group(1) if titulo_match else f"Live no TikTok - @{username}"
-                    
-                    resultado = (True, titulo, "TikTok", None)
-                    cache_lives[cache_key] = (resultado, agora_ts)
-                    print(f"✅ TikTok HTML: {username} está AO VIVO!")
-                    return resultado
-                else:
-                    print(f"📴 TikTok HTML: {username} está OFFLINE")
-        
-        except asyncio.TimeoutError:
-            print(f"⏰ Timeout no TikTok para {username}")
-        except Exception as e:
-            print(f"⚠️ Erro no TikTok para {username}: {e}")
-        
-        # =========================================================
-        # ================= FALLBACK FINAL ========================
-        # =========================================================
-        
-        resultado = (False, None, None, None)
-        cache_lives[cache_key] = (resultado, agora_ts)
-        return resultado
-        
-    except Exception as e:
-        print(f"❌ Erro ao verificar TikTok para {username}: {e}")
-        return False, None, None, None
 
 # =========================================================
 # ==================== CACHE DE USUÁRIOS ===================
@@ -7243,9 +7014,9 @@ class PainelLivesAdmin(discord.ui.View):
 
 @tasks.loop(minutes=2)
 async def verificar_lives():
-    """Verifica todas as lives cadastradas (Twitch, Kick e TikTok)"""
+    """Verifica apenas lives da Twitch (automático)"""
     
-    print("🔄 Verificando lives...")
+    print("🔄 Verificando lives da Twitch...")
     
     try:
         lives = await carregar_lives_db()
@@ -7266,7 +7037,11 @@ async def verificar_lives():
             canal_name = extrair_canal(link)
             
             if not plataforma or not canal_name:
-                print(f"⚠️ Link inválido ou não suportado: {link}")
+                print(f"⚠️ Link inválido: {link}")
+                continue
+            
+            # 🔥 SÓ VERIFICA TWITCH
+            if plataforma != "twitch":
                 continue
             
             ao_vivo = False
@@ -7275,55 +7050,35 @@ async def verificar_lives():
             thumbnail = None
             
             try:
-                if plataforma == "twitch":
-                    ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal_name)
-                    print(f"📺 Twitch {canal_name}: ao_vivo={ao_vivo}")
-                
-                elif plataforma == "kick":
-                    resultado = await checar_kick(canal_name)
-                    # VERIFICA SE O RETORNO É VÁLIDO
-                    if resultado is not None and len(resultado) == 4:
-                        ao_vivo, titulo, jogo, thumbnail = resultado
-                        print(f"🟢 Kick {canal_name}: ao_vivo={ao_vivo}")
-                    else:
-                        print(f"⚠️ Kick {canal_name}: retorno inválido - {resultado}")
-                        continue
-                
-                elif plataforma == "tiktok":
-                    ao_vivo, titulo, jogo, thumbnail = await checar_tiktok(canal_name)
-                    print(f"📱 TikTok {canal_name}: ao_vivo={ao_vivo}")
-                
-                else:
-                    print(f"⚠️ Plataforma não suportada: {plataforma}")
-                    continue
-                
+                ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal_name)
+                print(f"📺 Twitch {canal_name}: ao_vivo={ao_vivo}")
             except Exception as e:
-                print(f"❌ Erro ao verificar {plataforma}/{canal_name}: {e}")
+                print(f"❌ Erro ao verificar Twitch/{canal_name}: {e}")
                 continue
             
             if not ao_vivo and divulgado:
                 await atualizar_divulgado_db(link, False)
-                print(f"📴 Live encerrada: {plataforma}/{canal_name}")
+                print(f"📴 Live encerrada: Twitch/{canal_name}")
             
             if ao_vivo and not divulgado:
-                print(f"🔴🔴🔴 LIVE DETECTADA ({plataforma.upper()}): {canal_name}")
-                print(f"   → User ID: {user_id}")
-                print(f"   → Link: {link}")
-                print(f"   → Título: {titulo}")
+                print(f"🔴🔴🔴 LIVE DETECTADA (TWITCH): {canal_name}")
                 
                 resultado = await divulgar_live(user_id, link, titulo, jogo, thumbnail)
                 
                 if resultado:
                     await atualizar_divulgado_db(link, True)
-                    print(f"✅ Live divulgada: {plataforma}/{canal_name}")
+                    print(f"✅ Live divulgada: Twitch/{canal_name}")
                 else:
-                    print(f"❌ FALHA ao divulgar live: {plataforma}/{canal_name}")
+                    print(f"❌ FALHA ao divulgar live: Twitch/{canal_name}")
                     
     except Exception as e:
         print(f"❌ Erro no loop de lives: {e}")
         import traceback
         traceback.print_exc()
-async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
+
+
+async def divulgar_live(user_id, link, titulo, jogo, thumbnail, plataforma=None):
+    """Divulga live com embed padronizado para TODAS as plataformas"""
     try:
         canal = bot.get_channel(CANAL_DIVULGACAO_LIVE_ID)
         if not canal:
@@ -7335,36 +7090,428 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail):
             print(f"❌ Usuário {user_id} não encontrado")
             return False
         
-        plataforma = detectar_plataforma(link) or "desconhecida"
+        # Se não veio plataforma, detectar
+        if not plataforma:
+            plataforma = detectar_plataforma(link) or "desconhecida"
         
-        cores = {"twitch": 0x9146FF, "kick": 0x53FC18, "tiktok": 0x000000, "desconhecida": 0x808080}
-        nomes = {"twitch": "Twitch", "kick": "Kick", "tiktok": "TikTok", "desconhecida": "Desconhecida"}
-        icones = {"twitch": "🟣", "kick": "🟢", "tiktok": "📱", "desconhecida": "🔴"}
+        # CORES POR PLATAFORMA
+        cores = {
+            "twitch": 0x9146FF,      # Roxo Twitch
+            "kick": 0x53FC18,        # Verde Kick
+            "tiktok": 0x000000,      # Preto TikTok
+            "youtube": 0xFF0000,     # Vermelho YouTube
+            "desconhecida": 0x808080 # Cinza
+        }
         
-        embed = discord.Embed(title=f"{icones.get(plataforma, '🔴')} LIVE AO VIVO!", color=cores.get(plataforma, 0xff0000))
-        embed.description = f"👤 **Streamer:** {user.mention}\n📺 **Plataforma:** {nomes.get(plataforma, plataforma.upper())}\n"
+        # NOMES POR PLATAFORMA
+        nomes = {
+            "twitch": "Twitch",
+            "kick": "Kick",
+            "tiktok": "TikTok",
+            "youtube": "YouTube",
+            "desconhecida": "Desconhecida"
+        }
+        
+        # ICONES POR PLATAFORMA
+        icones = {
+            "twitch": "🟣",
+            "kick": "🟢",
+            "tiktok": "📱",
+            "youtube": "▶️",
+            "desconhecida": "🔴"
+        }
+        
+        # THUMBNAILS DAS PLATAFORMAS
+        thumbnails = {
+            "twitch": "https://www.twitch.tv/favicon.ico",
+            "kick": "https://kick.com/favicon.ico",
+            "tiktok": "https://www.tiktok.com/favicon.ico",
+            "youtube": "https://www.youtube.com/favicon.ico"
+        }
+        
+        plataforma_nome = nomes.get(plataforma, plataforma.upper())
+        icone = icones.get(plataforma, "🔴")
+        cor = cores.get(plataforma, 0x808080)
+        thumb = thumbnails.get(plataforma)
+        
+        # 🔥 CRIAR O EMBED (MESMO PADRÃO DA TWITCH)
+        embed = discord.Embed(
+            title=f"{icone} LIVE AO VIVO!",
+            color=cor,
+            timestamp=agora()
+        )
+        
+        # Descrição - IGUAL A DA TWITCH
+        descricao = f"👤 **Streamer:** {user.mention}\n📺 **Plataforma:** {plataforma_nome}\n"
+        
+        # Adicionar jogo se tiver
         if jogo and jogo != "TikTok" and jogo != "None" and jogo.strip():
-            embed.description += f"🎮 **Jogo:** {jogo}\n"
-        embed.description += f"📝 **Título:** {titulo or 'Sem título'}\n\n🔗 **Assistir:** {link}"
+            descricao += f"🎮 **Jogo:** {jogo}\n"
         
+        descricao += f"📝 **Título:** {titulo or 'Sem título'}\n\n🔗 **Assistir:** {link}"
+        embed.description = descricao
+        
+        # 🔥 IMAGEM - IGUAL A DA TWITCH
         if thumbnail and thumbnail != "None" and thumbnail.startswith("http"):
             embed.set_image(url=thumbnail)
-        elif plataforma == "kick":
-            embed.set_thumbnail(url="https://kick.com/favicon.ico")
-        elif plataforma == "twitch":
-            embed.set_thumbnail(url="https://www.twitch.tv/favicon.ico")
+        elif thumb:
+            embed.set_thumbnail(url=thumb)
         
+        # 🔥 FOOTER - IGUAL A DA TWITCH
         embed.set_footer(text=f"Live detectada • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
         
-        if plataforma == "tiktok":
-            await canal.send(content=f"🔴 {user.mention} está ao vivo no TikTok!", embed=embed, allowed_mentions=discord.AllowedMentions(users=True))
-        else:
-            await canal.send(content="@everyone 🔴 **LIVE INICIADA!**", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
+        # 🔥 ENVIAR - IGUAL A DA TWITCH
+        await canal.send(
+            content="@everyone 🔴 **LIVE INICIADA!**",
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(everyone=True)
+        )
         
         return True
+        
     except Exception as e:
         print(f"❌ ERRO ao divulgar live: {e}")
+        import traceback
+        traceback.print_exc()
         return False
+
+# =========================================================
+# ================ LIVES MANUAL (KICK/TIKTOK) ============
+# =========================================================
+
+# ================ 2.1 BANCO DE DADOS ===================
+async def criar_tabela_lives_manual():
+    async with get_db().acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS lives_manual (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                user_name VARCHAR(100) NOT NULL,
+                plataforma VARCHAR(20) NOT NULL,
+                link VARCHAR(255) NOT NULL,
+                titulo VARCHAR(255),
+                categoria VARCHAR(100),
+                ativo BOOLEAN DEFAULT true,
+                data_cadastro TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("📋 Tabela lives_manual criada/verificada")
+
+async def salvar_live_manual(user_id, user_name, plataforma, link, titulo, categoria):
+    async with get_db().acquire() as conn:
+        await conn.execute("""
+            UPDATE lives_manual SET ativo = false 
+            WHERE user_id = $1 AND ativo = true
+        """, str(user_id))
+        
+        return await conn.fetchval("""
+            INSERT INTO lives_manual (user_id, user_name, plataforma, link, titulo, categoria)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+        """, str(user_id), user_name, plataforma, link, titulo, categoria)
+
+async def buscar_lives_ativas():
+    async with get_db().acquire() as conn:
+        return await conn.fetch("""
+            SELECT * FROM lives_manual 
+            WHERE ativo = true 
+            ORDER BY data_cadastro DESC
+        """)
+
+async def desativar_live_manual(live_id):
+    async with get_db().acquire() as conn:
+        await conn.execute("""
+            UPDATE lives_manual SET ativo = false WHERE id = $1
+        """, live_id)
+
+# ================ 2.2 MODAL E VIEWS ===================
+class CadastrarLiveManualModal(discord.ui.Modal, title="🎥 CADASTRAR LIVE"):
+    def __init__(self, user_id, user_name):
+        super().__init__()
+        self.user_id = user_id
+        self.user_name = user_name
+    
+    plataforma = discord.ui.TextInput(
+        label="📺 PLATAFORMA",
+        placeholder="EX: KICK, TIKTOK, YOUTUBE, ETC",
+        required=True
+    )
+    
+    link = discord.ui.TextInput(
+        label="🔗 LINK DA LIVE",
+        placeholder="https://kick.com/seu_canal",
+        required=True
+    )
+    
+    titulo = discord.ui.TextInput(
+        label="📝 TÍTULO DA LIVE (OPCIONAL)",
+        placeholder="EX: MUITA AÇÃO NA VDR!",
+        required=False
+    )
+    
+    categoria = discord.ui.TextInput(
+        label="🎮 CATEGORIA/JOGO (OPCIONAL)",
+        placeholder="EX: GTA RP, MINECRAFT, ETC",
+        required=False
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        plataforma = self.plataforma.value.strip().upper()
+        link = self.link.value.strip()
+        titulo = self.titulo.value.strip() if self.titulo.value else None
+        categoria = self.categoria.value.strip() if self.categoria.value else None
+        
+        if not link.startswith("http://") and not link.startswith("https://"):
+            link = f"https://{link}"
+        
+        await salvar_live_manual(
+            self.user_id,
+            self.user_name,
+            plataforma,
+            link,
+            titulo,
+            categoria
+        )
+        
+        embed = discord.Embed(
+            title="✅ LIVE CADASTRADA COM SUCESSO!",
+            description=(
+                f"📺 **Plataforma:** {plataforma}\n"
+                f"🔗 **Link:** {link}\n"
+                f"📝 **Título:** {titulo or 'Não informado'}\n"
+                f"🎮 **Categoria:** {categoria or 'Não informado'}\n\n"
+                f"📢 **Quando for começar a live, clique no botão 'ANUNCIAR LIVE'**"
+            ),
+            color=0x2ecc71
+        )
+        embed.set_footer(text="Sistema de Lives • VDR")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class GerenciarLiveView(discord.ui.View):
+    def __init__(self, user_id, user_name):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        self.user_name = user_name
+    
+    @discord.ui.button(
+        label="📝 Cadastrar/Atualizar Live",
+        style=discord.ButtonStyle.primary,
+        custom_id="cadastrar_live_manual",
+        emoji="📝"
+    )
+    async def cadastrar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != str(self.user_id):
+            await interaction.response.send_message(
+                "❌ Apenas o dono desta live pode cadastrar/atualizar!",
+                ephemeral=True
+            )
+            return
+        
+        await interaction.response.send_modal(CadastrarLiveManualModal(self.user_id, self.user_name))
+    
+    @discord.ui.button(
+        label="📢 ANUNCIAR LIVE",
+        style=discord.ButtonStyle.success,
+        custom_id="anunciar_live_manual",
+        emoji="📢"
+    )
+    async def anunciar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != str(self.user_id):
+            await interaction.response.send_message(
+                "❌ Apenas o dono desta live pode anunciar!",
+                ephemeral=True
+            )
+            return
+        
+        async with get_db().acquire() as conn:
+            live = await conn.fetchrow("""
+                SELECT * FROM lives_manual 
+                WHERE user_id = $1 AND ativo = true
+            """, str(self.user_id))
+        
+        if not live:
+            await interaction.response.send_message(
+                "❌ **Você não tem uma live cadastrada!**\n"
+                "Clique em 'Cadastrar/Atualizar Live' primeiro.",
+                ephemeral=True
+            )
+            return
+        
+        plataforma = live["plataforma"].upper()
+        link = live["link"]
+        titulo = live["titulo"] or "Live ao vivo!"
+        categoria = live["categoria"] or "GTA RP"
+        
+        cores = {
+            "KICK": 0x53FC18,
+            "TIKTOK": 0x000000,
+            "YOUTUBE": 0xFF0000,
+            "TWITCH": 0x9146FF
+        }
+        icones = {
+            "KICK": "🟢",
+            "TIKTOK": "📱",
+            "YOUTUBE": "▶️",
+            "TWITCH": "🟣"
+        }
+        
+        color = cores.get(plataforma, 0x2ecc71)
+        icone = icones.get(plataforma, "🔴")
+        
+        embed = discord.Embed(
+            title=f"{icone} LIVE AO VIVO!",
+            description=(
+                f"👤 **Streamer:** {interaction.user.mention}\n"
+                f"📺 **Plataforma:** {plataforma}\n"
+                f"🎮 **Jogo:** {categoria}\n"
+                f"📝 **Título:** {titulo}\n\n"
+                f"🔗 **Assistir:** {link}"
+            ),
+            color=color,
+            timestamp=agora()
+        )
+        
+        if plataforma == "KICK":
+            embed.set_thumbnail(url="https://kick.com/favicon.ico")
+        elif plataforma == "TWITCH":
+            embed.set_thumbnail(url="https://www.twitch.tv/favicon.ico")
+        elif plataforma == "TIKTOK":
+            embed.set_thumbnail(url="https://www.tiktok.com/favicon.ico")
+        
+        embed.set_footer(text=f"Live iniciada • {agora().strftime('%d/%m/%Y %H:%M')}")
+        
+        canal_divulgacao = interaction.guild.get_channel(CANAL_DIVULGACAO_LIVE_ID)
+        
+        if not canal_divulgacao:
+            await interaction.response.send_message(
+                "❌ Canal de divulgação não encontrado!",
+                ephemeral=True
+            )
+            return
+        
+        await canal_divulgacao.send(
+            content=f"@everyone 🔴 **LIVE INICIADA!**",
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(everyone=True)
+        )
+        
+        await desativar_live_manual(live["id"])
+        
+        await interaction.response.send_message(
+            f"✅ **LIVE ANUNCIADA COM SUCESSO!**\n"
+            f"📢 Anúncio enviado para <#{CANAL_DIVULGACAO_LIVE_ID}>",
+            ephemeral=True
+        )
+    
+    @discord.ui.button(
+        label="❌ Cancelar Live",
+        style=discord.ButtonStyle.danger,
+        custom_id="cancelar_live_manual",
+        emoji="❌"
+    )
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != str(self.user_id):
+            await interaction.response.send_message(
+                "❌ Apenas o dono desta live pode cancelar!",
+                ephemeral=True
+            )
+            return
+        
+        async with get_db().acquire() as conn:
+            live = await conn.fetchrow("""
+                SELECT id FROM lives_manual 
+                WHERE user_id = $1 AND ativo = true
+            """, str(self.user_id))
+        
+        if not live:
+            await interaction.response.send_message(
+                "❌ Você não tem uma live ativa para cancelar!",
+                ephemeral=True
+            )
+            return
+        
+        await desativar_live_manual(live["id"])
+        
+        await interaction.response.send_message(
+            "✅ **Live cancelada com sucesso!**\n"
+            "Você pode cadastrar uma nova live quando quiser.",
+            ephemeral=True
+        )
+
+
+class PainelLivesManualView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(
+        label="🎥 Minha Live",
+        style=discord.ButtonStyle.primary,
+        custom_id="minha_live_manual",
+        emoji="🎥"
+    )
+    async def minha_live(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = GerenciarLiveView(
+            interaction.user.id,
+            interaction.user.display_name
+        )
+        
+        embed = discord.Embed(
+            title="🎥 GERENCIAR MINHA LIVE",
+            description=(
+                "**📌 Como funciona:**\n\n"
+                "1. Clique em **'Cadastrar/Atualizar Live'**\n"
+                "2. Informe a plataforma (Kick, TikTok, etc)\n"
+                "3. Cole o link da sua live\n"
+                "4. Quando começar, clique em **'ANUNCIAR LIVE'**\n\n"
+                "✅ **Plataformas suportadas:**\n"
+                "• 🟢 Kick\n"
+                "• 📱 TikTok\n"
+                "• ▶️ YouTube\n"
+                "• E qualquer outra!"
+            ),
+            color=0x3498db
+        )
+        embed.set_footer(text="Sistema de Lives • VDR")
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+async def enviar_painel_lives_manual():
+    """Envia o painel de lives manual (para Kick, TikTok, etc)"""
+    canal = bot.get_channel(CANAL_CADASTRO_LIVE_ID)
+    if not canal:
+        print("❌ Canal de cadastro de lives não encontrado")
+        return
+    
+    embed = discord.Embed(
+        title="🎥 SISTEMA DE LIVES",
+        description=(
+            "**📌 Como funciona:**\n\n"
+            "🟣 **Twitch** → Detectado AUTOMATICAMENTE!\n"
+            "🟢 **Kick** → Use o sistema MANUAL\n"
+            "📱 **TikTok** → Use o sistema MANUAL\n"
+            "▶️ **Outras** → Use o sistema MANUAL\n\n"
+            "**Para Kick, TikTok e outras:**\n"
+            "1. Clique em **'🎥 Minha Live'**\n"
+            "2. Cadastre sua live\n"
+            "3. Quando começar, clique em **'ANUNCIAR LIVE'**\n\n"
+            "✅ **Simples, rápido e 100% confiável!**"
+        ),
+        color=0x3498db
+    )
+    
+    async for msg in canal.history(limit=50):
+        if msg.author == bot.user:
+            try:
+                await msg.delete()
+                await asyncio.sleep(0.3)
+            except:
+                pass
+    
+    await canal.send(embed=embed, view=PainelLivesManualView())
+    print("🎥 Painel de lives manual enviado")
 
 
 # =========================================================
@@ -12329,6 +12476,7 @@ async def on_ready():
         bot.add_view(SolicitarSalaView())
         bot.add_view(CadastrarLiveView())
         bot.add_view(PainelLivesAdmin())
+        bot.add_view(PainelLivesManualView())
         bot.add_view(PolvoraView())
         bot.add_view(ConfirmarPagamentoView())
         bot.add_view(LavagemView())
@@ -12358,6 +12506,18 @@ async def on_ready():
             verificar_lives.start()
     except Exception as e:
         print("Erro loop lives:", e)
+
+    try:
+        await criar_tabela_lives_manual()
+        print("📋 Tabela de lives manual criada/verificada")
+    except Exception as e:
+        print(f"❌ Erro ao criar tabela de lives manual: {e}")
+    
+    try:
+        await enviar_painel_lives_manual()
+        print("🎥 Painel de lives manual enviado")
+    except Exception as e:
+        print(f"❌ Erro ao enviar painel de lives manual: {e}")
     
     try:
         if not relatorio_semanal_polvoras.is_running():
