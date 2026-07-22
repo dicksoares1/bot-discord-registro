@@ -6967,17 +6967,25 @@ class PublicarLiveManualModal(discord.ui.Modal, title="📢 PUBLICAR LIVE"):
             )
 
 
-
 class RemoverLiveSelect(discord.ui.Select):
     def __init__(self, lives):
         options = []
+        # Usar um set para evitar duplicatas
+        usuarios_vistos = set()
+        
         for row in lives:
             uid = row["user_id"]
+            if uid in usuarios_vistos:
+                continue
+            usuarios_vistos.add(uid)
+            
             user = bot.get_user(int(uid))
             nome = user.display_name if user else f"ID: {uid}"
             options.append(discord.SelectOption(label=nome, value=uid, emoji="🎥"))
+        
         if not options:
             options = [discord.SelectOption(label="Nenhuma live", value="none", emoji="📭")]
+        
         super().__init__(placeholder="Selecione o usuário", options=options)
         self.lives = lives
     
@@ -9234,11 +9242,6 @@ async def enviar_painel_lives():
     
     await canal.send(embed=embed, view=PainelLivesUnicoView())
     print("🎥 Painel único de lives enviado")
-
-async def enviar_painel_admin_lives():
-    embed = discord.Embed(title="⚙️ Painel ADM - Lives", description="Gerencie todas as lives cadastradas.", color=0xe74c3c)
-    await enviar_ou_atualizar_painel("painel_lives_admin", CANAL_CADASTRO_LIVE_ID, embed, PainelLivesAdmin())
-
 
 class SolicitarSalaView(discord.ui.View):
     def __init__(self):
@@ -12722,7 +12725,6 @@ async def on_ready():
             enviar_painel_registro(),
             enviar_painel_fabricacao(),
             enviar_painel_lives(),
-            enviar_painel_admin_lives(),
             enviar_painel_polvoras(),
             enviar_painel_lavagem(),
             enviar_painel_vendas(),
