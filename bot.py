@@ -6855,6 +6855,118 @@ class CadastrarLiveView(discord.ui.View):
     async def cadastrar(self, interaction: discord.Interaction, button):
         await interaction.response.send_modal(CadastrarLiveModal())
 
+class PainelLivesUnicoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(
+        label="🎥 Cadastrar Twitch",
+        style=discord.ButtonStyle.primary,
+        custom_id="cadastrar_twitch",
+        emoji="🎥"
+    )
+    async def cadastrar_twitch(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Cadastra a Twitch (automático)"""
+        await interaction.response.send_modal(CadastrarLiveModal())
+    
+    @discord.ui.button(
+        label="📢 Publicar Live",
+        style=discord.ButtonStyle.success,
+        custom_id="publicar_live",
+        emoji="📢"
+    )
+    async def publicar_live(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Publica live manual (Kick/TikTok/YouTube)"""
+        await interaction.response.send_modal(PublicarLiveManualModal(interaction.user.id, interaction.user.display_name))
+    
+    @discord.ui.button(
+        label="⚙️ Gerenciar",
+        style=discord.ButtonStyle.secondary,
+        custom_id="gerenciar_lives_adm",
+        emoji="⚙️"
+    )
+    async def gerenciar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Painel administrativo (ADM apenas)"""
+        if interaction.user.id != ADM_ID:
+            await interaction.response.send_message("❌ Apenas ADM podem usar este recurso!", ephemeral=True)
+            return
+        
+        view = GerenciarLivesView()
+        await interaction.response.send_message(
+            "**⚙️ PAINEL DE GERENCIAMENTO DE LIVES**\n\n"
+            "📋 **Ver Lives** - Lista todas as lives cadastradas\n"
+            "🗑️ **Remover Live** - Remove um usuário e todas as suas lives",
+            view=view,
+            ephemeral=True
+        )
+
+
+class PublicarLiveManualModal(discord.ui.Modal, title="📢 PUBLICAR LIVE"):
+    def __init__(self, user_id, user_name):
+        super().__init__()
+        self.user_id = user_id
+        self.user_name = user_name
+    
+    plataforma = discord.ui.TextInput(
+        label="📺 PLATAFORMA",
+        placeholder="EX: KICK, TIKTOK, YOUTUBE",
+        required=True
+    )
+    
+    link = discord.ui.TextInput(
+        label="🔗 LINK DA LIVE",
+        placeholder="https://kick.com/seu_canal",
+        required=True
+    )
+    
+    titulo = discord.ui.TextInput(
+        label="📝 TÍTULO DA LIVE",
+        placeholder="EX: MUITA AÇÃO NA VDR!",
+        required=True
+    )
+    
+    jogo = discord.ui.TextInput(
+        label="🎮 JOGO/CATEGORIA",
+        placeholder="EX: GTA RP, MINECRAFT",
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        plataforma = self.plataforma.value.strip().upper()
+        link = self.link.value.strip()
+        titulo = self.titulo.value.strip()
+        jogo = self.jogo.value.strip()
+        
+        if not link.startswith("http://") and not link.startswith("https://"):
+            link = f"https://{link}"
+        
+        resultado = await divulgar_live(
+            user_id=self.user_id,
+            link=link,
+            titulo=titulo,
+            jogo=jogo,
+            thumbnail=None,
+            plataforma=plataforma.lower()
+        )
+        
+        if resultado:
+            await interaction.response.send_message(
+                f"✅ **LIVE PUBLICADA COM SUCESSO!**\n\n"
+                f"📺 **Plataforma:** {plataforma}\n"
+                f"🔗 **Link:** {link}\n"
+                f"📝 **Título:** {titulo}\n"
+                f"🎮 **Jogo:** {jogo}\n\n"
+                f"📢 Anúncio enviado para <#1243325102917943335>",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ **ERRO AO PUBLICAR LIVE!**\n"
+                "Verifique o link e tente novamente.",
+                ephemeral=True
+            )
+
+
 
 class RemoverLiveSelect(discord.ui.Select):
     def __init__(self, lives):
@@ -7477,41 +7589,6 @@ class PainelLivesManualView(discord.ui.View):
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-
-async def enviar_painel_lives_manual():
-    """Envia o painel de lives manual (para Kick, TikTok, etc)"""
-    canal = bot.get_channel(CANAL_CADASTRO_LIVE_ID)
-    if not canal:
-        print("❌ Canal de cadastro de lives não encontrado")
-        return
-    
-    embed = discord.Embed(
-        title="🎥 SISTEMA DE LIVES",
-        description=(
-            "**📌 Como funciona:**\n\n"
-            "🟣 **Twitch** → Detectado AUTOMATICAMENTE!\n"
-            "🟢 **Kick** → Use o sistema MANUAL\n"
-            "📱 **TikTok** → Use o sistema MANUAL\n"
-            "▶️ **Outras** → Use o sistema MANUAL\n\n"
-            "**Para Kick, TikTok e outras:**\n"
-            "1. Clique em **'🎥 Minha Live'**\n"
-            "2. Cadastre sua live\n"
-            "3. Quando começar, clique em **'ANUNCIAR LIVE'**\n\n"
-            "✅ **Simples, rápido e 100% confiável!**"
-        ),
-        color=0x3498db
-    )
-    
-    async for msg in canal.history(limit=50):
-        if msg.author == bot.user:
-            try:
-                await msg.delete()
-                await asyncio.sleep(0.3)
-            except:
-                pass
-    
-    await canal.send(embed=embed, view=PainelLivesManualView())
-    print("🎥 Painel de lives manual enviado")
 
 
 # =========================================================
@@ -9117,14 +9194,46 @@ async def enviar_painel_lavagem():
 
 
 async def enviar_painel_lives():
+    """Envia o painel único de lives"""
     canal = bot.get_channel(CANAL_CADASTRO_LIVE_ID)
     if not canal:
         print("❌ Canal cadastro live não encontrado")
         return
-    embed = discord.Embed(title="🎥 CADASTRO DE LIVE", description="**Clique no botão abaixo para cadastrar sua live!**\n\n📌 **Plataformas suportadas:**\n• Twitch\n• Kick\n• TikTok\n\n⚠️ **Importante:**\n• Cadastre apenas suas próprias lives\n• O link será verificado automaticamente\n• Quando você iniciar uma live, será divulgada automaticamente!", color=0x9146FF)
-    await enviar_ou_atualizar_painel("painel_lives", CANAL_CADASTRO_LIVE_ID, embed, CadastrarLiveView())
-    print("🎥 Painel de cadastro de live verificado/atualizado")
-
+    
+    embed = discord.Embed(
+        title="🎥 SISTEMA DE LIVES",
+        description=(
+            "**Gerencie suas lives de forma simples e rápida!**\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🟣 **TWITCH - AUTOMÁTICO**\n"
+            "• Cadastre sua live **uma única vez**\n"
+            "• Quando entrar ao vivo, o bot **anuncia automaticamente**\n"
+            "• Você não precisa fazer mais nada!\n\n"
+            "🟢 **KICK / TIKTOK / YOUTUBE - MANUAL**\n"
+            "• **Toda vez** que for começar a live, publique manualmente\n"
+            "• Preencha as informações e clique em 'Publicar Live'\n"
+            "• O anúncio vai imediatamente para o canal de divulgação\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "📢 **Todas as lives vão para:** <#1243325102917943335>\n"
+            "⚠️ **Importante:** O link deve ser válido e acessível!"
+        ),
+        color=0x9146FF,
+        timestamp=agora()
+    )
+    embed.set_thumbnail(url="https://www.twitch.tv/favicon.ico")
+    embed.set_footer(text="Vida Rasa • Sistema de Lives")
+    
+    # Deletar mensagens antigas do bot
+    async for msg in canal.history(limit=30):
+        if msg.author == bot.user:
+            try:
+                await msg.delete()
+                await asyncio.sleep(0.3)
+            except:
+                pass
+    
+    await canal.send(embed=embed, view=PainelLivesUnicoView())
+    print("🎥 Painel único de lives enviado")
 
 async def enviar_painel_admin_lives():
     embed = discord.Embed(title="⚙️ Painel ADM - Lives", description="Gerencie todas as lives cadastradas.", color=0xe74c3c)
@@ -12475,6 +12584,7 @@ async def on_ready():
         bot.add_view(RegistroView())
         bot.add_view(SolicitarSalaView())
         bot.add_view(CadastrarLiveView())
+        bot.add_view(PainelLivesUnicoView())
         bot.add_view(PainelLivesAdmin())
         bot.add_view(PainelLivesManualView())
         bot.add_view(PolvoraView())
@@ -12514,10 +12624,10 @@ async def on_ready():
         print(f"❌ Erro ao criar tabela de lives manual: {e}")
     
     try:
-        await enviar_painel_lives_manual()
-        print("🎥 Painel de lives manual enviado")
+        await enviar_painel_lives()
+        print("🎥 Painel único de lives enviado")
     except Exception as e:
-        print(f"❌ Erro ao enviar painel de lives manual: {e}")
+        print(f"❌ Erro ao enviar painel de lives: {e}")
     
     try:
         if not relatorio_semanal_polvoras.is_running():
