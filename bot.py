@@ -21,6 +21,19 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 
 # =========================================================
+# ==================== SEÇÃO 0: BOT =======================
+# =========================================================
+
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+intents.guilds = True
+intents.presences = True
+intents.reactions = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# =========================================================
 # ==================== SEÇÃO GLOBAL: CONFIGURAÇÕES ========
 # =========================================================
 
