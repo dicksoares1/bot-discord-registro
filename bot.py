@@ -2511,31 +2511,46 @@ async def criar_tabela_alugueis():
         return
     try:
         async with pool.acquire() as conn:
+            # DROP e RECREATE para garantir a estrutura correta
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS alugueis (
                     id SERIAL PRIMARY KEY,
                     galpao TEXT NOT NULL,
                     dias_alugados INTEGER DEFAULT 0,
                     data_inicio TIMESTAMP DEFAULT NOW(),
-                    data_fim TIMESTAMP,
                     ativo BOOLEAN DEFAULT true,
                     data_atualizacao TIMESTAMP DEFAULT NOW()
                 )
             """)
             
-            # Inserir registros padrão se não existirem
-            await conn.execute("""
-                INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
-                VALUES ('NORTE', 0, NOW(), true)
-                ON CONFLICT DO NOTHING
-            """)
-            await conn.execute("""
-                INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
-                VALUES ('SUL', 0, NOW(), true)
-                ON CONFLICT DO NOTHING
+            # Verificar se a coluna existe, se não, adicionar
+            coluna_existe = await conn.fetchval("""
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'alugueis' AND column_name = 'dias_alugados'
             """)
             
-            logger.info("✅ TABELA ALUGUEIS CRIADA")
+            if not coluna_existe:
+                await conn.execute("""
+                    ALTER TABLE alugueis ADD COLUMN dias_alugados INTEGER DEFAULT 0
+                """)
+                logger.info("✅ Coluna dias_alugados adicionada")
+            
+            # Verificar se já existem registros
+            existe_norte = await conn.fetchval("SELECT 1 FROM alugueis WHERE galpao = 'NORTE'")
+            if not existe_norte:
+                await conn.execute("""
+                    INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                    VALUES ('NORTE', 0, NOW(), true)
+                """)
+            
+            existe_sul = await conn.fetchval("SELECT 1 FROM alugueis WHERE galpao = 'SUL'")
+            if not existe_sul:
+                await conn.execute("""
+                    INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                    VALUES ('SUL', 0, NOW(), true)
+                """)
+            
+            logger.info("✅ TABELA ALUGUEIS CRIADA/VERIFICADA")
     except Exception as e:
         logger.error(f"❌ ERRO AO CRIAR TABELA ALUGUEIS: {e}")
 
@@ -2546,14 +2561,14 @@ async def salvar_aluguel(galpao, dias):
         return False
     try:
         async with pool.acquire() as conn:
-            # Verificar se já existe
+            # Verificar se já existe registro ativo
             existe = await conn.fetchval(
                 "SELECT id FROM alugueis WHERE galpao = $1 AND ativo = true",
                 galpao
             )
             
             if existe:
-                # Atualizar
+                # Atualizar somando dias
                 await conn.execute("""
                     UPDATE alugueis 
                     SET dias_alugados = dias_alugados + $1,
@@ -2561,7 +2576,7 @@ async def salvar_aluguel(galpao, dias):
                     WHERE galpao = $1 AND ativo = true
                 """, dias, galpao)
             else:
-                # Criar novo
+                # Criar novo registro
                 await conn.execute("""
                     INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
                     VALUES ($1, $2, NOW(), true)
@@ -2611,12 +2626,14 @@ async def resetar_aluguel(galpao):
         return False
     try:
         async with pool.acquire() as conn:
+            # Desativar registro antigo
             await conn.execute("""
                 UPDATE alugueis 
                 SET ativo = false 
                 WHERE galpao = $1 AND ativo = true
             """, galpao)
             
+            # Criar novo registro com 0 dias
             await conn.execute("""
                 INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
                 VALUES ($1, 0, NOW(), true)
@@ -8272,6 +8289,7 @@ async def on_ready():
         return
 
     await criar_tabela_grupos()
+    await criar_tabela_alugueis()
     
     # Carregar guild e membros
     guild = bot.get_guild(GUILD_ID)
@@ -8312,8 +8330,7 @@ async def on_ready():
 
     await recriar_painel_grupos()
 
-    await criar_tabela_alugueis()
-    
+       
     # Limpeza de memória
     gc.collect()
     logger.info("🧹 Limpeza de memória executada")
