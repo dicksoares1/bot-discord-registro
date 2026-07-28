@@ -5616,7 +5616,7 @@ async def enviar_painel_remover_ausencia():
         logger.error(f"❌ Erro ao enviar painel remover ausência: {e}")
 
 # =========================================================
-# ==================== SEÇÃO 10: GRUPOS ===================
+# ==================== SEÇÃO 10: GRUPOS (FINAL) ===========
 # =========================================================
 
 # --- IDs DOS GRUPOS ---
@@ -5819,7 +5819,7 @@ async def buscar_grupo_por_organizacao(nome_org):
         logger.error(f"❌ Erro ao buscar grupo por organização: {e}")
         return None
 
-# --- FUNÇÃO PARA LIMPAR E RECRIAR O PAINEL (AUTOMÁTICO) ---
+# --- FUNÇÃO PARA RECRIAR O PAINEL (AUTOMÁTICO) ---
 async def recriar_painel_grupos():
     """Limpa e recria o painel de grupos automaticamente."""
     canal = bot.get_channel(CANAL_GRUPOS_ID)
@@ -5904,7 +5904,7 @@ class PainelGruposView(discord.ui.View):
         super().__init__(timeout=None)
         self.grupos = grupos
         
-        # Dropdown para selecionar grupo
+        # Dropdown para selecionar grupo (custom_id ÚNICO)
         if grupos and len(grupos) > 0:
             options = []
             for grupo in grupos[:25]:
@@ -5926,7 +5926,7 @@ class PainelGruposView(discord.ui.View):
                     options=options,
                     min_values=1,
                     max_values=1,
-                    custom_id="select_grupo_principal"
+                    custom_id="select_grupo_principal_01"  # ID ÚNICO
                 )
                 select.callback = self.select_callback
                 self.add_item(select)
@@ -5935,14 +5935,14 @@ class PainelGruposView(discord.ui.View):
         self.add_item(discord.ui.Button(
             label="➕ Novo Grupo",
             style=discord.ButtonStyle.success,
-            custom_id="btn_novo_grupo",
+            custom_id="btn_novo_grupo_01",  # ID ÚNICO
             emoji="➕"
         ))
         
         self.add_item(discord.ui.Button(
             label="🔄 Atualizar",
             style=discord.ButtonStyle.secondary,
-            custom_id="btn_atualizar_grupos",
+            custom_id="btn_atualizar_grupos_01",  # ID ÚNICO
             emoji="🔄"
         ))
     
@@ -6000,7 +6000,7 @@ class PainelGruposView(discord.ui.View):
             logger.error(f"❌ Erro: {e}")
             await interaction.followup.send(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
     
-    @discord.ui.button(label="➕ Novo Grupo", style=discord.ButtonStyle.success, custom_id="btn_novo_grupo", emoji="➕")
+    @discord.ui.button(label="➕ Novo Grupo", style=discord.ButtonStyle.success, custom_id="btn_novo_grupo_01", emoji="➕")
     async def novo_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -6009,7 +6009,7 @@ class PainelGruposView(discord.ui.View):
             return
         await interaction.response.send_modal(RegistrarGrupoModal())
     
-    @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_grupos", emoji="🔄")
+    @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_grupos_01", emoji="🔄")
     async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await recriar_painel_grupos()
@@ -6123,121 +6123,71 @@ class GrupoView(discord.ui.View):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-# --- MODAL PARA REGISTRAR (COM 5 CAMPOS APENAS) ---
-class RegistrarGrupoModal(discord.ui.Modal, title="📋 Novo Grupo (1/2)"):
-    """Primeira parte do registro - 5 campos máximos."""
+# --- MODAL PARA REGISTRAR (SOMENTE 5 CAMPOS) ---
+class RegistrarGrupoModal(discord.ui.Modal, title="📋 Registrar Novo Grupo"):
+    """Modal com campos unificados - máximo 5 campos."""
     def __init__(self):
         super().__init__(timeout=300)
         
         self.nome_org = discord.ui.TextInput(
             label="🏷️ Nome da Organização",
-            placeholder="Ex: VDR, Polícia",
+            placeholder="Ex: VDR, Polícia, Mafia",
             required=True,
             max_length=50
         )
-        self.lider_nome = discord.ui.TextInput(
-            label="👤 Nome do Líder",
-            placeholder="Ex: João Silva",
+        
+        self.lider = discord.ui.TextInput(
+            label="👤 Líder (Nome - Telefone)",
+            placeholder="Ex: João Silva - (11) 99999-9999",
             required=True,
             max_length=100
         )
-        self.lider_telefone = discord.ui.TextInput(
-            label="📱 Telefone do Líder",
-            placeholder="Ex: (11) 99999-9999",
-            required=True,
-            max_length=20
+        
+        self.braco = discord.ui.TextInput(
+            label="👤 Braço (Nome - Telefone - opcional)",
+            placeholder="Ex: José Santos - (11) 88888-8888",
+            required=False,
+            max_length=100
         )
+        
         self.produto = discord.ui.TextInput(
-            label="🔫 Produto",
+            label="🔫 Produto que fornece",
             placeholder="Ex: PT, SUB, Ambos",
             required=True,
             max_length=50
         )
+        
         self.tipo_org = discord.ui.TextInput(
-            label="📌 Tipo",
+            label="📌 Tipo de Organização",
             placeholder="facção / pista_sem_tablet / pista_com_tablet",
             required=True,
-            max_length=30
+            max_length=30,
+            default="pista_sem_tablet"
         )
         
         self.add_item(self.nome_org)
-        self.add_item(self.lider_nome)
-        self.add_item(self.lider_telefone)
+        self.add_item(self.lider)
+        self.add_item(self.braco)
         self.add_item(self.produto)
         self.add_item(self.tipo_org)
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Salvar dados temporários
-        self.interaction = interaction
         await interaction.response.defer(ephemeral=True)
         
-        # Abrir segundo modal para o resto
-        modal2 = RegistrarGrupoModal2(
-            self.nome_org.value,
-            self.lider_nome.value,
-            self.lider_telefone.value,
-            self.produto.value,
-            self.tipo_org.value
-        )
-        await interaction.followup.send("📋 **Continue o cadastro (parte 2/2):**", view=modal2, ephemeral=True)
-
-class RegistrarGrupoModal2(discord.ui.View):
-    """Segunda parte do registro - com botão para continuar."""
-    def __init__(self, nome_org, lider_nome, lider_telefone, produto, tipo_org):
-        super().__init__(timeout=300)
-        self.nome_org = nome_org
-        self.lider_nome = lider_nome
-        self.lider_telefone = lider_telefone
-        self.produto = produto
-        self.tipo_org = tipo_org
-    
-    @discord.ui.button(label="📋 Continuar Cadastro", style=discord.ButtonStyle.primary, custom_id="continuar_cadastro_2", emoji="📋")
-    async def continuar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RegistrarGrupoModalFinal(
-            self.nome_org,
-            self.lider_nome,
-            self.lider_telefone,
-            self.produto,
-            self.tipo_org
-        ))
-
-class RegistrarGrupoModalFinal(discord.ui.Modal, title="📋 Novo Grupo (2/2)"):
-    """Segunda parte do registro - campos opcionais."""
-    def __init__(self, nome_org, lider_nome, lider_telefone, produto, tipo_org):
-        super().__init__(timeout=300)
-        self.nome_org = nome_org
-        self.lider_nome = lider_nome
-        self.lider_telefone = lider_telefone
-        self.produto = produto
-        self.tipo_org = tipo_org
+        # Separar líder
+        lider_parts = self.lider.value.strip().split(" - ")
+        lider_nome = lider_parts[0] if lider_parts else self.lider.value
+        lider_telefone = lider_parts[1] if len(lider_parts) > 1 else "Não informado"
         
-        self.braco_nome = discord.ui.TextInput(
-            label="👤 Nome do Braço (opcional)",
-            placeholder="Ex: José Santos",
-            required=False,
-            max_length=100
-        )
-        self.braco_telefone = discord.ui.TextInput(
-            label="📱 Telefone do Braço (opcional)",
-            placeholder="Ex: (11) 88888-8888",
-            required=False,
-            max_length=20
-        )
-        self.observacoes = discord.ui.TextInput(
-            label="📝 Observações (opcional)",
-            placeholder="Informações adicionais",
-            required=False,
-            max_length=500
-        )
+        # Separar braço
+        braco_nome = None
+        braco_telefone = None
+        if self.braco.value:
+            braco_parts = self.braco.value.strip().split(" - ")
+            braco_nome = braco_parts[0] if braco_parts else self.braco.value
+            braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "Não informado"
         
-        self.add_item(self.braco_nome)
-        self.add_item(self.braco_telefone)
-        self.add_item(self.observacoes)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        tipo_org = self.tipo_org.strip().lower()
+        tipo_org = self.tipo_org.value.strip().lower()
         if tipo_org not in ['facção', 'pista_sem_tablet', 'pista_com_tablet']:
             tipo_org = 'pista_sem_tablet'
         
@@ -6246,158 +6196,110 @@ class RegistrarGrupoModalFinal(discord.ui.Modal, title="📋 Novo Grupo (2/2)"):
         
         await salvar_grupo_db(
             grupo_id,
-            self.nome_org.strip(),
-            self.lider_nome.strip(),
-            self.lider_telefone.strip(),
-            self.braco_nome.value.strip() if self.braco_nome.value else None,
-            self.braco_telefone.value.strip() if self.braco_telefone.value else None,
-            self.produto.strip(),
+            self.nome_org.value.strip(),
+            lider_nome,
+            lider_telefone,
+            braco_nome,
+            braco_telefone,
+            self.produto.value.strip(),
             tipo_org,
-            self.observacoes.value.strip() if self.observacoes.value else ""
+            ""
         )
         
         await recriar_painel_grupos()
-        await interaction.followup.send(f"✅ **Grupo {self.nome_org} registrado!**", ephemeral=True)
+        await interaction.followup.send(f"✅ **Grupo {self.nome_org.value} registrado com sucesso!**", ephemeral=True)
 
-# --- MODAL PARA EDITAR (DIVIDIDO EM 2 PARTES) ---
-class EditarGrupoModal(discord.ui.Modal, title="✏️ Editar Grupo (1/2)"):
-    """Primeira parte da edição."""
+# --- MODAL PARA EDITAR (SOMENTE 5 CAMPOS) ---
+class EditarGrupoModal(discord.ui.Modal, title="✏️ Editar Grupo"):
+    """Modal com campos unificados - máximo 5 campos."""
     def __init__(self, grupo_id, dados):
         super().__init__(timeout=300)
         self.grupo_id = grupo_id
-        self.dados = dados
         
         self.nome_org = discord.ui.TextInput(
-            label="🏷️ Nome",
+            label="🏷️ Nome da Organização",
             default=dados.get('nome_org', ''),
             required=True,
             max_length=50
         )
-        self.lider_nome = discord.ui.TextInput(
-            label="👤 Líder",
-            default=dados.get('lider_nome', ''),
+        
+        lider_texto = f"{dados.get('lider_nome', '')} - {dados.get('lider_telefone', '')}"
+        self.lider = discord.ui.TextInput(
+            label="👤 Líder (Nome - Telefone)",
+            default=lider_texto,
             required=True,
             max_length=100
         )
-        self.lider_telefone = discord.ui.TextInput(
-            label="📱 Telefone Líder",
-            default=dados.get('lider_telefone', ''),
-            required=True,
-            max_length=20
+        
+        if dados.get('braco_nome') and dados.get('braco_telefone'):
+            braco_default = f"{dados.get('braco_nome', '')} - {dados.get('braco_telefone', '')}"
+        elif dados.get('braco_nome'):
+            braco_default = dados.get('braco_nome', '')
+        else:
+            braco_default = ""
+        
+        self.braco = discord.ui.TextInput(
+            label="👤 Braço (Nome - Telefone - opcional)",
+            default=braco_default,
+            required=False,
+            max_length=100
         )
+        
         self.produto = discord.ui.TextInput(
-            label="🔫 Produto",
+            label="🔫 Produto que fornece",
             default=dados.get('produto', ''),
             required=True,
             max_length=50
         )
+        
+        tipo_atual = dados.get('tipo_org', 'pista_sem_tablet')
         self.tipo_org = discord.ui.TextInput(
-            label="📌 Tipo",
-            default=dados.get('tipo_org', 'pista_sem_tablet'),
+            label="📌 Tipo de Organização",
+            default=tipo_atual,
             required=True,
             max_length=30
         )
         
         self.add_item(self.nome_org)
-        self.add_item(self.lider_nome)
-        self.add_item(self.lider_telefone)
+        self.add_item(self.lider)
+        self.add_item(self.braco)
         self.add_item(self.produto)
         self.add_item(self.tipo_org)
     
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        # Abrir segundo modal
-        modal2 = EditarGrupoModal2(
-            self.grupo_id,
-            self.nome_org.value,
-            self.lider_nome.value,
-            self.lider_telefone.value,
-            self.produto.value,
-            self.tipo_org.value,
-            self.dados
-        )
-        await interaction.followup.send("📋 **Continue a edição (parte 2/2):**", view=modal2, ephemeral=True)
-
-class EditarGrupoModal2(discord.ui.View):
-    """Segunda parte da edição."""
-    def __init__(self, grupo_id, nome_org, lider_nome, lider_telefone, produto, tipo_org, dados):
-        super().__init__(timeout=300)
-        self.grupo_id = grupo_id
-        self.nome_org = nome_org
-        self.lider_nome = lider_nome
-        self.lider_telefone = lider_telefone
-        self.produto = produto
-        self.tipo_org = tipo_org
-        self.dados = dados
-    
-    @discord.ui.button(label="📋 Continuar Edição", style=discord.ButtonStyle.primary, custom_id="continuar_edicao_2", emoji="📋")
-    async def continuar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(EditarGrupoModalFinal(
-            self.grupo_id,
-            self.nome_org,
-            self.lider_nome,
-            self.lider_telefone,
-            self.produto,
-            self.tipo_org,
-            self.dados
-        ))
-
-class EditarGrupoModalFinal(discord.ui.Modal, title="✏️ Editar Grupo (2/2)"):
-    """Segunda parte da edição - campos opcionais."""
-    def __init__(self, grupo_id, nome_org, lider_nome, lider_telefone, produto, tipo_org, dados):
-        super().__init__(timeout=300)
-        self.grupo_id = grupo_id
-        self.nome_org = nome_org
-        self.lider_nome = lider_nome
-        self.lider_telefone = lider_telefone
-        self.produto = produto
-        self.tipo_org = tipo_org
+        # Separar líder
+        lider_parts = self.lider.value.strip().split(" - ")
+        lider_nome = lider_parts[0] if lider_parts else self.lider.value
+        lider_telefone = lider_parts[1] if len(lider_parts) > 1 else "Não informado"
         
-        self.braco_nome = discord.ui.TextInput(
-            label="👤 Braço (opcional)",
-            default=dados.get('braco_nome', '') or '',
-            required=False,
-            max_length=100
-        )
-        self.braco_telefone = discord.ui.TextInput(
-            label="📱 Telefone Braço (opcional)",
-            default=dados.get('braco_telefone', '') or '',
-            required=False,
-            max_length=20
-        )
-        self.observacoes = discord.ui.TextInput(
-            label="📝 Observações",
-            default=dados.get('observacoes', '') or '',
-            required=False,
-            max_length=500
-        )
+        # Separar braço
+        braco_nome = None
+        braco_telefone = None
+        if self.braco.value:
+            braco_parts = self.braco.value.strip().split(" - ")
+            braco_nome = braco_parts[0] if braco_parts else self.braco.value
+            braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "Não informado"
         
-        self.add_item(self.braco_nome)
-        self.add_item(self.braco_telefone)
-        self.add_item(self.observacoes)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        tipo_org = self.tipo_org.strip().lower()
+        tipo_org = self.tipo_org.value.strip().lower()
         if tipo_org not in ['facção', 'pista_sem_tablet', 'pista_com_tablet']:
             tipo_org = 'pista_sem_tablet'
         
         await atualizar_grupo_db(
             self.grupo_id,
-            self.nome_org.strip(),
-            self.lider_nome.strip(),
-            self.lider_telefone.strip(),
-            self.braco_nome.value.strip() if self.braco_nome.value else None,
-            self.braco_telefone.value.strip() if self.braco_telefone.value else None,
-            self.produto.strip(),
+            self.nome_org.value.strip(),
+            lider_nome,
+            lider_telefone,
+            braco_nome,
+            braco_telefone,
+            self.produto.value.strip(),
             tipo_org,
-            self.observacoes.value.strip() if self.observacoes.value else ""
+            ""
         )
         
         await recriar_painel_grupos()
-        await interaction.followup.send(f"✅ **Grupo {self.nome_org} atualizado!**", ephemeral=True)
+        await interaction.followup.send(f"✅ **Grupo {self.nome_org.value} atualizado com sucesso!**", ephemeral=True)
 
 # --- VIEW PARA CONFIRMAR EXCLUSÃO ---
 class ConfirmarExcluirView(discord.ui.View):
@@ -6447,7 +6349,7 @@ async def enviar_painel_registro_grupos():
     
     embed = discord.Embed(
         title="📋 REGISTRO DE GRUPOS",
-        description="**Clique no botão para registrar um novo grupo.**\n\n📌 **Tipos:**\n• ⚔️ facção - PT e SUB\n• 📋 pista_sem_tablet - Apenas PT\n• 📱 pista_com_tablet - PT e SUB",
+        description="**Clique no botão para registrar um novo grupo.**\n\n📌 **Tipos:**\n• ⚔️ facção - PT e SUB\n• 📋 pista_sem_tablet - Apenas PT\n• 📱 pista_com_tablet - PT e SUB\n\n📌 **Campos:**\n• Nome da Organização\n• Líder (Nome - Telefone)\n• Braço (Nome - Telefone - opcional)\n• Produto\n• Tipo de Organização",
         color=0x2ecc71
     )
     
@@ -6455,7 +6357,7 @@ async def enviar_painel_registro_grupos():
     view.add_item(discord.ui.Button(
         label="📋 Novo Grupo",
         style=discord.ButtonStyle.success,
-        custom_id="btn_registrar_grupo",
+        custom_id="btn_registrar_grupo_01",  # ID ÚNICO
         emoji="📋"
     ))
     
