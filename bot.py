@@ -3409,7 +3409,7 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
                     await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", diff_sub, diff_sub * 90)
                 elif diff_sub < 0:
                     await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", diff_sub, diff_sub * 90)
-                await enviar_embed_grupo(grupo["grupo_id"])
+                await recriar_painel_grupos()
         canal_log = interaction.guild.get_channel(1478381934026424391)
         if canal_log:
             embed_log = discord.Embed(title="✏️ Venda Editada", color=0xf1c40f)
@@ -3426,6 +3426,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     qtd_sub = discord.ui.TextInput(label="Quantidade SUB", placeholder="Digite a quantidade de munição SUB (ex: 16000)", required=True)
     total_entregas = discord.ui.TextInput(label="Número de entregas", placeholder="Ex: 2, 3, 4... (padrão: 1)", required=False)
     observacoes = discord.ui.TextInput(label="Observações", style=discord.TextStyle.paragraph, required=False)
+    
     async def on_submit(self, interaction: discord.Interaction):
         try:
             pt = int(self.qtd_pt.value.strip()) if self.qtd_pt.value.strip() else 0
@@ -3438,15 +3439,18 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         except ValueError:
             await interaction.response.send_message("❌ Valores inválidos.", ephemeral=True)
             return
+        
         try:
             total_entregas = int(self.total_entregas.value.strip()) if self.total_entregas.value else 1
             if total_entregas < 1:
                 total_entregas = 1
         except:
             total_entregas = 1
+        
         org_nome = self.organizacao.value.strip().upper()
         config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
         numero_pedido = await proximo_pedido()
+        
         LIMITE_DIARIO = 8000
         if pt == 0:
             entregas_pt = 0
@@ -3456,11 +3460,13 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             entregas_sub = 0
         else:
             entregas_sub = (sub + LIMITE_DIARIO - 1) // LIMITE_DIARIO
+        
         num_entregas = max(entregas_pt, entregas_sub)
         if num_entregas == 0:
             num_entregas = 1
         if total_entregas > num_entregas:
             num_entregas = total_entregas
+        
         entregas_lista = []
         pt_restante = pt
         sub_restante = sub
@@ -3483,18 +3489,24 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             else:
                 sub_entrega = 0
             entregas_lista.append({"pt": pt_entrega, "sub": sub_entrega})
+        
         entregas_json = json.dumps(entregas_lista)
         pacotes_pt_total = pt // 50
         pacotes_sub_total = sub // 50
         total = (pt * 50) + (sub * 90)
+        
         await salvar_venda_db(str(interaction.user.id), total, numero_pedido)
+        
+        # CORREÇÃO: Usar sync_grupo_com_vendas em vez de enviar_embed_grupo
         grupo = await buscar_grupo_por_organizacao(org_nome)
         if grupo:
             if pacotes_pt_total > 0:
                 await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt_total, pacotes_pt_total * 50)
             if pacotes_sub_total > 0:
                 await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub_total, pacotes_sub_total * 90)
-            await enviar_embed_grupo(grupo["grupo_id"])
+            # Atualizar o painel de grupos
+            await recriar_painel_grupos()
+        
         if num_entregas > 1:
             primeira_entrega = entregas_lista[0]
             entrega_id = await salvar_entrega_parcelada(
@@ -3552,6 +3564,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             if grupo:
                 msg_resposta += f"\n📊 **Grupo integrado:** ✅ {org_nome}"
             await interaction.response.send_message(msg_resposta, ephemeral=True)
+        
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
