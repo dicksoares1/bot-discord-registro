@@ -5629,40 +5629,78 @@ CANAL_COMPRAS_REGISTRADAS_ID = 1270467793363669053
 
 # --- FUNÇÃO PRINCIPAL PARA LIMPAR E RECRIAR O PAINEL ---
 async def forcar_atualizacao_painel_grupos():
-    """Força a limpeza do canal e recria o painel com dropdown."""
+    """Força a limpeza do canal e recria o painel com dropdown - OTIMIZADO."""
     canal = bot.get_channel(CANAL_GRUPOS_ID)
     if not canal:
         logger.error(f"❌ Canal de grupos não encontrado: {CANAL_GRUPOS_ID}")
         return False
     
     try:
-        # 1. DELETAR TODAS AS MENSAGENS DO BOT NO CANAL
+        # 1. DELETAR MENSAGENS DO BOT NO CANAL (COM DELAY)
         logger.info("🗑️ Limpando mensagens antigas do canal de grupos...")
         deletadas = 0
-        async for msg in canal.history(limit=200):
+        async for msg in canal.history(limit=100):  # REDUZIDO para 100
             if msg.author == bot.user:
                 try:
                     await msg.delete()
                     deletadas += 1
-                    await asyncio.sleep(0.2)  # Pequeno delay para evitar rate limit
+                    await asyncio.sleep(0.5)  # AUMENTADO para evitar rate limit
                 except Exception as e:
                     logger.error(f"Erro ao deletar mensagem: {e}")
+                    await asyncio.sleep(1)
         
         logger.info(f"✅ {deletadas} mensagens deletadas")
         
-        # 2. ENVIAR O NOVO PAINEL
+        # 2. AGUARDAR ANTES DE ENVIAR A NOVA MENSAGEM
+        await asyncio.sleep(2)
+        
+        # 3. ENVIAR O NOVO PAINEL
         logger.info("📋 Criando novo painel de grupos...")
         await enviar_painel_grupos()
         
         logger.info("✅ Painel de grupos recriado com sucesso!")
         return True
         
+    except discord.errors.HTTPException as e:
+        if e.status == 429:
+            logger.warning("⚠️ Rate limit detectado, aguardando...")
+            await asyncio.sleep(5)
+            return await forcar_atualizacao_painel_grupos()  # Tenta novamente
+        logger.error(f"❌ Erro HTTP: {e}")
+        return False
     except Exception as e:
         logger.error(f"❌ Erro ao forçar atualização do painel: {e}")
         return False
 
+@bot.command(name="resetar_grupos")
+@commands.has_permissions(administrator=True)
+async def cmd_resetar_grupos(ctx):
+    """Comando para resetar apenas o canal de grupos."""
+    await ctx.send("🔄 Resetando canal de grupos...")
+    try:
+        canal = bot.get_channel(CANAL_GRUPOS_ID)
+        if not canal:
+            await ctx.send("❌ Canal não encontrado!")
+            return
+        
+        deletadas = 0
+        async for msg in canal.history(limit=200):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    deletadas += 1
+                    await asyncio.sleep(0.3)
+                except:
+                    pass
+        
+        await asyncio.sleep(2)
+        await enviar_painel_grupos()
+        await ctx.send(f"✅ Canal resetado! {deletadas} mensagens deletadas e novo painel criado.")
+    except Exception as e:
+        await ctx.send(f"❌ Erro: {e}")
+
 async def enviar_painel_grupos():
-    """Envia o painel principal com dropdown para selecionar grupos."""
+    """Envia o painel principal com dropdown - VERSÃO LEVE."""
     canal = bot.get_channel(CANAL_GRUPOS_ID)
     if not canal:
         logger.error(f"❌ Canal de grupos não encontrado: {CANAL_GRUPOS_ID}")
@@ -5672,7 +5710,7 @@ async def enviar_painel_grupos():
     
     embed = discord.Embed(
         title="📋 GERENCIAMENTO DE GRUPOS",
-        description="**Selecione um grupo no menu abaixo para ver suas informações.**\n\n📌 **Como usar:**\n1️⃣ Selecione um grupo no dropdown\n2️⃣ Veja as informações detalhadas\n3️⃣ Use os botões para editar ou excluir",
+        description="**Selecione um grupo no menu abaixo para ver suas informações.**",
         color=0x2ecc71,
         timestamp=agora()
     )
@@ -5696,28 +5734,21 @@ async def enviar_painel_grupos():
             value=f"**Total de grupos:** {len(grupos)}\n**🔫 PT vendido:** {fmt_num(total_pt)} pacotes\n**🔫 SUB vendido:** {fmt_num(total_sub)} pacotes",
             inline=False
         )
-        
-        # Listar os grupos disponíveis
-        lista_grupos = ""
-        for i, grupo in enumerate(grupos[:15], 1):
-            lista_grupos += f"**{i}.** {grupo['nome_org'].upper()}\n"
-        if len(grupos) > 15:
-            lista_grupos += f"\n*... e mais {len(grupos) - 15} grupos*"
-        
-        embed.add_field(
-            name="📋 GRUPOS DISPONÍVEIS",
-            value=lista_grupos,
-            inline=False
-        )
     
     embed.set_footer(text="Use o dropdown abaixo para selecionar um grupo")
     
-    # Criar a view com dropdown
     view = PainelGruposView(grupos)
     
-    # Enviar a nova mensagem
-    await canal.send(embed=embed, view=view)
-    logger.info("✅ Novo painel de grupos enviado")
+    try:
+        await canal.send(embed=embed, view=view)
+        logger.info("✅ Painel de grupos enviado")
+    except discord.errors.HTTPException as e:
+        if e.status == 429:
+            logger.warning("⚠️ Rate limit ao enviar painel de grupos")
+            await asyncio.sleep(5)
+            await canal.send(embed=embed, view=view)
+        else:
+            raise
 
 # --- VIEWS E MODAIS DOS GRUPOS ---
 class PainelGruposView(discord.ui.View):
@@ -7884,38 +7915,62 @@ async def carregar_dados_iniciais():
     await restaurar_producoes()
 
 async def enviar_paineis_iniciais(guild):
-    """Envia todos os painéis iniciais."""
+    """Envia todos os painéis iniciais com delays para evitar rate limit."""
     try:
-        tasks_list = [
-            enviar_painel_registro(),
-            enviar_painel_fabricacao(),
-            enviar_painel_lives(),
-            enviar_painel_polvoras(),
-            enviar_painel_lavagem(),
-            enviar_painel_vendas(),
-            enviar_painel_remover_ausencia(),
-            enviar_painel_relatorio_financeiro(),
-            enviar_painel_registrar_compra(),
-            enviar_painel_solicitar_sala(),
-            enviar_painel_botao_ausencia(),
-            enviar_painel_registro_grupos(),  # Mantido
-            enviar_painel_grupos(),  # NOVO - Painel principal com dropdown
-            enviar_painel_relatorio_metas(),
-            enviar_painel_mensagens(),
-            enviar_painel_controle(),
+        logger.info("🖥️ Iniciando envio de painéis (com delays)...")
+        
+        # Lista de funções com delays entre elas
+        paineis = [
+            ("Registro", enviar_painel_registro),
+            ("Fabricação", enviar_painel_fabricacao),
+            ("Lives", enviar_painel_lives),
+            ("Pólvora", enviar_painel_polvoras),
+            ("Lavagem", enviar_painel_lavagem),
+            ("Vendas", enviar_painel_vendas),
+            ("Remover Ausência", enviar_painel_remover_ausencia),
+            ("Relatório Financeiro", enviar_painel_relatorio_financeiro),
+            ("Registrar Compra", enviar_painel_registrar_compra),
+            ("Solicitar Sala", enviar_painel_solicitar_sala),
+            ("Botão Ausência", enviar_painel_botao_ausencia),
+            ("Registro Grupos", enviar_painel_registro_grupos),
+            ("Painel Grupos", enviar_painel_grupos),
+            ("Relatório Metas", enviar_painel_relatorio_metas),
+            ("Mensagens", enviar_painel_mensagens),
+            ("Controle", enviar_painel_controle),
         ]
         
+        # Enviar cada painel com delay
+        for i, (nome, func) in enumerate(paineis):
+            try:
+                logger.info(f"📤 Enviando painel {i+1}/{len(paineis)}: {nome}")
+                await func()
+                # Delay entre cada painel para evitar rate limit
+                if i < len(paineis) - 1:
+                    await asyncio.sleep(2)
+            except Exception as e:
+                logger.error(f"❌ Erro ao enviar painel {nome}: {e}")
+                await asyncio.sleep(3)  # Delay maior em caso de erro
+        
+        # Ações separadas com delay extra
         if guild:
-            tasks_list.append(enviar_painel_acoes(guild))
+            try:
+                logger.info("📤 Enviando painel de ações...")
+                await enviar_painel_acoes(guild)
+                await asyncio.sleep(2)
+            except Exception as e:
+                logger.error(f"❌ Erro ao enviar painel de ações: {e}")
         
-        results = await asyncio.gather(*tasks_list, return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"Erro em painel específico: {result}")
+        # Forçar atualização do painel de grupos com cuidado
+        try:
+            logger.info("🔄 Forçando atualização do painel de grupos...")
+            await forcar_atualizacao_painel_grupos()
+        except Exception as e:
+            logger.error(f"❌ Erro ao forçar atualização grupos: {e}")
         
-        logger.info("🖥️ Painéis verificados/enviados.")
+        logger.info("✅ Todos os painéis enviados com sucesso!")
+        
     except Exception as e:
-        logger.error(f"Erro geral ao enviar painéis: {e}")
+        logger.error(f"❌ Erro geral ao enviar painéis: {e}")
 
 async def restaurar_producoes():
     """Restaura produções ativas após reinicialização."""
