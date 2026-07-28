@@ -7500,14 +7500,21 @@ async def enviar_painel_bau_saiu():
         logger.error(f"❌ Erro ao enviar painel de baú saiu: {e}")
 
 async def enviar_painel_controle():
+    """Envia todos os painéis de controle - VERSÃO CORRIGIDA"""
     await criar_tabelas_controle()
+    await criar_tabelas_armas_pessoais()
+    
+    # Envia os painéis do baú e armas emprestadas (sistema antigo)
     await enviar_painel_armas()
     await enviar_painel_armas_entrou()
     await enviar_painel_armas_saiu()
     await enviar_painel_armas_perdeu()
     await enviar_painel_bau_entrou()
     await enviar_painel_bau_saiu()
-
+    
+    # ENVIA O PAINEL DE ARMAS PESSOAIS (SISTEMA NOVO)
+    await enviar_painel_armas_pessoais()
+    
 async def on_message_controle(message: discord.Message):
     if message.author.bot:
         return
@@ -8046,7 +8053,7 @@ class PerderArmaPessoalModal(discord.ui.Modal, title="💀 PERDER ARMA PESSOAL")
 
 # --- FUNÇÃO PARA ENVIAR PAINEL DE ARMAS PESSOAIS ---
 async def enviar_painel_armas_pessoais():
-    """Envia o painel de armas pessoais."""
+    """Envia o painel de armas pessoais - não deleta mensagens existentes."""
     canal = bot.get_channel(CANAL_CONTROLE_ARMAS_ID)
     if not canal:
         logger.error("❌ CANAL NÃO ENCONTRADO")
@@ -8115,12 +8122,25 @@ async def enviar_painel_armas_pessoais():
     view = ArmasPessoaisView()
     
     try:
-        # Não deleta as mensagens existentes - apenas adiciona o novo painel
-        await canal.send(embed=embed, view=view)
-        logger.info("🔫 PAINEL DE ARMAS PESSOAIS ENVIADO")
+        # VERIFICAR SE JÁ EXISTE UM PAINEL DE ARMAS PESSOAIS
+        existe_painel = False
+        async for msg in canal.history(limit=100):
+            if msg.author == bot.user and msg.embeds:
+                if msg.embeds[0].title == "🔫 ARMAS PESSOAIS":
+                    existe_painel = True
+                    try:
+                        await msg.edit(embed=embed, view=view)
+                        logger.info("🔫 PAINEL DE ARMAS PESSOAIS ATUALIZADO")
+                        return
+                    except:
+                        pass
+                    break
+        
+        if not existe_painel:
+            await canal.send(embed=embed, view=view)
+            logger.info("🔫 PAINEL DE ARMAS PESSOAIS ENVIADO")
     except Exception as e:
         logger.error(f"❌ ERRO AO ENVIAR PAINEL ARMAS PESSOAIS: {e}")
-
 
 # =========================================================
 # ==================== SEÇÃO 12: FINANCEIRO ===============
