@@ -805,58 +805,56 @@ async def criar_tabela_alugueis():
         return
     try:
         async with pool.acquire() as conn:
+            # Criar tabela se não existir
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS alugueis (
                     id SERIAL PRIMARY KEY,
                     galpao TEXT NOT NULL,
                     dias_alugados INTEGER DEFAULT 0,
                     data_inicio TIMESTAMP DEFAULT NOW(),
-                    data_fim TIMESTAMP,
                     ativo BOOLEAN DEFAULT true,
                     data_atualizacao TIMESTAMP DEFAULT NOW()
                 )
             """)
             
-            # Inserir registros padrão se não existirem
-            await conn.execute("""
-                INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
-                VALUES ('NORTE', 0, NOW(), true)
-                ON CONFLICT DO NOTHING
-            """)
-            await conn.execute("""
-                INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
-                VALUES ('SUL', 0, NOW(), true)
-                ON CONFLICT DO NOTHING
+            # Verificar se a coluna dias_alugados existe
+            coluna_existe = await conn.fetchval("""
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'alugueis' AND column_name = 'dias_alugados'
             """)
             
-            logger.info("✅ TABELA ALUGUEIS CRIADA")
+            if not coluna_existe:
+                await conn.execute("""
+                    ALTER TABLE alugueis ADD COLUMN dias_alugados INTEGER DEFAULT 0
+                """)
+                logger.info("✅ Coluna dias_alugados adicionada")
+            
+            # DESATIVAR registros antigos que não são os principais
+            await conn.execute("""
+                UPDATE alugueis 
+                SET ativo = false 
+                WHERE galpao NOT IN ('GALPÕES NORTE', 'GALPÕES SUL')
+                  AND ativo = true
+            """)
+            
+            # Inserir registros padrão se não existirem
+            existe_norte = await conn.fetchval("SELECT 1 FROM alugueis WHERE galpao = 'GALPÕES NORTE'")
+            if not existe_norte:
+                await conn.execute("""
+                    INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                    VALUES ('GALPÕES NORTE', 0, NOW(), true)
+                """)
+            
+            existe_sul = await conn.fetchval("SELECT 1 FROM alugueis WHERE galpao = 'GALPÕES SUL'")
+            if not existe_sul:
+                await conn.execute("""
+                    INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                    VALUES ('GALPÕES SUL', 0, NOW(), true)
+                """)
+            
+            logger.info("✅ TABELA ALUGUEIS CRIADA/VERIFICADA")
     except Exception as e:
         logger.error(f"❌ ERRO AO CRIAR TABELA ALUGUEIS: {e}")
-        
-        # Inicializar itens do baú
-        for item in ITENS_DISPONIVEIS:
-            item_nome = item.split(" ", 1)[1] if " " in item else item
-            try:
-                await conn.execute(
-                    "INSERT INTO bau_estoque (item_nome, quantidade) VALUES ($1, 0) ON CONFLICT (item_nome) DO NOTHING",
-                    item_nome.upper()
-                )
-            except Exception as e:
-                logger.warning(f"⚠️ Erro ao inserir item {item_nome}: {e}")
-        
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS alugueis (
-                id SERIAL PRIMARY KEY,
-                galpao TEXT,
-                user_id VARCHAR(30),
-                data_inicio TIMESTAMP,
-                data_fim TIMESTAMP,
-                dias INTEGER,
-                ativo BOOLEAN DEFAULT true
-            )
-        """)
-        
-        logger.info("📋 Todas as tabelas verificadas/criadas com sucesso!")
 
 # =========================================================
 # ==================== SEÇÃO GLOBAL: CACHE =================
@@ -2591,34 +2589,59 @@ async def carregar_alugueis():
     """Carrega os dados de aluguel dos galpões."""
     pool = get_db()
     if not pool:
-        return {"NORTE": {"dias": 0, "inicio": None}, "SUL": {"dias": 0, "inicio": None}}
+        return {"GALPÕES NORTE": {"dias": 0, "inicio": None}, "GALPÕES SUL": {"dias": 0, "inicio": None}}
     try:
         async with pool.acquire() as conn:
+            # Primeiro, limpar registros antigos que não são os principais
+            await conn.execute("""
+                UPDATE alugueis 
+                SET ativo = false 
+                WHERE galpao NOT IN ('GALPÕES NORTE', 'GALPÕES SUL')
+                  AND ativo = true
+            """)
+            
+            # Garantir que os registros principais existem
+            existe_norte = await conn.fetchval("SELECT 1 FROM alugueis WHERE galpao = 'GALPÕES NORTE'")
+            if not existe_norte:
+                await conn.execute("""
+                    INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                    VALUES ('GALPÕES NORTE', 0, NOW(), true)
+                """)
+            
+            existe_sul = await conn.fetchval("SELECT 1 FROM alugueis WHERE galpao = 'GALPÕES SUL'")
+            if not existe_sul:
+                await conn.execute("""
+                    INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                    VALUES ('GALPÕES SUL', 0, NOW(), true)
+                """)
+            
+            # Carregar apenas os registros ativos principais
             rows = await conn.fetch("""
                 SELECT galpao, dias_alugados, data_inicio 
                 FROM alugueis 
-                WHERE ativo = true
+                WHERE ativo = true 
+                AND galpao IN ('GALPÕES NORTE', 'GALPÕES SUL')
             """)
             
             resultado = {}
             for row in rows:
-                galpao = row["galpao"].upper()
+                galpao = row["galpao"]
                 resultado[galpao] = {
                     "dias": row["dias_alugados"] or 0,
                     "inicio": row["data_inicio"]
                 }
             
-            # Garantir que ambos existem
-            if "NORTE" not in resultado:
-                resultado["NORTE"] = {"dias": 0, "inicio": None}
-            if "SUL" not in resultado:
-                resultado["SUL"] = {"dias": 0, "inicio": None}
+            # Garantir que ambos existem no resultado
+            if "GALPÕES NORTE" not in resultado:
+                resultado["GALPÕES NORTE"] = {"dias": 0, "inicio": None}
+            if "GALPÕES SUL" not in resultado:
+                resultado["GALPÕES SUL"] = {"dias": 0, "inicio": None}
             
             return resultado
     except Exception as e:
         logger.error(f"❌ ERRO AO CARREGAR ALUGUEIS: {e}")
-        return {"NORTE": {"dias": 0, "inicio": None}, "SUL": {"dias": 0, "inicio": None}}
-
+        return {"GALPÕES NORTE": {"dias": 0, "inicio": None}, "GALPÕES SUL": {"dias": 0, "inicio": None}}
+        
 async def resetar_aluguel(galpao):
     """Reseta o aluguel de um galpão."""
     pool = get_db()
@@ -2664,8 +2687,14 @@ class AlugarGalpaoModal(discord.ui.Modal, title="📅 Alugar Galpão"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        galpao = self.galpao.value.strip().upper()
-        if galpao not in ["NORTE", "SUL"]:
+        galpao_input = self.galpao.value.strip().upper()
+        
+        # Converter para o nome correto
+        if galpao_input == "NORTE":
+            galpao = "GALPÕES NORTE"
+        elif galpao_input == "SUL":
+            galpao = "GALPÕES SUL"
+        else:
             await interaction.followup.send("❌ Galpão inválido! Use NORTE ou SUL.", ephemeral=True)
             return
         
@@ -2681,7 +2710,7 @@ class AlugarGalpaoModal(discord.ui.Modal, title="📅 Alugar Galpão"):
         
         embed = discord.Embed(
             title="📅 ALUGUEL REGISTRADO",
-            description=f"🏭 **Galpão {galpao}**\n📅 **{dias} dias** adicionados",
+            description=f"🏭 **{galpao}**\n📅 **{dias} dias** adicionados",
             color=0x2ecc71,
             timestamp=agora()
         )
