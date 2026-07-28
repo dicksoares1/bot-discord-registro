@@ -7734,15 +7734,30 @@ CANAL_TEXTOS_VENDAS_ID = 1499045083994001500
 
 # --- VARIÁVEIS GLOBAIS DAS MENSAGENS ---
 mensagens_em_andamento = set()
+mensagens_timers = {}  # Para controlar timeout
 
-# --- VIEWS E MODAIS DAS MENSAGENS ---
+# --- FUNÇÃO PARA LIMPAR MENSAGEM EM ANDAMENTO ---
+async def limpar_mensagem_andamento(user_id):
+    """Remove o usuário da lista de mensagens em andamento."""
+    if user_id in mensagens_em_andamento:
+        mensagens_em_andamento.remove(user_id)
+    if user_id in mensagens_timers:
+        del mensagens_timers[user_id]
+
+# --- VIEW E MODAIS DAS MENSAGENS ---
 class MenuMensagensView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+    
     @discord.ui.button(label="📝 Gerar Mensagem de Venda", style=discord.ButtonStyle.primary, custom_id="gerar_mensagem_venda", emoji="📝")
     async def gerar_mensagem(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="📝 MENU DE MENSAGENS DE VENDA", description="**Selecione o tipo de mensagem que deseja gerar:**\n\n📌 **Opções disponíveis:**\n• 📦 Pedido Pronto\n• ❌ Pedido Cancelado\n• ✅ Pedido Finalizado\n• 💰 Pendência de Pagamento\n• ⚠️ Pagamento Pendente\n\n🔹 **Você precisará informar:**\n• O valor (quando aplicável)\n• Seu passaporte e nome (para a chave PIX)", color=0x3498db)
+        embed = discord.Embed(
+            title="📝 MENU DE MENSAGENS DE VENDA",
+            description="**Selecione o tipo de mensagem que deseja gerar:**\n\n📌 **Opções disponíveis:**\n• 📦 Pedido Pronto\n• ❌ Pedido Cancelado\n• ✅ Pedido Finalizado\n• 💰 Pendência de Pagamento\n• ⚠️ Pagamento Pendente\n\n🔹 **Você precisará informar:**\n• O valor (quando aplicável)\n• Seu passaporte e nome (para a chave PIX)",
+            color=0x3498db
+        )
         embed.set_footer(text="Clique no botão correspondente à mensagem que deseja gerar")
+        
         view = SelecionarMensagemView()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -7755,14 +7770,19 @@ class SelecionarMensagemView(discord.ui.View):
         self.add_item(discord.ui.Button(label="💰 Pendência de Pagamento", style=discord.ButtonStyle.primary, custom_id="msg_pendencia_pagamento", emoji="💰", row=1))
         self.add_item(discord.ui.Button(label="⚠️ Pagamento Pendente", style=discord.ButtonStyle.primary, custom_id="msg_pagamento_pendente", emoji="⚠️", row=1))
         self.add_item(discord.ui.Button(label="❌ Fechar", style=discord.ButtonStyle.secondary, custom_id="fechar_mensagens", emoji="❌", row=1))
+    
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
+        
         if custom_id == "fechar_mensagens":
+            # Limpar o estado do usuário ao fechar
+            await limpar_mensagem_andamento(interaction.user.id)
             try:
                 await interaction.message.delete()
             except:
                 pass
             return False
+        
         handlers = {
             "msg_pedido_pronto": self.handle_pedido_pronto,
             "msg_pedido_cancelado": self.handle_pedido_cancelado,
@@ -7775,45 +7795,95 @@ class SelecionarMensagemView(discord.ui.View):
             await handler(interaction)
             return False
         return True
+    
     async def handle_pedido_pronto(self, interaction: discord.Interaction):
+        # Verificar se já tem mensagem em andamento
         if interaction.user.id in mensagens_em_andamento:
-            await interaction.response.send_message("⚠️ Você já tem uma mensagem em andamento!", ephemeral=True)
-            return
+            # Se tiver, remover o bloqueio automaticamente
+            await limpar_mensagem_andamento(interaction.user.id)
+        
+        # Adicionar à lista
+        mensagens_em_andamento.add(interaction.user.id)
+        
+        # Configurar timer para limpar automaticamente após 5 minutos
+        mensagens_timers[interaction.user.id] = asyncio.create_task(
+            limpar_timer_mensagem(interaction.user.id, 300)  # 5 minutos
+        )
+        
         modal = MensagemPedidoProntoModal(interaction.user)
         await interaction.response.send_modal(modal)
+    
     async def handle_pedido_cancelado(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
-            await interaction.response.send_message("⚠️ Você já tem uma mensagem em andamento!", ephemeral=True)
-            return
+            await limpar_mensagem_andamento(interaction.user.id)
+        
+        mensagens_em_andamento.add(interaction.user.id)
+        mensagens_timers[interaction.user.id] = asyncio.create_task(
+            limpar_timer_mensagem(interaction.user.id, 300)
+        )
+        
         modal = MensagemPedidoCanceladoModal()
         await interaction.response.send_modal(modal)
+    
     async def handle_pedido_finalizado(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
-            await interaction.response.send_message("⚠️ Você já tem uma mensagem em andamento!", ephemeral=True)
-            return
+            await limpar_mensagem_andamento(interaction.user.id)
+        
+        mensagens_em_andamento.add(interaction.user.id)
+        mensagens_timers[interaction.user.id] = asyncio.create_task(
+            limpar_timer_mensagem(interaction.user.id, 300)
+        )
+        
         modal = MensagemPedidoFinalizadoModal()
         await interaction.response.send_modal(modal)
+    
     async def handle_pendencia_pagamento(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
-            await interaction.response.send_message("⚠️ Você já tem uma mensagem em andamento!", ephemeral=True)
-            return
+            await limpar_mensagem_andamento(interaction.user.id)
+        
+        mensagens_em_andamento.add(interaction.user.id)
+        mensagens_timers[interaction.user.id] = asyncio.create_task(
+            limpar_timer_mensagem(interaction.user.id, 300)
+        )
+        
         modal = MensagemPendenciaPagamentoModal()
         await interaction.response.send_modal(modal)
+    
     async def handle_pagamento_pendente(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
-            await interaction.response.send_message("⚠️ Você já tem uma mensagem em andamento!", ephemeral=True)
-            return
+            await limpar_mensagem_andamento(interaction.user.id)
+        
+        mensagens_em_andamento.add(interaction.user.id)
+        mensagens_timers[interaction.user.id] = asyncio.create_task(
+            limpar_timer_mensagem(interaction.user.id, 300)
+        )
+        
         modal = MensagemPagamentoPendenteModal(interaction.user)
         await interaction.response.send_modal(modal)
 
+# --- TIMER PARA LIMPAR AUTOMATICAMENTE ---
+async def limpar_timer_mensagem(user_id, tempo_segundos):
+    """Limpa a mensagem em andamento após o tempo especificado."""
+    await asyncio.sleep(tempo_segundos)
+    await limpar_mensagem_andamento(user_id)
+
+# --- MODAIS DAS MENSAGENS (CORRIGIDOS) ---
 class MensagemPedidoProntoModal(discord.ui.Modal, title="📦 Pedido Pronto"):
     def __init__(self, usuario):
-        super().__init__()
+        super().__init__(timeout=300)  # 5 minutos de timeout
         self.usuario = usuario
-        mensagens_em_andamento.add(usuario.id)
-    valor = discord.ui.TextInput(label="💰 Valor da encomenda (opcional)", placeholder="Ex: 50000 ou deixe em branco", required=False, max_length=50)
+    
+    valor = discord.ui.TextInput(
+        label="💰 Valor da encomenda (opcional)",
+        placeholder="Ex: 50000 ou deixe em branco",
+        required=False,
+        max_length=50
+    )
+    
     async def on_submit(self, interaction: discord.Interaction):
-        mensagens_em_andamento.discard(interaction.user.id)
+        # Limpar da lista ao finalizar
+        await limpar_mensagem_andamento(interaction.user.id)
+        
         valor_texto = ""
         if self.valor.value and self.valor.value.strip():
             try:
@@ -7821,6 +7891,7 @@ class MensagemPedidoProntoModal(discord.ui.Modal, title="📦 Pedido Pronto"):
                 valor_texto = formatar_dinheiro(valor)
             except:
                 valor_texto = self.valor.value
+        
         nome_display = interaction.user.display_name
         passaporte = "SEM PASSAPORTE"
         if " - " in nome_display:
@@ -7829,6 +7900,7 @@ class MensagemPedidoProntoModal(discord.ui.Modal, title="📦 Pedido Pronto"):
             nome = partes[1] if len(partes) > 1 else nome_display
         else:
             nome = nome_display
+        
         mensagem = f"""📝 PEDIDO PRONTO!
 
 🚚 Sua encomenda está pronta e será entregue assim que você estiver disponível para receber.
@@ -7837,23 +7909,45 @@ class MensagemPedidoProntoModal(discord.ui.Modal, title="📦 Pedido Pronto"):
 
 📞 Entre em contato antes do prazo para confirmar o recebimento e evitar o cancelamento.
 
-@everyone
-
-@everyone 
 {passaporte} - {nome} — {agora().strftime('%d/%m/%Y %H:%M')}"""
         if valor_texto:
             mensagem += f"\n💰 Valor: {valor_texto}"
-        embed = discord.Embed(title="📋 MENSAGEM GERADA - PEDIDO PRONTO", description="**Copie a mensagem abaixo e cole no canal desejado:**", color=0x2ecc71)
+        
+        embed = discord.Embed(
+            title="📋 MENSAGEM GERADA - PEDIDO PRONTO",
+            description="**Copie a mensagem abaixo e cole no canal desejado:**",
+            color=0x2ecc71
+        )
         embed.add_field(name="📝 MENSAGEM", value=f"```\n{mensagem}\n```", inline=False)
-        embed.add_field(name="📌 DETALHES", value=f"👤 Gerado por: {interaction.user.mention}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}", inline=False)
+        embed.add_field(
+            name="📌 DETALHES",
+            value=f"👤 Gerado por: {interaction.user.mention}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+            inline=False
+        )
         embed.set_footer(text="Clique em 'Copiar' para copiar a mensagem")
+        
         view = CopiarMensagemView(mensagem)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        # Em caso de erro, limpar da lista
+        await limpar_mensagem_andamento(interaction.user.id)
+        logger.error(f"Erro no modal: {error}")
 
 class MensagemPedidoCanceladoModal(discord.ui.Modal, title="❌ Pedido Cancelado"):
-    valor = discord.ui.TextInput(label="💰 Valor da encomenda (opcional)", placeholder="Ex: 50000 ou deixe em branco", required=False, max_length=50)
+    def __init__(self):
+        super().__init__(timeout=300)
+    
+    valor = discord.ui.TextInput(
+        label="💰 Valor da encomenda (opcional)",
+        placeholder="Ex: 50000 ou deixe em branco",
+        required=False,
+        max_length=50
+    )
+    
     async def on_submit(self, interaction: discord.Interaction):
-        mensagens_em_andamento.discard(interaction.user.id)
+        await limpar_mensagem_andamento(interaction.user.id)
+        
         valor_texto = ""
         if self.valor.value and self.valor.value.strip():
             try:
@@ -7861,6 +7955,7 @@ class MensagemPedidoCanceladoModal(discord.ui.Modal, title="❌ Pedido Cancelado
                 valor_texto = f"\n💰 Valor: {formatar_dinheiro(valor)}"
             except:
                 valor_texto = f"\n💰 Valor: {self.valor.value}"
+        
         nome_display = interaction.user.display_name
         passaporte = "SEM PASSAPORTE"
         if " - " in nome_display:
@@ -7869,28 +7964,50 @@ class MensagemPedidoCanceladoModal(discord.ui.Modal, title="❌ Pedido Cancelado
             nome = partes[1] if len(partes) > 1 else nome_display
         else:
             nome = nome_display
+        
         mensagem = f"""❌ PEDIDO CANCELADO
 
 Sua encomenda foi cancelada por não haver ninguém disponível para receber dentro do prazo de 24 horas.
 
 Caso ainda tenha interesse, será necessário realizar um novo pedido.
 
-@everyone
-
-@everyone 
 {passaporte} - {nome} — {agora().strftime('%d/%m/%Y %H:%M')}
 {valor_texto}"""
-        embed = discord.Embed(title="📋 MENSAGEM GERADA - PEDIDO CANCELADO", description="**Copie a mensagem abaixo e cole no canal desejado:**", color=0xe74c3c)
+        
+        embed = discord.Embed(
+            title="📋 MENSAGEM GERADA - PEDIDO CANCELADO",
+            description="**Copie a mensagem abaixo e cole no canal desejado:**",
+            color=0xe74c3c
+        )
         embed.add_field(name="📝 MENSAGEM", value=f"```\n{mensagem}\n```", inline=False)
-        embed.add_field(name="📌 DETALHES", value=f"👤 Gerado por: {interaction.user.mention}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}", inline=False)
+        embed.add_field(
+            name="📌 DETALHES",
+            value=f"👤 Gerado por: {interaction.user.mention}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+            inline=False
+        )
         embed.set_footer(text="Clique em 'Copiar' para copiar a mensagem")
+        
         view = CopiarMensagemView(mensagem)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await limpar_mensagem_andamento(interaction.user.id)
+        logger.error(f"Erro no modal: {error}")
 
 class MensagemPedidoFinalizadoModal(discord.ui.Modal, title="✅ Pedido Finalizado"):
-    valor = discord.ui.TextInput(label="💰 Valor da encomenda (opcional)", placeholder="Ex: 50000 ou deixe em branco", required=False, max_length=50)
+    def __init__(self):
+        super().__init__(timeout=300)
+    
+    valor = discord.ui.TextInput(
+        label="💰 Valor da encomenda (opcional)",
+        placeholder="Ex: 50000 ou deixe em branco",
+        required=False,
+        max_length=50
+    )
+    
     async def on_submit(self, interaction: discord.Interaction):
-        mensagens_em_andamento.discard(interaction.user.id)
+        await limpar_mensagem_andamento(interaction.user.id)
+        
         valor_texto = ""
         if self.valor.value and self.valor.value.strip():
             try:
@@ -7898,35 +8015,64 @@ class MensagemPedidoFinalizadoModal(discord.ui.Modal, title="✅ Pedido Finaliza
                 valor_texto = f"\n💰 Valor: {formatar_dinheiro(valor)}"
             except:
                 valor_texto = f"\n💰 Valor: {self.valor.value}"
+        
         mensagem = f"""✅ PEDIDO FINALIZADO
 
 Sua encomenda foi entregue e o pagamento foi confirmado.
 
 Agradecemos pela preferência!
 
-@everyone
-
-@everyone 
 {interaction.user.display_name} — {agora().strftime('%d/%m/%Y %H:%M')}
 {valor_texto}"""
-        embed = discord.Embed(title="📋 MENSAGEM GERADA - PEDIDO FINALIZADO", description="**Copie a mensagem abaixo e cole no canal desejado:**", color=0x2ecc71)
+        
+        embed = discord.Embed(
+            title="📋 MENSAGEM GERADA - PEDIDO FINALIZADO",
+            description="**Copie a mensagem abaixo e cole no canal desejado:**",
+            color=0x2ecc71
+        )
         embed.add_field(name="📝 MENSAGEM", value=f"```\n{mensagem}\n```", inline=False)
-        embed.add_field(name="📌 DETALHES", value=f"👤 Gerado por: {interaction.user.mention}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}", inline=False)
+        embed.add_field(
+            name="📌 DETALHES",
+            value=f"👤 Gerado por: {interaction.user.mention}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+            inline=False
+        )
         embed.set_footer(text="Clique em 'Copiar' para copiar a mensagem")
+        
         view = CopiarMensagemView(mensagem)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await limpar_mensagem_andamento(interaction.user.id)
+        logger.error(f"Erro no modal: {error}")
 
 class MensagemPendenciaPagamentoModal(discord.ui.Modal, title="💰 Pendência de Pagamento"):
-    valor = discord.ui.TextInput(label="💰 Valor pendente", placeholder="Ex: 50000", required=True, max_length=50)
-    chave_pix = discord.ui.TextInput(label="📱 Chave PIX (passaporte e nome)", placeholder="Ex: 820 - Leon", required=True, max_length=100)
+    def __init__(self):
+        super().__init__(timeout=300)
+    
+    valor = discord.ui.TextInput(
+        label="💰 Valor pendente",
+        placeholder="Ex: 50000",
+        required=True,
+        max_length=50
+    )
+    chave_pix = discord.ui.TextInput(
+        label="📱 Chave PIX (passaporte e nome)",
+        placeholder="Ex: 820 - Leon",
+        required=True,
+        max_length=100
+    )
+    
     async def on_submit(self, interaction: discord.Interaction):
-        mensagens_em_andamento.discard(interaction.user.id)
+        await limpar_mensagem_andamento(interaction.user.id)
+        
         try:
             valor = int(self.valor.value.replace(".", "").replace(",", ""))
             valor_texto = formatar_dinheiro(valor)
         except:
             valor_texto = self.valor.value
+        
         chave_pix = self.chave_pix.value.strip()
+        
         mensagem = f"""🔔 ATENÇÃO – PENDÊNCIA DE PAGAMENTO
 
 Consta uma pendência referente à sua última encomenda.
@@ -7937,31 +8083,54 @@ Consta uma pendência referente à sua última encomenda.
 Pedimos que o pagamento seja realizado o quanto antes.
 
 Obrigado!"""
-        embed = discord.Embed(title="📋 MENSAGEM GERADA - PENDÊNCIA DE PAGAMENTO", description="**Copie a mensagem abaixo e cole no canal desejado:**", color=0xf1c40f)
+        
+        embed = discord.Embed(
+            title="📋 MENSAGEM GERADA - PENDÊNCIA DE PAGAMENTO",
+            description="**Copie a mensagem abaixo e cole no canal desejado:**",
+            color=0xf1c40f
+        )
         embed.add_field(name="📝 MENSAGEM", value=f"```\n{mensagem}\n```", inline=False)
-        embed.add_field(name="📌 DETALHES", value=f"👤 Gerado por: {interaction.user.mention}\n💰 Valor: R$ {valor_texto}\n📱 Chave PIX: {chave_pix}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}", inline=False)
+        embed.add_field(
+            name="📌 DETALHES",
+            value=f"👤 Gerado por: {interaction.user.mention}\n💰 Valor: R$ {valor_texto}\n📱 Chave PIX: {chave_pix}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+            inline=False
+        )
         embed.set_footer(text="Clique em 'Copiar' para copiar a mensagem")
+        
         view = CopiarMensagemView(mensagem)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await limpar_mensagem_andamento(interaction.user.id)
+        logger.error(f"Erro no modal: {error}")
 
 class MensagemPagamentoPendenteModal(discord.ui.Modal, title="⚠️ Pagamento Pendente"):
     def __init__(self, usuario):
-        super().__init__()
+        super().__init__(timeout=300)
         self.usuario = usuario
-        mensagens_em_andamento.add(usuario.id)
-    valor = discord.ui.TextInput(label="💰 Valor pendente", placeholder="Ex: 50000", required=True, max_length=50)
+    
+    valor = discord.ui.TextInput(
+        label="💰 Valor pendente",
+        placeholder="Ex: 50000",
+        required=True,
+        max_length=50
+    )
+    
     async def on_submit(self, interaction: discord.Interaction):
-        mensagens_em_andamento.discard(interaction.user.id)
+        await limpar_mensagem_andamento(interaction.user.id)
+        
         try:
             valor = int(self.valor.value.replace(".", "").replace(",", ""))
             valor_texto = formatar_dinheiro(valor)
         except:
             valor_texto = self.valor.value
+        
         nome_display = interaction.user.display_name
         if " - " in nome_display:
             chave_pix = nome_display
         else:
             chave_pix = f"SEM PASSAPORTE - {nome_display}"
+        
         mensagem = f"""🔔 ATENÇÃO!
 
 ✅ Sua encomenda foi entregue.
@@ -7969,24 +8138,37 @@ class MensagemPagamentoPendenteModal(discord.ui.Modal, title="⚠️ Pagamento P
 💰 Pagamento pendente: R$ {valor_texto}
 📱 Chave PIX: {chave_pix}
 
-@everyone
-
-@everyone 
 {chave_pix} — {agora().strftime('%H:%M')}"""
-        embed = discord.Embed(title="📋 MENSAGEM GERADA - PAGAMENTO PENDENTE", description="**Copie a mensagem abaixo e cole no canal desejado:**", color=0xe67e22)
+        
+        embed = discord.Embed(
+            title="📋 MENSAGEM GERADA - PAGAMENTO PENDENTE",
+            description="**Copie a mensagem abaixo e cole no canal desejado:**",
+            color=0xe67e22
+        )
         embed.add_field(name="📝 MENSAGEM", value=f"```\n{mensagem}\n```", inline=False)
-        embed.add_field(name="📌 DETALHES", value=f"👤 Gerado por: {interaction.user.mention}\n💰 Valor: R$ {valor_texto}\n📱 Chave PIX: {chave_pix}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}", inline=False)
+        embed.add_field(
+            name="📌 DETALHES",
+            value=f"👤 Gerado por: {interaction.user.mention}\n💰 Valor: R$ {valor_texto}\n📱 Chave PIX: {chave_pix}\n📅 Data: {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+            inline=False
+        )
         embed.set_footer(text="Clique em 'Copiar' para copiar a mensagem")
+        
         view = CopiarMensagemView(mensagem)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await limpar_mensagem_andamento(interaction.user.id)
+        logger.error(f"Erro no modal: {error}")
 
 class CopiarMensagemView(discord.ui.View):
     def __init__(self, mensagem):
         super().__init__(timeout=120)
         self.mensagem = mensagem
+    
     @discord.ui.button(label="📋 Copiar Mensagem", style=discord.ButtonStyle.success, custom_id="copiar_mensagem", emoji="📋")
     async def copiar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(f"✅ **Mensagem copiada!**\n\nUse `Ctrl+C` para copiar a mensagem abaixo:\n\n```\n{self.mensagem}\n```", ephemeral=True)
+    
     @discord.ui.button(label="❌ Fechar", style=discord.ButtonStyle.secondary, custom_id="fechar_copiar", emoji="❌")
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -8000,22 +8182,36 @@ async def enviar_painel_mensagens():
     if not canal:
         logger.error("❌ Canal de textos vendas não encontrado")
         return
-    embed = discord.Embed(title="📝 GERADOR DE MENSAGENS DE VENDA", description="**Clique no botão abaixo para abrir o menu de mensagens.**\n\n📌 **Mensagens disponíveis:**\n• 📦 Pedido Pronto\n• ❌ Pedido Cancelado\n• ✅ Pedido Finalizado\n• 💰 Pendência de Pagamento\n• ⚠️ Pagamento Pendente\n\n🔹 **Como funciona:**\n1. Selecione o tipo de mensagem\n2. Preencha os campos solicitados\n3. A mensagem será gerada automaticamente\n4. Copie e cole no canal desejado", color=0x3498db)
-    embed.add_field(name="📌 DICA", value="• O passaporte é extraído automaticamente do seu apelido no servidor\n• Certifique-se de ter seu apelido no formato: `PASSAPORTE - NOME`", inline=False)
+    
+    embed = discord.Embed(
+        title="📝 GERADOR DE MENSAGENS DE VENDA",
+        description="**Clique no botão abaixo para abrir o menu de mensagens.**\n\n📌 **Mensagens disponíveis:**\n• 📦 Pedido Pronto\n• ❌ Pedido Cancelado\n• ✅ Pedido Finalizado\n• 💰 Pendência de Pagamento\n• ⚠️ Pagamento Pendente\n\n🔹 **Como funciona:**\n1. Selecione o tipo de mensagem\n2. Preencha os campos solicitados\n3. A mensagem será gerada automaticamente\n4. Copie e cole no canal desejado",
+        color=0x3498db
+    )
+    embed.add_field(
+        name="📌 DICA",
+        value="• O passaporte é extraído automaticamente do seu apelido no servidor\n• Certifique-se de ter seu apelido no formato: `PASSAPORTE - NOME`\n• Se fechar a janela, espere 5 minutos ou clique em 'Fechar' para liberar",
+        inline=False
+    )
     embed.set_footer(text="Sistema de Mensagens • VDR 442")
+    
+    view = MenuMensagensView()
+    
     try:
         async for msg in canal.history(limit=20):
             if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "📝 GERADOR DE MENSAGENS DE VENDA":
                 try:
-                    await msg.edit(embed=embed, view=MenuMensagensView())
+                    await msg.edit(embed=embed, view=view)
                     logger.info("📝 Painel de mensagens atualizado")
                     return
                 except:
                     pass
-        await canal.send(embed=embed, view=MenuMensagensView())
+        await canal.send(embed=embed, view=view)
         logger.info("📝 Painel de mensagens enviado")
     except Exception as e:
         logger.error(f"❌ Erro ao enviar painel de mensagens: {e}")
+
+# =========================================================
 
 # =========================================================
 # ==================== SEÇÃO 14: CLIPES ===================
