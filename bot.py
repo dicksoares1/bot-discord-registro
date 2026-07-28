@@ -3421,23 +3421,46 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
         await interaction.response.send_message(msg_resposta, ephemeral=True)
 
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
-    organizacao = discord.ui.TextInput(label="Organização", placeholder="Digite o nome da organização (ex: VDR, POLICIA)", required=True)
-    qtd_pt = discord.ui.TextInput(label="Quantidade PT", placeholder="Digite a quantidade de munição PT (ex: 24000)", required=True)
-    qtd_sub = discord.ui.TextInput(label="Quantidade SUB", placeholder="Digite a quantidade de munição SUB (ex: 16000)", required=True)
-    total_entregas = discord.ui.TextInput(label="Número de entregas", placeholder="Ex: 2, 3, 4... (padrão: 1)", required=False)
-    observacoes = discord.ui.TextInput(label="Observações", style=discord.TextStyle.paragraph, required=False)
+    organizacao = discord.ui.TextInput(
+        label="🏷️ Organização", 
+        placeholder="Digite o nome da organização (ex: VDR, POLICIA)", 
+        required=True
+    )
+    qtd_pt = discord.ui.TextInput(
+        label="🔫 Quantidade PT", 
+        placeholder="Digite a quantidade de munição PT (ex: 24000)", 
+        required=True
+    )
+    qtd_sub = discord.ui.TextInput(
+        label="🔫 Quantidade SUB", 
+        placeholder="Digite a quantidade de munição SUB (ex: 16000)", 
+        required=True
+    )
+    total_entregas = discord.ui.TextInput(
+        label="📦 Número de entregas", 
+        placeholder="Ex: 2, 3, 4... (padrão: 1)", 
+        required=False
+    )
+    observacoes = discord.ui.TextInput(
+        label="📝 Observações", 
+        style=discord.TextStyle.paragraph, 
+        required=False
+    )
     
     async def on_submit(self, interaction: discord.Interaction):
+        # PRIMEIRO: Deferir a resposta para não expirar
+        await interaction.response.defer(ephemeral=True)
+        
         try:
             pt = int(self.qtd_pt.value.strip()) if self.qtd_pt.value.strip() else 0
             sub = int(self.qtd_sub.value.strip()) if self.qtd_sub.value.strip() else 0
             if pt < 0 or sub < 0:
                 raise ValueError
             if pt == 0 and sub == 0:
-                await interaction.response.send_message("❌ Você precisa informar pelo menos PT ou SUB!", ephemeral=True)
+                await interaction.followup.send("❌ Você precisa informar pelo menos PT ou SUB!", ephemeral=True)
                 return
         except ValueError:
-            await interaction.response.send_message("❌ Valores inválidos.", ephemeral=True)
+            await interaction.followup.send("❌ Valores inválidos.", ephemeral=True)
             return
         
         try:
@@ -3497,16 +3520,16 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         
         await salvar_venda_db(str(interaction.user.id), total, numero_pedido)
         
-        # CORREÇÃO: Usar sync_grupo_com_vendas em vez de enviar_embed_grupo
+        # Buscar grupo e registrar compras
         grupo = await buscar_grupo_por_organizacao(org_nome)
         if grupo:
             if pacotes_pt_total > 0:
                 await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt_total, pacotes_pt_total * 50)
             if pacotes_sub_total > 0:
                 await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub_total, pacotes_sub_total * 90)
-            # Atualizar o painel de grupos
             await recriar_painel_grupos()
         
+        # Criar embeds de entrega
         if num_entregas > 1:
             primeira_entrega = entregas_lista[0]
             entrega_id = await salvar_entrega_parcelada(
@@ -3537,13 +3560,15 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                     grupo=grupo,
                     entregas_lista=entregas_lista
                 )
+            
             resumo_entregas = ""
             for i, e in enumerate(entregas_lista, 1):
                 resumo_entregas += f"• Entrega {i}/{num_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
+            
             msg_resposta = f"✅ **Venda parcelada registrada!**\n\n📦 **Pedido #{numero_pedido:04d}**\n🏷 **Organização:** {org_nome}\n📦 **Total PT:** {fmt_num(pt)} munições\n📦 **Total SUB:** {fmt_num(sub)} munições\n💰 **Total:** {formatar_dinheiro(total)}\n\n📋 **Entregas ({num_entregas} no total):**\n{resumo_entregas}\n✅ **Entrega 1/{num_entregas} criada!**"
             if grupo:
                 msg_resposta += f"\n📊 **Grupo integrado:** ✅ {org_nome}"
-            await interaction.response.send_message(msg_resposta, ephemeral=True)
+            await interaction.followup.send(msg_resposta, ephemeral=True)
         else:
             await criar_embed_entrega(
                 interaction=interaction,
@@ -3560,14 +3585,14 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
                 grupo=grupo,
                 entregas_lista=None
             )
+            
             msg_resposta = f"✅ **Venda registrada!**\n\n📦 **Pedido #{numero_pedido:04d}**\n🏷 **Organização:** {org_nome}\n🔫 **PT:** {fmt_num(pt)} munições\n🔫 **SUB:** {fmt_num(sub)} munições\n💰 **Total:** {formatar_dinheiro(total)}"
             if grupo:
                 msg_resposta += f"\n📊 **Grupo integrado:** ✅ {org_nome}"
-            await interaction.response.send_message(msg_resposta, ephemeral=True)
+            await interaction.followup.send(msg_resposta, ephemeral=True)
         
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
-
 class CalculadoraView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
