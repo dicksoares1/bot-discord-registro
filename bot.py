@@ -2558,6 +2558,9 @@ async def salvar_aluguel(galpao, dias):
     if not pool:
         return False
     try:
+        # Garantir que dias é inteiro
+        dias = int(dias)
+        
         async with pool.acquire() as conn:
             # Verificar se já existe registro ativo
             existe = await conn.fetchval(
@@ -2566,18 +2569,18 @@ async def salvar_aluguel(galpao, dias):
             )
             
             if existe:
-                # Atualizar somando dias
+                # Atualizar somando dias com CAST explícito
                 await conn.execute("""
                     UPDATE alugueis 
-                    SET dias_alugados = dias_alugados + $1,
+                    SET dias_alugados = dias_alugados + $1::INTEGER,
                         data_atualizacao = NOW()
-                    WHERE galpao = $1 AND ativo = true
+                    WHERE galpao = $2 AND ativo = true
                 """, dias, galpao)
             else:
-                # Criar novo registro
+                # Criar novo registro com CAST explícito
                 await conn.execute("""
                     INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
-                    VALUES ($1, $2, NOW(), true)
+                    VALUES ($1, $2::INTEGER, NOW(), true)
                 """, galpao, dias)
             
             return True
@@ -2702,11 +2705,16 @@ class AlugarGalpaoModal(discord.ui.Modal, title="📅 Alugar Galpão"):
             dias = int(self.dias.value.strip())
             if dias <= 0:
                 raise ValueError
-        except:
-            await interaction.followup.send("❌ Número de dias inválido!", ephemeral=True)
+        except ValueError:
+            await interaction.followup.send("❌ Número de dias inválido! Digite um número inteiro positivo.", ephemeral=True)
             return
         
-        await salvar_aluguel(galpao, dias)
+        # Salvar com o valor inteiro
+        sucesso = await salvar_aluguel(galpao, dias)
+        
+        if not sucesso:
+            await interaction.followup.send("❌ Erro ao salvar aluguel. Tente novamente.", ephemeral=True)
+            return
         
         embed = discord.Embed(
             title="📅 ALUGUEL REGISTRADO",
@@ -2722,7 +2730,6 @@ class AlugarGalpaoModal(discord.ui.Modal, title="📅 Alugar Galpão"):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
         await enviar_painel_fabricacao()
-
 # =========================================================
 # ==================== SEÇÃO 4: VENDAS ====================
 # =========================================================
