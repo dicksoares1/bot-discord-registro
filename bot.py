@@ -8125,7 +8125,6 @@ async def enviar_paineis_iniciais(guild):
             ("Registrar Compra", enviar_painel_registrar_compra),
             ("Solicitar Sala", enviar_painel_solicitar_sala),
             ("Botão Ausência", enviar_painel_botao_ausencia),
-            ("Registro Grupos", enviar_painel_registro_grupos),
             ("Painel Grupos", enviar_painel_grupos),
             ("Relatório Metas", enviar_painel_relatorio_metas),
             ("Mensagens", enviar_painel_mensagens),
