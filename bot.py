@@ -797,6 +797,41 @@ async def inicializar_tabelas(pool):
                 ultima_atualizacao TIMESTAMP DEFAULT NOW()
             )
         """)
+
+async def criar_tabela_alugueis():
+    """Cria tabela de aluguel de galpões."""
+    pool = get_db()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS alugueis (
+                    id SERIAL PRIMARY KEY,
+                    galpao TEXT NOT NULL,
+                    dias_alugados INTEGER DEFAULT 0,
+                    data_inicio TIMESTAMP DEFAULT NOW(),
+                    data_fim TIMESTAMP,
+                    ativo BOOLEAN DEFAULT true,
+                    data_atualizacao TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
+            # Inserir registros padrão se não existirem
+            await conn.execute("""
+                INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                VALUES ('NORTE', 0, NOW(), true)
+                ON CONFLICT DO NOTHING
+            """)
+            await conn.execute("""
+                INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                VALUES ('SUL', 0, NOW(), true)
+                ON CONFLICT DO NOTHING
+            """)
+            
+            logger.info("✅ TABELA ALUGUEIS CRIADA")
+    except Exception as e:
+        logger.error(f"❌ ERRO AO CRIAR TABELA ALUGUEIS: {e}")
         
         # Inicializar itens do baú
         for item in ITENS_DISPONIVEIS:
@@ -2208,6 +2243,44 @@ class FabricacaoView(discord.ui.View):
         await enviar_painel_fabricacao()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
 
+    @discord.ui.button(label="📅 Alugar Galpão", style=discord.ButtonStyle.primary, custom_id="alugar_galpao", emoji="📅")
+    async def alugar_galpao(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AlugarGalpaoModal())
+    
+    @discord.ui.button(label="📊 Alugueis", style=discord.ButtonStyle.secondary, custom_id="ver_alugueis", emoji="📊")
+    async def ver_alugueis(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        alugueis = await carregar_alugueis()
+        
+        embed = discord.Embed(
+            title="📅 STATUS DOS ALUGUEIS",
+            color=0x3498db,
+            timestamp=agora()
+        )
+        
+        for galpao, dados in alugueis.items():
+            dias = dados["dias"]
+            inicio = dados["inicio"]
+            
+            if inicio and dias > 0:
+                dias_passados = (agora() - inicio.replace(tzinfo=BRASIL)).days
+                dias_restantes = max(0, dias - dias_passados)
+                
+                if dias_restantes > 0:
+                    status = f"🟢 {dias_restantes} dias restantes"
+                else:
+                    status = "🔴 EXPIRADO"
+            else:
+                status = "⚪ NÃO ALUGADO"
+            
+            embed.add_field(
+                name=f"🏭 {galpao}",
+                value=f"**Dias alugados:** {dias}\n**Status:** {status}",
+                inline=True
+            )
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
     data_inicio = discord.ui.TextInput(label="Data inicial (DD/MM/AAAA)", placeholder="Ex: 01/04/2026")
     data_fim = discord.ui.TextInput(label="Data final (DD/MM/AAAA)", placeholder="Ex: 30/04/2026")
@@ -2260,28 +2333,76 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produç
 
 # --- PAINEL DA PRODUÇÃO ---
 async def enviar_painel_fabricacao():
+    """Envia o painel de fabricação com informações de aluguel."""
     canal = bot.get_channel(CANAL_FABRICACAO_ID)
     if not canal:
         logger.error("❌ Canal de fabricação não encontrado")
         return
+    
     estoque_municoes = await carregar_estoque()
     estoque_insumos = await carregar_estoque_insumos()
+    alugueis = await carregar_alugueis()
+    
     embed = discord.Embed(
         title="🏭 PAINEL DE FABRICAÇÃO",
         description="**Gerencie a produção e estoque:**",
         color=0x2ecc71
     )
-    embed.add_field(name="📦 ESTOQUE DE MUNIÇÃO", value=f"🔫 **PT:** {fmt_num(estoque_municoes['PT'])} pacotes\n🔫 **SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes", inline=False)
-    embed.add_field(name="💊 ESTOQUE DE INSUMOS", value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades", inline=False)
-    embed.add_field(name="🏭 PRODUÇÃO DE CÁPSULAS", value=(
-        "• **Galpões Norte:** 65 minutos (3 galpões)\n"
-        "• **Galpões Sul:** 130 minutos (3 galpões)\n\n"
-        "💡 Ao clicar, informe:\n"
-        "   - Quantos galpões (1, 2 ou 3)\n"
-        "   - Pólvora por galpão"
-    ), inline=False)
+    
+    # --- ALUGUEL DE GALPÕES ---
+    texto_alugueis = ""
+    for galpao, dados in alugueis.items():
+        dias = dados["dias"]
+        inicio = dados["inicio"]
+        
+        if inicio and dias > 0:
+            dias_passados = (agora() - inicio.replace(tzinfo=BRASIL)).days
+            dias_restantes = max(0, dias - dias_passados)
+            
+            if dias_restantes > 0:
+                status = f"🟢 {dias_restantes} dias"
+            else:
+                status = "🔴 EXPIRADO"
+        else:
+            status = "⚪ NÃO ALUGADO"
+        
+        texto_alugueis += f"**{galpao}:** {dias} dias | {status}\n"
+    
+    embed.add_field(
+        name="📅 ALUGUEL DE GALPÕES",
+        value=texto_alugueis or "Nenhum aluguel registrado",
+        inline=False
+    )
+    
+    # --- ESTOQUES ---
+    embed.add_field(
+        name="📦 ESTOQUE DE MUNIÇÃO",
+        value=f"🔫 **PT:** {fmt_num(estoque_municoes['PT'])} pacotes\n🔫 **SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="💊 ESTOQUE DE INSUMOS",
+        value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🏭 PRODUÇÃO DE CÁPSULAS",
+        value=(
+            "• **Galpões Norte:** 65 minutos (3 galpões)\n"
+            "• **Galpões Sul:** 130 minutos (3 galpões)\n\n"
+            "💡 Ao clicar, informe:\n"
+            "   - Quantos galpões (1, 2 ou 3)\n"
+            "   - Pólvora por galpão"
+        ),
+        inline=False
+    )
+    
     embed.set_footer(text=f"🔄 Atualizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+    
     view = FabricacaoView()
+    
     try:
         async for msg in canal.history(limit=20):
             if msg.author == bot.user and msg.embeds and msg.embeds[0].title == "🏭 PAINEL DE FABRICAÇÃO":
@@ -2378,6 +2499,183 @@ async def enviar_painel_polvoras():
     )
     await enviar_ou_atualizar_painel("painel_polvora", CANAL_CALCULO_POLVORA_ID, embed, PolvoraView())
     logger.info("💣 Painel de pólvora verificado/atualizado")
+
+# =========================================================
+# ==================== FUNÇÕES DE ALUGUEL =================
+# =========================================================
+
+async def criar_tabela_alugueis():
+    """Cria tabela de aluguel de galpões."""
+    pool = get_db()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS alugueis (
+                    id SERIAL PRIMARY KEY,
+                    galpao TEXT NOT NULL,
+                    dias_alugados INTEGER DEFAULT 0,
+                    data_inicio TIMESTAMP DEFAULT NOW(),
+                    data_fim TIMESTAMP,
+                    ativo BOOLEAN DEFAULT true,
+                    data_atualizacao TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
+            # Inserir registros padrão se não existirem
+            await conn.execute("""
+                INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                VALUES ('NORTE', 0, NOW(), true)
+                ON CONFLICT DO NOTHING
+            """)
+            await conn.execute("""
+                INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                VALUES ('SUL', 0, NOW(), true)
+                ON CONFLICT DO NOTHING
+            """)
+            
+            logger.info("✅ TABELA ALUGUEIS CRIADA")
+    except Exception as e:
+        logger.error(f"❌ ERRO AO CRIAR TABELA ALUGUEIS: {e}")
+
+async def salvar_aluguel(galpao, dias):
+    """Salva ou atualiza o aluguel de um galpão."""
+    pool = get_db()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            # Verificar se já existe
+            existe = await conn.fetchval(
+                "SELECT id FROM alugueis WHERE galpao = $1 AND ativo = true",
+                galpao
+            )
+            
+            if existe:
+                # Atualizar
+                await conn.execute("""
+                    UPDATE alugueis 
+                    SET dias_alugados = dias_alugados + $1,
+                        data_atualizacao = NOW()
+                    WHERE galpao = $1 AND ativo = true
+                """, dias, galpao)
+            else:
+                # Criar novo
+                await conn.execute("""
+                    INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                    VALUES ($1, $2, NOW(), true)
+                """, galpao, dias)
+            
+            return True
+    except Exception as e:
+        logger.error(f"❌ ERRO AO SALVAR ALUGUEL: {e}")
+        return False
+
+async def carregar_alugueis():
+    """Carrega os dados de aluguel dos galpões."""
+    pool = get_db()
+    if not pool:
+        return {"NORTE": {"dias": 0, "inicio": None}, "SUL": {"dias": 0, "inicio": None}}
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT galpao, dias_alugados, data_inicio 
+                FROM alugueis 
+                WHERE ativo = true
+            """)
+            
+            resultado = {}
+            for row in rows:
+                galpao = row["galpao"].upper()
+                resultado[galpao] = {
+                    "dias": row["dias_alugados"] or 0,
+                    "inicio": row["data_inicio"]
+                }
+            
+            # Garantir que ambos existem
+            if "NORTE" not in resultado:
+                resultado["NORTE"] = {"dias": 0, "inicio": None}
+            if "SUL" not in resultado:
+                resultado["SUL"] = {"dias": 0, "inicio": None}
+            
+            return resultado
+    except Exception as e:
+        logger.error(f"❌ ERRO AO CARREGAR ALUGUEIS: {e}")
+        return {"NORTE": {"dias": 0, "inicio": None}, "SUL": {"dias": 0, "inicio": None}}
+
+async def resetar_aluguel(galpao):
+    """Reseta o aluguel de um galpão."""
+    pool = get_db()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE alugueis 
+                SET ativo = false 
+                WHERE galpao = $1 AND ativo = true
+            """, galpao)
+            
+            await conn.execute("""
+                INSERT INTO alugueis (galpao, dias_alugados, data_inicio, ativo)
+                VALUES ($1, 0, NOW(), true)
+            """, galpao)
+            return True
+    except Exception as e:
+        logger.error(f"❌ ERRO AO RESETAR ALUGUEL: {e}")
+        return False
+
+# =========================================================
+# ==================== MODAL DE ALUGUEL ===================
+# =========================================================
+
+class AlugarGalpaoModal(discord.ui.Modal, title="📅 Alugar Galpão"):
+    galpao = discord.ui.TextInput(
+        label="🏭 Qual galpão?",
+        placeholder="Digite NORTE ou SUL",
+        required=True,
+        max_length=5
+    )
+    dias = discord.ui.TextInput(
+        label="📅 Quantos dias?",
+        placeholder="Digite o número de dias",
+        required=True,
+        max_length=3
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        galpao = self.galpao.value.strip().upper()
+        if galpao not in ["NORTE", "SUL"]:
+            await interaction.followup.send("❌ Galpão inválido! Use NORTE ou SUL.", ephemeral=True)
+            return
+        
+        try:
+            dias = int(self.dias.value.strip())
+            if dias <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ Número de dias inválido!", ephemeral=True)
+            return
+        
+        await salvar_aluguel(galpao, dias)
+        
+        embed = discord.Embed(
+            title="📅 ALUGUEL REGISTRADO",
+            description=f"🏭 **Galpão {galpao}**\n📅 **{dias} dias** adicionados",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        
+        alugueis = await carregar_alugueis()
+        dados = alugueis.get(galpao, {})
+        total_dias = dados.get("dias", 0)
+        embed.add_field(name="📊 Total de dias", value=f"{total_dias} dias", inline=True)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        await enviar_painel_fabricacao()
 
 # =========================================================
 # ==================== SEÇÃO 4: VENDAS ====================
@@ -8013,6 +8311,8 @@ async def on_ready():
     await enviar_paineis_iniciais(guild)
 
     await recriar_painel_grupos()
+
+    await criar_tabela_alugueis()
     
     # Limpeza de memória
     gc.collect()
