@@ -4707,6 +4707,63 @@ async def verificar_avisos_meta():
         logger.error(f"❌ Erro ao verificar avisos de meta: {e}")
 
 # =========================================================
+# ==================== COMANDOS DE METAS ===================
+# =========================================================
+
+@bot.command(name="atualizar_paineis_metas")
+@commands.has_permissions(administrator=True)
+async def cmd_atualizar_paineis_metas(ctx):
+    """Atualiza todos os painéis de metas."""
+    await ctx.send("🔄 Atualizando painéis de metas...")
+    
+    try:
+        # Recarregar cache de metas
+        await carregar_metas_cache()
+        
+        # Atualizar cada sala de meta
+        guild = ctx.guild
+        contador = 0
+        for uid, dados in metas_cache.items():
+            canal = guild.get_channel(dados["canal_id"])
+            if canal:
+                await atualizar_embed_meta(int(uid))
+                contador += 1
+                await asyncio.sleep(0.3)
+        
+        # Atualizar painel de solicitar sala
+        await enviar_painel_solicitar_sala()
+        
+        # Atualizar painel de relatório
+        await enviar_painel_relatorio_metas()
+        
+        await ctx.send(f"✅ **{contador} painéis de metas atualizados!**")
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar painéis de metas: {e}")
+        await ctx.send(f"❌ Erro ao atualizar painéis: {e}")
+
+@bot.command(name="atualizar_metas")
+@commands.has_permissions(administrator=True)
+async def cmd_atualizar_metas(ctx):
+    """Atualiza todas as salas de metas."""
+    await ctx.send("🔄 Atualizando salas de metas...")
+    
+    try:
+        await carregar_metas_cache()
+        
+        contador = 0
+        for uid in list(metas_cache.keys()):
+            await atualizar_embed_meta(int(uid))
+            contador += 1
+            await asyncio.sleep(0.2)
+        
+        await ctx.send(f"✅ **{contador} salas de metas atualizadas!**")
+    except Exception as e:
+        logger.error(f"❌ Erro: {e}")
+        await ctx.send(f"❌ Erro: {e}")
+
+
+# =========================================================
 # ==================== SEÇÃO 6: AÇÕES =====================
 # =========================================================
 
