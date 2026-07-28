@@ -5616,13 +5616,11 @@ async def enviar_painel_remover_ausencia():
         logger.error(f"❌ Erro ao enviar painel remover ausência: {e}")
 
 # =========================================================
-# ==================== SEÇÃO 10: GRUPOS ===================
+# ==================== SEÇÃO 10: GRUPOS (FINAL) ===========
 # =========================================================
 
 # --- IDs DOS GRUPOS ---
-CANAL_REGISTRO_GRUPOS_ID = 1516781653194833991
 CANAL_GRUPOS_ID = 1448563544386961479
-CANAL_COMPRAS_REGISTRADAS_ID = 1270467793363669053
 
 # --- TIPOS DE ORGANIZAÇÃO ---
 TIPOS_ORGANIZACAO = {
@@ -5823,33 +5821,53 @@ async def buscar_grupo_por_organizacao(nome_org):
         logger.error(f"❌ ERRO: {e}")
         return None
 
-# --- FUNÇÃO PARA RECRIAR O PAINEL ---
+# --- FUNÇÃO PARA LIMPAR E RECRIAR O PAINEL (FORÇADO) ---
 async def recriar_painel_grupos():
+    """LIMPA TODAS AS MENSAGENS DO BOT E RECRIA O PAINEL."""
     canal = bot.get_channel(CANAL_GRUPOS_ID)
     if not canal:
-        logger.error(f"❌ CANAL NÃO ENCONTRADO")
+        logger.error(f"❌ CANAL NÃO ENCONTRADO: {CANAL_GRUPOS_ID}")
         return False
     
     try:
+        # DELETAR TODAS AS MENSAGENS DO BOT (FORÇADO)
+        logger.info("🗑️ DELETANDO TODAS AS MENSAGENS DO BOT NO CANAL...")
         deletadas = 0
-        async for msg in canal.history(limit=100):
+        
+        # Buscar todas as mensagens do bot no canal
+        async for msg in canal.history(limit=500):
             if msg.author == bot.user:
                 try:
                     await msg.delete()
                     deletadas += 1
-                    await asyncio.sleep(0.2)
-                except:
-                    pass
+                    await asyncio.sleep(0.3)  # Delay para evitar rate limit
+                except discord.Forbidden:
+                    logger.error("❌ SEM PERMISSÃO PARA DELETAR MENSAGENS!")
+                except discord.HTTPException as e:
+                    if e.status == 429:
+                        logger.warning("⚠️ RATE LIMIT, AGUARDANDO...")
+                        await asyncio.sleep(2)
+                    else:
+                        logger.error(f"❌ ERRO AO DELETAR: {e}")
         
+        logger.info(f"✅ {deletadas} MENSAGENS DELETADAS")
+        
+        # AGUARDAR PARA EVITAR RATE LIMIT
+        await asyncio.sleep(2)
+        
+        # ENVIAR O NOVO PAINEL (APENAS 1 MENSAGEM)
         await enviar_painel_grupos()
-        logger.info(f"✅ PAINEL RECRIADO ({deletadas} REMOVIDAS)")
+        
+        logger.info("✅ PAINEL RECRIADO COM SUCESSO!")
         return True
+        
     except Exception as e:
-        logger.error(f"❌ ERRO: {e}")
+        logger.error(f"❌ ERRO AO RECRIAR PAINEL: {e}")
         return False
 
 # --- FUNÇÃO PARA ENVIAR PAINEL PRINCIPAL ---
 async def enviar_painel_grupos():
+    """ENVIA O PAINEL PRINCIPAL COM DROPDOWN."""
     canal = bot.get_channel(CANAL_GRUPOS_ID)
     if not canal:
         logger.error(f"❌ CANAL NÃO ENCONTRADO")
@@ -5891,12 +5909,15 @@ async def enviar_painel_grupos():
         
         embed.set_footer(text="👇 SELECIONE UM GRUPO NO DROPDOWN")
         
+        # CRIAR VIEW COM APENAS 2 BOTÕES + DROPDOWN
         view = PainelGruposView(grupos)
+        
+        # ENVIAR A MENSAGEM
         await canal.send(embed=embed, view=view)
-        logger.info("✅ PAINEL ENVIADO")
+        logger.info("✅ PAINEL ENVIADO (APENAS 1 MENSAGEM)")
         
     except Exception as e:
-        logger.error(f"❌ ERRO: {e}")
+        logger.error(f"❌ ERRO AO ENVIAR PAINEL: {e}")
 
 # --- VIEW PRINCIPAL ---
 class PainelGruposView(discord.ui.View):
@@ -5907,6 +5928,7 @@ class PainelGruposView(discord.ui.View):
         import time
         self.uid = str(int(time.time()))[-6:]
         
+        # DROPDOWN
         if grupos and len(grupos) > 0:
             options = []
             for grupo in grupos[:25]:
@@ -5928,22 +5950,24 @@ class PainelGruposView(discord.ui.View):
                     options=options,
                     min_values=1,
                     max_values=1,
-                    custom_id=f"select_grupo_{self.uid}"
+                    custom_id=f"select_{self.uid}"
                 )
                 select.callback = self.select_callback
                 self.add_item(select)
         
+        # BOTÃO 1: NOVO GRUPO
         self.add_item(discord.ui.Button(
             label="➕ NOVO GRUPO",
             style=discord.ButtonStyle.success,
-            custom_id=f"btn_novo_{self.uid}",
+            custom_id=f"novo_{self.uid}",
             emoji="➕"
         ))
         
+        # BOTÃO 2: ATUALIZAR
         self.add_item(discord.ui.Button(
             label="🔄 ATUALIZAR",
             style=discord.ButtonStyle.secondary,
-            custom_id=f"btn_atualizar_{self.uid}",
+            custom_id=f"atualizar_{self.uid}",
             emoji="🔄"
         ))
     
@@ -6002,7 +6026,7 @@ class PainelGruposView(discord.ui.View):
             logger.error(f"❌ ERRO: {e}")
             await interaction.followup.send(f"❌ ERRO: {str(e)[:100]}", ephemeral=True)
     
-    @discord.ui.button(label="➕ NOVO GRUPO", style=discord.ButtonStyle.success, custom_id="btn_novo_padrao", emoji="➕")
+    @discord.ui.button(label="➕ NOVO GRUPO", style=discord.ButtonStyle.success, custom_id="novo_padrao", emoji="➕")
     async def novo_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -6011,7 +6035,7 @@ class PainelGruposView(discord.ui.View):
             return
         await interaction.response.send_modal(RegistrarGrupoModal())
     
-    @discord.ui.button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_padrao", emoji="🔄")
+    @discord.ui.button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="atualizar_padrao", emoji="🔄")
     async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await recriar_painel_grupos()
@@ -6351,7 +6375,6 @@ async def sync_grupo_com_vendas(org_nome, tipo, quantidade, valor):
         return True
     return False
 
-# =========================================================
 
 # =========================================================
 # ==================== SEÇÃO 11: CONTROLE DE BAÚ/ARMAS ===
