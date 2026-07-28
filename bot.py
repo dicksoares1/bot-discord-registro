@@ -5616,7 +5616,7 @@ async def enviar_painel_remover_ausencia():
         logger.error(f"❌ Erro ao enviar painel remover ausência: {e}")
 
 # =========================================================
-# ==================== SEÇÃO 10: GRUPOS (FINAL) ===========
+# ==================== SEÇÃO 10: GRUPOS ===================
 # =========================================================
 
 # --- IDs DOS GRUPOS ---
@@ -5819,9 +5819,9 @@ async def buscar_grupo_por_organizacao(nome_org):
         logger.error(f"❌ Erro ao buscar grupo por organização: {e}")
         return None
 
-# --- FUNÇÃO PARA RECRIAR O PAINEL (AUTOMÁTICO) ---
+# --- FUNÇÃO PARA RECRIAR O PAINEL ---
 async def recriar_painel_grupos():
-    """Limpa e recria o painel de grupos automaticamente."""
+    """Limpa e recria o painel de grupos."""
     canal = bot.get_channel(CANAL_GRUPOS_ID)
     if not canal:
         logger.error(f"❌ Canal de grupos não encontrado: {CANAL_GRUPOS_ID}")
@@ -5891,6 +5891,7 @@ async def enviar_painel_grupos():
         
         embed.set_footer(text="👇 Selecione um grupo no dropdown")
         
+        # Criar view com ID único baseado no timestamp
         view = PainelGruposView(grupos)
         await canal.send(embed=embed, view=view)
         logger.info("✅ Painel de grupos enviado")
@@ -5898,13 +5899,17 @@ async def enviar_painel_grupos():
     except Exception as e:
         logger.error(f"❌ Erro ao enviar painel: {e}")
 
-# --- VIEW PRINCIPAL ---
+# --- VIEW PRINCIPAL COM IDs ÚNICOS ---
 class PainelGruposView(discord.ui.View):
     def __init__(self, grupos):
         super().__init__(timeout=None)
         self.grupos = grupos
         
-        # Dropdown para selecionar grupo (custom_id ÚNICO)
+        # Gerar ID único para este painel
+        import time
+        self.uid = str(int(time.time()))[-6:]
+        
+        # Dropdown para selecionar grupo
         if grupos and len(grupos) > 0:
             options = []
             for grupo in grupos[:25]:
@@ -5926,23 +5931,23 @@ class PainelGruposView(discord.ui.View):
                     options=options,
                     min_values=1,
                     max_values=1,
-                    custom_id="select_grupo_principal_01"  # ID ÚNICO
+                    custom_id=f"select_grupo_{self.uid}"  # ID ÚNICO
                 )
                 select.callback = self.select_callback
                 self.add_item(select)
         
-        # Botões com custom_id ÚNICOS
+        # Botões com IDs ÚNICOS
         self.add_item(discord.ui.Button(
             label="➕ Novo Grupo",
             style=discord.ButtonStyle.success,
-            custom_id="btn_novo_grupo_01",  # ID ÚNICO
+            custom_id=f"btn_novo_{self.uid}",  # ID ÚNICO
             emoji="➕"
         ))
         
         self.add_item(discord.ui.Button(
             label="🔄 Atualizar",
             style=discord.ButtonStyle.secondary,
-            custom_id="btn_atualizar_grupos_01",  # ID ÚNICO
+            custom_id=f"btn_atualizar_{self.uid}",  # ID ÚNICO
             emoji="🔄"
         ))
     
@@ -6000,7 +6005,7 @@ class PainelGruposView(discord.ui.View):
             logger.error(f"❌ Erro: {e}")
             await interaction.followup.send(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
     
-    @discord.ui.button(label="➕ Novo Grupo", style=discord.ButtonStyle.success, custom_id="btn_novo_grupo_01", emoji="➕")
+    @discord.ui.button(label="➕ Novo Grupo", style=discord.ButtonStyle.success, custom_id="btn_novo_painel", emoji="➕")
     async def novo_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -6009,7 +6014,7 @@ class PainelGruposView(discord.ui.View):
             return
         await interaction.response.send_modal(RegistrarGrupoModal())
     
-    @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_grupos_01", emoji="🔄")
+    @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_painel", emoji="🔄")
     async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await recriar_painel_grupos()
@@ -6022,35 +6027,39 @@ class GrupoView(discord.ui.View):
         self.grupo_id = grupo_id
         self.nome_org = nome_org
         
+        # Gerar ID único
+        import time
+        self.uid = str(int(time.time()))[-6:]
+        
         self.add_item(discord.ui.Button(
             label="✏️ Editar",
             style=discord.ButtonStyle.primary,
-            custom_id=f"editar_{grupo_id[:8]}",
+            custom_id=f"editar_{self.uid}",
             emoji="✏️"
         ))
         self.add_item(discord.ui.Button(
             label="🗑️ Excluir",
             style=discord.ButtonStyle.danger,
-            custom_id=f"excluir_{grupo_id[:8]}",
+            custom_id=f"excluir_{self.uid}",
             emoji="🗑️"
         ))
         self.add_item(discord.ui.Button(
             label="📊 Compras",
             style=discord.ButtonStyle.success,
-            custom_id=f"compras_{grupo_id[:8]}",
+            custom_id=f"compras_{self.uid}",
             emoji="📦"
         ))
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         
-        if custom_id.startswith(f"editar_{self.grupo_id[:8]}"):
+        if custom_id.startswith(f"editar_{self.uid}"):
             await self.editar(interaction)
             return False
-        elif custom_id.startswith(f"excluir_{self.grupo_id[:8]}"):
+        elif custom_id.startswith(f"excluir_{self.uid}"):
             await self.excluir(interaction)
             return False
-        elif custom_id.startswith(f"compras_{self.grupo_id[:8]}"):
+        elif custom_id.startswith(f"compras_{self.uid}"):
             await self.compras(interaction)
             return False
         return True
@@ -6123,9 +6132,8 @@ class GrupoView(discord.ui.View):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-# --- MODAL PARA REGISTRAR (SOMENTE 5 CAMPOS) ---
+# --- MODAL PARA REGISTRAR ---
 class RegistrarGrupoModal(discord.ui.Modal, title="📋 Registrar Novo Grupo"):
-    """Modal com campos unificados - máximo 5 campos."""
     def __init__(self):
         super().__init__(timeout=300)
         
@@ -6207,11 +6215,10 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 Registrar Novo Grupo"):
         )
         
         await recriar_painel_grupos()
-        await interaction.followup.send(f"✅ **Grupo {self.nome_org.value} registrado com sucesso!**", ephemeral=True)
+        await interaction.followup.send(f"✅ **Grupo {self.nome_org.value} registrado!**", ephemeral=True)
 
-# --- MODAL PARA EDITAR (SOMENTE 5 CAMPOS) ---
+# --- MODAL PARA EDITAR ---
 class EditarGrupoModal(discord.ui.Modal, title="✏️ Editar Grupo"):
-    """Modal com campos unificados - máximo 5 campos."""
     def __init__(self, grupo_id, dados):
         super().__init__(timeout=300)
         self.grupo_id = grupo_id
@@ -6299,7 +6306,7 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ Editar Grupo"):
         )
         
         await recriar_painel_grupos()
-        await interaction.followup.send(f"✅ **Grupo {self.nome_org.value} atualizado com sucesso!**", ephemeral=True)
+        await interaction.followup.send(f"✅ **Grupo {self.nome_org.value} atualizado!**", ephemeral=True)
 
 # --- VIEW PARA CONFIRMAR EXCLUSÃO ---
 class ConfirmarExcluirView(discord.ui.View):
@@ -6308,26 +6315,29 @@ class ConfirmarExcluirView(discord.ui.View):
         self.grupo_id = grupo_id
         self.nome_org = nome_org
         
+        import time
+        self.uid = str(int(time.time()))[-6:]
+        
         self.add_item(discord.ui.Button(
             label="✅ Sim",
             style=discord.ButtonStyle.danger,
-            custom_id=f"conf_excluir_{grupo_id[:8]}",
+            custom_id=f"conf_{self.uid}",
             emoji="✅"
         ))
         self.add_item(discord.ui.Button(
             label="❌ Cancelar",
             style=discord.ButtonStyle.secondary,
-            custom_id=f"cancel_excluir_{grupo_id[:8]}",
+            custom_id=f"cancel_{self.uid}",
             emoji="❌"
         ))
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         
-        if custom_id.startswith(f"conf_excluir_{self.grupo_id[:8]}"):
+        if custom_id.startswith("conf_"):
             await self.confirmar(interaction)
             return False
-        elif custom_id.startswith(f"cancel_excluir_{self.grupo_id[:8]}"):
+        elif custom_id.startswith("cancel_"):
             await self.cancelar(interaction)
             return False
         return True
@@ -6349,7 +6359,7 @@ async def enviar_painel_registro_grupos():
     
     embed = discord.Embed(
         title="📋 REGISTRO DE GRUPOS",
-        description="**Clique no botão para registrar um novo grupo.**\n\n📌 **Tipos:**\n• ⚔️ facção - PT e SUB\n• 📋 pista_sem_tablet - Apenas PT\n• 📱 pista_com_tablet - PT e SUB\n\n📌 **Campos:**\n• Nome da Organização\n• Líder (Nome - Telefone)\n• Braço (Nome - Telefone - opcional)\n• Produto\n• Tipo de Organização",
+        description="**Clique no botão para registrar um novo grupo.**\n\n📌 **Tipos:**\n• ⚔️ facção - PT e SUB\n• 📋 pista_sem_tablet - Apenas PT\n• 📱 pista_com_tablet - PT e SUB",
         color=0x2ecc71
     )
     
@@ -6357,7 +6367,7 @@ async def enviar_painel_registro_grupos():
     view.add_item(discord.ui.Button(
         label="📋 Novo Grupo",
         style=discord.ButtonStyle.success,
-        custom_id="btn_registrar_grupo_01",  # ID ÚNICO
+        custom_id="btn_registrar_unico",  # ID ÚNICO
         emoji="📋"
     ))
     
