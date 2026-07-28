@@ -7541,6 +7541,588 @@ async def on_message_controle(message: discord.Message):
             logger.error(f"❌ Erro ao recolocar painel: {e}")
 
 # =========================================================
+# ==================== SEÇÃO 11.5: ARMAS PESSOAIS =========
+# =========================================================
+# ESTA SEÇÃO É ADICIONAL - NÃO REMOVE NADA DO EXISTENTE
+# =========================================================
+
+# --- CONSTANTES ---
+DURACAO_ARMA_PESSOAL_DIAS = 7  # Dias até quebrar
+
+# --- QUERIES DO BANCO (TABELAS NOVAS) ---
+async def criar_tabelas_armas_pessoais():
+    """Cria as tabelas para armas pessoais."""
+    pool = get_db()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            # Tabela de armas pessoais dos membros
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS armas_pessoais (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(30) NOT NULL,
+                    nome_membro TEXT NOT NULL,
+                    arma_nome TEXT NOT NULL,
+                    quantidade INTEGER DEFAULT 1,
+                    data_atribuicao TIMESTAMP DEFAULT NOW(),
+                    data_vencimento TIMESTAMP,
+                    status VARCHAR(20) DEFAULT 'NOVA',
+                    observacoes TEXT,
+                    ativo BOOLEAN DEFAULT true,
+                    UNIQUE(user_id, arma_nome)
+                )
+            """)
+            
+            # Tabela de histórico de armas pessoais
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS armas_pessoais_historico (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(30),
+                    nome_membro TEXT,
+                    arma_nome TEXT,
+                    quantidade INTEGER,
+                    acao VARCHAR(20),
+                    data TIMESTAMP DEFAULT NOW(),
+                    observacoes TEXT
+                )
+            """)
+            
+            logger.info("✅ TABELAS DE ARMAS PESSOAIS CRIADAS")
+    except Exception as e:
+        logger.error(f"❌ ERRO AO CRIAR TABELAS ARMAS PESSOAIS: {e}")
+
+# --- FUNÇÕES DE BANCO ---
+async def atribuir_arma_pessoal(user_id, nome_membro, arma_nome, quantidade=1, observacoes=""):
+    """Atribui uma arma pessoal a um membro."""
+    pool = get_db()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            data_vencimento = para_db_naive(agora() + timedelta(days=DURACAO_ARMA_PESSOAL_DIAS))
+            
+            existe = await conn.fetchval(
+                "SELECT id FROM armas_pessoais WHERE user_id = $1 AND arma_nome = $2 AND ativo = true",
+                str(user_id), arma_nome.upper()
+            )
+            
+            if existe:
+                await conn.execute("""
+                    UPDATE armas_pessoais 
+                    SET quantidade = quantidade + $1,
+                        data_atribuicao = NOW(),
+                        data_vencimento = $2,
+                        status = 'NOVA',
+                        observacoes = $3
+                    WHERE user_id = $4 AND arma_nome = $5 AND ativo = true
+                """, quantidade, data_vencimento, observacoes.upper(), str(user_id), arma_nome.upper())
+            else:
+                await conn.execute("""
+                    INSERT INTO armas_pessoais (user_id, nome_membro, arma_nome, quantidade, data_atribuicao, data_vencimento, status, observacoes)
+                    VALUES ($1, $2, $3, $4, NOW(), $5, 'NOVA', $6)
+                """, str(user_id), nome_membro.upper(), arma_nome.upper(), quantidade, data_vencimento, observacoes.upper())
+            
+            await conn.execute("""
+                INSERT INTO armas_pessoais_historico (user_id, nome_membro, arma_nome, quantidade, acao, observacoes)
+                VALUES ($1, $2, $3, $4, 'ATRIBUIDA', $5)
+            """, str(user_id), nome_membro.upper(), arma_nome.upper(), quantidade, observacoes.upper())
+            
+            return True
+    except Exception as e:
+        logger.error(f"❌ ERRO AO ATRIBUIR ARMA PESSOAL: {e}")
+        return False
+
+async def devolver_arma_pessoal(user_id, arma_nome, observacoes=""):
+    """Devolve uma arma pessoal."""
+    pool = get_db()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            arma = await conn.fetchrow(
+                "SELECT * FROM armas_pessoais WHERE user_id = $1 AND arma_nome = $2 AND ativo = true",
+                str(user_id), arma_nome.upper()
+            )
+            
+            if not arma:
+                return False
+            
+            await conn.execute("""
+                UPDATE armas_pessoais 
+                SET ativo = false,
+                    observacoes = observacoes || ' | DEVOLVIDA: ' || $1
+                WHERE user_id = $2 AND arma_nome = $3 AND ativo = true
+            """, observacoes, str(user_id), arma_nome.upper())
+            
+            await conn.execute("""
+                INSERT INTO armas_pessoais_historico (user_id, nome_membro, arma_nome, quantidade, acao, observacoes)
+                VALUES ($1, $2, $3, $4, 'DEVOLVIDA', $5)
+            """, str(user_id), arma['nome_membro'], arma_nome.upper(), arma['quantidade'], observacoes.upper())
+            
+            return True
+    except Exception as e:
+        logger.error(f"❌ ERRO AO DEVOLVER ARMA PESSOAL: {e}")
+        return False
+
+async def perder_arma_pessoal(user_id, arma_nome, observacoes=""):
+    """Registra perda de uma arma pessoal."""
+    pool = get_db()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            arma = await conn.fetchrow(
+                "SELECT * FROM armas_pessoais WHERE user_id = $1 AND arma_nome = $2 AND ativo = true",
+                str(user_id), arma_nome.upper()
+            )
+            
+            if not arma:
+                return False
+            
+            await conn.execute("""
+                UPDATE armas_pessoais 
+                SET ativo = false,
+                    observacoes = observacoes || ' | PERDIDA: ' || $1
+                WHERE user_id = $2 AND arma_nome = $3 AND ativo = true
+            """, observacoes, str(user_id), arma_nome.upper())
+            
+            await conn.execute("""
+                INSERT INTO armas_pessoais_historico (user_id, nome_membro, arma_nome, quantidade, acao, observacoes)
+                VALUES ($1, $2, $3, $4, 'PERDIDA', $5)
+            """, str(user_id), arma['nome_membro'], arma_nome.upper(), arma['quantidade'], observacoes.upper())
+            
+            return True
+    except Exception as e:
+        logger.error(f"❌ ERRO AO REGISTRAR PERDA: {e}")
+        return False
+
+async def reparar_arma_pessoal(user_id, arma_nome, observacoes=""):
+    """Repara uma arma pessoal (renova por mais 7 dias)."""
+    pool = get_db()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            arma = await conn.fetchrow(
+                "SELECT * FROM armas_pessoais WHERE user_id = $1 AND arma_nome = $2 AND ativo = true",
+                str(user_id), arma_nome.upper()
+            )
+            
+            if not arma:
+                return False
+            
+            data_vencimento = para_db_naive(agora() + timedelta(days=DURACAO_ARMA_PESSOAL_DIAS))
+            
+            await conn.execute("""
+                UPDATE armas_pessoais 
+                SET data_vencimento = $1,
+                    status = 'REPARADA',
+                    observacoes = observacoes || ' | REPARADA: ' || $2
+                WHERE user_id = $3 AND arma_nome = $4 AND ativo = true
+            """, data_vencimento, observacoes.upper(), str(user_id), arma_nome.upper())
+            
+            await conn.execute("""
+                INSERT INTO armas_pessoais_historico (user_id, nome_membro, arma_nome, quantidade, acao, observacoes)
+                VALUES ($1, $2, $3, $4, 'REPARADA', $5)
+            """, str(user_id), arma['nome_membro'], arma_nome.upper(), arma['quantidade'], observacoes.upper())
+            
+            return True
+    except Exception as e:
+        logger.error(f"❌ ERRO AO REPARAR ARMA PESSOAL: {e}")
+        return False
+
+async def carregar_armas_pessoais():
+    """Carrega todas as armas pessoais ativas."""
+    pool = get_db()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetch("""
+                SELECT * FROM armas_pessoais 
+                WHERE ativo = true 
+                ORDER BY nome_membro, arma_nome
+            """)
+    except Exception as e:
+        logger.error(f"❌ ERRO AO CARREGAR ARMAS PESSOAIS: {e}")
+        return []
+
+async def buscar_armas_pessoais_membro(user_id):
+    """Busca as armas pessoais de um membro."""
+    pool = get_db()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetch("""
+                SELECT * FROM armas_pessoais 
+                WHERE user_id = $1 AND ativo = true 
+                ORDER BY arma_nome
+            """, str(user_id))
+    except Exception as e:
+        logger.error(f"❌ ERRO AO BUSCAR ARMAS PESSOAIS: {e}")
+        return []
+
+# --- VIEWS E MODAIS PARA ARMAS PESSOAIS ---
+class ArmasPessoaisView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="➕ ATRIBUIR ARMA PESSOAL", style=discord.ButtonStyle.success, custom_id="atribuir_arma_pessoal", emoji="➕")
+    async def atribuir_arma(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        is_admin = interaction.user.guild_permissions.administrator
+        if not is_gerente and not is_admin:
+            await interaction.response.send_message("❌ APENAS GERENTES E ADM!", ephemeral=True)
+            return
+        await interaction.response.send_modal(AtribuirArmaPessoalModal())
+    
+    @discord.ui.button(label="🔍 VER ARMAS DO MEMBRO", style=discord.ButtonStyle.primary, custom_id="ver_armas_membro", emoji="🔍")
+    async def ver_membro(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VerArmasMembroModal())
+    
+    @discord.ui.button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="atualizar_armas_pessoais", emoji="🔄")
+    async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_armas_pessoais()
+        await interaction.followup.send("✅ PAINEL ATUALIZADO!", ephemeral=True)
+
+class AtribuirArmaPessoalModal(discord.ui.Modal, title="🔫 ATRIBUIR ARMA PESSOAL"):
+    user_id = discord.ui.TextInput(label="🆔 ID DO MEMBRO", placeholder="DIGITE O ID DO MEMBRO", required=True, max_length=30)
+    nome_membro = discord.ui.TextInput(label="👤 NOME DO MEMBRO", placeholder="EX: LEON - 820", required=True, max_length=100)
+    arma_nome = discord.ui.TextInput(label="🔫 NOME DA ARMA", placeholder="EX: M4, AUG, SIG SAUER", required=True, max_length=50)
+    quantidade = discord.ui.TextInput(label="📦 QUANTIDADE", placeholder="PADRÃO: 1", required=False, max_length=5, default="1")
+    observacoes = discord.ui.TextInput(label="📝 OBSERVAÇÕES (OPCIONAL)", required=False, max_length=200)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            uid = int(self.user_id.value.strip())
+        except:
+            await interaction.followup.send("❌ ID INVÁLIDO!", ephemeral=True)
+            return
+        
+        try:
+            qtd = int(self.quantidade.value.strip() or "1")
+            if qtd <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ QUANTIDADE INVÁLIDA!", ephemeral=True)
+            return
+        
+        nome = self.nome_membro.value.strip().upper()
+        arma = self.arma_nome.value.strip().upper()
+        obs = self.observacoes.value.strip() if self.observacoes.value else ""
+        
+        sucesso = await atribuir_arma_pessoal(uid, nome, arma, qtd, obs)
+        
+        if sucesso:
+            embed = discord.Embed(
+                title="✅ ARMA PESSOAL ATRIBUÍDA",
+                description=f"🔫 **{arma}** atribuída a **{nome}**",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.add_field(name="👤 MEMBRO", value=f"<@{uid}>", inline=True)
+            embed.add_field(name="🔫 ARMA", value=arma, inline=True)
+            embed.add_field(name="📦 QUANTIDADE", value=f"{qtd}", inline=True)
+            embed.add_field(name="📅 DURAÇÃO", value=f"{DURACAO_ARMA_PESSOAL_DIAS} DIAS", inline=True)
+            if obs:
+                embed.add_field(name="📝 OBS", value=obs, inline=False)
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await enviar_painel_armas_pessoais()
+        else:
+            await interaction.followup.send("❌ ERRO AO ATRIBUIR ARMA!", ephemeral=True)
+
+class VerArmasMembroModal(discord.ui.Modal, title="🔍 VER ARMAS DO MEMBRO"):
+    user_id = discord.ui.TextInput(label="🆔 ID DO MEMBRO", placeholder="DIGITE O ID", required=True, max_length=30)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            uid = int(self.user_id.value.strip())
+        except:
+            await interaction.followup.send("❌ ID INVÁLIDO!", ephemeral=True)
+            return
+        
+        armas = await buscar_armas_pessoais_membro(uid)
+        
+        if not armas:
+            await interaction.followup.send(f"📭 <@{uid}> NÃO POSSUI ARMAS PESSOAIS.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title=f"🔫 ARMAS PESSOAIS DE <@{uid}>",
+            color=0x3498db,
+            timestamp=agora()
+        )
+        
+        agora_br = agora()
+        texto = ""
+        for arma in armas:
+            nome = arma['arma_nome']
+            status = arma['status']
+            data_vencimento = arma['data_vencimento']
+            
+            if data_vencimento:
+                if data_vencimento.tzinfo is None:
+                    data_vencimento = data_vencimento.replace(tzinfo=BRASIL)
+                dias_restantes = (data_vencimento - agora_br).days
+            else:
+                dias_restantes = DURACAO_ARMA_PESSOAL_DIAS
+            
+            if dias_restantes < 0:
+                emoji = "💀"
+            elif dias_restantes <= 2:
+                emoji = "🔴"
+            elif dias_restantes <= 4:
+                emoji = "🟡"
+            else:
+                emoji = "🟢"
+            
+            texto += f"{emoji} **{nome}** - {status} ({dias_restantes} DIAS)\n"
+        
+        embed.add_field(name="📋 ARMAS", value=texto, inline=False)
+        
+        # Criar dropdown para selecionar arma
+        if armas:
+            options = []
+            for arma in armas:
+                options.append(
+                    discord.SelectOption(
+                        label=arma['arma_nome'][:45],
+                        description=f"Status: {arma['status']}",
+                        value=arma['arma_nome'],
+                        emoji="🔫"
+                    )
+                )
+            
+            select = discord.ui.Select(
+                placeholder="SELECIONE UMA ARMA...",
+                options=options,
+                min_values=1,
+                max_values=1
+            )
+            
+            async def select_callback(interaction_select):
+                arma_nome = interaction_select.data["values"][0]
+                view = ArmaPessoalAcaoView(uid, arma_nome)
+                embed_arma = discord.Embed(
+                    title=f"🔫 {arma_nome}",
+                    description=f"**Membro:** <@{uid}>",
+                    color=0x3498db
+                )
+                for a in armas:
+                    if a['arma_nome'] == arma_nome:
+                        embed_arma.add_field(name="📌 STATUS", value=a['status'], inline=True)
+                        embed_arma.add_field(name="📦 QUANTIDADE", value=f"{a['quantidade']}", inline=True)
+                        if a['data_vencimento']:
+                            if a['data_vencimento'].tzinfo is None:
+                                data_venc = a['data_vencimento'].replace(tzinfo=BRASIL)
+                            dias = (data_venc - agora_br).days
+                            embed_arma.add_field(name="📅 DIAS RESTANTES", value=f"{dias} DIAS", inline=True)
+                        break
+                await interaction_select.response.send_message(embed=embed_arma, view=view, ephemeral=True)
+            
+            select.callback = select_callback
+            view = discord.ui.View(timeout=120)
+            view.add_item(select)
+            view.add_item(discord.ui.Button(label="❌ FECHAR", style=discord.ButtonStyle.danger, custom_id="fechar_ver_armas"))
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        else:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+class ArmaPessoalAcaoView(discord.ui.View):
+    def __init__(self, user_id, arma_nome):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.arma_nome = arma_nome
+        
+        self.add_item(discord.ui.Button(label="🔄 REPARAR", style=discord.ButtonStyle.primary, custom_id="reparar_pessoal", emoji="🔄"))
+        self.add_item(discord.ui.Button(label="📤 DEVOLVER", style=discord.ButtonStyle.success, custom_id="devolver_pessoal", emoji="📤"))
+        self.add_item(discord.ui.Button(label="💀 PERDER", style=discord.ButtonStyle.danger, custom_id="perder_pessoal", emoji="💀"))
+        self.add_item(discord.ui.Button(label="❌ FECHAR", style=discord.ButtonStyle.secondary, custom_id="fechar_pessoal", emoji="❌"))
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        custom_id = interaction.data.get("custom_id", "")
+        
+        if custom_id == "reparar_pessoal":
+            await interaction.response.send_modal(RepararArmaPessoalModal(self.user_id, self.arma_nome))
+            return False
+        elif custom_id == "devolver_pessoal":
+            await interaction.response.send_modal(DevolverArmaPessoalModal(self.user_id, self.arma_nome))
+            return False
+        elif custom_id == "perder_pessoal":
+            await interaction.response.send_modal(PerderArmaPessoalModal(self.user_id, self.arma_nome))
+            return False
+        elif custom_id == "fechar_pessoal":
+            await interaction.response.send_message("❌ FECHADO.", ephemeral=True)
+            return False
+        return True
+
+class RepararArmaPessoalModal(discord.ui.Modal, title="🔄 REPARAR ARMA PESSOAL"):
+    def __init__(self, user_id, arma_nome):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.arma_nome = arma_nome
+    observacoes = discord.ui.TextInput(label="📝 OBSERVAÇÕES (OPCIONAL)", required=False, max_length=200)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        obs = self.observacoes.value.strip() if self.observacoes.value else ""
+        sucesso = await reparar_arma_pessoal(self.user_id, self.arma_nome, obs)
+        
+        if sucesso:
+            embed = discord.Embed(
+                title="🔄 ARMA REPARADA",
+                description=f"🔫 **{self.arma_nome}** REPARADA! +{DURACAO_ARMA_PESSOAL_DIAS} DIAS",
+                color=0x3498db,
+                timestamp=agora()
+            )
+            embed.add_field(name="👤 MEMBRO", value=f"<@{self.user_id}>", inline=True)
+            embed.add_field(name="🔫 ARMA", value=self.arma_nome, inline=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await enviar_painel_armas_pessoais()
+        else:
+            await interaction.followup.send("❌ ERRO AO REPARAR!", ephemeral=True)
+
+class DevolverArmaPessoalModal(discord.ui.Modal, title="📤 DEVOLVER ARMA PESSOAL"):
+    def __init__(self, user_id, arma_nome):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.arma_nome = arma_nome
+    observacoes = discord.ui.TextInput(label="📝 OBSERVAÇÕES (OPCIONAL)", required=False, max_length=200)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        obs = self.observacoes.value.strip() if self.observacoes.value else ""
+        sucesso = await devolver_arma_pessoal(self.user_id, self.arma_nome, obs)
+        
+        if sucesso:
+            embed = discord.Embed(
+                title="📤 ARMA DEVOLVIDA",
+                description=f"🔫 **{self.arma_nome}** DEVOLVIDA COM SUCESSO!",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.add_field(name="👤 MEMBRO", value=f"<@{self.user_id}>", inline=True)
+            embed.add_field(name="🔫 ARMA", value=self.arma_nome, inline=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await enviar_painel_armas_pessoais()
+        else:
+            await interaction.followup.send("❌ ERRO AO DEVOLVER!", ephemeral=True)
+
+class PerderArmaPessoalModal(discord.ui.Modal, title="💀 PERDER ARMA PESSOAL"):
+    def __init__(self, user_id, arma_nome):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.arma_nome = arma_nome
+    observacoes = discord.ui.TextInput(label="📝 OBSERVAÇÕES (OPCIONAL)", placeholder="COMO PERDEU?", required=False, max_length=200)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        obs = self.observacoes.value.strip() if self.observacoes.value else ""
+        sucesso = await perder_arma_pessoal(self.user_id, self.arma_nome, obs)
+        
+        if sucesso:
+            embed = discord.Embed(
+                title="💀 ARMA PERDIDA",
+                description=f"🔫 **{self.arma_nome}** REGISTRADA COMO PERDIDA!",
+                color=0xe74c3c,
+                timestamp=agora()
+            )
+            embed.add_field(name="👤 MEMBRO", value=f"<@{self.user_id}>", inline=True)
+            embed.add_field(name="🔫 ARMA", value=self.arma_nome, inline=True)
+            if obs:
+                embed.add_field(name="📝 OBS", value=obs, inline=False)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await enviar_painel_armas_pessoais()
+        else:
+            await interaction.followup.send("❌ ERRO AO REGISTRAR PERDA!", ephemeral=True)
+
+# --- FUNÇÃO PARA ENVIAR PAINEL DE ARMAS PESSOAIS ---
+async def enviar_painel_armas_pessoais():
+    """Envia o painel de armas pessoais."""
+    canal = bot.get_channel(CANAL_CONTROLE_ARMAS_ID)
+    if not canal:
+        logger.error("❌ CANAL NÃO ENCONTRADO")
+        return
+    
+    await criar_tabelas_armas_pessoais()
+    armas = await carregar_armas_pessoais()
+    
+    embed = discord.Embed(
+        title="🔫 ARMAS PESSOAIS",
+        description="**ARMAS ATRIBUÍDAS AOS MEMBROS**\n\n📌 **FORMATO:** MEMBRO | ARMA | STATUS | DIAS",
+        color=0x34495e,
+        timestamp=agora()
+    )
+    
+    if armas:
+        texto = ""
+        agora_br = agora()
+        armas_vencidas = 0
+        
+        for arma in armas:
+            nome = arma['nome_membro']
+            arma_nome = arma['arma_nome']
+            status = arma['status']
+            data_vencimento = arma['data_vencimento']
+            
+            if data_vencimento:
+                if data_vencimento.tzinfo is None:
+                    data_vencimento = data_vencimento.replace(tzinfo=BRASIL)
+                dias_restantes = (data_vencimento - agora_br).days
+            else:
+                dias_restantes = DURACAO_ARMA_PESSOAL_DIAS
+            
+            if dias_restantes < 0:
+                emoji = "💀"
+                armas_vencidas += 1
+            elif dias_restantes <= 2:
+                emoji = "🔴"
+            elif dias_restantes <= 4:
+                emoji = "🟡"
+            else:
+                emoji = "🟢"
+            
+            texto += f"{emoji} **{nome}** | {arma_nome} | {status} ({dias_restantes} DIAS)\n"
+        
+        embed.add_field(
+            name=f"📋 ARMAS ATIVAS ({len(armas)})",
+            value=texto[:1024] if texto else "NENHUMA ARMA",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📊 RESUMO",
+            value=f"**TOTAL:** {len(armas)}\n💀 **VENCIDAS:** {armas_vencidas}\n📅 **DURAÇÃO:** {DURACAO_ARMA_PESSOAL_DIAS} DIAS",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="📭 NENHUMA ARMA PESSOAL",
+            value="CLIQUE EM **➕ ATRIBUIR ARMA PESSOAL**",
+            inline=False
+        )
+    
+    embed.set_footer(text="🔴 < 2 DIAS | 🟡 3-4 DIAS | 🟢 > 4 DIAS | 💀 VENCIDA")
+    
+    view = ArmasPessoaisView()
+    
+    try:
+        # Não deleta as mensagens existentes - apenas adiciona o novo painel
+        await canal.send(embed=embed, view=view)
+        logger.info("🔫 PAINEL DE ARMAS PESSOAIS ENVIADO")
+    except Exception as e:
+        logger.error(f"❌ ERRO AO ENVIAR PAINEL ARMAS PESSOAIS: {e}")
+
+
+# =========================================================
 # ==================== SEÇÃO 12: FINANCEIRO ===============
 # =========================================================
 
@@ -8522,6 +9104,8 @@ async def on_ready():
 
     await criar_tabela_grupos()
     await criar_tabela_alugueis()
+    await criar_tabelas_armas_pessoais()
+    await enviar_painel_armas_pessoais()
     
     # Carregar guild e membros
     guild = bot.get_guild(GUILD_ID)
