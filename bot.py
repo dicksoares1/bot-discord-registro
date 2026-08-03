@@ -4261,8 +4261,8 @@ class FecharMetaModal(discord.ui.Modal, title="🔒 Fechar Meta"):
         await interaction.followup.send(f"✅ **Meta fechada com sucesso!**\n\n💰 Dinheiro: {formatar_dinheiro(resultado['dinheiro'])}\n🎯 Ações: {formatar_dinheiro(resultado['dinheiro_acoes'])}\n💣 Pólvora: {fmt_num(resultado['polvora'])} unidades", ephemeral=True)
 
 class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
-    data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO", placeholder="Ex: 01/06/2026", required=True)
-    data_fim = discord.ui.TextInput(label="📅 Data FIM", placeholder="Ex: 30/06/2026", required=True)
+    data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO", placeholder="Ex: 01/07/2026", required=True)
+    data_fim = discord.ui.TextInput(label="📅 Data FIM", placeholder="Ex: 31/07/2026", required=True)
     
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -4272,31 +4272,56 @@ class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
             inicio_dt = inicio.replace(hour=0, minute=0, second=0)
             fim_dt = fim.replace(hour=23, minute=59, second=59)
         except ValueError:
-            await interaction.followup.send("❌ Formato de data inválido!", ephemeral=True)
+            await interaction.followup.send("❌ Formato de data inválido! Use DD/MM/AAAA", ephemeral=True)
+            return
+        
+        if fim < inicio:
+            await interaction.followup.send("❌ Data de FIM deve ser depois da data de INÍCIO!", ephemeral=True)
             return
         
         historico = await buscar_historico_metas(inicio_dt, fim_dt)
         if not historico:
-            await interaction.followup.send(f"📭 Nenhuma meta fechada no período.", ephemeral=True)
+            await interaction.followup.send(f"📭 Nenhuma meta fechada no período **{self.data_inicio.value}** até **{self.data_fim.value}**.", ephemeral=True)
             return
         
         total_dinheiro = sum(r["dinheiro"] for r in historico)
         total_polvora = sum(r["polvora"] for r in historico)
         total_acoes = sum(r.get("dinheiro_acoes") or 0 for r in historico)
-        
-        embed = discord.Embed(
-            title="📊 RELATÓRIO DE METAS",
-            description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}",
-            color=0x2ecc71
-        )
-        embed.add_field(name="💰 TOTAL DINHEIRO SUJO", value=formatar_dinheiro(total_dinheiro), inline=True)
-        embed.add_field(name="🎯 TOTAL DINHEIRO AÇÕES", value=formatar_dinheiro(total_acoes), inline=True)
-        embed.add_field(name="💣 TOTAL PÓLVORA", value=f"{fmt_num(total_polvora)} unidades", inline=True)
+        total_geral = total_dinheiro + total_acoes
         
         guild = interaction.guild
-        lista = ""
-        for item in historico[:15]:
-            # CORREÇÃO: Buscar o apelido do membro
+        
+        # --- EMBED 1: RESUMO GERAL ---
+        embed_resumo = discord.Embed(
+            title="📊 RELATÓRIO DE METAS FECHADAS",
+            description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed_resumo.add_field(
+            name="📊 RESUMO GERAL",
+            value=(
+                f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
+                f"🎯 **Dinheiro de Ações:** {formatar_dinheiro(total_acoes)}\n"
+                f"💣 **Pólvora:** {fmt_num(total_polvora)} unidades\n"
+                f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
+                f"👥 **Total de metas fechadas:** {len(historico)}"
+            ),
+            inline=False
+        )
+        embed_resumo.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
+        
+        # --- EMBED PARA TODOS OS MEMBROS (igual ao outro) ---
+        embed_metas = discord.Embed(
+            title="📋 LISTA DE METAS FECHADAS",
+            color=0x3498db
+        )
+        
+        texto = ""
+        # Ordenar por valor total (maior para menor)
+        historico_ordenado = sorted(historico, key=lambda x: x["dinheiro"] + (x.get("dinheiro_acoes") or 0), reverse=True)
+        
+        for idx, item in enumerate(historico_ordenado, 1):
             member = guild.get_member(int(item["user_id"])) if guild else None
             if member:
                 nome = member.display_name
@@ -4305,20 +4330,64 @@ class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
                 nome = user.display_name if user else f"ID: {item['user_id']}"
             
             total = item["dinheiro"] + (item.get("dinheiro_acoes") or 0)
-            lista += f"👤 {nome} - 💰 {formatar_dinheiro(total)} - 💣 {fmt_num(item['polvora'])}\n"
+            texto += f"**{idx}.** {nome} - {formatar_dinheiro(total)}\n"
         
-        if len(historico) > 15:
-            lista += f"\n*... e mais {len(historico) - 15} registros*"
-        embed.add_field(name="📋 METAS FECHADAS", value=lista, inline=False)
-        embed.set_footer(text=f"Total: {len(historico)} metas fechadas")
-        
-        canal = interaction.guild.get_channel(RESULTADOS_METAS_ID)
-        if canal:
-            await canal.send(embed=embed)
-            await interaction.followup.send(f"✅ Relatório enviado!", ephemeral=True)
+        # Se o texto for muito grande, dividir em partes
+        if len(texto) > 4000:
+            # Dividir em blocos de 20
+            linhas = texto.split("\n")
+            blocos = []
+            bloco_atual = []
+            for linha in linhas:
+                bloco_atual.append(linha)
+                if len("\n".join(bloco_atual)) > 3500:
+                    blocos.append("\n".join(bloco_atual))
+                    bloco_atual = []
+            if bloco_atual:
+                blocos.append("\n".join(bloco_atual))
+            
+            # Enviar primeiro bloco no embed principal
+            embed_metas.add_field(name="📋 LISTA (Parte 1)", value=blocos[0], inline=False)
+            
+            # Enviar o embed de resumo
+            await interaction.guild.get_channel(RESULTADOS_METAS_ID).send(embed=embed_resumo)
+            await interaction.guild.get_channel(RESULTADOS_METAS_ID).send(embed=embed_metas)
+            
+            # Enviar os blocos restantes como mensagens separadas
+            for i, bloco in enumerate(blocos[1:], 2):
+                embed_extra = discord.Embed(
+                    title=f"📋 LISTA DE METAS FECHADAS (Parte {i})",
+                    color=0x3498db
+                )
+                embed_extra.add_field(name="📋 LISTA", value=bloco, inline=False)
+                await interaction.guild.get_channel(RESULTADOS_METAS_ID).send(embed=embed_extra)
+                await asyncio.sleep(0.5)
+            
+            total_mensagens = 2 + len(blocos[1:])
+            await interaction.followup.send(
+                f"✅ **Relatório enviado com sucesso!**\n"
+                f"📊 {len(historico)} metas encontradas\n"
+                f"📨 {total_mensagens} mensagens enviadas",
+                ephemeral=True
+            )
         else:
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
+            # Tudo cabe em um embed
+            embed_metas.add_field(name="📋 LISTA", value=texto, inline=False)
+            
+            canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
+            if not canal_resultados:
+                canal_resultados = interaction.channel
+            
+            await canal_resultados.send(embed=embed_resumo)
+            await canal_resultados.send(embed=embed_metas)
+            
+            await interaction.followup.send(
+                f"✅ **Relatório enviado com sucesso!**\n"
+                f"📊 {len(historico)} metas encontradas\n"
+                f"📨 2 mensagens enviadas",
+                ephemeral=True
+            )
+            
 class MetaView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=None)
