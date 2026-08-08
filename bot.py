@@ -4880,6 +4880,7 @@ class MetaView(discord.ui.View):
                 return
         await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
     
+    # ⚠️ APENAS 1 BOTÃO "Pólvora Paga" ⚠️
     @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga", emoji="✅")
     async def polvora_paga(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -4889,13 +4890,11 @@ class MetaView(discord.ui.View):
             await interaction.response.send_message("❌ Apenas **Gerentes** ou **ADM** podem marcar pólvora como paga!", ephemeral=True)
             return
         
-        # Verificar se tem pólvora pendente
         pendente = await buscar_polvora_pendente(self.user_id)
         if not pendente:
             await interaction.response.send_message("📭 Este membro não tem pólvora pendente para pagar!", ephemeral=True)
             return
         
-        # Perguntar se quer pagar
         view = ConfirmarPagamentoPolvoraView(self.user_id, pendente)
         embed = discord.Embed(
             title="💰 CONFIRMAR PAGAMENTO DE PÓLVORA",
@@ -4908,8 +4907,7 @@ class MetaView(discord.ui.View):
         embed.set_footer(text="Clique em ✅ Confirmar Pagamento para finalizar")
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-        
+    
     @discord.ui.button(label="🔒 Fechar Meta", style=discord.ButtonStyle.danger, custom_id="meta_fechar", emoji="🔒")
     async def fechar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_dono = str(interaction.user.id) == str(self.user_id)
@@ -5387,8 +5385,56 @@ class ConfirmarPagamentoPolvoraView(discord.ui.View):
         self.user_id = user_id
         self.pendente = pendente
     
+    @discord.ui.button(label="✅ Confirmar Pagamento", style=discord.ButtonStyle.success, custom_id="confirmar_pagamento_polvora", emoji="✅")
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        sucesso = await pagar_polvora(self.user_id)
+        if not sucesso:
+            await interaction.followup.send("❌ Erro ao marcar pólvora como paga!", ephemeral=True)
+            return
+        
+        canal_membro = None
+        pool = get_db()
+        if pool:
+            async with pool.acquire() as conn:
+                canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(self.user_id))
+                if canal_id:
+                    canal_membro = interaction.guild.get_channel(int(canal_id))
+        
+        if canal_membro:
+            embed_notificacao = discord.Embed(
+                title="✅ PÓLVORA PAGA!",
+                description=f"👤 <@{self.user_id}>",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed_notificacao.add_field(name="📦 Quantidade", value=f"{fmt_num(self.pendente['quantidade'])} unidades", inline=True)
+            embed_notificacao.add_field(name="💰 Valor recebido", value=formatar_dinheiro(self.pendente['valor']), inline=True)
+            embed_notificacao.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
+            embed_notificacao.set_footer(text="Pólvora paga! ✅")
+            
+            await canal_membro.send(embed=embed_notificacao)
+        
+        embed = discord.Embed(
+            title="✅ PÓLVORA PAGA COM SUCESSO!",
+            description=f"👤 <@{self.user_id}>",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.add_field(name="📦 Quantidade", value=f"{fmt_num(self.pendente['quantidade'])} unidades", inline=True)
+        embed.add_field(name="💰 Valor pago", value=formatar_dinheiro(self.pendente['valor']), inline=True)
+        embed.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
+        embed.set_footer(text="Pólvora paga! ✅")
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        await atualizar_embed_meta(self.user_id)
+        
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 
-    
     @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.danger, custom_id="cancelar_pagamento_polvora", emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Pagamento cancelado.", ephemeral=True)
