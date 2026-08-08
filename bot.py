@@ -4537,6 +4537,7 @@ class MetaView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
+    
     @discord.ui.button(label="💣 Adicionar Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_adicionar_polvora", emoji="💣")
     async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = get_db()
@@ -4558,6 +4559,7 @@ class MetaView(discord.ui.View):
                 await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                 return
         await interaction.response.send_modal(AdicionarPolvoraModal(self.user_id))
+    
     @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro", emoji="💰")
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = get_db()
@@ -4579,6 +4581,7 @@ class MetaView(discord.ui.View):
                 await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                 return
         await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
+    
     @discord.ui.button(label="🔒 Fechar Meta", style=discord.ButtonStyle.danger, custom_id="meta_fechar", emoji="🔒")
     async def fechar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_dono = str(interaction.user.id) == str(self.user_id)
@@ -4587,7 +4590,39 @@ class MetaView(discord.ui.View):
             await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem fechar a meta!", ephemeral=True)
             return
         await interaction.response.send_modal(FecharMetaModal(self.user_id))
-
+    
+    # ⚠️ ADICIONE ESTE NOVO BOTÃO ⚠️
+    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar", emoji="✏️")
+    async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_dono = str(interaction.user.id) == str(self.user_id)
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        is_admin = interaction.user.guild_permissions.administrator
+        
+        if not is_dono and not is_gerente and not is_admin:
+            await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
+            return
+        
+        pool = get_db()
+        if not pool:
+            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+        
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+        
+        if not meta:
+            await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+            return
+        
+        dados = {
+            "dinheiro": meta["dinheiro"] or 0,
+            "polvora": meta["polvora"] or 0,
+            "dinheiro_acoes": meta.get("dinheiro_acoes") or 0,
+            "acao": meta.get("acao") or "Nenhuma"
+        }
+        
+        await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
+        
 class RelatorioMetasButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="📊 Gerar Relatório de Metas", style=discord.ButtonStyle.success, custom_id="relatorio_metas_btn", emoji="📊")
@@ -5137,6 +5172,106 @@ async def cmd_atualizar_metas(ctx):
     except Exception as e:
         logger.error(f"❌ Erro: {e}")
         await ctx.send(f"❌ Erro: {e}")
+
+# --- MODAL PARA EDITAR META ---
+class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
+    def __init__(self, user_id, dados_atuais):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        
+        self.dinheiro = discord.ui.TextInput(
+            label="💰 Dinheiro Sujo (Meta)",
+            placeholder="Digite o valor correto",
+            default=str(dados_atuais.get("dinheiro", 0)),
+            required=True,
+            max_length=15
+        )
+        
+        self.polvora = discord.ui.TextInput(
+            label="💣 Pólvora",
+            placeholder="Digite a quantidade correta",
+            default=str(dados_atuais.get("polvora", 0)),
+            required=True,
+            max_length=10
+        )
+        
+        self.dinheiro_acoes = discord.ui.TextInput(
+            label="🎯 Dinheiro de Ações",
+            placeholder="Digite o valor correto",
+            default=str(dados_atuais.get("dinheiro_acoes", 0)),
+            required=True,
+            max_length=15
+        )
+        
+        self.acao = discord.ui.TextInput(
+            label="🎯 Ação Atual",
+            placeholder="Digite a ação correta (ou Nenhuma)",
+            default=dados_atuais.get("acao") or "Nenhuma",
+            required=False,
+            max_length=100
+        )
+        
+        self.add_item(self.dinheiro)
+        self.add_item(self.polvora)
+        self.add_item(self.dinheiro_acoes)
+        self.add_item(self.acao)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            novo_dinheiro = int(self.dinheiro.value.replace(".", "").replace(",", ""))
+            nova_polvora = int(self.polvora.value.replace(".", "").replace(",", ""))
+            novo_dinheiro_acoes = int(self.dinheiro_acoes.value.replace(".", "").replace(",", ""))
+            nova_acao = self.acao.value.strip() if self.acao.value.strip() else "Nenhuma"
+            
+            if novo_dinheiro < 0 or nova_polvora < 0 or novo_dinheiro_acoes < 0:
+                raise ValueError("Valores não podem ser negativos")
+                
+        except ValueError as e:
+            await interaction.followup.send(f"❌ **Valor inválido!** {str(e)}", ephemeral=True)
+            return
+        
+        # Atualizar no banco de dados
+        pool = get_db()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+        
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE metas 
+                    SET dinheiro = $1, polvora = $2, dinheiro_acoes = $3, acao = $4
+                    WHERE user_id = $5
+                """, novo_dinheiro, nova_polvora, novo_dinheiro_acoes, nova_acao, str(self.user_id))
+            
+            # Atualizar cache
+            if str(self.user_id) in metas_cache:
+                metas_cache[str(self.user_id)]["dinheiro"] = novo_dinheiro
+                metas_cache[str(self.user_id)]["polvora"] = nova_polvora
+                metas_cache[str(self.user_id)]["dinheiro_acoes"] = novo_dinheiro_acoes
+                metas_cache[str(self.user_id)]["acao"] = nova_acao
+            
+            # Atualizar embed da meta
+            await atualizar_embed_meta(self.user_id)
+            
+            embed = discord.Embed(
+                title="✅ META ATUALIZADA COM SUCESSO!",
+                description=f"**👤 <@{self.user_id}>**",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.add_field(name="💰 Dinheiro Sujo", value=formatar_dinheiro(novo_dinheiro), inline=True)
+            embed.add_field(name="💣 Pólvora", value=f"{fmt_num(nova_polvora)} unidades", inline=True)
+            embed.add_field(name="🎯 Dinheiro de Ações", value=formatar_dinheiro(novo_dinheiro_acoes), inline=True)
+            embed.add_field(name="🎯 Ação", value=nova_acao, inline=False)
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao editar meta: {e}")
+            await interaction.followup.send(f"❌ Erro ao editar meta: {str(e)}", ephemeral=True)
 
 
 # =========================================================
