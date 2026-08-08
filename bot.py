@@ -1813,11 +1813,6 @@ class VenderPolvoraModal(discord.ui.Modal, title="💣 Vender Pólvora"):
         await interaction.followup.send(embed=embed, ephemeral=True)
         await atualizar_embed_meta(self.user_id)
 
-class ConfirmarPagamentoPolvoraView(discord.ui.View):
-    def __init__(self, user_id, pendente):
-        super().__init__(timeout=120)
-        self.user_id = user_id
-        self.pendente = pendente
     
 class ConfirmarPagamentoPolvoraView(discord.ui.View):
     def __init__(self, user_id, pendente):
@@ -1835,7 +1830,7 @@ class ConfirmarPagamentoPolvoraView(discord.ui.View):
             await interaction.followup.send("❌ Erro ao marcar pólvora como paga!", ephemeral=True)
             return
         
-        # Buscar o canal do membro
+        # 🔹 Buscar o canal do membro para notificar
         canal_membro = None
         pool = get_db()
         if pool:
@@ -1844,31 +1839,93 @@ class ConfirmarPagamentoPolvoraView(discord.ui.View):
                 if canal_id:
                     canal_membro = interaction.guild.get_channel(int(canal_id))
         
-        # Notificar o membro na sala dele
+        # 🔹 Se não achou o canal, tenta encontrar pelo nome do membro
+        if not canal_membro:
+            member = interaction.guild.get_member(int(self.user_id))
+            if member:
+                for canal in interaction.guild.text_channels:
+                    if member.display_name.lower() in canal.name.lower() and "📁" in canal.name:
+                        canal_membro = canal
+                        break
+        
+        # 🔹 Notificar o membro na sala dele (com embed)
         if canal_membro:
             embed_notificacao = discord.Embed(
                 title="✅ PÓLVORA PAGA!",
-                description=f"👤 <@{self.user_id}>",
+                description=f"👤 <@{self.user_id}> sua pólvora foi paga!",
                 color=0x2ecc71,
                 timestamp=agora()
             )
-            embed_notificacao.add_field(name="📦 Quantidade", value=f"{fmt_num(self.pendente['quantidade'])} unidades", inline=True)
-            embed_notificacao.add_field(name="💰 Valor recebido", value=formatar_dinheiro(self.pendente['valor']), inline=True)
-            embed_notificacao.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
-            embed_notificacao.set_footer(text="Pólvora paga! ✅")
+            embed_notificacao.add_field(
+                name="📦 Quantidade",
+                value=f"{fmt_num(self.pendente['quantidade'])} unidades",
+                inline=True
+            )
+            embed_notificacao.add_field(
+                name="💰 Valor recebido",
+                value=formatar_dinheiro(self.pendente['valor']),
+                inline=True
+            )
+            embed_notificacao.add_field(
+                name="💵 Preço por unidade",
+                value=f"R$ {PRECO_POLVORA:.2f}",
+                inline=True
+            )
+            embed_notificacao.set_footer(text="Pólvora paga com sucesso! ✅")
             
             await canal_membro.send(embed=embed_notificacao)
+        else:
+            # 🔹 Se não achou o canal, tenta enviar por DM
+            try:
+                member = interaction.guild.get_member(int(self.user_id))
+                if member:
+                    embed_dm = discord.Embed(
+                        title="✅ PÓLVORA PAGA!",
+                        description=f"Sua pólvora foi paga!",
+                        color=0x2ecc71,
+                        timestamp=agora()
+                    )
+                    embed_dm.add_field(
+                        name="📦 Quantidade",
+                        value=f"{fmt_num(self.pendente['quantidade'])} unidades",
+                        inline=True
+                    )
+                    embed_dm.add_field(
+                        name="💰 Valor recebido",
+                        value=formatar_dinheiro(self.pendente['valor']),
+                        inline=True
+                    )
+                    embed_dm.add_field(
+                        name="💵 Preço por unidade",
+                        value=f"R$ {PRECO_POLVORA:.2f}",
+                        inline=True
+                    )
+                    await member.send(embed=embed_dm)
+            except:
+                pass
         
-        # Embed para o gerente
+        # Embed para o gerente (confirmando que foi pago)
         embed = discord.Embed(
             title="✅ PÓLVORA PAGA COM SUCESSO!",
             description=f"👤 <@{self.user_id}>",
             color=0x2ecc71,
             timestamp=agora()
         )
-        embed.add_field(name="📦 Quantidade", value=f"{fmt_num(self.pendente['quantidade'])} unidades", inline=True)
-        embed.add_field(name="💰 Valor pago", value=formatar_dinheiro(self.pendente['valor']), inline=True)
-        embed.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
+        embed.add_field(
+            name="📦 Quantidade",
+            value=f"{fmt_num(self.pendente['quantidade'])} unidades",
+            inline=True
+        )
+        embed.add_field(
+            name="💰 Valor pago",
+            value=formatar_dinheiro(self.pendente['valor']),
+            inline=True
+        )
+        embed.add_field(
+            name="💵 Preço por unidade",
+            value=f"R$ {PRECO_POLVORA:.2f}",
+            inline=True
+        )
         embed.set_footer(text="Pólvora paga! ✅")
         
         await interaction.followup.send(embed=embed, ephemeral=True)
