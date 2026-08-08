@@ -1775,14 +1775,21 @@ class VenderPolvoraModal(discord.ui.Modal, title="💣 Vender Pólvora"):
         
         valor = qtd * PRECO_POLVORA
         
-        # Salvar a venda de pólvora pendente
         sucesso = await salvar_venda_polvora(self.user_id, qtd)
         if not sucesso:
             await interaction.followup.send("❌ Erro ao registrar venda de pólvora!", ephemeral=True)
             return
         
-        # Buscar total pendente
-        pendente = await buscar_polvora_pendente(self.user_id)
+        # Apenas confirma e atualiza o embed da meta
+        await interaction.followup.send(
+            f"✅ **{fmt_num(qtd)} unidades de pólvora registradas para venda!**\n"
+            f"💰 Valor a receber: {formatar_dinheiro(valor)}\n"
+            f"📌 Aguarde o pagamento no painel da sua meta.",
+            ephemeral=True
+        )
+        
+        # Atualizar o embed da meta (mostra a pólvora pendente)
+        await atualizar_embed_meta(self.user_id)
         
         embed = discord.Embed(
             title="💣 VENDA DE PÓLVORA REGISTRADA",
@@ -1812,6 +1819,12 @@ class ConfirmarPagamentoPolvoraView(discord.ui.View):
         self.user_id = user_id
         self.pendente = pendente
     
+class ConfirmarPagamentoPolvoraView(discord.ui.View):
+    def __init__(self, user_id, pendente):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.pendente = pendente
+    
     @discord.ui.button(label="✅ Confirmar Pagamento", style=discord.ButtonStyle.success, custom_id="confirmar_pagamento_polvora", emoji="✅")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -1822,16 +1835,31 @@ class ConfirmarPagamentoPolvoraView(discord.ui.View):
             await interaction.followup.send("❌ Erro ao marcar pólvora como paga!", ephemeral=True)
             return
         
-        # Buscar o membro para verificar se tem meta
+        # Buscar o canal do membro
+        canal_membro = None
         pool = get_db()
         if pool:
             async with pool.acquire() as conn:
-                meta = await conn.fetchrow("SELECT dinheiro FROM metas WHERE user_id = $1", str(self.user_id))
-                if meta:
-                    # Adicionar o valor da pólvora na meta do membro
-                    novo_dinheiro = meta["dinheiro"] + self.pendente["valor"]
-                    await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_dinheiro, str(self.user_id))
+                canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(self.user_id))
+                if canal_id:
+                    canal_membro = interaction.guild.get_channel(int(canal_id))
         
+        # Notificar o membro na sala dele
+        if canal_membro:
+            embed_notificacao = discord.Embed(
+                title="✅ PÓLVORA PAGA!",
+                description=f"👤 <@{self.user_id}>",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed_notificacao.add_field(name="📦 Quantidade", value=f"{fmt_num(self.pendente['quantidade'])} unidades", inline=True)
+            embed_notificacao.add_field(name="💰 Valor recebido", value=formatar_dinheiro(self.pendente['valor']), inline=True)
+            embed_notificacao.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
+            embed_notificacao.set_footer(text="Pólvora paga! ✅")
+            
+            await canal_membro.send(embed=embed_notificacao)
+        
+        # Embed para o gerente
         embed = discord.Embed(
             title="✅ PÓLVORA PAGA COM SUCESSO!",
             description=f"👤 <@{self.user_id}>",
@@ -1841,12 +1869,21 @@ class ConfirmarPagamentoPolvoraView(discord.ui.View):
         embed.add_field(name="📦 Quantidade", value=f"{fmt_num(self.pendente['quantidade'])} unidades", inline=True)
         embed.add_field(name="💰 Valor pago", value=formatar_dinheiro(self.pendente['valor']), inline=True)
         embed.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
-        embed.set_footer(text="Valor adicionado à meta do membro!")
+        embed.set_footer(text="Pólvora paga! ✅")
         
         await interaction.followup.send(embed=embed, ephemeral=True)
+        
+        # Atualizar o embed da meta (remove a pólvora pendente)
         await atualizar_embed_meta(self.user_id)
         
-        # Tentar fechar a interação original
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+    
+    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.danger, custom_id="cancelar_pagamento_polvora", emoji="❌")
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Pagamento cancelado.", ephemeral=True)
         try:
             await interaction.message.delete()
         except:
@@ -4261,11 +4298,14 @@ async def atualizar_embed_meta(user_id):
                 return
             metas_cache[str(user_id)] = {"canal_id": canal.id, "dinheiro": 0, "polvora": 0, "acao": None, "dinheiro_acoes": 0}
         
-        # CORREÇÃO: Buscar o apelido do membro
+        # Buscar pólvora pendente
+        pendente = await buscar_polvora_pendente(user_id)
+        
+        # Buscar o apelido do membro
         guild = bot.get_guild(GUILD_ID)
         member = guild.get_member(int(user_id))
         if member:
-            nome = member.display_name  # Apelido do servidor
+            nome = member.display_name
         else:
             user = await pegar_usuario(user_id)
             nome = user.display_name if user else str(user_id)
@@ -4283,10 +4323,24 @@ async def atualizar_embed_meta(user_id):
         embed.add_field(name="💰 DINHEIRO SUJO (Meta)", value=formatar_dinheiro(dinheiro_meta), inline=True)
         embed.add_field(name="🎯 DINHEIRO DE AÇÕES", value=formatar_dinheiro(dinheiro_acoes), inline=True)
         embed.add_field(name="💣 PÓLVORA", value=f"{fmt_num(polvora)} unidades" if polvora > 0 else "0 unidades", inline=True)
+        
+        # ⚠️ PÓLVORA VENDIDA (PENDENTE) - NÃO VAI PARA O DINHEIRO SUJO ⚠️
+        if pendente and pendente["quantidade"] > 0:
+            embed.add_field(
+                name="📦 PÓLVORA VENDIDA (AGUARDANDO PAGAMENTO)",
+                value=f"📦 {fmt_num(pendente['quantidade'])} unidades\n💰 {formatar_dinheiro(pendente['valor'])}\n💵 R$ {PRECO_POLVORA:.2f}/unidade",
+                inline=False
+            )
+        
         embed.add_field(name="🎯 AÇÃO ATUAL", value=acao, inline=False)
-        embed.add_field(name="📌 COMO USAR", value="**💣 Adicionar Pólvora** - Registre pólvora da meta\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta", inline=False)
+        embed.add_field(
+            name="📌 COMO USAR",
+            value="**💣 Vender Pólvora** - Venda pólvora para a facção\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta\n**💰 Pólvora Paga** - Gerente paga a pólvora pendente",
+            inline=False
+        )
         embed.set_footer(text=f"ID: {user_id}")
         
+        # Deletar mensagens antigas
         mensagens_deletadas = 0
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
