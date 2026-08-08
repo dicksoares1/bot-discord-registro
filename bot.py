@@ -1888,45 +1888,7 @@ class ConfirmarPagamentoPolvoraView(discord.ui.View):
             await interaction.message.delete()
         except:
             pass
-        
-        # Embed para o gerente
-        embed = discord.Embed(
-            title="✅ PÓLVORA PAGA COM SUCESSO!",
-            description=f"👤 <@{self.user_id}>",
-            color=0x2ecc71,
-            timestamp=agora()
-        )
-        embed.add_field(name="📦 Quantidade", value=f"{fmt_num(self.pendente['quantidade'])} unidades", inline=True)
-        embed.add_field(name="💰 Valor pago", value=formatar_dinheiro(self.pendente['valor']), inline=True)
-        embed.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
-        embed.set_footer(text="Pólvora paga! ✅")
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        
-        # Atualizar o embed da meta (remove a pólvora pendente)
-        await atualizar_embed_meta(self.user_id)
-        
-        try:
-            await interaction.message.delete()
-        except:
-            pass
-    
-    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.danger, custom_id="cancelar_pagamento_polvora", emoji="❌")
-    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("❌ Pagamento cancelado.", ephemeral=True)
-        try:
-            await interaction.message.delete()
-        except:
-            pass
-    
-    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.danger, custom_id="cancelar_pagamento_polvora", emoji="❌")
-    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("❌ Pagamento cancelado.", ephemeral=True)
-        try:
-            await interaction.message.delete()
-        except:
-            pass
-
+            
 # --- FUNÇÕES AUXILIARES DA PRODUÇÃO ---
 async def gerar_desc_producao(prod, pct=None, restante=None):
     try:
