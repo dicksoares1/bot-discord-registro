@@ -6022,6 +6022,7 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         super().__init__()
         self.acao_id = acao_id
         self.mensagem_original = mensagem_original
+    
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -6031,10 +6032,12 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         except:
             await interaction.followup.send("❌ Valor inválido!", ephemeral=True)
             return
+        
         pool = get_db()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+        
         async with pool.acquire() as conn:
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
             limite = ACOES_SEMANA.get(acao["tipo"])
@@ -6045,32 +6048,27 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
                     return
             await conn.execute("UPDATE acoes_semana SET valor=$1, resultado='ganhou' WHERE id=$2", valor_total, self.acao_id)
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+        
         ids_participantes = [str(p["user_id"]) for p in participantes]
         qtd = len(ids_participantes)
         if qtd == 0:
             await interaction.followup.send("⚠️ Nenhum participante!", ephemeral=True)
             return
-        valor_por_pessoa = valor_total // qtd
-        resto = valor_total % qtd
-        depositos_ok = 0
-        for uid in ids_participantes:
-            sucesso = await depositar_na_meta(int(uid), valor_por_pessoa, f"Ação: {acao['tipo']}")
-            if sucesso:
-                depositos_ok += 1
-        if resto > 0 and ids_participantes:
-            await depositar_na_meta(int(ids_participantes[0]), resto, f"Ação: {acao['tipo']} (Restante)")
+        
         lista_participantes = "\n".join([f"<@{uid}>" for uid in ids_participantes])
-        embed = discord.Embed(title="🎉 RESULTADO DA AÇÃO - GANHOU!", color=0x2ecc71)
+        embed = discord.Embed(
+            title="🎉 RESULTADO DA AÇÃO - GANHOU!",
+            description=f"⚠️ **ATENÇÃO:** O valor deve ser pago manualmente aos participantes!",
+            color=0x2ecc71
+        )
         embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
         embed.add_field(name="💰 Total Ganho", value=formatar_dinheiro(valor_total), inline=False)
         embed.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
-        embed.add_field(name="💸 Valor por pessoa", value=formatar_dinheiro(valor_por_pessoa), inline=True)
-        embed.add_field(name="✅ Depósitos", value=f"{depositos_ok}/{qtd} realizados", inline=True)
-        if resto > 0:
-            embed.add_field(name="📦 Restante", value=formatar_dinheiro(resto), inline=True)
+        embed.add_field(name="📌 OBSERVAÇÃO", value="O valor NÃO foi depositado automaticamente. Pague manualmente cada participante.", inline=False)
+        
         await self.mensagem_original.edit(embed=embed, view=None)
         await enviar_painel_acoes(interaction.guild)
-        await interaction.followup.send(f"✅ {depositos_ok} depósitos realizados!", ephemeral=True)
+        await interaction.followup.send(f"✅ Ação registrada como GANHOU! Pague os participantes manualmente.", ephemeral=True)
 
 class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
     confirmacao = discord.ui.TextInput(label="Digite CONFIRMAR para registrar a perda", required=True)
