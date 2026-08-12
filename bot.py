@@ -9255,7 +9255,7 @@ async def enviar_paineis_iniciais(guild):
         # Forçar atualização do painel de grupos com cuidado
         try:
             logger.info("🔄 Forçando atualização do painel de grupos...")
-            await forcar_atualizacao_painel_grupos()
+            await recriar_painel_grupos()
         except Exception as e:
             logger.error(f"❌ Erro ao forçar atualização grupos: {e}")
         
