@@ -4211,38 +4211,37 @@ async def verificar_avisos_quarta():
     hoje = agora()
     # Só executa na quarta-feira (weekday = 2)
     if hoje.weekday() != 2:
+        logger.info("📅 Hoje não é quarta-feira. Avisos não enviados.")
         return
+    
+    logger.info("📨 Verificando avisos de quarta-feira...")
     
     pool = get_db()
     if not pool:
+        logger.error("❌ Banco de dados indisponível!")
         return
     
     try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            logger.error("❌ Guild não encontrada!")
+            return
+        
+        # Cargos que DEVEM ter meta (obrigados)
+        cargos_obrigados = [
+            CARGO_AGREGADO_ID,
+            CARGO_MEMBRO_ID,
+            CARGO_SOLDADO_ID,
+            CARGO_01_ID,
+            CARGO_02_ID,
+            CARGO_RESP_METAS_ID,
+            CARGO_RESP_ACAO_ID,
+            CARGO_RESP_VENDAS_ID,
+            CARGO_RESP_PRODUCAO_ID
+        ]
+        
         async with pool.acquire() as conn:
-            metas = await conn.fetch("SELECT * FROM metas")
-            
-            # Cargos que DEVEM ter meta (obrigados)
-            cargos_obrigados = [
-                CARGO_AGREGADO_ID,
-                CARGO_MEMBRO_ID,
-                CARGO_SOLDADO_ID,
-                CARGO_01_ID,
-                CARGO_02_ID,
-                CARGO_RESP_METAS_ID,
-                CARGO_RESP_ACAO_ID,
-                CARGO_RESP_VENDAS_ID,
-                CARGO_RESP_PRODUCAO_ID
-            ]
-            
-            guild = bot.get_guild(GUILD_ID)
-            if not guild:
-                return
-            
-            # Buscar todos os membros com cargo obrigatório
-            membros_com_meta = set()
-            for meta in metas:
-                membros_com_meta.add(meta["user_id"])
-            
+            avisos_enviados = 0
             for member in guild.members:
                 if member.bot:
                     continue
@@ -4254,12 +4253,13 @@ async def verificar_avisos_quarta():
                 
                 user_id = str(member.id)
                 
-                # Verificar se o membro tem meta
+                # Buscar meta do membro
                 meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
                 
                 # Se não tem meta, criar uma
                 if not meta:
-                    # Verificar se já tem sala
+                    logger.info(f"📝 Criando meta para {member.display_name} (não tinha)")
+                    
                     canal_existente = None
                     for canal in guild.text_channels:
                         if member.display_name.lower() in canal.name.lower() and "📁" in canal.name:
@@ -4271,7 +4271,6 @@ async def verificar_avisos_quarta():
                     else:
                         await criar_sala_meta(member)
                     
-                    # Recarregar meta
                     meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
                     if not meta:
                         continue
@@ -4280,9 +4279,8 @@ async def verificar_avisos_quarta():
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
                 total = dinheiro + dinheiro_acoes
                 
-                # ⚠️ SÓ AVISA QUEM NÃO FEZ NENHUM DEPÓSITO ⚠️
+                # SÓ AVISA QUEM NÃO FEZ NENHUM DEPÓSITO
                 if total == 0:
-                    # Verificar se já foi avisado hoje
                     ja_avisado = await conn.fetchval(
                         "SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'quarta' AND data::date = $2",
                         user_id, hoje.date()
@@ -4316,9 +4314,12 @@ async def verificar_avisos_quarta():
                                 )
                                 embed.set_footer(text="Meta semanal • Vida Rasa")
                                 await canal.send(embed=embed)
+                                avisos_enviados += 1
                                 logger.info(f"📨 Aviso de quarta enviado para {member.display_name}")
         
+        logger.info(f"✅ Avisos de quarta-feira enviados: {avisos_enviados} membros")
         return True
+        
     except Exception as e:
         logger.error(f"❌ Erro ao verificar avisos de quarta: {e}")
         return False
@@ -4451,7 +4452,7 @@ async def atualizar_embed_meta(user_id):
             timestamp=agora()
         )
         
-        # ⚠️ REMOVIDO: "DINHEIRO DE AÇÕES" e "AÇÃO ATUAL" ⚠️
+        # DINHEIRO SUJO
         embed.add_field(
             name="💰 DINHEIRO SUJO (Meta)",
             value=formatar_dinheiro(dinheiro_meta),
@@ -4472,7 +4473,7 @@ async def atualizar_embed_meta(user_id):
                 inline=False
             )
         
-        # ⚠️ NOVO: Barra de progresso da meta (R$ 300.000) ⚠️
+        # BARRA DE PROGRESSO DA META (R$ 300.000)
         meta_total = 300000
         progresso = min(dinheiro_meta / meta_total, 1.0)
         barra = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
@@ -4499,8 +4500,6 @@ async def atualizar_embed_meta(user_id):
             value=f"`{barra}` **{porcentagem}%**\n**{status_meta}**\n💰 {formatar_dinheiro(dinheiro_meta)} / {formatar_dinheiro(meta_total)}",
             inline=False
         )
-        
-        # ⚠️ REMOVIDO: "AÇÃO ATUAL" ⚠️
         
         embed.add_field(
             name="📌 COMO USAR",
@@ -5830,6 +5829,103 @@ class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
         except Exception as e:
             logger.error(f"❌ Erro ao editar meta: {e}")
             await interaction.followup.send(f"❌ Erro ao editar meta: {str(e)}", ephemeral=True)
+
+async def verificar_avisos_quarta_forcado():
+    """Versão forçada para testar o aviso (ignora o dia da semana)."""
+    logger.info("📨 TESTE FORÇADO: Verificando avisos de quarta-feira...")
+    
+    pool = get_db()
+    if not pool:
+        logger.error("❌ Banco de dados indisponível!")
+        return False
+    
+    try:
+        hoje = agora()
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            logger.error("❌ Guild não encontrada!")
+            return False
+        
+        cargos_obrigados = [
+            CARGO_AGREGADO_ID,
+            CARGO_MEMBRO_ID,
+            CARGO_SOLDADO_ID,
+            CARGO_01_ID,
+            CARGO_02_ID,
+            CARGO_RESP_METAS_ID,
+            CARGO_RESP_ACAO_ID,
+            CARGO_RESP_VENDAS_ID,
+            CARGO_RESP_PRODUCAO_ID
+        ]
+        
+        async with pool.acquire() as conn:
+            avisos_enviados = 0
+            for member in guild.members:
+                if member.bot:
+                    continue
+                
+                tem_cargo = any(r.id in cargos_obrigados for r in member.roles)
+                if not tem_cargo:
+                    continue
+                
+                user_id = str(member.id)
+                meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
+                
+                if not meta:
+                    continue
+                
+                dinheiro = meta["dinheiro"] or 0
+                dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+                total = dinheiro + dinheiro_acoes
+                
+                if total == 0:
+                    canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", user_id)
+                    if canal_id:
+                        canal = bot.get_channel(int(canal_id))
+                        if canal:
+                            embed = discord.Embed(
+                                title="⚠️ [TESTE] AVISO DE META SEMANAL",
+                                description=f"{member.mention} **atenção!**",
+                                color=0xe74c3c
+                            )
+                            embed.add_field(
+                                name="📌 Você ainda NÃO fez nenhum depósito na sua meta esta semana!",
+                                value=(
+                                    "⏰ **Você tem até domingo para completar sua meta!**\n\n"
+                                    "⚠️ **Consequências:**\n"
+                                    "• Se NÃO fechar a meta: **REBAIXAMENTO** na facção\n"
+                                    "• Se atrasar 2 vezes: **REMOÇÃO** da facção\n\n"
+                                    "💪 **Corra atrás do prejuízo!**\n\n"
+                                    "🔴 **ESTE É UM TESTE**"
+                                ),
+                                inline=False
+                            )
+                            embed.set_footer(text="Meta semanal • Vida Rasa • TESTE")
+                            await canal.send(embed=embed)
+                            avisos_enviados += 1
+                            logger.info(f"📨 [TESTE] Aviso enviado para {member.display_name}")
+        
+        logger.info(f"✅ [TESTE] Avisos enviados: {avisos_enviados} membros")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Erro no teste de aviso: {e}")
+        return False
+
+@bot.command(name="testar_aviso_quarta")
+@commands.has_permissions(administrator=True)
+async def cmd_testar_aviso_quarta(ctx):
+    """Comando para testar o aviso de quarta-feira manualmente."""
+    await ctx.send("🔄 Testando aviso de quarta-feira...")
+    
+    resultado = await verificar_avisos_quarta_forcado()
+    
+    if resultado:
+        await ctx.send("✅ Avisos enviados com sucesso!")
+    else:
+        await ctx.send("❌ Erro ao enviar avisos. Verifique os logs.")
+
+
 
 
 # =========================================================
