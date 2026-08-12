@@ -4207,35 +4207,118 @@ async def verificar_meta_concluida(user_id, valor_total):
             return False
 
 async def verificar_avisos_quarta():
+    """Verifica e envia aviso na quarta-feira para quem não fez depósito."""
     hoje = agora()
+    # Só executa na quarta-feira (weekday = 2)
     if hoje.weekday() != 2:
         return
+    
     pool = get_db()
     if not pool:
         return
+    
     try:
         async with pool.acquire() as conn:
             metas = await conn.fetch("SELECT * FROM metas")
+            
+            # Cargos que DEVEM ter meta (obrigados)
+            cargos_obrigados = [
+                CARGO_AGREGADO_ID,
+                CARGO_MEMBRO_ID,
+                CARGO_SOLDADO_ID,
+                CARGO_01_ID,
+                CARGO_02_ID,
+                CARGO_RESP_METAS_ID,
+                CARGO_RESP_ACAO_ID,
+                CARGO_RESP_VENDAS_ID,
+                CARGO_RESP_PRODUCAO_ID
+            ]
+            
+            guild = bot.get_guild(GUILD_ID)
+            if not guild:
+                return
+            
+            # Buscar todos os membros com cargo obrigatório
+            membros_com_meta = set()
             for meta in metas:
-                user_id = meta["user_id"]
+                membros_com_meta.add(meta["user_id"])
+            
+            for member in guild.members:
+                if member.bot:
+                    continue
+                
+                # Verificar se o membro tem cargo obrigatório
+                tem_cargo = any(r.id in cargos_obrigados for r in member.roles)
+                if not tem_cargo:
+                    continue
+                
+                user_id = str(member.id)
+                
+                # Verificar se o membro tem meta
+                meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
+                
+                # Se não tem meta, criar uma
+                if not meta:
+                    # Verificar se já tem sala
+                    canal_existente = None
+                    for canal in guild.text_channels:
+                        if member.display_name.lower() in canal.name.lower() and "📁" in canal.name:
+                            canal_existente = canal
+                            break
+                    
+                    if canal_existente:
+                        await salvar_meta_db(member.id, canal_existente.id, 0, 0, 0)
+                    else:
+                        await criar_sala_meta(member)
+                    
+                    # Recarregar meta
+                    meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
+                    if not meta:
+                        continue
+                
                 dinheiro = meta["dinheiro"] or 0
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
                 total = dinheiro + dinheiro_acoes
+                
+                # ⚠️ SÓ AVISA QUEM NÃO FEZ NENHUM DEPÓSITO ⚠️
                 if total == 0:
-                    ja_avisado = await conn.fetchval("SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'quarta' AND data::date = $2", str(user_id), hoje.date())
+                    # Verificar se já foi avisado hoje
+                    ja_avisado = await conn.fetchval(
+                        "SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'quarta' AND data::date = $2",
+                        user_id, hoje.date()
+                    )
+                    
                     if not ja_avisado:
-                        await conn.execute("INSERT INTO metas_avisos (user_id, tipo, data) VALUES ($1, 'quarta', $2)", str(user_id), agora_db())
-                        canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(user_id))
+                        await conn.execute(
+                            "INSERT INTO metas_avisos (user_id, tipo, data) VALUES ($1, 'quarta', $2)",
+                            user_id, agora_db()
+                        )
+                        
+                        canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", user_id)
                         if canal_id:
                             canal = bot.get_channel(int(canal_id))
                             if canal:
-                                user = await pegar_usuario(user_id)
-                                embed = discord.Embed(title="⚠️ AVISO DE META SEMANAL", description=f"{user.mention} **atenção!**", color=0xe74c3c)
-                                embed.add_field(name="📌 Você ainda NÃO fez nenhum depósito na sua meta esta semana!", value="⏰ **Você tem até domingo para completar sua meta!**\n\n⚠️ **Consequências:**\n• Se NÃO fechar a meta: **REBAIXAMENTO** na facção\n• Se atrasar 2 vezes: **REMOÇÃO** da facção\n\n💪 **Corra atrás do prejuízo!**", inline=False)
+                                embed = discord.Embed(
+                                    title="⚠️ AVISO DE META SEMANAL",
+                                    description=f"{member.mention} **atenção!**",
+                                    color=0xe74c3c
+                                )
+                                embed.add_field(
+                                    name="📌 Você ainda NÃO fez nenhum depósito na sua meta esta semana!",
+                                    value=(
+                                        "⏰ **Você tem até domingo para completar sua meta!**\n\n"
+                                        "⚠️ **Consequências:**\n"
+                                        "• Se NÃO fechar a meta: **REBAIXAMENTO** na facção\n"
+                                        "• Se atrasar 2 vezes: **REMOÇÃO** da facção\n\n"
+                                        "💪 **Corra atrás do prejuízo!**"
+                                    ),
+                                    inline=False
+                                )
                                 embed.set_footer(text="Meta semanal • Vida Rasa")
                                 await canal.send(embed=embed)
-                                return True
-        return False
+                                logger.info(f"📨 Aviso de quarta enviado para {member.display_name}")
+        
+        return True
     except Exception as e:
         logger.error(f"❌ Erro ao verificar avisos de quarta: {e}")
         return False
@@ -4360,35 +4443,65 @@ async def atualizar_embed_meta(user_id):
             nome = user.display_name if user else str(user_id)
         
         dinheiro_meta = meta["dinheiro"] or 0
-        dinheiro_acoes = meta.get("dinheiro_acoes") or 0
-        polvora = meta["polvora"] or 0  # Pólvora que está na meta (não é a vendida)
-        acao = meta.get("acao")
-        if acao is None:
-            acao = "Nenhuma"
-        else:
-            acao = str(acao)
+        polvora = meta["polvora"] or 0
         
-        embed = discord.Embed(title=f"📊 META DE {nome.upper()}", color=0x3498db, timestamp=agora())
-        embed.add_field(name="💰 DINHEIRO SUJO (Meta)", value=formatar_dinheiro(dinheiro_meta), inline=True)
-        embed.add_field(name="🎯 DINHEIRO DE AÇÕES", value=formatar_dinheiro(dinheiro_acoes), inline=True)
+        embed = discord.Embed(
+            title=f"📊 META DE {nome.upper()}",
+            color=0x3498db,
+            timestamp=agora()
+        )
         
-        # ⚠️ CAMPO PÓLVORA - mostra a pólvora da meta + a vendida pendente ⚠️
+        # ⚠️ REMOVIDO: "DINHEIRO DE AÇÕES" e "AÇÃO ATUAL" ⚠️
+        embed.add_field(
+            name="💰 DINHEIRO SUJO (Meta)",
+            value=formatar_dinheiro(dinheiro_meta),
+            inline=False
+        )
+        
+        # Pólvora da meta
         if pendente and pendente["quantidade"] > 0:
-            # Se tem pólvora pendente, mostra separado
             embed.add_field(
                 name="💣 PÓLVORA",
                 value=f"**Na meta:** {fmt_num(polvora)} unidades\n**Vendida (pendente):** {fmt_num(pendente['quantidade'])} unidades (R$ {formatar_dinheiro(pendente['valor'])})",
                 inline=False
             )
         else:
-            # Se não tem pendente, mostra só a pólvora da meta
             embed.add_field(
                 name="💣 PÓLVORA",
                 value=f"{fmt_num(polvora)} unidades" if polvora > 0 else "0 unidades",
-                inline=True
+                inline=False
             )
         
-        embed.add_field(name="🎯 AÇÃO ATUAL", value=acao, inline=False)
+        # ⚠️ NOVO: Barra de progresso da meta (R$ 300.000) ⚠️
+        meta_total = 300000
+        progresso = min(dinheiro_meta / meta_total, 1.0)
+        barra = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
+        porcentagem = int(progresso * 100)
+        
+        if progresso >= 1:
+            status_meta = "✅ META CONCLUÍDA! 🎉"
+            cor_status = 0x2ecc71
+        elif progresso >= 0.7:
+            status_meta = "🟢 Quase lá!"
+            cor_status = 0x2ecc71
+        elif progresso >= 0.4:
+            status_meta = "🟡 Vamos acelerar!"
+            cor_status = 0xf1c40f
+        elif progresso >= 0.1:
+            status_meta = "🟠 Começando..."
+            cor_status = 0xe67e22
+        else:
+            status_meta = "🔴 Comece já!"
+            cor_status = 0xe74c3c
+        
+        embed.add_field(
+            name="📊 PROGRESSO DA META",
+            value=f"`{barra}` **{porcentagem}%**\n**{status_meta}**\n💰 {formatar_dinheiro(dinheiro_meta)} / {formatar_dinheiro(meta_total)}",
+            inline=False
+        )
+        
+        # ⚠️ REMOVIDO: "AÇÃO ATUAL" ⚠️
+        
         embed.add_field(
             name="📌 COMO USAR",
             value="**💣 Vender Pólvora** - Venda pólvora para a facção\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta\n**💰 Pólvora Paga** - Gerente paga a pólvora pendente",
@@ -4408,11 +4521,10 @@ async def atualizar_embed_meta(user_id):
                     pass
         
         await canal.send(embed=embed, view=MetaView(user_id))
-        total = dinheiro_meta + dinheiro_acoes
-        await verificar_meta_concluida(user_id, total)
+        await verificar_meta_concluida(user_id, dinheiro_meta)
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
-
+        
 def membro_deve_ter_meta(member):
     """Verifica se o membro deve ter meta baseado nos cargos."""
     if not member:
