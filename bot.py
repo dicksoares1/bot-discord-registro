@@ -7379,7 +7379,7 @@ TIPOS_ORGANIZACAO = {
         "pode_pt": True,
         "pode_sub": True,
         "emoji": "🔧",
-        "produtos": ["TUNNING DE VEÍCULOS", "PEÇAS ILEGAIS", "PLACA FALSA", "DOCUMENTAÇÃO, NITRO"]
+        "produtos": ["TUNNING DE VEÍCULOS", "PEÇAS ILEGAIS", "PLACA FALSA", "NITRO"]
     }
 }
 
@@ -7766,7 +7766,21 @@ class PainelGruposView(discord.ui.View):
         if not is_admin and not is_gerente:
             await interaction.response.send_message("❌ APENAS ADM OU GERENTES!", ephemeral=True)
             return
-        await interaction.response.send_modal(RegistrarGrupoModal())
+    
+        view = EscolherTipoView("registrar")
+        embed = discord.Embed(
+            title="📌 SELECIONE O TIPO DE ORGANIZAÇÃO",
+            description=(
+                "**CLIQUE NO BOTÃO CORRESPONDENTE AO TIPO:**\n\n"
+                "📋 **PISTA SEM PAINEL** - APENAS PT\n"
+                "📱 **PISTA COM PAINEL** - PT E SUB\n"
+                "🤵 **MAFIAS** - PT E SUB\n"
+                "🏚️ **FAVELAS** - PT E SUB\n"
+                "🔧 **MECÂNICA ILEGAL** - PT E SUB"
+            ),
+            color=0x3498db
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
     @discord.ui.button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="atualizar_padrao", emoji="🔄")
     async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -7887,8 +7901,9 @@ class GrupoView(discord.ui.View):
 
 # --- MODAL PARA REGISTRAR ---
 class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
-    def __init__(self):
+    def __init__(self, tipo_escolhido, produtos_texto):
         super().__init__(timeout=300)
+        self.tipo_escolhido = tipo_escolhido
         
         self.nome_org = discord.ui.TextInput(
             label="🏷️ NOME DA ORGANIZAÇÃO",
@@ -7912,18 +7927,17 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
         )
         
         self.produto = discord.ui.TextInput(
-            label="🔫 PRODUTO QUE FORNECE",
-            placeholder="EX: PT, SUB, HAXIXE, ARMAS, REPARO",
+            label=f"🔫 PRODUTO QUE FORNECE ({self.tipo_escolhido})",
+            placeholder=f"OPÇÕES: {produtos_texto}",
             required=True,
             max_length=50
         )
         
         self.tipo_org = discord.ui.TextInput(
-            label="📌 TIPO DE ORGANIZAÇÃO",
-            placeholder="PISTA SEM PAINEL / PISTA COM PAINEL / MAFIAS / FAVELAS / MECÂNICA ILEGAL",
+            label="📌 TIPO DE ORGANIZAÇÃO (DEFINIDO)",
+            default=self.tipo_escolhido,
             required=True,
-            max_length=30,
-            default="PISTA SEM PAINEL"
+            max_length=30
         )
         
         self.add_item(self.nome_org)
@@ -7947,8 +7961,6 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
             braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "NÃO INFORMADO"
         
         tipo_org = self.tipo_org.value.strip().upper()
-        if tipo_org not in ['PISTA SEM PAINEL', 'PISTA COM PAINEL', 'MAFIAS', 'FAVELAS', 'MECÂNICA ILEGAL']:
-            tipo_org = 'PISTA SEM PAINEL'
         
         import time
         grupo_id = f"GRUPO_{int(time.time())}_{interaction.user.id}"
@@ -7970,7 +7982,7 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
         
 # --- MODAL PARA EDITAR ---
 class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
-    def __init__(self, grupo_id, dados):
+    def __init__(self, grupo_id, dados, tipo_escolhido, produtos_texto):
         super().__init__(timeout=300)
         self.grupo_id = grupo_id
         
@@ -8004,16 +8016,16 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
         )
         
         self.produto = discord.ui.TextInput(
-            label="🔫 PRODUTO QUE FORNECE",
+            label=f"🔫 PRODUTO QUE FORNECE ({tipo_escolhido})",
             default=dados.get('produto', '').upper(),
+            placeholder=f"OPÇÕES: {produtos_texto}",
             required=True,
             max_length=50
         )
         
-        tipo_atual = dados.get('tipo_org', 'PISTA SEM PAINEL').upper()
         self.tipo_org = discord.ui.TextInput(
-            label="📌 TIPO DE ORGANIZAÇÃO",
-            default=tipo_atual,
+            label="📌 TIPO DE ORGANIZAÇÃO (DEFINIDO)",
+            default=tipo_escolhido,
             required=True,
             max_length=30
         )
@@ -8039,8 +8051,6 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
             braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "NÃO INFORMADO"
         
         tipo_org = self.tipo_org.value.strip().upper()
-        if tipo_org not in ['PISTA SEM PAINEL', 'PISTA COM PAINEL', 'MAFIAS', 'FAVELAS', 'MECÂNICA ILEGAL']:
-            tipo_org = 'PISTA SEM PAINEL'
         
         await atualizar_grupo_db(
             self.grupo_id,
@@ -8056,7 +8066,7 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
         
         await recriar_painel_grupos()
         await interaction.followup.send(f"✅ **GRUPO {self.nome_org.value.upper()} ATUALIZADO!**", ephemeral=True)
-
+        
 # --- VIEW PARA CONFIRMAR EXCLUSÃO ---
 class ConfirmarExcluirView(discord.ui.View):
     def __init__(self, grupo_id, nome_org):
@@ -8107,6 +8117,91 @@ async def sync_grupo_com_vendas(org_nome, tipo, quantidade, valor):
         await registrar_compra_grupo_db(grupo["grupo_id"], tipo, quantidade, valor)
         return True
     return False
+
+# --- VIEW PARA ESCOLHER O TIPO DE ORGANIZAÇÃO ---
+class EscolherTipoView(discord.ui.View):
+    def __init__(self, acao, dados=None):
+        super().__init__(timeout=120)
+        self.acao = acao  # "registrar" ou "editar"
+        self.dados = dados  # usado apenas para editar
+        
+        self.add_item(discord.ui.Button(
+            label="📋 PISTA SEM PAINEL",
+            style=discord.ButtonStyle.secondary,
+            custom_id="tipo_pista_sem",
+            emoji="📋"
+        ))
+        self.add_item(discord.ui.Button(
+            label="📱 PISTA COM PAINEL",
+            style=discord.ButtonStyle.primary,
+            custom_id="tipo_pista_com",
+            emoji="📱"
+        ))
+        self.add_item(discord.ui.Button(
+            label="🤵 MAFIAS",
+            style=discord.ButtonStyle.primary,
+            custom_id="tipo_mafias",
+            emoji="🤵"
+        ))
+        self.add_item(discord.ui.Button(
+            label="🏚️ FAVELAS",
+            style=discord.ButtonStyle.primary,
+            custom_id="tipo_favelas",
+            emoji="🏚️"
+        ))
+        self.add_item(discord.ui.Button(
+            label="🔧 MECÂNICA ILEGAL",
+            style=discord.ButtonStyle.primary,
+            custom_id="tipo_mecanica",
+            emoji="🔧"
+        ))
+        self.add_item(discord.ui.Button(
+            label="❌ CANCELAR",
+            style=discord.ButtonStyle.danger,
+            custom_id="cancelar_tipo",
+            emoji="❌"
+        ))
+    
+    async def interaction_check(self, interaction: discord.Interaction):
+        custom_id = interaction.data.get("custom_id", "")
+        
+        if custom_id == "cancelar_tipo":
+            await interaction.response.send_message("❌ OPERAÇÃO CANCELADA.", ephemeral=True)
+            try:
+                await interaction.message.delete()
+            except:
+                pass
+            return False
+        
+        tipos = {
+            "tipo_pista_sem": "PISTA SEM PAINEL",
+            "tipo_pista_com": "PISTA COM PAINEL",
+            "tipo_mafias": "MAFIAS",
+            "tipo_favelas": "FAVELAS",
+            "tipo_mecanica": "MECÂNICA ILEGAL"
+        }
+        
+        tipo_escolhido = tipos.get(custom_id)
+        if tipo_escolhido:
+            await interaction.response.defer(ephemeral=True)
+            info_tipo = TIPOS_ORGANIZACAO.get(tipo_escolhido, {})
+            produtos = info_tipo.get("produtos", [])
+            produtos_texto = ", ".join(produtos) if produtos else "NENHUM"
+            
+            if self.acao == "registrar":
+                modal = RegistrarGrupoModal(tipo_escolhido, produtos_texto)
+                await interaction.followup.send_modal(modal)
+            else:
+                modal = EditarGrupoModal(self.dados["grupo_id"], self.dados["dados"], tipo_escolhido, produtos_texto)
+                await interaction.followup.send_modal(modal)
+            
+            try:
+                await interaction.message.delete()
+            except:
+                pass
+            return False
+        
+        return True
 
 
 # =========================================================
