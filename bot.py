@@ -7341,37 +7341,45 @@ CANAL_GRUPOS_ID = 1448563544386961479
 
 # --- TIPOS DE ORGANIZAÇÃO ---
 TIPOS_ORGANIZACAO = {
-    "FAVELAS": {
-        "nome": "🏚️ FAVELAS",
-        "descricao": "PODE COMPRAR PT E SUB",
+    "PISTA SEM PAINEL": {
+        "nome": "📋 PISTA SEM PAINEL",
+        "descricao": "APENAS PT",
         "pode_pt": True,
-        "pode_sub": True,
-        "emoji": "🏚️",
-        "produtos": ["HAXIXE", "AQUABLITS", "LEAN", "MD", "COCA", "LANÇA", "BALÃO", "K9", "KETAMINA"]
+        "pode_sub": False,
+        "emoji": "📋",
+        "produtos": ["PT"]
     },
-    "MÁFIA": {
-        "nome": "🤵 MÁFIA",
-        "descricao": "PODE COMPRAR PT E SUB",
-        "pode_pt": True,
-        "pode_sub": True,
-        "emoji": "🤵",
-        "produtos": ["MUNIÇÃO FUZIL", "MUNIÇÃO PISTOLA", "SUB", "ARMAS", "LAVAGEM", "CONTRABANDO", "MEC ILEGAL", "KIT REPARO"]
-    },
-    "PISTA COM TABLET": {
-        "nome": "📱 PISTA COM TABLET",
-        "descricao": "PODE COMPRAR PT E SUB",
+    "PISTA COM PAINEL": {
+        "nome": "📱 PISTA COM PAINEL",
+        "descricao": "PT E SUB",
         "pode_pt": True,
         "pode_sub": True,
         "emoji": "📱",
         "produtos": ["PT", "SUB"]
     },
-    "PISTA SEM TABLET": {
-        "nome": "📋 PISTA SEM TABLET",
-        "descricao": "PODE COMPRAR APENAS PT",
+    "MAFIAS": {
+        "nome": "🤵 MAFIAS",
+        "descricao": "PT E SUB",
         "pode_pt": True,
-        "pode_sub": False,
-        "emoji": "📋",
-        "produtos": ["PT"]
+        "pode_sub": True,
+        "emoji": "🤵",
+        "produtos": ["MUNIÇÃO FUZIL", "MUNIÇÃO PISTOLA", "SUB", "ARMAS", "LAVAGEM", "CONTRABANDO", "KIT REPARO"]
+    },
+    "FAVELAS": {
+        "nome": "🏚️ FAVELAS",
+        "descricao": "PT E SUB",
+        "pode_pt": True,
+        "pode_sub": True,
+        "emoji": "🏚️",
+        "produtos": ["HAXIXE", "AQUABLITS", "LEAN", "MD", "COCA", "LANÇA", "BALÃO", "K9", "KETAMINA"]
+    },
+    "MECÂNICA ILEGAL": {
+        "nome": "🔧 MECÂNICA ILEGAL",
+        "descricao": "PT E SUB",
+        "pode_pt": True,
+        "pode_sub": True,
+        "emoji": "🔧",
+        "produtos": ["TUNNING DE VEÍCULOS", "PEÇAS ILEGAIS", "PLACA FALSA", "DOCUMENTAÇÃO, NITRO"]
     }
 }
 
@@ -7391,7 +7399,7 @@ async def criar_tabela_grupos():
                     braco_nome TEXT,
                     braco_telefone TEXT,
                     produto TEXT,
-                    tipo_org VARCHAR(30) DEFAULT 'PISTA SEM TABLET',
+                    tipo_org VARCHAR(30) DEFAULT 'PISTA SEM PAINEL',
                     observacoes TEXT,
                     data_criacao TIMESTAMP DEFAULT NOW(),
                     data_atualizacao TIMESTAMP,
@@ -7405,7 +7413,7 @@ async def criar_tabela_grupos():
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                                   WHERE table_name='grupos' AND column_name='tipo_org') THEN
-                        ALTER TABLE grupos ADD COLUMN tipo_org VARCHAR(30) DEFAULT 'PISTA SEM TABLET';
+                        ALTER TABLE grupos ADD COLUMN tipo_org VARCHAR(30) DEFAULT 'PISTA SEM PAINEL';
                     END IF;
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                                   WHERE table_name='grupos' AND column_name='observacoes') THEN
@@ -7607,7 +7615,7 @@ async def enviar_painel_grupos():
         
         embed = discord.Embed(
             title="📋 GERENCIAMENTO DE GRUPOS",
-            description="**SELECIONE UM GRUPO NO MENU ABAIXO:**\n\n📌 **TIPOS:**\n• 🏚️ FAVELAS - PT E SUB\n• 🤵 MÁFIA - PT E SUB\n• 📱 PISTA COM TABLET - PT E SUB\n• 📋 PISTA SEM TABLET - APENAS PT",
+            description="**SELECIONE UM GRUPO NO MENU ABAIXO:**\n\n📌 **TIPOS:**\n• 📋 PISTA SEM PAINEL - APENAS PT\n• 📱 PISTA COM PAINEL - PT E SUB\n• 🤵 MAFIAS - PT E SUB\n• 🏚️ FAVELAS - PT E SUB\n• 🔧 MECÂNICA ILEGAL - PT E SUB",
             color=0x2ecc71,
             timestamp=agora()
         )
@@ -7905,17 +7913,17 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
         
         self.produto = discord.ui.TextInput(
             label="🔫 PRODUTO QUE FORNECE",
-            placeholder="EX: HAXIXE, MUNIÇÃO FUZIL, PT, SUB",
+            placeholder="EX: PT, SUB, HAXIXE, ARMAS, REPARO",
             required=True,
             max_length=50
         )
         
         self.tipo_org = discord.ui.TextInput(
             label="📌 TIPO DE ORGANIZAÇÃO",
-            placeholder="FAVELAS / MÁFIA / PISTA COM TABLET / PISTA SEM TABLET",
+            placeholder="PISTA SEM PAINEL / PISTA COM PAINEL / MAFIAS / FAVELAS / MECÂNICA ILEGAL",
             required=True,
             max_length=30,
-            default="PISTA SEM TABLET"
+            default="PISTA SEM PAINEL"
         )
         
         self.add_item(self.nome_org)
@@ -7939,8 +7947,8 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
             braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "NÃO INFORMADO"
         
         tipo_org = self.tipo_org.value.strip().upper()
-        if tipo_org not in ['FAVELAS', 'MÁFIA', 'PISTA COM TABLET', 'PISTA SEM TABLET']:
-            tipo_org = 'PISTA SEM TABLET'
+        if tipo_org not in ['PISTA SEM PAINEL', 'PISTA COM PAINEL', 'MAFIAS', 'FAVELAS', 'MECÂNICA ILEGAL']:
+            tipo_org = 'PISTA SEM PAINEL'
         
         import time
         grupo_id = f"GRUPO_{int(time.time())}_{interaction.user.id}"
@@ -8002,7 +8010,7 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
             max_length=50
         )
         
-        tipo_atual = dados.get('tipo_org', 'PISTA SEM TABLET').upper()
+        tipo_atual = dados.get('tipo_org', 'PISTA SEM PAINEL').upper()
         self.tipo_org = discord.ui.TextInput(
             label="📌 TIPO DE ORGANIZAÇÃO",
             default=tipo_atual,
@@ -8031,8 +8039,8 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
             braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "NÃO INFORMADO"
         
         tipo_org = self.tipo_org.value.strip().upper()
-        if tipo_org not in ['FAVELAS', 'MÁFIA', 'PISTA COM TABLET', 'PISTA SEM TABLET']:
-            tipo_org = 'PISTA SEM TABLET'
+        if tipo_org not in ['PISTA SEM PAINEL', 'PISTA COM PAINEL', 'MAFIAS', 'FAVELAS', 'MECÂNICA ILEGAL']:
+            tipo_org = 'PISTA SEM PAINEL'
         
         await atualizar_grupo_db(
             self.grupo_id,
