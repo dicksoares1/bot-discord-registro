@@ -7843,7 +7843,21 @@ class GrupoView(discord.ui.View):
             await interaction.response.send_message("❌ GRUPO NÃO ENCONTRADO!", ephemeral=True)
             return
         
-        await interaction.response.send_modal(EditarGrupoModal(self.grupo_id, dados))
+        view = EscolherTipoView("editar", {"grupo_id": self.grupo_id, "dados": dados})
+        embed = discord.Embed(
+            title="📌 SELECIONE O NOVO TIPO DE ORGANIZAÇÃO",
+            description=(
+                "**CLIQUE NO BOTÃO CORRESPONDENTE AO NOVO TIPO:**\n\n"
+                "📋 **PISTA SEM PAINEL** - APENAS PT\n"
+                "📱 **PISTA COM PAINEL** - PT E SUB\n"
+                "🤵 **MAFIAS** - PT E SUB\n"
+                "🏚️ **FAVELAS** - PT E SUB\n"
+                "🔧 **MECÂNICA ILEGAL** - PT E SUB\n\n"
+                f"📌 **TIPO ATUAL:** {dados.get('tipo_org', 'PISTA SEM PAINEL')}"
+            ),
+            color=0x3498db
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
     async def excluir(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
