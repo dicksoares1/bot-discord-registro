@@ -7341,26 +7341,37 @@ CANAL_GRUPOS_ID = 1448563544386961479
 
 # --- TIPOS DE ORGANIZAÇÃO ---
 TIPOS_ORGANIZACAO = {
-    "FACÇÃO": {
-        "nome": "⚔️ FACÇÃO",
+    "FAVELAS": {
+        "nome": "🏚️ FAVELAS",
         "descricao": "PODE COMPRAR PT E SUB",
         "pode_pt": True,
         "pode_sub": True,
-        "emoji": "⚔️"
+        "emoji": "🏚️",
+        "produtos": ["HAXIXE", "AQUABLITS", "LEAN", "MD", "COCA", "LANÇA", "BALÃO", "K9", "KETAMINA"]
     },
-    "PISTA COM PAINEL": {
-        "nome": "📱 PISTA COM PAINEL",
+    "MÁFIA": {
+        "nome": "🤵 MÁFIA",
         "descricao": "PODE COMPRAR PT E SUB",
         "pode_pt": True,
         "pode_sub": True,
-        "emoji": "📱"
+        "emoji": "🤵",
+        "produtos": ["MUNIÇÃO FUZIL", "MUNIÇÃO PISTOLA", "SUB", "ARMAS", "LAVAGEM", "CONTRABANDO", "MEC ILEGAL", "KIT REPARO"]
     },
-    "PISTA SEM PAINEL": {
-        "nome": "📋 PISTA SEM PAINEL",
-        "descricao": "APENAS PT",
+    "PISTA COM TABLET": {
+        "nome": "📱 PISTA COM TABLET",
+        "descricao": "PODE COMPRAR PT E SUB",
+        "pode_pt": True,
+        "pode_sub": True,
+        "emoji": "📱",
+        "produtos": ["PT", "SUB"]
+    },
+    "PISTA SEM TABLET": {
+        "nome": "📋 PISTA SEM TABLET",
+        "descricao": "PODE COMPRAR APENAS PT",
         "pode_pt": True,
         "pode_sub": False,
-        "emoji": "📋"
+        "emoji": "📋",
+        "produtos": ["PT"]
     }
 }
 
@@ -7380,7 +7391,7 @@ async def criar_tabela_grupos():
                     braco_nome TEXT,
                     braco_telefone TEXT,
                     produto TEXT,
-                    tipo_org VARCHAR(30) DEFAULT 'PISTA SEM PAINEL',
+                    tipo_org VARCHAR(30) DEFAULT 'PISTA SEM TABLET',
                     observacoes TEXT,
                     data_criacao TIMESTAMP DEFAULT NOW(),
                     data_atualizacao TIMESTAMP,
@@ -7394,7 +7405,7 @@ async def criar_tabela_grupos():
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                                   WHERE table_name='grupos' AND column_name='tipo_org') THEN
-                        ALTER TABLE grupos ADD COLUMN tipo_org VARCHAR(30) DEFAULT 'PISTA SEM PAINEL';
+                        ALTER TABLE grupos ADD COLUMN tipo_org VARCHAR(30) DEFAULT 'PISTA SEM TABLET';
                     END IF;
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                                   WHERE table_name='grupos' AND column_name='observacoes') THEN
@@ -7596,7 +7607,7 @@ async def enviar_painel_grupos():
         
         embed = discord.Embed(
             title="📋 GERENCIAMENTO DE GRUPOS",
-            description="**SELECIONE UM GRUPO NO MENU ABAIXO:**\n\n📌 **TIPOS:**\n• ⚔️ FACÇÃO - PT E SUB\n• 📱 PISTA COM PAINEL - PT E SUB\n• 📋 PISTA SEM PAINEL - APENAS PT",
+            description="**SELECIONE UM GRUPO NO MENU ABAIXO:**\n\n📌 **TIPOS:**\n• 🏚️ FAVELAS - PT E SUB\n• 🤵 MÁFIA - PT E SUB\n• 📱 PISTA COM TABLET - PT E SUB\n• 📋 PISTA SEM TABLET - APENAS PT",
             color=0x2ecc71,
             timestamp=agora()
         )
@@ -7626,16 +7637,13 @@ async def enviar_painel_grupos():
         
         embed.set_footer(text="👇 SELECIONE UM GRUPO NO DROPDOWN")
         
-        # CRIAR VIEW COM APENAS 2 BOTÕES + DROPDOWN
         view = PainelGruposView(grupos)
-        
-        # ENVIAR A MENSAGEM
         await canal.send(embed=embed, view=view)
-        logger.info("✅ PAINEL ENVIADO (APENAS 1 MENSAGEM)")
+        logger.info("✅ PAINEL DE GRUPOS ENVIADO")
         
     except Exception as e:
         logger.error(f"❌ ERRO AO ENVIAR PAINEL: {e}")
-
+        
 # --- VIEW PRINCIPAL ---
 class PainelGruposView(discord.ui.View):
     def __init__(self, grupos):
@@ -7897,17 +7905,17 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
         
         self.produto = discord.ui.TextInput(
             label="🔫 PRODUTO QUE FORNECE",
-            placeholder="EX: PT, SUB, AMBOS",
+            placeholder="EX: HAXIXE, MUNIÇÃO FUZIL, PT, SUB",
             required=True,
             max_length=50
         )
         
         self.tipo_org = discord.ui.TextInput(
             label="📌 TIPO DE ORGANIZAÇÃO",
-            placeholder="EX: FACÇÃO, PISTA COM PAINEL, PISTA SEM PAINEL",
+            placeholder="FAVELAS / MÁFIA / PISTA COM TABLET / PISTA SEM TABLET",
             required=True,
             max_length=30,
-            default="PISTA SEM PAINEL"
+            default="PISTA SEM TABLET"
         )
         
         self.add_item(self.nome_org)
@@ -7931,27 +7939,27 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
             braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "NÃO INFORMADO"
         
         tipo_org = self.tipo_org.value.strip().upper()
-        if tipo_org not in ['FACÇÃO', 'PISTA COM PAINEL', 'PISTA SEM PAINEL']:
-            tipo_org = 'PISTA SEM PAINEL'
+        if tipo_org not in ['FAVELAS', 'MÁFIA', 'PISTA COM TABLET', 'PISTA SEM TABLET']:
+            tipo_org = 'PISTA SEM TABLET'
         
         import time
         grupo_id = f"GRUPO_{int(time.time())}_{interaction.user.id}"
         
         await salvar_grupo_db(
             grupo_id,
-            self.nome_org.value.strip(),
-            lider_nome,
-            lider_telefone,
-            braco_nome,
-            braco_telefone,
-            self.produto.value.strip(),
+            self.nome_org.value.strip().upper(),
+            lider_nome.upper(),
+            lider_telefone.upper(),
+            braco_nome.upper() if braco_nome else None,
+            braco_telefone.upper() if braco_telefone else None,
+            self.produto.value.strip().upper(),
             tipo_org,
             ""
         )
         
         await recriar_painel_grupos()
         await interaction.followup.send(f"✅ **GRUPO {self.nome_org.value.upper()} REGISTRADO!**", ephemeral=True)
-
+        
 # --- MODAL PARA EDITAR ---
 class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
     def __init__(self, grupo_id, dados):
@@ -7960,12 +7968,12 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
         
         self.nome_org = discord.ui.TextInput(
             label="🏷️ NOME DA ORGANIZAÇÃO",
-            default=dados.get('nome_org', ''),
+            default=dados.get('nome_org', '').upper(),
             required=True,
             max_length=50
         )
         
-        lider_texto = f"{dados.get('lider_nome', '')} - {dados.get('lider_telefone', '')}"
+        lider_texto = f"{dados.get('lider_nome', '').upper()} - {dados.get('lider_telefone', '').upper()}"
         self.lider = discord.ui.TextInput(
             label="👤 LÍDER (NOME - TELEFONE)",
             default=lider_texto,
@@ -7974,9 +7982,9 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
         )
         
         if dados.get('braco_nome') and dados.get('braco_telefone'):
-            braco_default = f"{dados.get('braco_nome', '')} - {dados.get('braco_telefone', '')}"
+            braco_default = f"{dados.get('braco_nome', '').upper()} - {dados.get('braco_telefone', '').upper()}"
         elif dados.get('braco_nome'):
-            braco_default = dados.get('braco_nome', '')
+            braco_default = dados.get('braco_nome', '').upper()
         else:
             braco_default = ""
         
@@ -7989,12 +7997,12 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
         
         self.produto = discord.ui.TextInput(
             label="🔫 PRODUTO QUE FORNECE",
-            default=dados.get('produto', ''),
+            default=dados.get('produto', '').upper(),
             required=True,
             max_length=50
         )
         
-        tipo_atual = dados.get('tipo_org', 'PISTA SEM PAINEL')
+        tipo_atual = dados.get('tipo_org', 'PISTA SEM TABLET').upper()
         self.tipo_org = discord.ui.TextInput(
             label="📌 TIPO DE ORGANIZAÇÃO",
             default=tipo_atual,
@@ -8023,17 +8031,17 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
             braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "NÃO INFORMADO"
         
         tipo_org = self.tipo_org.value.strip().upper()
-        if tipo_org not in ['FACÇÃO', 'PISTA COM PAINEL', 'PISTA SEM PAINEL']:
-            tipo_org = 'PISTA SEM PAINEL'
+        if tipo_org not in ['FAVELAS', 'MÁFIA', 'PISTA COM TABLET', 'PISTA SEM TABLET']:
+            tipo_org = 'PISTA SEM TABLET'
         
         await atualizar_grupo_db(
             self.grupo_id,
-            self.nome_org.value.strip(),
-            lider_nome,
-            lider_telefone,
-            braco_nome,
-            braco_telefone,
-            self.produto.value.strip(),
+            self.nome_org.value.strip().upper(),
+            lider_nome.upper(),
+            lider_telefone.upper(),
+            braco_nome.upper() if braco_nome else None,
+            braco_telefone.upper() if braco_telefone else None,
+            self.produto.value.strip().upper(),
             tipo_org,
             ""
         )
