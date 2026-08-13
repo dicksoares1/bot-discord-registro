@@ -8133,6 +8133,7 @@ async def sync_grupo_com_vendas(org_nome, tipo, quantidade, valor):
     return False
 
 # --- VIEW PARA ESCOLHER O TIPO DE ORGANIZAÇÃO ---
+# --- VIEW PARA ESCOLHER O TIPO DE ORGANIZAÇÃO ---
 class EscolherTipoView(discord.ui.View):
     def __init__(self, acao, dados=None):
         super().__init__(timeout=120)
@@ -8197,17 +8198,17 @@ class EscolherTipoView(discord.ui.View):
         
         tipo_escolhido = tipos.get(custom_id)
         if tipo_escolhido:
-            await interaction.response.defer(ephemeral=True)
+            # ⚠️ CORREÇÃO: Usar response.send_modal em vez de followup.send_modal ⚠️
             info_tipo = TIPOS_ORGANIZACAO.get(tipo_escolhido, {})
             produtos = info_tipo.get("produtos", [])
             produtos_texto = ", ".join(produtos) if produtos else "NENHUM"
             
             if self.acao == "registrar":
                 modal = RegistrarGrupoModal(tipo_escolhido, produtos_texto)
-                await interaction.followup.send_modal(modal)
+                await interaction.response.send_modal(modal)
             else:
                 modal = EditarGrupoModal(self.dados["grupo_id"], self.dados["dados"], tipo_escolhido, produtos_texto)
-                await interaction.followup.send_modal(modal)
+                await interaction.response.send_modal(modal)
             
             try:
                 await interaction.message.delete()
