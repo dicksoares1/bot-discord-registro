@@ -808,6 +808,7 @@ async def inicializar_tabelas(pool):
                 data_pagamento TIMESTAMP
             )
         """)
+        await conn.execute("ALTER TABLE metas ADD COLUMN IF NOT EXISTS saldo_excedente BIGINT DEFAULT 0")
 
 async def criar_tabela_alugueis():
     """Cria tabela de aluguel de galpões."""
@@ -4012,22 +4013,40 @@ async def adicionar_polvora_meta(user_id, quantidade):
         return False
 
 async def adicionar_dinheiro_meta(user_id, valor):
+    """Adiciona dinheiro à meta. Se ultrapassar 300k, excedente vai para saldo_excedente."""
     pool = get_db()
     if not pool:
         return False
     try:
         async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT dinheiro FROM metas WHERE user_id = $1", str(user_id))
-            if meta:
-                novo_valor = meta["dinheiro"] + valor
-                await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_valor, str(user_id))
-                return True
-            return False
+            meta = await conn.fetchrow("SELECT dinheiro, saldo_excedente FROM metas WHERE user_id = $1", str(user_id))
+            if not meta:
+                return False
+
+            dinheiro_atual = meta["dinheiro"] or 0
+            saldo_excedente = meta["saldo_excedente"] or 0
+            META_LIMITE = 300000
+
+            falta_para_meta = max(0, META_LIMITE - dinheiro_atual)
+
+            if valor <= falta_para_meta:
+                novo_dinheiro = dinheiro_atual + valor
+                await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_dinheiro, str(user_id))
+            else:
+                novo_dinheiro = META_LIMITE
+                novo_excedente = saldo_excedente + (valor - falta_para_meta)
+                await conn.execute(
+                    "UPDATE metas SET dinheiro = $1, saldo_excedente = $2 WHERE user_id = $3",
+                    novo_dinheiro, novo_excedente, str(user_id)
+                )
+
+            return True
     except Exception as e:
         logger.error(f"❌ Erro ao adicionar dinheiro: {e}")
         return False
 
 async def fechar_meta(user_id, data_inicio, data_fim):
+    """Fecha a meta. Se tiver excedente, ele vira a meta da próxima semana."""
     pool = get_db()
     if not pool:
         return None
@@ -4036,21 +4055,37 @@ async def fechar_meta(user_id, data_inicio, data_fim):
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
             if not meta:
                 return None
-            acao = meta.get("acao")
-            if acao is None:
-                acao = "N/A"
-            else:
-                acao = str(acao)
+
+            dinheiro = meta["dinheiro"] or 0
+            polvora = meta["polvora"] or 0
+            acao = meta.get("acao") or "N/A"
+            dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+            saldo_excedente = meta.get("saldo_excedente") or 0
+
             await conn.execute(
                 """
                 INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
-                str(user_id), meta["dinheiro"], meta["polvora"], acao,
-                meta.get("dinheiro_acoes") or 0, data_inicio, data_fim, agora_db()
+                str(user_id), min(dinheiro, 300000), polvora, str(acao), dinheiro_acoes, data_inicio, data_fim, agora_db()
             )
-            await conn.execute("UPDATE metas SET dinheiro = 0, polvora = 0, dinheiro_acoes = 0 WHERE user_id = $1", str(user_id))
-            return {"dinheiro": meta["dinheiro"], "polvora": meta["polvora"], "acao": acao, "dinheiro_acoes": meta.get("dinheiro_acoes") or 0}
+
+            await conn.execute(
+                """
+                UPDATE metas 
+                SET dinheiro = $1, polvora = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL
+                WHERE user_id = $2
+                """,
+                saldo_excedente, str(user_id)
+            )
+
+            return {
+                "dinheiro": min(dinheiro, 300000),
+                "polvora": polvora,
+                "acao": acao,
+                "dinheiro_acoes": dinheiro_acoes,
+                "excedente": saldo_excedente
+            }
     except Exception as e:
         logger.error(f"❌ Erro ao fechar meta: {e}")
         return None
@@ -4082,73 +4117,55 @@ async def fechar_todas_metas(data_inicio, data_fim):
             metas = await conn.fetch("SELECT * FROM metas")
             if not metas:
                 return None, []
-            
+
             relatorio = []
             guild = bot.get_guild(GUILD_ID)
-            
-            # Processar cada meta
+
             for meta in metas:
                 user_id = meta["user_id"]
                 member = guild.get_member(int(user_id)) if guild else None
-                
-                # Verificar status do membro
+
                 status = membro_deve_ter_meta(member) if member else None
-                
-                # Se não tem cargo relevante, pular
                 if status is None:
                     continue
-                
+
                 dinheiro = meta["dinheiro"] or 0
                 polvora = meta["polvora"] or 0
                 acao = meta["acao"] or "N/A"
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
-                total = dinheiro + dinheiro_acoes
-                
-                # Se for isento, registrar com status especial
-                if status == "isento":
-                    # Salvar no histórico como isento
-                    await conn.execute(
-                        """
-                        INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                        """,
-                        user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, agora_db()
-                    )
-                    relatorio.append({
-                        "user_id": user_id, 
-                        "dinheiro": dinheiro, 
-                        "polvora": polvora, 
-                        "acao": acao, 
-                        "dinheiro_acoes": dinheiro_acoes, 
-                        "total": total,
-                        "status": "isento"
-                    })
-                else:
-                    # Salvar no histórico normalmente
-                    await conn.execute(
-                        """
-                        INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                        """,
-                        user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, agora_db()
-                    )
-                    relatorio.append({
-                        "user_id": user_id, 
-                        "dinheiro": dinheiro, 
-                        "polvora": polvora, 
-                        "acao": acao, 
-                        "dinheiro_acoes": dinheiro_acoes, 
-                        "total": total,
-                        "status": "obrigado"
-                    })
-                
-                # Resetar meta
-                await conn.execute("UPDATE metas SET dinheiro = 0, polvora = 0, dinheiro_acoes = 0 WHERE user_id = $1", user_id)
-            
-            # Buscar membros SEM META (apenas quem tem cargo obrigatório)
+                saldo_excedente = meta.get("saldo_excedente") or 0
+
+                await conn.execute(
+                    """
+                    INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    """,
+                    user_id, min(dinheiro, 300000), polvora, acao, dinheiro_acoes, data_inicio, data_fim, agora_db()
+                )
+
+                await conn.execute(
+                    """
+                    UPDATE metas 
+                    SET dinheiro = $1, polvora = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL
+                    WHERE user_id = $2
+                    """,
+                    saldo_excedente, user_id
+                )
+
+                relatorio.append({
+                    "user_id": user_id,
+                    "dinheiro": min(dinheiro, 300000),
+                    "polvora": polvora,
+                    "acao": acao,
+                    "dinheiro_acoes": dinheiro_acoes,
+                    "total": min(dinheiro, 300000) + dinheiro_acoes,
+                    "excedente": saldo_excedente,
+                    "status": status
+                })
+
             membros_sem_meta = []
             if guild:
-                cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID, 
+                cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID,
                               CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]
                 for member in guild.members:
                     if member.bot:
@@ -4158,23 +4175,24 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         tem_meta = any(m["user_id"] == str(member.id) for m in metas)
                         if not tem_meta:
                             membros_sem_meta.append({
-                                "user_id": str(member.id), 
-                                "nome": member.display_name, 
+                                "user_id": str(member.id),
+                                "nome": member.display_name,
                                 "menção": member.mention
                             })
-            
+
             return relatorio, membros_sem_meta
     except Exception as e:
         logger.error(f"❌ Erro ao fechar todas as metas: {e}")
         return None, []
 
 async def zerar_todas_metas():
+    """Zera todas as metas, incluindo saldo_excedente."""
     pool = get_db()
     if not pool:
         return []
     try:
         async with pool.acquire() as conn:
-            await conn.execute("UPDATE metas SET dinheiro = 0, dinheiro_acoes = 0, polvora = 0")
+            await conn.execute("UPDATE metas SET dinheiro = 0, dinheiro_acoes = 0, polvora = 0, saldo_excedente = 0")
             rows = await conn.fetch("SELECT user_id, canal_id FROM metas")
             return rows
     except Exception as e:
@@ -4356,7 +4374,14 @@ async def criar_sala_meta(member: discord.Member):
             canal_id = int(meta_existente["canal_id"])
             canal_existe = guild.get_channel(canal_id)
             if canal_existe:
-                metas_cache[str(member.id)] = {"canal_id": canal_id, "dinheiro": meta_existente["dinheiro"], "polvora": meta_existente["polvora"], "acao": meta_existente["acao"], "dinheiro_acoes": meta_existente.get("dinheiro_acoes") or 0}
+                metas_cache[str(member.id)] = {
+                    "canal_id": canal_id,
+                    "dinheiro": meta_existente["dinheiro"],
+                    "polvora": meta_existente["polvora"],
+                    "acao": meta_existente["acao"],
+                    "dinheiro_acoes": meta_existente.get("dinheiro_acoes") or 0,
+                    "saldo_excedente": meta_existente.get("saldo_excedente") or 0
+                }
                 await atualizar_embed_meta(member.id)
                 return canal_existe
             else:
@@ -4366,7 +4391,14 @@ async def criar_sala_meta(member: discord.Member):
         for canal in guild.text_channels:
             if member.display_name.lower() in canal.name.lower() and "📁" in canal.name:
                 await salvar_meta_db(member.id, canal.id, 0, 0, 0)
-                metas_cache[str(member.id)] = {"canal_id": canal.id, "dinheiro": 0, "polvora": 0, "acao": None, "dinheiro_acoes": 0}
+                metas_cache[str(member.id)] = {
+                    "canal_id": canal.id,
+                    "dinheiro": 0,
+                    "polvora": 0,
+                    "acao": None,
+                    "dinheiro_acoes": 0,
+                    "saldo_excedente": 0
+                }
                 await atualizar_embed_meta(member.id)
                 return canal
         categoria_id = obter_categoria_meta(member)
@@ -4385,7 +4417,14 @@ async def criar_sala_meta(member: discord.Member):
             overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
         canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
         await salvar_meta_db(member.id, canal.id, 0, 0, 0)
-        metas_cache[str(member.id)] = {"canal_id": canal.id, "dinheiro": 0, "polvora": 0, "acao": None, "dinheiro_acoes": 0}
+        metas_cache[str(member.id)] = {
+            "canal_id": canal.id,
+            "dinheiro": 0,
+            "polvora": 0,
+            "acao": None,
+            "dinheiro_acoes": 0,
+            "saldo_excedente": 0
+        }
         await asyncio.sleep(1)
         await atualizar_embed_meta(member.id)
         return canal
@@ -4405,7 +4444,7 @@ async def atualizar_embed_meta(user_id):
                     await criar_sala_meta(member)
                     await carregar_metas_cache()
                 return
-        
+
         dados = metas_cache[str(user_id)]
         canal = bot.get_channel(dados["canal_id"])
         if not canal:
@@ -4416,25 +4455,30 @@ async def atualizar_embed_meta(user_id):
                 async with pool.acquire() as conn:
                     await conn.execute("DELETE FROM metas WHERE user_id = $1", str(user_id))
             return
-        
+
         pool = get_db()
         if not pool:
             return
-        
+
         async with pool.acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
-        
+
         if not meta:
             await salvar_meta_db(user_id, canal.id, 0, 0, 0)
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
             if not meta:
                 return
-            metas_cache[str(user_id)] = {"canal_id": canal.id, "dinheiro": 0, "polvora": 0, "acao": None, "dinheiro_acoes": 0}
-        
-        # Buscar pólvora pendente
+            metas_cache[str(user_id)] = {
+                "canal_id": canal.id,
+                "dinheiro": 0,
+                "polvora": 0,
+                "acao": None,
+                "dinheiro_acoes": 0,
+                "saldo_excedente": 0
+            }
+
         pendente = await buscar_polvora_pendente(user_id)
-        
-        # Buscar o apelido do membro
+
         guild = bot.get_guild(GUILD_ID)
         member = guild.get_member(int(user_id))
         if member:
@@ -4442,24 +4486,35 @@ async def atualizar_embed_meta(user_id):
         else:
             user = await pegar_usuario(user_id)
             nome = user.display_name if user else str(user_id)
-        
+
         dinheiro_meta = meta["dinheiro"] or 0
         polvora = meta["polvora"] or 0
-        
+        saldo_excedente = meta.get("saldo_excedente") or 0
+        acao = meta.get("acao")
+        if acao is None:
+            acao = "Nenhuma"
+        else:
+            acao = str(acao)
+
         embed = discord.Embed(
             title=f"📊 META DE {nome.upper()}",
             color=0x3498db,
             timestamp=agora()
         )
-        
-        # DINHEIRO SUJO
+
         embed.add_field(
             name="💰 DINHEIRO SUJO (Meta)",
             value=formatar_dinheiro(dinheiro_meta),
             inline=False
         )
-        
-        # Pólvora da meta
+
+        if saldo_excedente > 0:
+            embed.add_field(
+                name="📦 SALDO EXCEDENTE (Próxima semana)",
+                value=formatar_dinheiro(saldo_excedente),
+                inline=False
+            )
+
         if pendente and pendente["quantidade"] > 0:
             embed.add_field(
                 name="💣 PÓLVORA",
@@ -4472,43 +4527,36 @@ async def atualizar_embed_meta(user_id):
                 value=f"{fmt_num(polvora)} unidades" if polvora > 0 else "0 unidades",
                 inline=False
             )
-        
-        # BARRA DE PROGRESSO DA META (R$ 300.000)
+
         meta_total = 300000
         progresso = min(dinheiro_meta / meta_total, 1.0)
         barra = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
         porcentagem = int(progresso * 100)
-        
+
         if progresso >= 1:
             status_meta = "✅ META CONCLUÍDA! 🎉"
-            cor_status = 0x2ecc71
         elif progresso >= 0.7:
             status_meta = "🟢 Quase lá!"
-            cor_status = 0x2ecc71
         elif progresso >= 0.4:
             status_meta = "🟡 Vamos acelerar!"
-            cor_status = 0xf1c40f
         elif progresso >= 0.1:
             status_meta = "🟠 Começando..."
-            cor_status = 0xe67e22
         else:
             status_meta = "🔴 Comece já!"
-            cor_status = 0xe74c3c
-        
+
         embed.add_field(
             name="📊 PROGRESSO DA META",
             value=f"`{barra}` **{porcentagem}%**\n**{status_meta}**\n💰 {formatar_dinheiro(dinheiro_meta)} / {formatar_dinheiro(meta_total)}",
             inline=False
         )
-        
+
         embed.add_field(
             name="📌 COMO USAR",
             value="**💣 Vender Pólvora** - Venda pólvora para a facção\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta\n**💰 Pólvora Paga** - Gerente paga a pólvora pendente",
             inline=False
         )
         embed.set_footer(text=f"ID: {user_id}")
-        
-        # Deletar mensagens antigas
+
         mensagens_deletadas = 0
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
@@ -4518,7 +4566,7 @@ async def atualizar_embed_meta(user_id):
                     await asyncio.sleep(0.3)
                 except:
                     pass
-        
+
         await canal.send(embed=embed, view=MetaView(user_id))
         await verificar_meta_concluida(user_id, dinheiro_meta)
     except Exception as e:
@@ -4615,37 +4663,45 @@ async def atualizar_categoria_meta(member):
         logger.error(f"❌ Erro ao atualizar categoria de {member.name}: {e}")
 
 async def depositar_na_meta(user_id, valor, motivo):
+    """Deposita na meta. Se ultrapassar 300k, excedente vai para saldo_excedente."""
     pool = get_db()
     if not pool:
         return False
     try:
         async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", str(user_id))
-            if meta:
-                if "Ação" in motivo:
-                    novo_acoes = (meta["dinheiro_acoes"] or 0) + valor
-                    await conn.execute("UPDATE metas SET dinheiro_acoes = $1 WHERE user_id = $2", novo_acoes, str(user_id))
-                else:
-                    novo_valor = meta["dinheiro"] + valor
-                    await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_valor, str(user_id))
-                canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(user_id))
-                if canal_id:
-                    canal = bot.get_channel(int(canal_id))
-                    if canal:
-                        await canal.send(f"💰 **Depósito recebido!**\n📝 Motivo: {motivo}\n💵 Valor: {formatar_dinheiro(valor)}\n✨ **Saldo atualizado na sua meta!**")
-                return True
-            else:
-                guild = bot.get_guild(GUILD_ID)
-                member = guild.get_member(int(user_id))
-                if member:
-                    canal = await criar_sala_meta(member)
-                    if canal:
-                        if "Ação" in motivo:
-                            await conn.execute("UPDATE metas SET dinheiro_acoes = $1 WHERE user_id = $2", valor, str(user_id))
-                        else:
-                            await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", valor, str(user_id))
-                        return True
+            meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes, saldo_excedente FROM metas WHERE user_id = $1", str(user_id))
+            if not meta:
                 return False
+
+            META_LIMITE = 300000
+            dinheiro_atual = meta["dinheiro"] or 0
+            dinheiro_acoes = meta["dinheiro_acoes"] or 0
+            saldo_excedente = meta["saldo_excedente"] or 0
+
+            if "Ação" in motivo:
+                novo_acoes = dinheiro_acoes + valor
+                await conn.execute("UPDATE metas SET dinheiro_acoes = $1 WHERE user_id = $2", novo_acoes, str(user_id))
+            else:
+                falta_para_meta = max(0, META_LIMITE - dinheiro_atual)
+
+                if valor <= falta_para_meta:
+                    novo_dinheiro = dinheiro_atual + valor
+                    await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_dinheiro, str(user_id))
+                else:
+                    novo_dinheiro = META_LIMITE
+                    novo_excedente = saldo_excedente + (valor - falta_para_meta)
+                    await conn.execute(
+                        "UPDATE metas SET dinheiro = $1, saldo_excedente = $2 WHERE user_id = $3",
+                        novo_dinheiro, novo_excedente, str(user_id)
+                    )
+
+            canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(user_id))
+            if canal_id:
+                canal = bot.get_channel(int(canal_id))
+                if canal:
+                    await canal.send(f"💰 **Depósito recebido!**\n📝 Motivo: {motivo}\n💵 Valor: {formatar_dinheiro(valor)}\n✨ **Saldo atualizado na sua meta!**")
+
+            return True
     except Exception as e:
         logger.error(f"❌ Erro ao depositar na meta: {e}")
         return False
