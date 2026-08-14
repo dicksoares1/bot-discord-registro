@@ -3259,11 +3259,52 @@ class StatusView(discord.ui.View):
         self.total_entregas = total_entregas
         self.entrega_ja_entregue = False
         self.proxima_criada = False
+        
+        # ⚠️ ADICIONAR OS BOTÕES MANUALMENTE NO __init__ ⚠️
+        # Botão PAGO
+        self.add_item(discord.ui.Button(
+            label="💰 Pago",
+            style=discord.ButtonStyle.primary,
+            custom_id="status_pago",
+            emoji="💰"
+        ))
+        
+        # Botão ENTREGUE
+        self.add_item(discord.ui.Button(
+            label="✅ Entregue",
+            style=discord.ButtonStyle.success,
+            custom_id="status_entregue",
+            emoji="✅"
+        ))
+        
+        # Botão CRIAR PRÓXIMA ENTREGA (só aparece se for parcelado)
         if total_entregas > 1:
-            for child in self.children:
-                if child.custom_id == "criar_proxima_entrega":
-                    child.disabled = False
-                    child.label = f"📦 Criar Próxima Entrega (2/{total_entregas})"
+            self.add_item(discord.ui.Button(
+                label=f"📦 Criar Próxima Entrega (2/{total_entregas})",
+                style=discord.ButtonStyle.primary,
+                custom_id="criar_proxima_entrega",
+                emoji="📦",
+                disabled=False
+            ))
+        else:
+            # Se for entrega única, adiciona desabilitado ou não adiciona
+            self.add_item(discord.ui.Button(
+                label="📦 Entrega Única",
+                style=discord.ButtonStyle.secondary,
+                custom_id="criar_proxima_entrega",
+                emoji="📦",
+                disabled=True
+            ))
+        
+        # Botão CANCELAR
+        self.add_item(discord.ui.Button(
+            label="❌ Pedido cancelado",
+            style=discord.ButtonStyle.danger,
+            custom_id="status_cancelado",
+            emoji="❌"
+        ))
+        
+        # Se disabled for True, desabilitar todos os botões
         if disabled:
             for item in self.children:
                 item.disabled = True
@@ -3362,10 +3403,6 @@ class StatusView(discord.ui.View):
                 await interaction.response.send_message(f"❌ **ESTOQUE INSUFICIENTE!**\n\n🔫 SUB: {pacotes_sub} pacotes necessários\n📦 Estoque atual: {estoque_atual['SUB']} pacotes", ephemeral=True)
                 return
         self.entrega_ja_entregue = True
-        for child in self.children:
-            if child.custom_id == "status_entregue":
-                child.disabled = True
-                child.label = "✅ Entregue (Concluído)"
         titulo = embed.title
         pedido_numero = int(titulo.split("#")[1]) if "#" in titulo else 0
         if pacotes_pt > 0:
@@ -3938,6 +3975,55 @@ async def enviar_painel_vendas():
     view = CalculadoraView()
     await enviar_ou_atualizar_painel("painel_vendas", CANAL_VENDAS_ID, embed, view)
     logger.info("🛒 Painel de vendas atualizado")
+
+async def restaurar_botoes_vendas():
+    """Restaura os botões das vendas após reinicialização."""
+    try:
+        canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
+        if not canal:
+            logger.error("❌ Canal de encomendas não encontrado para restaurar botões!")
+            return
+
+        logger.info("🔄 Restaurando botões de vendas...")
+        contador = 0
+
+        async for msg in canal.history(limit=500):
+            if msg.author == bot.user and msg.embeds:
+                # Verificar se é uma mensagem de venda
+                titulo = msg.embeds[0].title if msg.embeds[0].title else ""
+                if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper():
+                    # Verificar se já tem view
+                    if not msg.components:
+                        # Extrair o ID da entrega do embed
+                        entrega_id = None
+                        if msg.embeds[0].footer:
+                            texto_footer = msg.embeds[0].footer.text
+                            if "ID:" in texto_footer:
+                                try:
+                                    parte_id = texto_footer.split("ID:")[1].strip().split(" ")[0]
+                                    entrega_id = int(parte_id)
+                                except:
+                                    pass
+
+                        # Verificar se é parcelada
+                        total_entregas = 1
+                        if msg.embeds[0].description:
+                            if "entregas no total" in msg.embeds[0].description:
+                                try:
+                                    total_entregas = int(msg.embeds[0].description.split("tem")[1].split("entregas")[0].strip())
+                                except:
+                                    pass
+
+                        # Recriar a view
+                        view = StatusView(entrega_id=entrega_id, total_entregas=total_entregas)
+                        await msg.edit(view=view)
+                        contador += 1
+                        await asyncio.sleep(0.5)  # Evitar rate limit
+
+        logger.info(f"✅ {contador} mensagens de venda restauradas com botões!")
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao restaurar botões de vendas: {e}")
 
 # =========================================================
 # ==================== SEÇÃO 5: METAS =====================
@@ -9407,7 +9493,7 @@ async def on_ready():
     
     # Enviar painéis
     await enviar_paineis_iniciais(guild)
-
+    await restaurar_botoes_vendas()
     await recriar_painel_grupos()
 
        
