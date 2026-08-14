@@ -5059,7 +5059,7 @@ class MetaView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
-    
+
     @discord.ui.button(label="💣 Vender Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_vender_polvora", emoji="💣")
     async def vender_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = get_db()
@@ -5081,7 +5081,7 @@ class MetaView(discord.ui.View):
                 await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                 return
         await interaction.response.send_modal(VenderPolvoraModal(self.user_id))
-    
+
     @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro", emoji="💰")
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = get_db()
@@ -5103,22 +5103,21 @@ class MetaView(discord.ui.View):
                 await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                 return
         await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
-    
-    # ⚠️ APENAS 1 BOTÃO "Pólvora Paga" ⚠️
+
     @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga", emoji="✅")
     async def polvora_paga(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
-        
+
         if not is_gerente and not is_admin:
             await interaction.response.send_message("❌ Apenas **Gerentes** ou **ADM** podem marcar pólvora como paga!", ephemeral=True)
             return
-        
+
         pendente = await buscar_polvora_pendente(self.user_id)
         if not pendente:
             await interaction.response.send_message("📭 Este membro não tem pólvora pendente para pagar!", ephemeral=True)
             return
-        
+
         view = ConfirmarPagamentoPolvoraView(self.user_id, pendente)
         embed = discord.Embed(
             title="💰 CONFIRMAR PAGAMENTO DE PÓLVORA",
@@ -5129,9 +5128,9 @@ class MetaView(discord.ui.View):
         embed.add_field(name="💰 Valor total", value=formatar_dinheiro(pendente['valor']), inline=True)
         embed.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
         embed.set_footer(text="Clique em ✅ Confirmar Pagamento para finalizar")
-        
+
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
+
     @discord.ui.button(label="🔒 Fechar Meta", style=discord.ButtonStyle.danger, custom_id="meta_fechar", emoji="🔒")
     async def fechar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_dono = str(interaction.user.id) == str(self.user_id)
@@ -5140,36 +5139,36 @@ class MetaView(discord.ui.View):
             await interaction.response.send_message("❌ Apenas o dono da sala ou gerentes podem fechar a meta!", ephemeral=True)
             return
         await interaction.response.send_modal(FecharMetaModal(self.user_id))
-    
+
     @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar", emoji="✏️")
-async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-    is_dono = str(interaction.user.id) == str(self.user_id)
-    is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-    is_admin = interaction.user.guild_permissions.administrator
-    
-    if not is_dono and not is_gerente and not is_admin:
-        await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
-        return
-    
-    pool = get_db()
-    if not pool:
-        await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
-        return
-    
-    async with pool.acquire() as conn:
-        meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
-    
-    if not meta:
-        await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
-        return
-    
-    dados = {
-        "dinheiro": meta["dinheiro"] or 0,
-        "polvora": meta["polvora"] or 0,
-        "saldo_excedente": meta.get("saldo_excedente") or 0
-    }
-    
-    await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
+    async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_dono = str(interaction.user.id) == str(self.user_id)
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        is_admin = interaction.user.guild_permissions.administrator
+
+        if not is_dono and not is_gerente and not is_admin:
+            await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
+            return
+
+        pool = get_db()
+        if not pool:
+            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+
+        if not meta:
+            await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+            return
+
+        dados = {
+            "dinheiro": meta["dinheiro"] or 0,
+            "polvora": meta["polvora"] or 0,
+            "saldo_excedente": meta.get("saldo_excedente") or 0
+        }
+
+        await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
         
 class RelatorioMetasButton(discord.ui.Button):
     def __init__(self):
