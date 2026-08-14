@@ -3260,20 +3260,19 @@ class StatusView(discord.ui.View):
         self.entrega_ja_entregue = False
         self.proxima_criada = False
         
-        # ⚠️ ADICIONAR OS BOTÕES MANUALMENTE NO __init__ ⚠️
-        # Botão PAGO
+        # Botão PAGO (custom_id fixo)
         self.add_item(discord.ui.Button(
             label="💰 Pago",
             style=discord.ButtonStyle.primary,
-            custom_id="status_pago",
+            custom_id="status_pago_fixo",
             emoji="💰"
         ))
         
-        # Botão ENTREGUE
+        # Botão ENTREGUE (custom_id fixo)
         self.add_item(discord.ui.Button(
             label="✅ Entregue",
             style=discord.ButtonStyle.success,
-            custom_id="status_entregue",
+            custom_id="status_entregue_fixo",
             emoji="✅"
         ))
         
@@ -3282,32 +3281,49 @@ class StatusView(discord.ui.View):
             self.add_item(discord.ui.Button(
                 label=f"📦 Criar Próxima Entrega (2/{total_entregas})",
                 style=discord.ButtonStyle.primary,
-                custom_id="criar_proxima_entrega",
+                custom_id=f"criar_proxima_fixo_{entrega_id}" if entrega_id else "criar_proxima_fixo",
                 emoji="📦",
                 disabled=False
             ))
         else:
-            # Se for entrega única, adiciona desabilitado ou não adiciona
             self.add_item(discord.ui.Button(
                 label="📦 Entrega Única",
                 style=discord.ButtonStyle.secondary,
-                custom_id="criar_proxima_entrega",
+                custom_id="entrega_unica_fixo",
                 emoji="📦",
                 disabled=True
             ))
         
-        # Botão CANCELAR
+        # Botão CANCELAR (custom_id fixo)
         self.add_item(discord.ui.Button(
             label="❌ Pedido cancelado",
             style=discord.ButtonStyle.danger,
-            custom_id="status_cancelado",
+            custom_id="status_cancelado_fixo",
             emoji="❌"
         ))
         
-        # Se disabled for True, desabilitar todos os botões
         if disabled:
             for item in self.children:
                 item.disabled = True
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Verifica qual botão foi clicado e chama a função correta."""
+        custom_id = interaction.data.get("custom_id", "")
+        
+        if custom_id == "status_pago_fixo":
+            await self.pago(interaction, None)
+            return False
+        elif custom_id == "status_entregue_fixo":
+            await self.entregue(interaction, None)
+            return False
+        elif custom_id.startswith("criar_proxima_fixo"):
+            await self.criar_proxima(interaction, None)
+            return False
+        elif custom_id == "status_cancelado_fixo":
+            await self.cancelado(interaction, None)
+            return False
+        
+        return True
 
     def get_status(self, embed):
         for i, field in enumerate(embed.fields):
@@ -3330,8 +3346,7 @@ class StatusView(discord.ui.View):
     def entrega_ja_foi_entregue(self, linhas):
         return any(l.startswith("✅") for l in linhas)
 
-    @discord.ui.button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago")
-    async def pago(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def pago(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
         if self.pedido_cancelado(linhas):
@@ -3353,13 +3368,12 @@ class StatusView(discord.ui.View):
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
-            await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
+            await interaction.message.edit(embed=embed, view=StatusView(disabled=True, entrega_id=self.entrega_id))
         else:
             await interaction.message.edit(embed=embed, view=self)
-        await responder_interacao(interaction, defer=True)
+        await interaction.response.defer()
 
-    @discord.ui.button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue")
-    async def entregue(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def entregue(self, interaction: discord.Interaction, button):
         if self.entrega_ja_entregue:
             await interaction.response.send_message("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
             return
@@ -3422,27 +3436,14 @@ class StatusView(discord.ui.View):
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**\n📊 **Estoque atualizado**", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
-            await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
+            await interaction.message.edit(embed=embed, view=StatusView(disabled=True, entrega_id=self.entrega_id))
         else:
             await interaction.message.edit(embed=embed, view=self)
-        await responder_interacao(interaction, defer=True)
-        if pacotes_pt > 0 or pacotes_sub > 0:
-            canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
-            if canal_bau:
-                try:
-                    texto = f"📦 **Retirada do Baú**\n\n👤 Retirado por: {interaction.user.mention}\n"
-                    if pacotes_pt > 0:
-                        texto += f"🔫 PT: {pacotes_pt} pacotes\n"
-                    if pacotes_sub > 0:
-                        texto += f"🔫 SUB: {pacotes_sub} pacotes"
-                    await canal_bau.send(texto)
-                except Exception as e:
-                    logger.error(f"Erro envio baú: {e}")
+        await interaction.response.defer()
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
-    @discord.ui.button(label="📦 Criar Próxima Entrega", style=discord.ButtonStyle.primary, custom_id="criar_proxima_entrega", disabled=False)
-    async def criar_proxima(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def criar_proxima(self, interaction: discord.Interaction, button):
         if not self.entrega_id:
             await interaction.response.send_message("❌ Esta venda não tem entregas parceladas.", ephemeral=True)
             return
@@ -3466,7 +3467,7 @@ class StatusView(discord.ui.View):
                 await interaction.followup.send(f"✅ **Todas as {total_entregas} entregas já foram concluídas!**", ephemeral=True)
                 self.proxima_criada = True
                 for child in self.children:
-                    if child.custom_id == "criar_proxima_entrega":
+                    if "criar_proxima" in child.custom_id:
                         child.disabled = True
                         child.label = "✅ Todas criadas"
                 await interaction.message.edit(view=self)
@@ -3518,7 +3519,7 @@ class StatusView(discord.ui.View):
                 await interaction.followup.send(f"✅ **Todas as entregas foram concluídas!**", ephemeral=True)
                 self.proxima_criada = True
                 for child in self.children:
-                    if child.custom_id == "criar_proxima_entrega":
+                    if "criar_proxima" in child.custom_id:
                         child.disabled = True
                         child.label = "✅ Todas criadas"
                 await interaction.message.edit(view=self)
@@ -3565,7 +3566,7 @@ class StatusView(discord.ui.View):
             await atualizar_entrega_parcelada(self.entrega_id, proxima_entrega_num, str(msg.id), None)
             self.proxima_criada = True
             for child in self.children:
-                if child.custom_id == "criar_proxima_entrega":
+                if "criar_proxima" in child.custom_id:
                     child.disabled = True
                     child.label = f"✅ Próxima criada ({proxima_entrega_num}/{total_entregas})"
             await interaction.message.edit(view=self)
@@ -3576,8 +3577,7 @@ class StatusView(discord.ui.View):
             logger.error(f"❌ Erro ao criar próxima entrega: {e}")
             await interaction.followup.send(f"❌ **Erro ao criar próxima entrega:** {str(e)}", ephemeral=True)
 
-    @discord.ui.button(label="❌ Pedido cancelado", style=discord.ButtonStyle.danger, custom_id="status_cancelado")
-    async def cancelado(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def cancelado(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
         if self.pedido_pago(linhas):
@@ -3613,19 +3613,6 @@ class StatusView(discord.ui.View):
                     await atualizar_estoque("PT", pacotes_pt, "adicionar")
                 if pacotes_sub > 0:
                     await atualizar_estoque("SUB", pacotes_sub, "adicionar")
-                canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
-                if canal_bau:
-                    try:
-                        texto = f"🔄 **REVERSÃO DE ESTOQUE - PEDIDO CANCELADO**\n\n"
-                        texto += f"👤 Cancelado por: {interaction.user.mention}\n"
-                        texto += f"📦 Pedido #{pedido_numero}\n"
-                        if pacotes_pt > 0:
-                            texto += f"🔫 PT: +{pacotes_pt} pacotes (reabastecido)\n"
-                        if pacotes_sub > 0:
-                            texto += f"🔫 SUB: +{pacotes_sub} pacotes (reabastecido)"
-                        await canal_bau.send(texto)
-                    except Exception as e:
-                        logger.error(f"Erro envio baú reversão: {e}")
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
         if self.entrega_ja_foi_entregue(linhas):
@@ -3633,8 +3620,8 @@ class StatusView(discord.ui.View):
         else:
             linhas = [f"❌ Pedido cancelado por {user} • {agora_str}"]
         embed = self.set_status(embed, idx, linhas)
-        await interaction.message.edit(embed=embed, view=StatusView(disabled=True))
-        await responder_interacao(interaction, defer=True)
+        await interaction.message.edit(embed=embed, view=StatusView(disabled=True, entrega_id=self.entrega_id))
+        await interaction.response.defer()
         if self.entrega_id:
             await finalizar_entregas(self.entrega_id)
         await enviar_painel_vendas()
@@ -3989,12 +3976,10 @@ async def restaurar_botoes_vendas():
 
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds:
-                # Verificar se é uma mensagem de venda
                 titulo = msg.embeds[0].title if msg.embeds[0].title else ""
                 if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper():
-                    # Verificar se já tem view
+                    # Verificar se já tem view com botões
                     if not msg.components:
-                        # Extrair o ID da entrega do embed
                         entrega_id = None
                         if msg.embeds[0].footer:
                             texto_footer = msg.embeds[0].footer.text
@@ -4005,7 +3990,6 @@ async def restaurar_botoes_vendas():
                                 except:
                                     pass
 
-                        # Verificar se é parcelada
                         total_entregas = 1
                         if msg.embeds[0].description:
                             if "entregas no total" in msg.embeds[0].description:
@@ -4014,11 +3998,10 @@ async def restaurar_botoes_vendas():
                                 except:
                                     pass
 
-                        # Recriar a view
                         view = StatusView(entrega_id=entrega_id, total_entregas=total_entregas)
                         await msg.edit(view=view)
                         contador += 1
-                        await asyncio.sleep(0.5)  # Evitar rate limit
+                        await asyncio.sleep(0.5)
 
         logger.info(f"✅ {contador} mensagens de venda restauradas com botões!")
 
