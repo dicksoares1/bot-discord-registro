@@ -4008,6 +4008,81 @@ async def restaurar_botoes_vendas():
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar botões de vendas: {e}")
 
+async def recriar_mensagens_vendas():
+    """RECRIA TODAS AS MENSAGENS DE VENDA COM BOTÕES FIXOS."""
+    try:
+        canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
+        if not canal:
+            logger.error("❌ Canal de encomendas não encontrado!")
+            return
+
+        logger.info("🔄 RECRIANDO mensagens de vendas com botões fixos...")
+        contador = 0
+
+        async for msg in canal.history(limit=500):
+            if msg.author == bot.user and msg.embeds:
+                titulo = msg.embeds[0].title if msg.embeds[0].title else ""
+                if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper():
+                    try:
+                        # Extrair informações do embed
+                        embed = msg.embeds[0]
+                        
+                        # Extrair entrega_id do footer
+                        entrega_id = None
+                        if embed.footer:
+                            texto_footer = embed.footer.text
+                            if "ID:" in texto_footer:
+                                try:
+                                    parte_id = texto_footer.split("ID:")[1].strip().split(" ")[0]
+                                    entrega_id = int(parte_id)
+                                except:
+                                    pass
+                        
+                        # Extrair total_entregas
+                        total_entregas = 1
+                        if embed.description:
+                            if "entregas no total" in embed.description:
+                                try:
+                                    total_entregas = int(embed.description.split("tem")[1].split("entregas")[0].strip())
+                                except:
+                                    pass
+                        
+                        # Verificar se já está concluída
+                        ja_concluida = False
+                        for field in embed.fields:
+                            if field.name == "📌 Status" and "CONCLUÍDA" in field.value:
+                                ja_concluida = True
+                                break
+                        
+                        # Se já concluída, pular
+                        if ja_concluida:
+                            continue
+                        
+                        # Criar nova view com botões fixos
+                        view = StatusView(entrega_id=entrega_id, total_entregas=total_entregas)
+                        
+                        # Editar a mensagem com a nova view
+                        await msg.edit(view=view)
+                        contador += 1
+                        await asyncio.sleep(0.5)
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao recriar mensagem {msg.id}: {e}")
+
+        logger.info(f"✅ {contador} mensagens de venda recriadas com botões fixos!")
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao recriar mensagens de vendas: {e}")
+
+@bot.command(name="recriar_vendas")
+@commands.has_permissions(administrator=True)
+async def cmd_recriar_vendas(ctx):
+    """Comando para recriar todas as mensagens de venda com botões fixos."""
+    await ctx.send("🔄 Recriando mensagens de vendas...")
+    await recriar_mensagens_vendas()
+    await ctx.send("✅ Mensagens de vendas recriadas!")
+
+
 # =========================================================
 # ==================== SEÇÃO 5: METAS =====================
 # =========================================================
@@ -9476,8 +9551,9 @@ async def on_ready():
     
     # Enviar painéis
     await enviar_paineis_iniciais(guild)
-    await restaurar_botoes_vendas()
     await recriar_painel_grupos()
+    await recriar_mensagens_vendas()
+    await restaurar_botoes_vendas()
 
        
     # Limpeza de memória
