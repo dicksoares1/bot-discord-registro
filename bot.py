@@ -3377,14 +3377,19 @@ class StatusView(discord.ui.View):
         if self.entrega_ja_entregue:
             await interaction.response.send_message("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
             return
+
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
+
         if self.pedido_cancelado(linhas):
             await interaction.response.send_message("⚠️ Este pedido foi cancelado.", ephemeral=True)
             return
+
         if self.entrega_ja_foi_entregue(linhas):
             await interaction.response.send_message("⚠️ **Esta entrega já foi entregue!**", ephemeral=True)
             return
+
+        # Extrair pacotes do embed
         pacotes_pt = 0
         pacotes_sub = 0
         for field in embed.fields:
@@ -3404,41 +3409,84 @@ class StatusView(discord.ui.View):
                             pacotes_sub = int(l.replace("📦", "").replace("pacotes", "").strip())
                 except:
                     pass
+
+        # Verificar estoque
         if pacotes_pt > 0:
             estoque_suficiente = await verificar_estoque_suficiente("PT", pacotes_pt)
             if not estoque_suficiente:
                 estoque_atual = await carregar_estoque()
-                await interaction.response.send_message(f"❌ **ESTOQUE INSUFICIENTE!**\n\n🔫 PT: {pacotes_pt} pacotes necessários\n📦 Estoque atual: {estoque_atual['PT']} pacotes", ephemeral=True)
+                await interaction.response.send_message(
+                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n"
+                    f"🔫 PT: {pacotes_pt} pacotes necessários\n"
+                    f"📦 Estoque atual: {estoque_atual['PT']} pacotes",
+                    ephemeral=True
+                )
                 return
+
         if pacotes_sub > 0:
             estoque_suficiente = await verificar_estoque_suficiente("SUB", pacotes_sub)
             if not estoque_suficiente:
                 estoque_atual = await carregar_estoque()
-                await interaction.response.send_message(f"❌ **ESTOQUE INSUFICIENTE!**\n\n🔫 SUB: {pacotes_sub} pacotes necessários\n📦 Estoque atual: {estoque_atual['SUB']} pacotes", ephemeral=True)
+                await interaction.response.send_message(
+                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n"
+                    f"🔫 SUB: {pacotes_sub} pacotes necessários\n"
+                    f"📦 Estoque atual: {estoque_atual['SUB']} pacotes",
+                    ephemeral=True
+                )
                 return
+
         self.entrega_ja_entregue = True
         titulo = embed.title
         pedido_numero = int(titulo.split("#")[1]) if "#" in titulo else 0
+
+        # Registrar saída de estoque
         if pacotes_pt > 0:
             await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
         if pacotes_sub > 0:
             await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
+
+        # Atualizar status
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user
         linhas = [l for l in linhas if not l.startswith("📦")]
         linhas = [l for l in linhas if not l.startswith("✅")]
         linhas.append(f"✅ Entregue por {user.mention} • {agora_str}")
         embed = self.set_status(embed, idx, linhas)
+
         finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
+
         if finalizado:
             embed.color = 0x2ecc71
             embed.title = "🎉 VENDA CONCLUÍDA"
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**\n📊 **Estoque atualizado**", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
+            embed.add_field(
+                name="✅ VENDA FINALIZADA COM SUCESSO",
+                value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**\n📊 **Estoque atualizado**",
+                inline=False
+            )
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="🔥 **Pedido encerrado no sistema**",
+                inline=False
+            )
             await interaction.message.edit(embed=embed, view=StatusView(disabled=True, entrega_id=self.entrega_id))
         else:
             await interaction.message.edit(embed=embed, view=self)
+
+        # ⚠️ ENVIAR MENSAGEM PARA O BAÚ (SE TIVER PACOTES) ⚠️
+        if pacotes_pt > 0 or pacotes_sub > 0:
+            canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+            if canal_bau:
+                try:
+                    texto = f"📦 **Retirada do Baú**\n\n👤 Retirado por: {interaction.user.mention}\n"
+                    if pacotes_pt > 0:
+                        texto += f"🔫 PT: {pacotes_pt} pacotes\n"
+                    if pacotes_sub > 0:
+                        texto += f"🔫 SUB: {pacotes_sub} pacotes"
+                    await canal_bau.send(texto)
+                except Exception as e:
+                    logger.error(f"Erro envio baú: {e}")
+
         await interaction.response.defer()
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
@@ -3580,15 +3628,19 @@ class StatusView(discord.ui.View):
     async def cancelado(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
+
         if self.pedido_pago(linhas):
             await interaction.response.send_message("⚠️ Este pedido já foi pago e não pode ser cancelado.", ephemeral=True)
             return
+
         if self.pedido_cancelado(linhas):
             await interaction.response.send_message("⚠️ Este pedido já foi cancelado.", ephemeral=True)
             return
+
+        pacotes_pt = 0
+        pacotes_sub = 0
+
         if self.entrega_ja_foi_entregue(linhas):
-            pacotes_pt = 0
-            pacotes_sub = 0
             for field in embed.fields:
                 if field.name == "🔫 PT":
                     try:
@@ -3606,6 +3658,7 @@ class StatusView(discord.ui.View):
                                 pacotes_sub = int(l.replace("📦", "").replace("pacotes", "").strip())
                     except:
                         pass
+
             if pacotes_pt > 0 or pacotes_sub > 0:
                 titulo = embed.title
                 pedido_numero = int(titulo.split("#")[1]) if "#" in titulo else 0
@@ -3613,17 +3666,37 @@ class StatusView(discord.ui.View):
                     await atualizar_estoque("PT", pacotes_pt, "adicionar")
                 if pacotes_sub > 0:
                     await atualizar_estoque("SUB", pacotes_sub, "adicionar")
+
+                # ⚠️ ENVIAR MENSAGEM PARA O BAÚ (REVERSÃO) ⚠️
+                canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+                if canal_bau:
+                    try:
+                        texto = f"🔄 **REVERSÃO DE ESTOQUE - PEDIDO CANCELADO**\n\n"
+                        texto += f"👤 Cancelado por: {interaction.user.mention}\n"
+                        texto += f"📦 Pedido #{pedido_numero}\n"
+                        if pacotes_pt > 0:
+                            texto += f"🔫 PT: +{pacotes_pt} pacotes (reabastecido)\n"
+                        if pacotes_sub > 0:
+                            texto += f"🔫 SUB: +{pacotes_sub} pacotes (reabastecido)"
+                        await canal_bau.send(texto)
+                    except Exception as e:
+                        logger.error(f"Erro envio baú reversão: {e}")
+
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
+
         if self.entrega_ja_foi_entregue(linhas):
             linhas = [f"❌ Pedido cancelado por {user} • {agora_str}\n🔄 **ESTOQUE REVERTIDO**"]
         else:
             linhas = [f"❌ Pedido cancelado por {user} • {agora_str}"]
+
         embed = self.set_status(embed, idx, linhas)
         await interaction.message.edit(embed=embed, view=StatusView(disabled=True, entrega_id=self.entrega_id))
         await interaction.response.defer()
+
         if self.entrega_id:
             await finalizar_entregas(self.entrega_id)
+
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
