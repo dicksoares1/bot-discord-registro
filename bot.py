@@ -4074,7 +4074,7 @@ async def restaurar_botoes_vendas():
                         view = StatusView(entrega_id=entrega_id, total_entregas=total_entregas)
                         await msg.edit(view=view)
                         contador += 1
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1.0)
 
         logger.info(f"✅ {contador} mensagens de venda restauradas com botões!")
 
@@ -4137,7 +4137,7 @@ async def recriar_mensagens_vendas():
                         # Editar a mensagem com a nova view
                         await msg.edit(view=view)
                         contador += 1
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1.0)
                         
                     except Exception as e:
                         logger.error(f"❌ Erro ao recriar mensagem {msg.id}: {e}")
@@ -6965,7 +6965,7 @@ async def restaurar_acoes():
                             view = AcaoViewRestaurada(acao_id, criador_id)
                             await msg.edit(view=view)
                             contador += 1
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(1.0)
                     except:
                         pass
         
