@@ -6608,14 +6608,12 @@ class AcaoView(discord.ui.View):
             await conn.execute("UPDATE acoes_semana SET status='cancelada' WHERE id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
         
-        embed = interaction.message.embeds[0]
-        embed.color = 0xe74c3c
-        embed.title = f"🚫 AÇÃO CANCELADA - {acao['tipo']}"
-        embed.description = "⚠️ **Esta ação foi cancelada!**\n\nNenhum valor foi distribuído."
+        # ⚠️ DELETAR A MENSAGEM DA AÇÃO ⚠️
+        await interaction.message.delete()
         
-        # Remover todos os botões
-        await interaction.message.edit(embed=embed, view=None)
-        await interaction.response.send_message(f"✅ Ação **{acao['tipo']}** cancelada!", ephemeral=True)
+        await interaction.response.send_message(f"✅ Ação **{acao['tipo']}** cancelada e removida!", ephemeral=True)
+        
+        # Atualizar o painel
         await enviar_painel_acoes(interaction.guild)
     
     @discord.ui.button(label="📤 Concluir Escalação", style=discord.ButtonStyle.primary, custom_id="acao_concluir", emoji="📤")
@@ -6667,6 +6665,7 @@ class AcaoView(discord.ui.View):
             canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
             if canal_relatorio:
                 await canal_relatorio.send(embed=embed_relatorio)
+                # ⚠️ DELETAR A MENSAGEM DA AÇÃO ⚠️
                 await interaction.message.delete()
                 await interaction.response.send_message(f"✅ Helicrash **{acao['tipo']}** registrado!", ephemeral=True)
             else:
@@ -6689,6 +6688,7 @@ class AcaoView(discord.ui.View):
         if canal_relatorio:
             msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
             await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
+            # ⚠️ DELETAR A MENSAGEM DA AÇÃO ⚠️
             await interaction.message.delete()
             await interaction.response.send_message(f"✅ Escalação concluída!", ephemeral=True)
             await enviar_painel_acoes(interaction.guild)
@@ -6835,13 +6835,10 @@ class AcaoViewRestaurada(discord.ui.View):
             await conn.execute("UPDATE acoes_semana SET status='cancelada' WHERE id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
         
-        embed = interaction.message.embeds[0]
-        embed.color = 0xe74c3c
-        embed.title = f"🚫 AÇÃO CANCELADA - {acao['tipo']}"
-        embed.description = "⚠️ **Esta ação foi cancelada!**"
+        # ⚠️ DELETAR A MENSAGEM ⚠️
+        await interaction.message.delete()
         
-        await interaction.message.edit(embed=embed, view=None)
-        await interaction.response.send_message(f"✅ Ação cancelada!", ephemeral=True)
+        await interaction.response.send_message(f"✅ Ação cancelada e removida!", ephemeral=True)
         await enviar_painel_acoes(interaction.guild)
     
     async def concluir(self, interaction: discord.Interaction, button):
@@ -6898,6 +6895,25 @@ class AcaoViewRestaurada(discord.ui.View):
             
             await enviar_painel_acoes(interaction.guild)
             return
+        
+        embed_relatorio = discord.Embed(
+            title="🚨 RELATÓRIO DE AÇÃO",
+            color=0xe74c3c
+        )
+        embed_relatorio.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
+        embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
+        embed_relatorio.add_field(name="🎯 Resultado", value="⏳ Aguardando...", inline=False)
+        embed_relatorio.set_footer(text=f"ID: {self.acao_id}")
+        
+        canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+        if canal_relatorio:
+            msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
+            await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
+            await interaction.message.delete()
+            await interaction.response.send_message(f"✅ Escalação concluída!", ephemeral=True)
+            await enviar_painel_acoes(interaction.guild)
+        else:
+            await interaction.response.send_message("❌ Canal não encontrado!", ephemeral=True)
         
         embed_relatorio = discord.Embed(
             title="🚨 RELATÓRIO DE AÇÃO",
