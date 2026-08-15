@@ -3794,6 +3794,7 @@ async def adicionar_polvora_meta(user_id, quantidade):
 
 # ---------------------------------------------------------
 async def adicionar_dinheiro_meta(user_id, valor):
+    """Adiciona dinheiro à meta. Se ultrapassar 300k, excedente vai para saldo_excedente."""
     pool = get_db()
     if not pool:
         return False
@@ -3807,9 +3808,11 @@ async def adicionar_dinheiro_meta(user_id, valor):
             META_LIMITE = 300000
             falta_para_meta = max(0, META_LIMITE - dinheiro_atual)
             if valor <= falta_para_meta:
+                # Cabe todo na meta atual
                 novo_dinheiro = dinheiro_atual + valor
                 await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_dinheiro, str(user_id))
             else:
+                # Parte vai para a meta, o resto para excedente
                 novo_dinheiro = META_LIMITE
                 novo_excedente = saldo_excedente + (valor - falta_para_meta)
                 await conn.execute(
@@ -3823,6 +3826,7 @@ async def adicionar_dinheiro_meta(user_id, valor):
 
 # ---------------------------------------------------------
 async def fechar_meta(user_id, data_inicio, data_fim):
+    """Fecha a meta. Se tiver excedente, ele vira a meta da próxima semana."""
     pool = get_db()
     if not pool:
         return None
@@ -3836,6 +3840,8 @@ async def fechar_meta(user_id, data_inicio, data_fim):
             acao = meta.get("acao") or "N/A"
             dinheiro_acoes = meta.get("dinheiro_acoes") or 0
             saldo_excedente = meta.get("saldo_excedente") or 0
+
+            # Salvar no histórico (APENAS o valor da meta, até 300k)
             await conn.execute(
                 """
                 INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
@@ -3843,9 +3849,11 @@ async def fechar_meta(user_id, data_inicio, data_fim):
                 """,
                 str(user_id), min(dinheiro, 300000), polvora, str(acao), dinheiro_acoes, data_inicio, data_fim, agora_db()
             )
+
+            # ⚠️ RESETAR A META, MAS MANTER O EXCEDENTE COMO NOVA META ⚠️
             await conn.execute(
                 """
-                UPDATE metas
+                UPDATE metas 
                 SET dinheiro = $1, polvora = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL
                 WHERE user_id = $2
                 """,
@@ -3861,7 +3869,6 @@ async def fechar_meta(user_id, data_inicio, data_fim):
     except Exception as e:
         logger.error(f"❌ Erro ao fechar meta: {e}")
         return None
-
 # ---------------------------------------------------------
 async def buscar_historico_metas(data_inicio, data_fim):
     pool = get_db()
@@ -3891,19 +3898,25 @@ async def fechar_todas_metas(data_inicio, data_fim):
             metas = await conn.fetch("SELECT * FROM metas")
             if not metas:
                 return None, []
+
             relatorio = []
             guild = bot.get_guild(GUILD_ID)
+
             for meta in metas:
                 user_id = meta["user_id"]
                 member = guild.get_member(int(user_id)) if guild else None
+
                 status = membro_deve_ter_meta(member) if member else None
                 if status is None:
                     continue
+
                 dinheiro = meta["dinheiro"] or 0
                 polvora = meta["polvora"] or 0
                 acao = meta["acao"] or "N/A"
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
                 saldo_excedente = meta.get("saldo_excedente") or 0
+
+                # Salvar no histórico (APENAS o valor da meta, até 300k)
                 await conn.execute(
                     """
                     INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
@@ -3911,14 +3924,17 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     """,
                     user_id, min(dinheiro, 300000), polvora, acao, dinheiro_acoes, data_inicio, data_fim, agora_db()
                 )
+
+                # ⚠️ RESETAR META, MAS MANTER EXCEDENTE ⚠️
                 await conn.execute(
                     """
-                    UPDATE metas
+                    UPDATE metas 
                     SET dinheiro = $1, polvora = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL
                     WHERE user_id = $2
                     """,
                     saldo_excedente, user_id
                 )
+
                 relatorio.append({
                     "user_id": user_id,
                     "dinheiro": min(dinheiro, 300000),
@@ -3929,6 +3945,8 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     "excedente": saldo_excedente,
                     "status": status
                 })
+
+            # Buscar membros SEM META
             membros_sem_meta = []
             if guild:
                 cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID,
@@ -3945,6 +3963,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                                 "nome": member.display_name,
                                 "menção": member.mention
                             })
+
             return relatorio, membros_sem_meta
     except Exception as e:
         logger.error(f"❌ Erro ao fechar todas as metas: {e}")
@@ -4406,6 +4425,7 @@ async def atualizar_categoria_meta(member):
 
 # ---------------------------------------------------------
 async def depositar_na_meta(user_id, valor, motivo):
+    """Deposita na meta. Se ultrapassar 300k, excedente vai para saldo_excedente."""
     pool = get_db()
     if not pool:
         return False
@@ -4419,10 +4439,13 @@ async def depositar_na_meta(user_id, valor, motivo):
             dinheiro_acoes = meta["dinheiro_acoes"] or 0
             saldo_excedente = meta["saldo_excedente"] or 0
             if "Ação" in motivo:
+                # Depósitos de ação vão para dinheiro_acoes (sem limite)
                 novo_acoes = dinheiro_acoes + valor
                 await conn.execute("UPDATE metas SET dinheiro_acoes = $1 WHERE user_id = $2", novo_acoes, str(user_id))
             else:
+                # Depósitos normais vão para dinheiro (com regra de excedente)
                 falta_para_meta = max(0, META_LIMITE - dinheiro_atual)
+
                 if valor <= falta_para_meta:
                     novo_dinheiro = dinheiro_atual + valor
                     await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_dinheiro, str(user_id))
@@ -4755,8 +4778,7 @@ class MetaView(discord.ui.View):
         super().__init__(timeout=None)
         self.user_id = user_id
 
-    # ---------------------------------------------------------
-    @discord.ui.button(label="💣 Vender Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_vender_polvora", emoji="💣")
+    @discord.ui.button(label="💣 Vender Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_vender_polvora_fixo", emoji="💣")
     async def vender_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = get_db()
         if not pool:
@@ -4776,10 +4798,9 @@ class MetaView(discord.ui.View):
             else:
                 await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                 return
-        await interaction.response.send_modal(VenderPolvoraMetaModal(self.user_id))
+        await interaction.response.send_modal(VenderPolvoraModal(self.user_id))
 
-    # ---------------------------------------------------------
-    @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro", emoji="💰")
+    @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰")
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = get_db()
         if not pool:
@@ -4801,18 +4822,20 @@ class MetaView(discord.ui.View):
                 return
         await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
 
-    # ---------------------------------------------------------
-    @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga", emoji="✅")
+    @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga_fixo", emoji="✅")
     async def polvora_paga(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
+
         if not is_gerente and not is_admin:
             await interaction.response.send_message("❌ Apenas **Gerentes** ou **ADM** podem marcar pólvora como paga!", ephemeral=True)
             return
+
         pendente = await buscar_polvora_pendente(self.user_id)
         if not pendente:
             await interaction.response.send_message("📭 Este membro não tem pólvora pendente para pagar!", ephemeral=True)
             return
+
         view = ConfirmarPagamentoPolvoraView(self.user_id, pendente)
         embed = discord.Embed(
             title="💰 CONFIRMAR PAGAMENTO DE PÓLVORA",
@@ -4823,10 +4846,10 @@ class MetaView(discord.ui.View):
         embed.add_field(name="💰 Valor total", value=formatar_dinheiro(pendente['valor']), inline=True)
         embed.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
         embed.set_footer(text="Clique em ✅ Confirmar Pagamento para finalizar")
+
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    # ---------------------------------------------------------
-    @discord.ui.button(label="🔒 Fechar Meta", style=discord.ButtonStyle.danger, custom_id="meta_fechar", emoji="🔒")
+    @discord.ui.button(label="🔒 Fechar Meta", style=discord.ButtonStyle.danger, custom_id="meta_fechar_fixo", emoji="🔒")
     async def fechar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -4835,31 +4858,35 @@ class MetaView(discord.ui.View):
             return
         await interaction.response.send_modal(FecharMetaModal(self.user_id))
 
-    # ---------------------------------------------------------
-    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar", emoji="✏️")
+    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️")
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
+
         if not is_dono and not is_gerente and not is_admin:
             await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
             return
+
         pool = get_db()
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
         async with pool.acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+
         if not meta:
             await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
             return
+
         dados = {
             "dinheiro": meta["dinheiro"] or 0,
             "polvora": meta["polvora"] or 0,
             "saldo_excedente": meta.get("saldo_excedente") or 0
         }
-        await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
 
+        await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
 # ###############################################
 class RelatorioMetasButton(discord.ui.Button):
     def __init__(self):
