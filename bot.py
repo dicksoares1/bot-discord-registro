@@ -5720,6 +5720,513 @@ async def cmd_testar_aviso_quarta(ctx):
 # ==================== SEÇÃO 6: AÇÕES =====================
 # =========================================================
 
+# =========================================================
+# ==================== REGRAS DAS AÇÕES ===================
+# =========================================================
+
+REGRAS_GERAIS_BAHAMAS = """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 **REGRAS GERAIS - BAHAMAS**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1️⃣ **Bom senso** é a regra mais importante em ações fechadas ou de rua.
+
+2️⃣ 🚫 **Proibido** uso de drogas ilegais em ações fechadas (metanfetamina, cocaína, oxy, seringa medicinal, etc.).
+
+3️⃣ 🚫 **Proibido** uso de capacete em qualquer ação fechada.
+
+4️⃣ 🚫 **Proibido** uso de armas de fogo durante Corridas Clandestinas, no resgate ou na fuga.
+
+5️⃣ 🚫 **Proibido** usar mais de 1 colete em ações fechadas (lojas, bancos, carros-fortes etc.), sendo policial ou não.
+
+6️⃣ 🚫 **Proibido** movimentação/rotação com qualquer veículo em ações fechadas (exceto helicóptero da polícia).
+
+7️⃣ ✅ Liberado o comando `/gg` em ações fechadas e de rua das **00:00 às 12:00**.
+
+8️⃣ 👮 Policiais devem entrar **simultaneamente** no perímetro da ação.
+
+9️⃣ 🚫 **Proibido** uso de gasolina como arma em qualquer ação fechada.
+
+🔟 🚁 Helicóptero policial pode entrar sozinho no perímetro por **2 minutos**. Após isso, todo o contingente deve entrar.
+
+1️⃣1️⃣ **Disputa de blips:** Apenas 1 pessoa por facção pode puxar a ação.
+"""
+
+REGRAS_ACOES = {
+    # =========================================================
+    # ==================== LOJAS ==============================
+    # =========================================================
+    "Loja de Armas (Ammunation)": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 2.",
+            "🎯 **Com estande de tiro:** 0 fora.",
+            "🎯 **Sem estande de tiro:** 1 fora.",
+            "👮 **Máximo de policiais:** 3.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "🤝 **Negociação:** Obrigatória.",
+            "🚫 **Refém:** Proibido."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "Loja de Bebidas": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 3.",
+            "👮 **Máximo de policiais:** 4.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "🤝 **Negociação:** Obrigatória.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "Loja de Departamento": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 4 (máximo de 2 fora).",
+            "👮 **Máximo de policiais:** 5.",
+            "🚗 **Máximo de veículos:** 1 veículo, 4 rodas ou 2 motos.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Glock Rajada).",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional, máximo."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+
+    # =========================================================
+    # ==================== CONFRONTO DIRETO ==================
+    # =========================================================
+    "Mergulhador": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "Grapeseed": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 7.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "Companhia de Gás": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🚗 **Máximo de veículos:** 3.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 1️⃣ Proibido subir em qualquer objeto/lugar durante a ação.",
+            "📌 2️⃣ Proibido atirar contra policiais entrando no perímetro.",
+            "📌 3️⃣ Todos os participantes devem estar dentro do perímetro para o embate começar."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "Life Invader": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 8.",
+            "👮 **Máximo de policiais:** 10.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Proibido subir em qualquer objeto/lugar durante a ação.",
+            "📌 Proibido a utilização dos INTERIORES do perímetro (Life Invader, Cozinha/Piscina)."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "Aeroporto de Sucata": {
+        "regras": [
+            "👥 **Máximo de bandidos:** 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Obrigatório ter 6 pistolas.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+
+    # =========================================================
+    # ==================== CARRO FORTE =======================
+    # =========================================================
+    "Carro Forte": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido bugar head-glitch."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "Carro Forte - Açougue": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido bugar head-glitch."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "Carro Forte - Faculdade": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido bugar head-glitch."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "Carro Forte - Grove Street": {
+        "regras": [
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão).",
+            "📌 **Obs:** Helicóptero somente para visual, sem atirador."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+
+    # =========================================================
+    # ==================== JOALHERIA ==========================
+    # =========================================================
+    "Joalheria": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 7 (máximo de 3 fora e 4 dentro).",
+            "👮 **Máximo de policiais:** 9.",
+            "🚗 **Máximo de veículos:** 3 (em caso de fuga).",
+            "🔫 **Armamento:** No mínimo Submetralhadora.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional, no máximo 3.",
+            "📌 Proibido a utilização dos INTERIORES do perímetro (Prefeitura)."
+        ],
+        "is_bahamas": False,
+        "limite": 5
+    },
+
+    # =========================================================
+    # ==================== BANCO FLECCA ======================
+    # =========================================================
+    "Banco Fleeca": {
+        "regras": [
+            "👥 **Mínimo de bandidos:** 6 (mínimo de 3 dentro).",
+            "👥 **Máximo de bandidos:** 8 (mínimo de 3 dentro).",
+            "🚗 **Máximo de veículos:** 3.",
+            "👮 **Máximo de policiais:** 9.",
+            "🔫 **Armamento:** Mínimo submetralhadora, obrigatório ter 4 Rifles.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional, no máximo 3.",
+            "📌 Na fuga, só é permitido fazer o Fleeca Chaves."
+        ],
+        "is_bahamas": False,
+        "limite": 4
+    },
+    "Banco Fleeca - Chaves": {
+        "regras": [
+            "👥 **Mínimo de bandidos:** 6.",
+            "👥 **Máximo de bandidos:** 8.",
+            "🚗 **Máximo de veículos:** 3.",
+            "👮 **Máximo de policiais:** 9.",
+            "🔫 **Armamento:** Mínimo Submetralhadora.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional, no máximo 3.",
+            "📌 Regras de posicionamento: até 3 integrantes em locais altos/acessíveis no prédio e até 3 no interior do resort."
+        ],
+        "is_bahamas": False,
+        "limite": 4
+    },
+    "Banco Fleeca - Praia": {
+        "regras": [
+            "🔫 **Armamento:** Somente Submetralhadora.",
+            "📌 Heli drone + teti chão.",
+            "📌 Proibido interior da lojinha (cofre).",
+            "📌 Proibido veículo dentro do perímetro.",
+            "📌 Na casa de madeira fica limitado 3 bandidos.",
+            "📌 Polícia não pode marcar saída.",
+            "📌 Proibida a fuga."
+        ],
+        "is_bahamas": False,
+        "limite": 4
+    },
+    "Banco Fleeca - Shopping": {
+        "regras": [
+            "🔫 **Armamento:** Mínimo submetralhadora, obrigatório ter 4 Rifles.",
+            "📌 Com atirador: máximo 4 bandidos em prédios.",
+            "📌 Sem atirador: uso do interior do prédio proibido.",
+            "📌 Limite máximo de pessoas no metrô: 3.",
+            "📌 Proibida a fuga."
+        ],
+        "is_bahamas": False,
+        "limite": 4
+    },
+
+    # =========================================================
+    # ==================== BANCO DE PALETO ===================
+    # =========================================================
+    "Banco de Paleto": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 10.",
+            "👮 **Máximo de policiais:** 12.",
+            "🔫 **Armamento:** Todos de Rifle.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Os bandidos devem esperar o início da ação.",
+            "📌 Ação inicia quando a polícia entrar no perímetro.",
+            "📌 Helicóptero só poderá ter o piloto.",
+            "📌 Máximo de 6 pessoas dentro do GALINHEIRO."
+        ],
+        "is_bahamas": False,
+        "limite": 1
+    },
+
+    # =========================================================
+    # ==================== BANCO CENTRAL =====================
+    # =========================================================
+    "Banco Central": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 10.",
+            "👥 **Bandidos fora:** Máximo 3 em prédios ou 5 no chão.",
+            "🚗 **Máximo de veículos:** 3.",
+            "👮 **Máximo de policiais:** 12.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "🤝 **Negociação:** Obrigatória.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Proibido o uso do interior do apartamento em frente ao POSTAL.",
+            "📌 Obs: Proibido ter bandidos fora se a ação for na fuga."
+        ],
+        "is_bahamas": False,
+        "limite": 1
+    },
+    "Banco Central Com Refém": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 10.",
+            "👥 **Bandidos fora:** Máximo 3 em prédios ou 5 no chão.",
+            "🚗 **Máximo de veículos:** 4.",
+            "👮 **Máximo de policiais:** 12.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Permitido, máximo 4.",
+            "📌 Reféns podem ser usados para tirar atiradores ou proibir reposicionamento com helicóptero.",
+            "📌 Não pode ser os dois ao mesmo tempo.",
+            "📌 Proibido o uso do interior do apartamento em frente ao POSTAL.",
+            "📌 Obs: Proibido ter bandidos fora se a ação for na fuga."
+        ],
+        "is_bahamas": False,
+        "limite": 1
+    },
+
+    # =========================================================
+    # ==================== NIÓBIO ============================
+    # =========================================================
+    "Nióbio": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 12 (sem limites fora).",
+            "👮 **Máximo de policiais:** 18.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "⚔️ **Negociação:** Inexistente.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Proibido marcar a porta que dá acesso a água.",
+            "📌 A parte da água só poderá ser acessada para entrar ou sair do túnel do NIÓBIO.",
+            "📌 Limite de 4 bandidos entre o corredor que dá acesso a água e o quadrado do quebrado.",
+            "📌 Máximo de 4 bandidos no fundo do nióbio."
+        ],
+        "is_bahamas": False,
+        "limite": 1
+    },
+
+    # =========================================================
+    # ==================== HELICRASH =========================
+    # =========================================================
+    "🚁 Helicrash (13h)": {
+        "regras": [
+            "👥 **Máximo de participantes por facção/grupo:** 10.",
+            "🚗 **Máximo de veículos por facção/grupo:** 2.",
+            "🚫 **Proibido** o roubo de veículos durante o evento.",
+            "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.",
+            "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.",
+            "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
+            "💉 A reanimação é permitida somente após o término completo da ação.",
+            "🚫 Proibido a utilização de GRANADEIRA."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "🚁 Helicrash (15h)": {
+        "regras": [
+            "👥 **Máximo de participantes por facção/grupo:** 10.",
+            "🚗 **Máximo de veículos por facção/grupo:** 2.",
+            "🚫 **Proibido** o roubo de veículos durante o evento.",
+            "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.",
+            "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.",
+            "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
+            "💉 A reanimação é permitida somente após o término completo da ação.",
+            "🚫 Proibido a utilização de GRANADEIRA."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "🚁 Helicrash (22h)": {
+        "regras": [
+            "👥 **Máximo de participantes por facção/grupo:** 10.",
+            "🚗 **Máximo de veículos por facção/grupo:** 2.",
+            "🚫 **Proibido** o roubo de veículos durante o evento.",
+            "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.",
+            "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.",
+            "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
+            "💉 A reanimação é permitida somente após o término completo da ação.",
+            "🚫 Proibido a utilização de GRANADEIRA."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+    "🚁 Helicrash (02h)": {
+        "regras": [
+            "👥 **Máximo de participantes por facção/grupo:** 10.",
+            "🚗 **Máximo de veículos por facção/grupo:** 2.",
+            "🚫 **Proibido** o roubo de veículos durante o evento.",
+            "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.",
+            "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.",
+            "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
+            "💉 A reanimação é permitida somente após o término completo da ação.",
+            "🚫 Proibido a utilização de GRANADEIRA."
+        ],
+        "is_bahamas": False,
+        "limite": None
+    },
+
+    # =========================================================
+    # ==================== BAHAMAS ===========================
+    # =========================================================
+    "Loja de Armas (Bahamas)": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 2.",
+            "👥 **Máximo de Bandidos:** 3.",
+            "👮 **Máximo de policiais:** 3.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "🤝 **Negociação:** Obrigatória.",
+            "🚫 **Refém:** Proibido."
+        ],
+        "is_bahamas": True,
+        "limite": None
+    },
+    "Burgueshot (Bahamas)": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 3.",
+            "👥 **Máximo de Bandidos:** 5.",
+            "👮 **Máximo de Policiais:** 5.",
+            "🔫 **Armamento:** Mínimo pistola.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional."
+        ],
+        "is_bahamas": True,
+        "limite": None
+    },
+    "Refinaria (Bahamas)": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 7.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Fica proibido o uso de atirador."
+        ],
+        "is_bahamas": True,
+        "limite": None
+    },
+    "Lan House - (Bahamas)": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 6.",
+            "👥 **Máximo de Bandidos:** 8.",
+            "👮 **Máximo de Policiais:** 10.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Limite de 4 pessoas dentro da Lan House."
+        ],
+        "is_bahamas": True,
+        "limite": None
+    },
+    "Lan House - Jersey": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 6.",
+            "👥 **Máximo de Bandidos:** 8.",
+            "👮 **Máximo de Policiais:** 10.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Limite de 4 pessoas dentro da Lan House."
+        ],
+        "is_bahamas": True,
+        "limite": None
+    },
+    "Lan House - Brooklyn": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 6.",
+            "👥 **Máximo de Bandidos:** 8.",
+            "👮 **Máximo de Policiais:** 10.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Limite de 4 pessoas dentro da Lan House."
+        ],
+        "is_bahamas": True,
+        "limite": None
+    },
+    "Lan House - Manhattan": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 6.",
+            "👥 **Máximo de Bandidos:** 8.",
+            "👮 **Máximo de Policiais:** 10.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Limite de 4 pessoas dentro da Lan House."
+        ],
+        "is_bahamas": True,
+        "limite": None
+    },
+    "Banco Bahamas": {
+        "regras": [
+            "👥 **Máximo de Bandidos:** 10.",
+            "👮 **Máximo de Policiais:** 14.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Proibido a utilização das estações de METRO (Subterraneo).",
+            "📌 Limite de 6 pessoas no Salão.",
+            "📌 Máximo de 4 bandidos na parte de baixo do Banco."
+        ],
+        "is_bahamas": True,
+        "limite": None
+    }
+}
+
 CANAL_ESCALACOES_ID = 1241406819545514064
 CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 
@@ -5859,22 +6366,28 @@ async def concluir_acao_db(acao_id, resultado, valor=0):
         logger.error(f"❌ Erro ao concluir ação: {e}")
 
 # ###############################################
+# ###############################################
 class SelecionarAcaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
         options = []
-        for nome, limite in ACOES_SEMANA.items():
+        # Ordenar para colocar os Helicrash no final
+        acoes_ordenadas = sorted(ACOES_SEMANA.keys(), key=lambda x: (0 if "Helicrash" not in x else 1, x))
+        
+        for nome in acoes_ordenadas:
+            limite = ACOES_SEMANA.get(nome)
             emoji = "🚁" if "Helicrash" in nome else "🏪"
             if "Bahamas" in nome:
                 emoji = "🏝️"
+            if "Banco" in nome or "Joalheria" in nome:
+                emoji = "🏦"
+            if "Carro Forte" in nome:
+                emoji = "🚚"
             if limite is not None:
                 options.append(discord.SelectOption(label=nome, description=f"Limite: {limite}/semana", emoji=emoji))
-        for nome, limite in ACOES_SEMANA.items():
-            if limite is None:
-                emoji = "🚁" if "Helicrash" in nome else "🏪"
-                if "Bahamas" in nome:
-                    emoji = "🏝️"
+            else:
                 options.append(discord.SelectOption(label=nome, description="Ilimitado", emoji=emoji))
+        
         select = discord.ui.Select(placeholder="📋 Escolha a ação", options=options, max_values=1)
         select.callback = self.select_callback
         self.add_item(select)
@@ -5884,47 +6397,115 @@ class SelecionarAcaoView(discord.ui.View):
     async def select_callback(self, interaction: discord.Interaction):
         acao_tipo = interaction.data["values"][0]
         await interaction.response.defer(ephemeral=True)
+        
+        # Verificar limite
         limite = ACOES_SEMANA.get(acao_tipo)
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+        
         if limite and limite is not None:
             async with pool.acquire() as conn:
                 qtd = await conn.fetchval("SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND status='concluida' AND (resultado='ganhou' OR resultado='perdeu')", acao_tipo)
                 if qtd >= limite:
                     await interaction.followup.send(f"❌ Ação **{acao_tipo}** já atingiu o limite semanal de **{limite}** vez(es)!", ephemeral=True)
                     return
+        
         acao_id = await salvar_acao_db(acao_tipo, interaction.user.id)
-        cor = 0xe67e22 if "Helicrash" in acao_tipo else 0x3498db
-        emoji = "🚁" if "Helicrash" in acao_tipo else "🎯"
-        if "Bahamas" in acao_tipo:
-            emoji = "🏝️"
-        embed = discord.Embed(
-            title=f"{emoji} {acao_tipo}",
-            description="**Clique no botão ✅ PARTICIPAR para se inscrever nesta ação!**\n\n📌 Quem participar será registrado automaticamente.\n👤 Quando terminar a escalação, o criador clica em 📤 Concluir.",
-            color=cor
-        )
+        
+        # Buscar regras da ação
+        regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."], "is_bahamas": False})
+        regras = regras_data.get("regras", [])
+        is_bahamas = regras_data.get("is_bahamas", False)
+        
+        # Definir cores e emojis
         if "Helicrash" in acao_tipo:
-            horario = acao_tipo.split("(")[1].replace(")", "")
-            embed.description += f"\n\n⏰ **Horário:** {horario} (horário de Brasília)"
+            cor = 0xe67e22
+            emoji = "🚁"
+        elif "Bahamas" in acao_tipo:
+            cor = 0x1abc9c
+            emoji = "🏝️"
+        elif "Banco" in acao_tipo:
+            cor = 0xe74c3c
+            emoji = "🏦"
+        elif "Carro Forte" in acao_tipo:
+            cor = 0xf39c12
+            emoji = "🚚"
+        else:
+            cor = 0x3498db
+            emoji = "🎯"
+        
+        # Montar embed
+        embed = discord.Embed(
+            title=f"{emoji} ESCALAÇÃO - {acao_tipo}",
+            color=cor,
+            timestamp=agora()
+        )
+        
+        # Adicionar regras
+        embed.add_field(
+            name="📌 REGRAS DA AÇÃO",
+            value="\n".join(regras),
+            inline=False
+        )
+        
+        # Adicionar regras gerais do Bahamas se for ação de Bahamas
+        if is_bahamas:
+            embed.add_field(
+                name="🏝️ REGRAS GERAIS - BAHAMAS",
+                value=REGRAS_GERAIS_BAHAMAS,
+                inline=False
+            )
+        
+        # Limite semanal
         if limite and limite is not None:
             async with pool.acquire() as conn:
                 qtd_feita = await conn.fetchval("SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND status='concluida' AND (resultado='ganhou' OR resultado='perdeu')", acao_tipo)
-                embed.description += f"\n\n📊 **Limite semanal:** {qtd_feita}/{limite} ações realizadas"
-        embed.add_field(name="👥 Participantes (0)", value="Nenhum participante ainda.\nClique no botão abaixo para participar!", inline=False)
-        embed.add_field(name="👤 Criado por", value=interaction.user.mention, inline=True)
-        embed.add_field(name="📅 Data", value=agora().strftime('%d/%m/%Y %H:%M'), inline=True)
+                embed.add_field(
+                    name="📊 LIMITE SEMANAL",
+                    value=f"{qtd_feita}/{limite} ações realizadas",
+                    inline=False
+                )
+        
+        # Participantes
+        embed.add_field(
+            name="👥 PARTICIPANTES (0)",
+            value="Nenhum participante ainda.\nClique no botão ✅ PARTICIPAR para se inscrever!",
+            inline=False
+        )
+        
+        # Criador e data
+        embed.add_field(
+            name="👤 CRIADO POR",
+            value=interaction.user.mention,
+            inline=True
+        )
+        embed.add_field(
+            name="📅 DATA",
+            value=agora().strftime('%d/%m/%Y %H:%M'),
+            inline=True
+        )
+        
+        # Informação de como participar
+        embed.add_field(
+            name="📝 COMO PARTICIPAR",
+            value="✅ Clique em **'Participar'** para se inscrever na ação.\n📤 Quando a escalação estiver completa, o criador clica em **'Concluir'**.",
+            inline=False
+        )
+        
         embed.set_footer(text=f"ID: {acao_id}")
+        
+        # Enviar mensagem no canal de escalações
         canal = interaction.guild.get_channel(CANAL_ESCALACOES_ID)
         if canal:
             view = AcaoView(acao_id, interaction.user.id)
             await canal.send(embed=embed, view=view)
             acoes_ativas[acao_id] = {"embed": embed, "criador_id": interaction.user.id}
-            await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada!", ephemeral=True)
+            await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada com sucesso!", ephemeral=True)
         else:
             await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
-
+            
 # ###############################################
 class AcaoView(discord.ui.View):
     def __init__(self, acao_id, criador_id):
