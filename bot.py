@@ -6594,28 +6594,26 @@ class AcaoView(discord.ui.View):
             await interaction.response.send_message("❌ Apenas o criador ou gerentes podem cancelar a ação!", ephemeral=True)
             return
         
+        await interaction.response.defer(ephemeral=True)
+        
         pool = get_db()
         if not pool:
-            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
         
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
-                await interaction.response.send_message("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
+                await interaction.followup.send("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
             
             await conn.execute("UPDATE acoes_semana SET status='cancelada' WHERE id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
         
-        # ⚠️ DELETAR A MENSAGEM DA AÇÃO ⚠️
         await interaction.message.delete()
-        
-        await interaction.response.send_message(f"✅ Ação **{acao['tipo']}** cancelada e removida!", ephemeral=True)
-        
-        # Atualizar o painel
+        await interaction.followup.send(f"✅ Ação **{acao['tipo']}** cancelada e removida!", ephemeral=True)
         await enviar_painel_acoes(interaction.guild)
-    
+        
     @discord.ui.button(label="📤 Concluir Escalação", style=discord.ButtonStyle.primary, custom_id="acao_concluir", emoji="📤")
     async def concluir(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_criador = interaction.user.id == self.criador_id
@@ -6625,15 +6623,18 @@ class AcaoView(discord.ui.View):
             await interaction.response.send_message("❌ Apenas o criador ou gerentes podem concluir!", ephemeral=True)
             return
         
+        # ⚠️ DEFERIR PRIMEIRO PARA EVITAR TIMEOUT ⚠️
+        await interaction.response.defer(ephemeral=True)
+        
         pool = get_db()
         if not pool:
-            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
         
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
-                await interaction.response.send_message("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
+                await interaction.followup.send("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
             
             acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
@@ -6641,7 +6642,7 @@ class AcaoView(discord.ui.View):
             is_helicrash = "Helicrash" in acao["tipo"]
             
             if not participantes:
-                await interaction.response.send_message("⚠️ Nenhum participante! Ação cancelada.", ephemeral=True)
+                await interaction.followup.send("⚠️ Nenhum participante! Ação cancelada.", ephemeral=True)
                 await interaction.message.delete()
                 return
             
@@ -6665,11 +6666,10 @@ class AcaoView(discord.ui.View):
             canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
             if canal_relatorio:
                 await canal_relatorio.send(embed=embed_relatorio)
-                # ⚠️ DELETAR A MENSAGEM DA AÇÃO ⚠️
                 await interaction.message.delete()
-                await interaction.response.send_message(f"✅ Helicrash **{acao['tipo']}** registrado!", ephemeral=True)
+                await interaction.followup.send(f"✅ Helicrash **{acao['tipo']}** registrado!", ephemeral=True)
             else:
-                await interaction.response.send_message("❌ Canal de relatório não encontrado!", ephemeral=True)
+                await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
             
             await enviar_painel_acoes(interaction.guild)
             return
@@ -6688,13 +6688,12 @@ class AcaoView(discord.ui.View):
         if canal_relatorio:
             msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
             await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
-            # ⚠️ DELETAR A MENSAGEM DA AÇÃO ⚠️
             await interaction.message.delete()
-            await interaction.response.send_message(f"✅ Escalação concluída!", ephemeral=True)
+            await interaction.followup.send(f"✅ Escalação concluída!", ephemeral=True)
             await enviar_painel_acoes(interaction.guild)
         else:
-            await interaction.response.send_message("❌ Canal de relatório não encontrado!", ephemeral=True)
-    
+            await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
+            
     async def atualizar_embed(self, interaction, participantes, acao):
         """Atualiza o embed com a lista de participantes."""
         embed = interaction.message.embeds[0]
@@ -6821,24 +6820,24 @@ class AcaoViewRestaurada(discord.ui.View):
             await interaction.response.send_message("❌ Apenas o criador ou gerentes!", ephemeral=True)
             return
         
+        await interaction.response.defer(ephemeral=True)
+        
         pool = get_db()
         if not pool:
-            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
         
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
-                await interaction.response.send_message("❌ Esta ação já foi concluída!", ephemeral=True)
+                await interaction.followup.send("❌ Esta ação já foi concluída!", ephemeral=True)
                 return
             
             await conn.execute("UPDATE acoes_semana SET status='cancelada' WHERE id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
         
-        # ⚠️ DELETAR A MENSAGEM ⚠️
         await interaction.message.delete()
-        
-        await interaction.response.send_message(f"✅ Ação cancelada e removida!", ephemeral=True)
+        await interaction.followup.send(f"✅ Ação cancelada e removida!", ephemeral=True)
         await enviar_painel_acoes(interaction.guild)
     
     async def concluir(self, interaction: discord.Interaction, button):
@@ -6849,15 +6848,17 @@ class AcaoViewRestaurada(discord.ui.View):
             await interaction.response.send_message("❌ Apenas o criador ou gerentes!", ephemeral=True)
             return
         
+        await interaction.response.defer(ephemeral=True)
+        
         pool = get_db()
         if not pool:
-            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
         
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
-                await interaction.response.send_message("❌ Esta ação já foi concluída!", ephemeral=True)
+                await interaction.followup.send("❌ Esta ação já foi concluída!", ephemeral=True)
                 return
             
             acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
@@ -6865,7 +6866,7 @@ class AcaoViewRestaurada(discord.ui.View):
             is_helicrash = "Helicrash" in acao["tipo"]
             
             if not participantes:
-                await interaction.response.send_message("⚠️ Nenhum participante!", ephemeral=True)
+                await interaction.followup.send("⚠️ Nenhum participante!", ephemeral=True)
                 await interaction.message.delete()
                 return
             
@@ -6889,9 +6890,9 @@ class AcaoViewRestaurada(discord.ui.View):
             if canal_relatorio:
                 await canal_relatorio.send(embed=embed_relatorio)
                 await interaction.message.delete()
-                await interaction.response.send_message(f"✅ Helicrash registrado!", ephemeral=True)
+                await interaction.followup.send(f"✅ Helicrash registrado!", ephemeral=True)
             else:
-                await interaction.response.send_message("❌ Canal não encontrado!", ephemeral=True)
+                await interaction.followup.send("❌ Canal não encontrado!", ephemeral=True)
             
             await enviar_painel_acoes(interaction.guild)
             return
@@ -6910,30 +6911,11 @@ class AcaoViewRestaurada(discord.ui.View):
             msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
             await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
             await interaction.message.delete()
-            await interaction.response.send_message(f"✅ Escalação concluída!", ephemeral=True)
+            await interaction.followup.send(f"✅ Escalação concluída!", ephemeral=True)
             await enviar_painel_acoes(interaction.guild)
         else:
-            await interaction.response.send_message("❌ Canal não encontrado!", ephemeral=True)
-        
-        embed_relatorio = discord.Embed(
-            title="🚨 RELATÓRIO DE AÇÃO",
-            color=0xe74c3c
-        )
-        embed_relatorio.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
-        embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
-        embed_relatorio.add_field(name="🎯 Resultado", value="⏳ Aguardando...", inline=False)
-        embed_relatorio.set_footer(text=f"ID: {self.acao_id}")
-        
-        canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
-        if canal_relatorio:
-            msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
-            await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
-            await interaction.message.delete()
-            await interaction.response.send_message(f"✅ Escalação concluída!", ephemeral=True)
-            await enviar_painel_acoes(interaction.guild)
-        else:
-            await interaction.response.send_message("❌ Canal não encontrado!", ephemeral=True)
-    
+            await interaction.followup.send("❌ Canal não encontrado!", ephemeral=True)
+            
     async def atualizar_embed(self, interaction, participantes, acao):
         embed = interaction.message.embeds[0]
         lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum participante."
