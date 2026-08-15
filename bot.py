@@ -127,6 +127,7 @@ CARGO_GERENTE_ID = 1324499473296134154
 CARGO_GERENTE_GERAL_ID = 1462804425163935796
 CARGO_RESP_METAS_ID = 1337407399656423485
 CARGO_RESP_ACAO_ID = 1337379517274259509
+CARGO_RESP_P1_ID = 1537563287393402920
 CARGO_RESP_VENDAS_ID = 1337379530586980352
 CARGO_RESP_PRODUCAO_ID = 1337379524949573662
 CARGO_SOLDADO_ID = 1537803858611281940
@@ -280,7 +281,7 @@ def obter_categoria_meta(member):
     roles = [r.id for r in member.roles]
     if CARGO_GERENTE_ID in roles:
         return CATEGORIA_META_GERENTE_ID
-    if any(r in roles for r in [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]):
+    if any(r in roles for r in [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]):
         return CATEGORIA_META_RESPONSAVEIS_ID
     if CARGO_SOLDADO_ID in roles:
         return CATEGORIA_META_SOLDADO_ID
@@ -3931,7 +3932,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
             membros_sem_meta = []
             if guild:
                 cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID,
-                              CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]
+                              CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]
                 for member in guild.members:
                     if member.bot:
                         continue
@@ -4029,7 +4030,7 @@ async def verificar_avisos_quarta():
         cargos_obrigados = [
             CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
             CARGO_01_ID, CARGO_02_ID, CARGO_RESP_METAS_ID,
-            CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID
+            CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID
         ]
         async with pool.acquire() as conn:
             avisos_enviados = 0
@@ -4198,7 +4199,7 @@ async def definir_valor_meta_por_cargo(member: discord.Member):
     cargos_isentos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
     if any(r in roles for r in cargos_isentos):
         return 0
-    cargos_responsaveis = [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]
+    cargos_responsaveis = [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]
     if any(r in roles for r in cargos_responsaveis):
         return 100000
     if CARGO_SOLDADO_ID in roles:
@@ -4337,7 +4338,7 @@ def membro_deve_ter_meta(member):
         return None
     cargos_com_meta = [
         CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
-        CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID,
+        CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID,
         CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID
     ]
     cargos_isentos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
@@ -5486,7 +5487,7 @@ async def verificar_avisos_quarta_forcado():
         cargos_obrigados = [
             CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
             CARGO_01_ID, CARGO_02_ID, CARGO_RESP_METAS_ID,
-            CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID
+            CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID
         ]
         async with pool.acquire() as conn:
             avisos_enviados = 0
