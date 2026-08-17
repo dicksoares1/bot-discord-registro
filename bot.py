@@ -4065,29 +4065,75 @@ async def buscar_historico_metas(data_inicio, data_fim):
 async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, historico, titulo_extra=""):
     """
     Gera o relatório de metas com formatação padronizada.
-    Usado tanto para CONSULTAR quanto para FECHAR METAS.
+    Separa os membros por cargo: Gerentes, 01/02 (ISENTOS), Responsáveis, Soldados, Membros, Agregados
+    ⚠️ Pólvora NÃO aparece no relatório (apenas controle interno)
     """
     try:
         if not historico:
             await interaction.followup.send(f"📭 Nenhuma meta fechada no período **{data_inicio_str}** até **{data_fim_str}**.", ephemeral=True)
             return
         
-        # Calculando separados
+        # Calculando totais (SEM PÓLVORA)
         total_dinheiro = sum(r["dinheiro"] for r in historico)
-        total_polvora = sum(r["polvora"] for r in historico)
         total_acoes = sum(r.get("dinheiro_acoes") or 0 for r in historico)
         total_geral = total_dinheiro + total_acoes
         
         guild = interaction.guild
-        isentos = []
-        pagaram = []
-        nao_pagaram = []
         
+        # =========================================================
+        # SEPARAR POR CARGO
+        # =========================================================
+        grupos = {
+            "gerentes": {
+                "cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID],
+                "nome": "🟢 GERENTES (ISENTOS)",
+                "cor": 0x2ecc71,
+                "itens": [],
+                "is_isento": True
+            },
+            "cargos_01_02": {
+                "cargos": [CARGO_01_ID, CARGO_02_ID],
+                "nome": "🟡 CARGOS 01/02 (ISENTOS)",
+                "cor": 0xf1c40f,
+                "itens": [],
+                "is_isento": True
+            },
+            "responsaveis": {
+                "cargos": [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID],
+                "nome": "🔵 RESPONSÁVEIS",
+                "cor": 0x3498db,
+                "itens": [],
+                "is_isento": False
+            },
+            "soldados": {
+                "cargos": [CARGO_SOLDADO_ID],
+                "nome": "🟠 SOLDADOS",
+                "cor": 0xe67e22,
+                "itens": [],
+                "is_isento": False
+            },
+            "membros": {
+                "cargos": [CARGO_MEMBRO_ID],
+                "nome": "🔴 MEMBROS",
+                "cor": 0xe74c3c,
+                "itens": [],
+                "is_isento": False
+            },
+            "agregados": {
+                "cargos": [CARGO_AGREGADO_ID],
+                "nome": "⚪ AGREGADOS",
+                "cor": 0x95a5a6,
+                "itens": [],
+                "is_isento": False
+            }
+        }
+        
+        # Processar cada meta e classificar
         for item in historico:
             user_id = int(item["user_id"])
             member = guild.get_member(user_id) if guild else None
-            status = membro_deve_ter_meta(member) if member else None
-            if status is None:
+            
+            if not member:
                 continue
             
             total_meta = item["dinheiro"]
@@ -4098,22 +4144,34 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             item_dict["total_meta"] = total_meta
             item_dict["total_acoes"] = total_acoes_item
             item_dict["total_geral"] = total_geral_item
-            item_dict["status"] = status
+            item_dict["nome"] = member.display_name
             
-            if status == "isento":
-                isentos.append(item_dict)
-            elif status == "obrigado" and total_geral_item > 0:
-                pagaram.append(item_dict)
-            elif status == "obrigado" and total_geral_item == 0:
-                nao_pagaram.append(item_dict)
-        
-        pagaram_ordenado = sorted(pagaram, key=lambda x: x["total_geral"], reverse=True)
+            # Classificar por cargo
+            cargo_encontrado = False
+            for grupo_key, grupo_data in grupos.items():
+                if any(role.id in grupo_data["cargos"] for role in member.roles):
+                    grupo_data["itens"].append(item_dict)
+                    cargo_encontrado = True
+                    break
+            
+            # Se não encontrou nenhum cargo, colocar como "outros"
+            if not cargo_encontrado:
+                if "outros" not in grupos:
+                    grupos["outros"] = {
+                        "nome": "📌 OUTROS",
+                        "cor": 0x808080,
+                        "itens": [],
+                        "is_isento": False
+                    }
+                grupos["outros"]["itens"].append(item_dict)
         
         canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
         if not canal_resultados:
             canal_resultados = interaction.channel
         
-        # 1. EMBED RESUMO GERAL
+        # =========================================================
+        # 1. EMBED RESUMO GERAL (SEM PÓLVORA)
+        # =========================================================
         titulo = f"📊 RELATÓRIO DE METAS FECHADAS"
         if titulo_extra:
             titulo = f"📊 {titulo_extra}"
@@ -4124,99 +4182,135 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             color=0x2ecc71, timestamp=agora()
         )
         
+        # Contar totais por grupo
+        total_nao_isentos = 0
+        total_isentos = 0
+        for grupo_key, grupo_data in grupos.items():
+            if grupo_data["itens"]:
+                if grupo_data.get("is_isento", False):
+                    total_isentos += len(grupo_data["itens"])
+                else:
+                    total_nao_isentos += len(grupo_data["itens"])
+        
         resumo_texto = (
             f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
             f"🎯 **Dinheiro de Ações:** {formatar_dinheiro(total_acoes)}\n"
-            f"💣 **Pólvora:** {fmt_num(total_polvora)} unidades\n"
             f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
             f"👥 **Total de metas fechadas:** {len(historico)}\n"
-            f"✅ **Pagaram:** {len(pagaram)}\n"
-            f"❌ **Não pagaram:** {len(nao_pagaram)}\n"
-            f"🟡 **Isentos (Gerentes):** {len(isentos)}"
+            f"🟡 **Isentos (Gerentes + 01/02):** {total_isentos}\n"
+            f"📊 **Obrigados (Demais cargos):** {total_nao_isentos}"
         )
         embed_resumo.add_field(name="📊 RESUMO GERAL", value=resumo_texto, inline=False)
-        embed_resumo.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
         
+        # Resumo por grupo
+        resumo_grupos = ""
+        for grupo_key, grupo_data in grupos.items():
+            if grupo_data["itens"]:
+                qtd = len(grupo_data["itens"])
+                total_grupo = sum(item["total_geral"] for item in grupo_data["itens"])
+                if grupo_data.get("is_isento", False):
+                    resumo_grupos += f"{grupo_data['nome']}: {qtd} membros (ISENTOS)\n"
+                else:
+                    resumo_grupos += f"{grupo_data['nome']}: {qtd} membros | {formatar_dinheiro(total_grupo)}\n"
+        
+        if resumo_grupos:
+            embed_resumo.add_field(name="📊 RESUMO POR CARGO", value=resumo_grupos, inline=False)
+        
+        embed_resumo.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
         await canal_resultados.send(embed=embed_resumo)
         await asyncio.sleep(0.5)
         
-        # 2. QUEM PAGOU
-        if pagaram_ordenado:
-            for i in range(0, len(pagaram_ordenado), 5):
-                grupo = pagaram_ordenado[i:i+5]
-                embed = discord.Embed(
-                    title=f"✅ QUEM PAGOU ({len(pagaram)} membros) - Parte {i//5 + 1}",
-                    color=0x2ecc71
-                )
-                texto = ""
-                for idx, item in enumerate(grupo, i + 1):
-                    member = guild.get_member(int(item["user_id"])) if guild else None
-                    if member:
-                        nome = member.display_name
+        # =========================================================
+        # 2. EMBEDS POR GRUPO
+        # =========================================================
+        for grupo_key, grupo_data in grupos.items():
+            if not grupo_data["itens"]:
+                continue
+            
+            # Ordenar por total (maior para menor)
+            itens_ordenados = sorted(grupo_data["itens"], key=lambda x: x["total_geral"], reverse=True)
+            
+            # =========================================================
+            # SE FOR ISENTO (GERENTES + 01/02) - MOSTRA APENAS LISTA
+            # =========================================================
+            if grupo_data.get("is_isento", False):
+                for i in range(0, len(itens_ordenados), 10):
+                    grupo = itens_ordenados[i:i+10]
+                    embed = discord.Embed(
+                        title=f"🟡 {grupo_data['nome']} ({len(itens_ordenados)} membros) - Parte {i//10 + 1}",
+                        color=grupo_data["cor"]
+                    )
+                    texto = ""
+                    for idx, item in enumerate(grupo, i + 1):
+                        texto += f"**{idx}.** {item['nome']} - 🟡 ISENTO (não paga meta)\n"
+                    
+                    embed.add_field(name="📋 LISTA DE ISENTOS", value=texto, inline=False)
+                    await canal_resultados.send(embed=embed)
+                    await asyncio.sleep(0.3)
+                continue
+            
+            # =========================================================
+            # NÃO ISENTOS - SEPARAR QUEM PAGOU E QUEM NÃO PAGOU
+            # =========================================================
+            pagaram = [item for item in itens_ordenados if item["total_geral"] > 0]
+            nao_pagaram = [item for item in itens_ordenados if item["total_geral"] == 0]
+            
+            # QUEM PAGOU
+            if pagaram:
+                for i in range(0, len(pagaram), 5):
+                    grupo = pagaram[i:i+5]
+                    embed = discord.Embed(
+                        title=f"✅ {grupo_data['nome']} - QUEM PAGOU ({len(pagaram)} membros) - Parte {i//5 + 1}",
+                        color=grupo_data["cor"]
+                    )
+                    texto = ""
+                    for idx, item in enumerate(grupo, i + 1):
+                        texto += f"**{idx}.** {item['nome']}\n"
+                        texto += f"   💰 Meta: {formatar_dinheiro(item['total_meta'])}\n"
+                        texto += f"   🎯 Ações: {formatar_dinheiro(item['total_acoes'])}\n"
+                        texto += f"   📦 Total: {formatar_dinheiro(item['total_geral'])}\n\n"
+                    
+                    if len(texto) > 1000:
+                        parte1 = texto[:900]
+                        parte2 = texto[900:]
+                        embed.add_field(name="📋 LISTA (parte 1)", value=parte1, inline=False)
+                        embed.add_field(name="📋 LISTA (parte 2)", value=parte2, inline=False)
                     else:
-                        user = await pegar_usuario(int(item["user_id"]))
-                        nome = user.display_name if user else f"ID: {item['user_id']}"
-                    texto += f"**{idx}.** {nome}\n"
-                    texto += f"   💰 Meta: {formatar_dinheiro(item['total_meta'])}\n"
-                    texto += f"   🎯 Ações: {formatar_dinheiro(item['total_acoes'])}\n"
-                    texto += f"   📦 Total: {formatar_dinheiro(item['total_geral'])}\n\n"
-                
-                if len(texto) > 1000:
-                    parte1 = texto[:900]
-                    parte2 = texto[900:]
-                    embed.add_field(name="📋 LISTA (parte 1)", value=parte1, inline=False)
-                    embed.add_field(name="📋 LISTA (parte 2)", value=parte2, inline=False)
-                else:
+                        embed.add_field(name="📋 LISTA", value=texto, inline=False)
+                    
+                    await canal_resultados.send(embed=embed)
+                    await asyncio.sleep(0.3)
+            
+            # QUEM NÃO PAGOU
+            if nao_pagaram:
+                for i in range(0, len(nao_pagaram), 10):
+                    grupo = nao_pagaram[i:i+10]
+                    embed = discord.Embed(
+                        title=f"❌ {grupo_data['nome']} - QUEM NÃO PAGOU ({len(nao_pagaram)} membros) - Parte {i//10 + 1}",
+                        color=0xe74c3c
+                    )
+                    texto = ""
+                    for idx, item in enumerate(grupo, i + 1):
+                        texto += f"**{idx}.** {item['nome']} - ❌ ZERADO\n"
+                    
                     embed.add_field(name="📋 LISTA", value=texto, inline=False)
-                
-                await canal_resultados.send(embed=embed)
-                await asyncio.sleep(0.3)
+                    await canal_resultados.send(embed=embed)
+                    await asyncio.sleep(0.3)
         
-        # 3. QUEM NÃO PAGOU
-        if nao_pagaram:
-            for i in range(0, len(nao_pagaram), 10):
-                grupo = nao_pagaram[i:i+10]
-                embed = discord.Embed(
-                    title=f"❌ QUEM NÃO PAGOU ({len(nao_pagaram)} membros) - Parte {i//10 + 1}",
-                    color=0xe74c3c
-                )
-                texto = ""
-                for idx, item in enumerate(grupo, i + 1):
-                    member = guild.get_member(int(item["user_id"])) if guild else None
-                    if member:
-                        nome = member.display_name
-                    else:
-                        user = await pegar_usuario(int(item["user_id"]))
-                        nome = user.display_name if user else f"ID: {item['user_id']}"
-                    texto += f"**{idx}.** {nome} - ❌ ZERADO\n"
-                
-                embed.add_field(name="📋 LISTA", value=texto, inline=False)
-                await canal_resultados.send(embed=embed)
-                await asyncio.sleep(0.3)
+        # =========================================================
+        # 3. CONTAGEM FINAL
+        # =========================================================
+        total_embeds = 1
+        for grupo_key, grupo_data in grupos.items():
+            if grupo_data["itens"]:
+                if grupo_data.get("is_isento", False):
+                    total_embeds += (len(grupo_data["itens"]) + 9) // 10
+                else:
+                    pagaram = [item for item in grupo_data["itens"] if item["total_geral"] > 0]
+                    nao_pagaram = [item for item in grupo_data["itens"] if item["total_geral"] == 0]
+                    total_embeds += (len(pagaram) + 4) // 5
+                    total_embeds += (len(nao_pagaram) + 9) // 10
         
-        # 4. ISENTOS
-        if isentos:
-            for i in range(0, len(isentos), 10):
-                grupo = isentos[i:i+10]
-                embed = discord.Embed(
-                    title=f"🟡 META ISENTA ({len(isentos)} gerentes) - Parte {i//10 + 1}",
-                    color=0xf1c40f
-                )
-                texto = ""
-                for idx, item in enumerate(grupo, i + 1):
-                    member = guild.get_member(int(item["user_id"])) if guild else None
-                    if member:
-                        nome = member.display_name
-                    else:
-                        user = await pegar_usuario(int(item["user_id"]))
-                        nome = user.display_name if user else f"ID: {item['user_id']}"
-                    texto += f"**{idx}.** {nome} - 🟡 ISENTO (Gerente)\n"
-                
-                embed.add_field(name="📋 LISTA", value=texto, inline=False)
-                await canal_resultados.send(embed=embed)
-                await asyncio.sleep(0.3)
-        
-        total_embeds = 1 + (len(pagaram_ordenado) + 4) // 5 + (len(nao_pagaram) + 9) // 10 + (len(isentos) + 9) // 10
         await interaction.followup.send(
             f"✅ **Relatório enviado com sucesso!**\n"
             f"📊 {len(historico)} metas processadas\n"
