@@ -4035,27 +4035,37 @@ async def fechar_meta(user_id, data_inicio, data_fim):
         return None
 # ---------------------------------------------------------
 async def buscar_historico_metas(data_inicio, data_fim):
-    """Busca metas no histórico pelo período informado."""
+    """
+    Busca metas no histórico APENAS do período informado.
+    NUNCA mistura semanas diferentes.
+    """
     pool = await get_pool()
     if not pool:
+        logger.error("❌ Pool do banco indisponível em buscar_historico_metas")
         return []
     try:
         async with pool.acquire() as conn:
-            # Converter para string no formato que o PostgreSQL entende
-            inicio_str = data_inicio.strftime("%Y-%m-%d 00:00:00")
-            fim_str = data_fim.strftime("%Y-%m-%d 23:59:59")
+            # Converter para datetime sem timezone
+            inicio_dt = data_inicio.replace(tzinfo=None) if hasattr(data_inicio, 'replace') else data_inicio
+            fim_dt = data_fim.replace(tzinfo=None) if hasattr(data_fim, 'replace') else data_fim
+            
+            logger.info(f"🔍 Buscando histórico entre {inicio_dt} e {fim_dt}")
             
             rows = await conn.fetch(
                 """
                 SELECT * FROM metas_historico 
-                WHERE data_fechamento >= $1::timestamp 
-                AND data_fechamento <= $2::timestamp
+                WHERE data_fechamento >= $1 
+                AND data_fechamento <= $2
                 ORDER BY data_fechamento DESC
                 """,
-                inicio_str, fim_str
+                inicio_dt, fim_dt
             )
             
-            logger.info(f"📊 Busca histórico: {len(rows)} metas encontradas entre {inicio_str} e {fim_str}")
+            logger.info(f"📊 Busca histórico: {len(rows)} metas encontradas no período")
+            
+            # Mostrar as primeiras datas encontradas (debug)
+            for row in rows[:3]:
+                logger.info(f"📅 Meta - user: {row['user_id']} - data_fechamento: {row['data_fechamento']}")
             
             return rows
     except Exception as e:
@@ -4324,24 +4334,32 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
         
 # ---------------------------------------------------------
 async def fechar_todas_metas(data_inicio, data_fim):
-    """Fecha todas as metas e salva no histórico. NÃO ZERA as metas."""
+    """
+    APENAS salva as metas no histórico com as datas corretas.
+    NUNCA zera o banco de dados.
+    """
     pool = await get_pool()
     if not pool:
+        logger.error("❌ Pool do banco indisponível em fechar_todas_metas")
         return None, []
     try:
         async with pool.acquire() as conn:
             metas = await conn.fetch("SELECT * FROM metas")
             if not metas:
+                logger.warning("📭 Nenhuma meta encontrada para fechar")
                 return None, []
+
+            # Converter para datetime sem timezone
+            data_inicio_naive = data_inicio.replace(tzinfo=None) if hasattr(data_inicio, 'replace') else data_inicio
+            data_fim_naive = data_fim.replace(tzinfo=None) if hasattr(data_fim, 'replace') else data_fim
+            data_fechamento = agora_db()
+            
+            logger.info(f"📅 FECHANDO METAS - Período: {data_inicio_naive} até {data_fim_naive}")
+            logger.info(f"📅 Data de fechamento: {data_fechamento}")
 
             relatorio = []
             guild = bot.get_guild(GUILD_ID)
-            
-            # DATA DE FECHAMENTO = AGORA
-            data_fechamento = agora_db()
-            
-            logger.info(f"📅 FECHANDO METAS - Período: {data_inicio} até {data_fim}")
-            logger.info(f"📅 Data de fechamento: {data_fechamento}")
+            salvos = 0
 
             for meta in metas:
                 user_id = meta["user_id"]
@@ -4355,38 +4373,29 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 polvora = meta["polvora"] or 0
                 acao = meta["acao"] or "N/A"
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
-                saldo_excedente = meta.get("saldo_excedente") or 0
 
-                # SALVAR NO HISTÓRICO
-                await conn.execute(
-                    """
-                    INSERT INTO metas_historico (
-                        user_id, dinheiro, polvora, acao, dinheiro_acoes, 
-                        data_inicio, data_fim, data_fechamento
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    """,
-                    user_id, 
-                    min(dinheiro, 300000), 
-                    polvora, 
-                    acao, 
-                    dinheiro_acoes, 
-                    data_inicio,
-                    data_fim,
-                    data_fechamento
-                )
-
-                logger.info(f"📊 Salvando meta de {user_id} - data_fechamento: {data_fechamento}")
-
-                # ⚠️ NÃO ZERA MAIS! Mantém os valores
-                # Só reseta o campo "acao" para não ficar repetindo
-                await conn.execute(
-                    """
-                    UPDATE metas 
-                    SET acao = NULL
-                    WHERE user_id = $1
-                    """,
-                    user_id
-                )
+                # ⚠️ SOMENTE SALVAR NO HISTÓRICO - NUNCA ZERA
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO metas_historico (
+                            user_id, dinheiro, polvora, acao, dinheiro_acoes, 
+                            data_inicio, data_fim, data_fechamento
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        """,
+                        user_id, 
+                        min(dinheiro, 300000), 
+                        polvora, 
+                        acao, 
+                        dinheiro_acoes, 
+                        data_inicio_naive,
+                        data_fim_naive,
+                        data_fechamento
+                    )
+                    salvos += 1
+                    logger.info(f"✅ Meta de {user_id} salva no histórico - data_fechamento: {data_fechamento}")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao salvar meta de {user_id} no histórico: {e}")
 
                 relatorio.append({
                     "user_id": user_id,
@@ -4395,9 +4404,10 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     "acao": acao,
                     "dinheiro_acoes": dinheiro_acoes,
                     "total_meta": min(dinheiro, 300000),
-                    "excedente": saldo_excedente,
                     "status": status
                 })
+
+            logger.info(f"✅ {salvos} metas salvas no histórico com sucesso!")
 
             # Buscar membros SEM META
             membros_sem_meta = []
@@ -4604,6 +4614,34 @@ async def carregar_metas_cache():
     except Exception as e:
         logger.error(f"❌ Erro ao recarregar cache de metas: {e}")
         return False
+# ---------------------------------------------------------
+async def zerar_exibicao_metas():
+    """
+    ZERA APENAS A EXIBIÇÃO (EMBEDS) no Discord.
+    NUNCA TOUCA NO BANCO DE DADOS.
+    """
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            logger.error("❌ Guild não encontrada para zerar exibição")
+            return 0
+        
+        # Recarregar o cache para pegar os valores atuais do banco
+        await carregar_metas_cache()
+        
+        logger.info(f"🔄 Zerando exibição de {len(metas_cache)} metas...")
+        
+        contador = 0
+        for uid in list(metas_cache.keys()):
+            await atualizar_embed_meta(int(uid))
+            contador += 1
+            await asyncio.sleep(0.3)
+        
+        logger.info(f"✅ {contador} embeds de metas atualizados (exibição zerada)")
+        return contador
+    except Exception as e:
+        logger.error(f"❌ Erro ao zerar exibição das metas: {e}")
+        return 0
 
 # ---------------------------------------------------------
 async def criar_sala_meta(member: discord.Member):
@@ -5250,16 +5288,14 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            data_inicio_naive = self.data_inicio.replace(tzinfo=None)
-            data_fim_naive = self.data_fim.replace(tzinfo=None)
-            
-            relatorio, membros_sem_meta = await fechar_todas_metas(data_inicio_naive, data_fim_naive)
+            # ⚠️ 1. SALVAR NO HISTÓRICO (NUNCA ZERA)
+            relatorio, membros_sem_meta = await fechar_todas_metas(self.data_inicio, self.data_fim)
             
             if not relatorio and not membros_sem_meta:
                 await interaction.followup.send("📭 Nenhuma meta para fechar.", ephemeral=True)
                 return
             
-            # CHAMA A FUNÇÃO QUE GERA O RELATÓRIO
+            # ⚠️ 2. GERAR RELATÓRIO
             await gerar_relatorio_metas(
                 interaction=interaction,
                 data_inicio_str=self.data_inicio_str,
@@ -5267,6 +5303,9 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
                 historico=relatorio,
                 titulo_extra="📊 RELATÓRIO SEMANAL - METAS FECHADAS"
             )
+            
+            # ⚠️ 3. ZERAR APENAS A EXIBIÇÃO (EMBEDS) - NUNCA TOUCA NO BANCO
+            await zerar_exibicao_metas()
             
             # MEMBROS SEM META (se houver)
             if membros_sem_meta:
@@ -5289,10 +5328,13 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
                     await canal_resultados.send(embed=embed)
                     await asyncio.sleep(0.3)
             
-            # Atualizar as metas
-            for uid in metas_cache.keys():
-                await atualizar_embed_meta(int(uid))
-                await asyncio.sleep(0.3)
+            await interaction.followup.send(
+                f"✅ **Metas fechadas com sucesso!**\n"
+                f"📊 {len(relatorio)} metas salvas no histórico\n"
+                f"🔄 Exibição zerada no Discord\n"
+                f"📌 Os dados continuam salvos no banco para consulta",
+                ephemeral=True
+            )
                 
         except Exception as e:
             logger.error(f"❌ Erro ao fechar metas automático: {e}")
