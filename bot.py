@@ -3978,7 +3978,7 @@ async def adicionar_dinheiro_meta(user_id, valor):
 
 # ---------------------------------------------------------
 async def fechar_meta(user_id, data_inicio, data_fim):
-    """Fecha a meta individual e salva no histórico."""
+    """Fecha a meta individual. NÃO ZERA, apenas salva no histórico."""
     pool = await get_pool()
     if not pool:
         return None
@@ -3994,7 +3994,6 @@ async def fechar_meta(user_id, data_inicio, data_fim):
             dinheiro_acoes = meta.get("dinheiro_acoes") or 0
             saldo_excedente = meta.get("saldo_excedente") or 0
             
-            # ⚠️ DATA DE FECHAMENTO = AGORA
             data_fechamento = agora_db()
 
             await conn.execute(
@@ -4009,19 +4008,19 @@ async def fechar_meta(user_id, data_inicio, data_fim):
                 polvora, 
                 str(acao), 
                 dinheiro_acoes, 
-                data_inicio,  # Data de INÍCIO
-                data_fim,     # Data de FIM
-                data_fechamento  # ⚠️ DATA DE FECHAMENTO = AGORA
+                data_inicio,
+                data_fim,
+                data_fechamento
             )
 
-            # Resetar a meta, manter excedente
+            # ⚠️ NÃO ZERA! Só reseta o campo acao
             await conn.execute(
                 """
                 UPDATE metas 
-                SET dinheiro = $1, polvora = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL
-                WHERE user_id = $2
+                SET acao = NULL
+                WHERE user_id = $1
                 """,
-                saldo_excedente, str(user_id)
+                str(user_id)
             )
 
             return {
@@ -4231,7 +4230,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
         
 # ---------------------------------------------------------
 async def fechar_todas_metas(data_inicio, data_fim):
-    """Fecha todas as metas e salva no histórico com a data correta."""
+    """Fecha todas as metas e salva no histórico. NÃO ZERA as metas."""
     pool = await get_pool()
     if not pool:
         return None, []
@@ -4244,7 +4243,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
             relatorio = []
             guild = bot.get_guild(GUILD_ID)
             
-            # DATA DE FECHAMENTO = AGORA (momento do fechamento)
+            # DATA DE FECHAMENTO = AGORA
             data_fechamento = agora_db()
             
             logger.info(f"📅 FECHANDO METAS - Período: {data_inicio} até {data_fim}")
@@ -4264,7 +4263,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
                 saldo_excedente = meta.get("saldo_excedente") or 0
 
-                # SALVAR COM A DATA CORRETA
+                # SALVAR NO HISTÓRICO
                 await conn.execute(
                     """
                     INSERT INTO metas_historico (
@@ -4284,14 +4283,15 @@ async def fechar_todas_metas(data_inicio, data_fim):
 
                 logger.info(f"📊 Salvando meta de {user_id} - data_fechamento: {data_fechamento}")
 
-                # Resetar a meta, mas manter excedente
+                # ⚠️ NÃO ZERA MAIS! Mantém os valores
+                # Só reseta o campo "acao" para não ficar repetindo
                 await conn.execute(
                     """
                     UPDATE metas 
-                    SET dinheiro = $1, polvora = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL
-                    WHERE user_id = $2
+                    SET acao = NULL
+                    WHERE user_id = $1
                     """,
-                    saldo_excedente, user_id
+                    user_id
                 )
 
                 relatorio.append({
@@ -4330,13 +4330,27 @@ async def fechar_todas_metas(data_inicio, data_fim):
 
 # ---------------------------------------------------------
 async def zerar_todas_metas():
+    """Zera todas as metas (dinheiro, pólvora, ações e excedente). USAR COM CUIDADO!"""
     pool = await get_pool()
     if not pool:
         return []
     try:
         async with pool.acquire() as conn:
-            await conn.execute("UPDATE metas SET dinheiro = 0, dinheiro_acoes = 0, polvora = 0, saldo_excedente = 0")
+            # Buscar todos os usuários com meta antes de zerar
             rows = await conn.fetch("SELECT user_id, canal_id FROM metas")
+            
+            # Zerar tudo
+            await conn.execute("""
+                UPDATE metas 
+                SET dinheiro = 0, 
+                    dinheiro_acoes = 0, 
+                    polvora = 0, 
+                    saldo_excedente = 0,
+                    acao = NULL
+            """)
+            
+            logger.info(f"⚠️ TODAS AS METAS FORAM ZERADAS! {len(rows)} metas resetadas.")
+            
             return rows
     except Exception as e:
         logger.error(f"❌ Erro ao zerar metas: {e}")
@@ -5195,6 +5209,84 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
         await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
 
 # ###############################################
+class ZerarMetasButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="⚠️ ZERAR TODAS AS METAS", style=discord.ButtonStyle.danger, custom_id="zerar_metas_btn_painel", emoji="⚠️")
+
+    async def callback(self, interaction: discord.Interaction):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem zerar todas as metas!", ephemeral=True)
+            return
+        
+        view = ConfirmarZerarView()
+        embed = discord.Embed(
+            title="⚠️ ATENÇÃO - ZERAR METAS",
+            description=(
+                "**Você está prestes a ZERAR TODAS as metas!**\n\n"
+                "⚠️ Isso vai resetar:\n"
+                "• 💰 Dinheiro Sujo (Meta)\n"
+                "• 🎯 Dinheiro de Ações\n"
+                "• 💣 Pólvora\n"
+                "• 📦 Saldo Excedente\n\n"
+                "📌 **Os dados do histórico NÃO serão apagados.**\n"
+                "📌 **Esta ação não pode ser desfeita!**\n\n"
+                "Clique em **'✅ Sim, zerar tudo'** para confirmar."
+            ),
+            color=0xe74c3c
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+# ###############################################
+class ConfirmarZerarView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="✅ Sim, zerar tudo", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            metas = await zerar_todas_metas()
+            
+            atualizadas = 0
+            for meta in metas:
+                user_id = int(meta["user_id"])
+                await atualizar_embed_meta(user_id)
+                atualizadas += 1
+                await asyncio.sleep(0.3)
+            
+            await interaction.followup.send(
+                f"✅ **Todas as metas foram zeradas com sucesso!**\n\n"
+                f"📊 {atualizadas} metas resetadas.\n"
+                f"📌 Os dados do histórico permanecem intactos.",
+                ephemeral=True
+            )
+            
+            canal_gerencia = interaction.guild.get_channel(CANAL_GERENCIA_ID)
+            if canal_gerencia:
+                embed = discord.Embed(
+                    title="⚠️ METAS ZERADAS",
+                    description=f"Todas as metas foram resetadas por {interaction.user.mention}",
+                    color=0xe74c3c,
+                    timestamp=agora()
+                )
+                embed.add_field(name="📊 Total resetado", value=f"{atualizadas} metas", inline=True)
+                await canal_gerencia.send(embed=embed)
+                
+        except Exception as e:
+            logger.error(f"❌ Erro ao zerar metas: {e}")
+            await interaction.followup.send(f"❌ Erro ao zerar metas: {e}", ephemeral=True)
+
+    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+# ###############################################
 class ConfirmarPagamentoPolvoraViewMeta(discord.ui.View):
     def __init__(self, user_id, pendente):
         super().__init__(timeout=120)
@@ -5309,7 +5401,8 @@ async def enviar_painel_relatorio_metas():
             "**Gerencie as metas de todos os membros.**\n\n"
             "📌 **Opções disponíveis:**\n"
             "• 📊 **Gerar Relatório** - Consulta metas já fechadas (com datas)\n"
-            "• 🔒 **Fechar Metas (Automático)** - Fecha a semana anterior automaticamente\n\n"
+            "• 🔒 **Fechar Metas (Automático)** - Fecha a semana anterior (NÃO ZERA)\n"
+            "• ⚠️ **Zerar Metas** - Zera TODAS as metas (cuidado!)\n\n"
             "📋 **O relatório mostra:**\n"
             "• Quem pagou e quanto (META)\n"
             "• Quem pagou e quanto (AÇÕES)\n"
@@ -5326,7 +5419,8 @@ async def enviar_painel_relatorio_metas():
             "**Clique no botão verde e confirme:**\n"
             "• O sistema calcula a SEMANA ANTERIOR (Segunda a Domingo)\n"
             "• Fecha todas as metas do período\n"
-            "• Gera o relatório automaticamente\n\n"
+            "• Gera o relatório automaticamente\n"
+            "• ⚠️ **NÃO ZERA** as metas, apenas fecha\n\n"
             "**Exemplo:**\n"
             "• Se fechar hoje (20/07/2026) → Fecha 13/07 a 19/07\n"
             "• Se fechar amanhã (21/07/2026) → Fecha 13/07 a 19/07\n"
@@ -5346,13 +5440,25 @@ async def enviar_painel_relatorio_metas():
         inline=False
     )
     
+    embed.add_field(
+        name="⚠️ COMO USAR - ZERAR METAS",
+        value=(
+            "**Clique no botão vermelho e confirme DUAS VEZES:**\n"
+            "• Zera TODAS as metas (dinheiro, ações, pólvora, excedente)\n"
+            "• ⚠️ **NÃO apaga o histórico**\n"
+            "• ⚠️ **Esta ação não pode ser desfeita!**\n"
+            "• Use apenas quando realmente necessário"
+        ),
+        inline=False
+    )
+    
     view = discord.ui.View(timeout=None)
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharMetasAutomaticoButton())
+    view.add_item(ZerarMetasButton())  # ⚠️ BOTÃO DE ZERAR ADICIONADO
     
     await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495685092999279, embed, view)
-    logger.info("📊 Painel de gerenciamento de metas enviado (versão simplificada)")
-
+    logger.info("📊 Painel de gerenciamento de metas enviado")
 # ---------------------------------------------------------
 @tasks.loop(hours=1)
 async def verificar_avisos_meta():
