@@ -2407,6 +2407,68 @@ class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagen
         await enviar_painel_fabricacao()
 
 # ###############################################
+class EditarEstoqueModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE DE MUNIÇÃO"):
+    pt = discord.ui.TextInput(
+        label="🔫 Quantidade de PT (pacotes)",
+        placeholder="Digite a quantidade atual de PT",
+        required=True,
+        max_length=10
+    )
+    sub = discord.ui.TextInput(
+        label="🔫 Quantidade de SUB (pacotes)",
+        placeholder="Digite a quantidade atual de SUB",
+        required=True,
+        max_length=10
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            nova_pt = int(self.pt.value.replace(".", "").replace(",", ""))
+            nova_sub = int(self.sub.value.replace(".", "").replace(",", ""))
+            
+            if nova_pt < 0 or nova_sub < 0:
+                raise ValueError("Valores não podem ser negativos")
+        except ValueError:
+            await interaction.followup.send("❌ **Valores inválidos!** Digite números positivos.", ephemeral=True)
+            return
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+        
+        try:
+            async with pool.acquire() as conn:
+                # Atualizar PT
+                await conn.execute(
+                    "UPDATE estoque_municoes SET quantidade = $1, ultima_atualizacao = NOW() WHERE tipo = 'PT'",
+                    nova_pt
+                )
+                # Atualizar SUB
+                await conn.execute(
+                    "UPDATE estoque_municoes SET quantidade = $1, ultima_atualizacao = NOW() WHERE tipo = 'SUB'",
+                    nova_sub
+                )
+            
+            # Atualizar o painel
+            await enviar_painel_fabricacao()
+            
+            embed = discord.Embed(
+                title="✅ ESTOQUE ATUALIZADO!",
+                description=f"🔫 **PT:** {fmt_num(nova_pt)} pacotes\n🔫 **SUB:** {fmt_num(nova_sub)} pacotes",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.set_footer(text=f"Atualizado por {interaction.user.display_name}")
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao editar estoque: {e}")
+            await interaction.followup.send(f"❌ Erro ao editar estoque: {e}", ephemeral=True)
+# ###############################################
 class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -2502,6 +2564,24 @@ class FabricacaoView(discord.ui.View):
                 status = "⚪ NÃO ALUGADO"
             embed.add_field(name=f"🏭 {galpao}", value=f"**Dias alugados:** {dias}\n**Status:** {status}", inline=True)
         await interaction.followup.send(embed=embed, ephemeral=True)
+    # ---------------------------------------------------------
+
+    @discord.ui.button(label="✏️ Editar Estoque", style=discord.ButtonStyle.primary, custom_id="editar_estoque_btn", emoji="✏️")
+    async def editar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Abre o modal para editar o estoque de munição."""
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **Administradores** ou **Gerentes** podem editar o estoque!", ephemeral=True)
+            return
+        
+        estoque = await carregar_estoque()
+        modal = EditarEstoqueModal()
+        modal.pt.placeholder = f"Atual: {fmt_num(estoque['PT'])} pacotes"
+        modal.sub.placeholder = f"Atual: {fmt_num(estoque['SUB'])} pacotes"
+        
+        await interaction.response.send_modal(modal)
 
 # ###############################################
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
