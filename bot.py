@@ -5537,14 +5537,13 @@ async def enviar_painel_relatorio_metas():
             "**Gerencie as metas de todos os membros.**\n\n"
             "📌 **Opções disponíveis:**\n"
             "• 📊 **Gerar Relatório** - Consulta metas já fechadas (com datas)\n"
-            "• 🔒 **Fechar Metas (Automático)** - Fecha a semana anterior (NÃO ZERA)\n"
-            "• ⚠️ **Zerar Metas** - Zera TODAS as metas (cuidado!)\n\n"
+            "• 🔒 **Fechar Metas (Automático)** - Fecha a semana anterior (NUNCA ZERA O BANCO)\n\n"
             "📋 **O relatório mostra:**\n"
             "• Quem pagou e quanto (META)\n"
             "• Quem pagou e quanto (AÇÕES)\n"
             "• Quem NÃO pagou\n"
-            "• Isentos (Gerentes)\n"
-            "• Totais gerais separados"
+            "• Isentos (Gerentes e 01/02)\n"
+            "• Totais gerais separados por cargo"
         ),
         color=0x2ecc71
     )
@@ -5556,10 +5555,11 @@ async def enviar_painel_relatorio_metas():
             "• O sistema calcula a SEMANA ANTERIOR (Segunda a Domingo)\n"
             "• Fecha todas as metas do período\n"
             "• Gera o relatório automaticamente\n"
-            "• ⚠️ **NÃO ZERA** as metas, apenas fecha\n\n"
+            "• ⚠️ **NUNCA ZERA O BANCO DE DADOS**\n"
+            "• Apenas zera a exibição (embeds) no Discord\n\n"
             "**Exemplo:**\n"
-            "• Se fechar hoje (20/07/2026) → Fecha 13/07 a 19/07\n"
-            "• Se fechar amanhã (21/07/2026) → Fecha 13/07 a 19/07\n"
+            "• Se fechar hoje (20/08/2026) → Fecha 10/08 a 16/08\n"
+            "• Se fechar amanhã (21/08/2026) → Fecha 10/08 a 16/08\n"
             "• Sempre a SEMANA ANTERIOR completa!"
         ),
         inline=False
@@ -5569,21 +5569,21 @@ async def enviar_painel_relatorio_metas():
         name="📌 COMO USAR - GERAR RELATÓRIO",
         value=(
             "**Clique no botão azul e informe as datas:**\n"
-            "• Data INÍCIO (ex: 01/07/2026)\n"
-            "• Data FIM (ex: 31/07/2026)\n\n"
-            "O sistema vai buscar as metas já fechadas no período e gerar o relatório."
+            "• Data INÍCIO (ex: 01/08/2026)\n"
+            "• Data FIM (ex: 07/08/2026)\n\n"
+            "O sistema vai buscar as metas já fechadas no período e gerar o relatório.\n"
+            "⚠️ **NUNCA ALTERA NADA no banco ou nos embeds.**"
         ),
         inline=False
     )
     
     embed.add_field(
-        name="⚠️ COMO USAR - ZERAR METAS",
+        name="📌 SEGURANÇA",
         value=(
-            "**Clique no botão vermelho e confirme DUAS VEZES:**\n"
-            "• Zera TODAS as metas (dinheiro, ações, pólvora, excedente)\n"
-            "• ⚠️ **NÃO apaga o histórico**\n"
-            "• ⚠️ **Esta ação não pode ser desfeita!**\n"
-            "• Use apenas quando realmente necessário"
+            "✅ **Os dados NUNCA são perdidos**\n"
+            "• Fechar Metas → Salva no histórico + Zera apenas os embeds\n"
+            "• Gerar Relatório → Apenas consulta\n"
+            "• Os dados permanecem no banco para sempre"
         ),
         inline=False
     )
@@ -5591,10 +5591,10 @@ async def enviar_painel_relatorio_metas():
     view = discord.ui.View(timeout=None)
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharMetasAutomaticoButton())
-    view.add_item(ZerarMetasButton())  # ⚠️ BOTÃO DE ZERAR ADICIONADO
+    # ⚠️ BOTÃO ZERAR REMOVIDO - SEGURANÇA!
     
     await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495685092999279, embed, view)
-    logger.info("📊 Painel de gerenciamento de metas enviado")
+    logger.info("📊 Painel de gerenciamento de metas enviado (SEM botão zerar)")
 # ---------------------------------------------------------
 @tasks.loop(hours=1)
 async def verificar_avisos_meta():
