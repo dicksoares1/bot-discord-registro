@@ -9628,6 +9628,85 @@ async def listar_lives_cmd(ctx):
             embed.add_field(name=f"👤 {nome}", value=f"📺 {plataforma.upper()}\n🔗 {link}\n📌 {divulgado}", inline=False)
     await ctx.send(embed=embed)
 
+# ---------------------------------------------------------
+@bot.command(name="limpar_sala")
+@commands.has_permissions(administrator=True)
+async def cmd_limpar_sala(ctx):
+    """
+    Limpa todas as mensagens do canal, mantendo APENAS a última mensagem do bot.
+    Uso: !limpar_sala
+    """
+    canal = ctx.channel
+    
+    await ctx.send("🔄 **LIMPANDO A SALA...**\n⏳ Mantendo apenas a última mensagem do bot.")
+    
+    try:
+        # Buscar a última mensagem do bot
+        ultima_msg_bot = None
+        async for msg in canal.history(limit=100):
+            if msg.author == bot.user:
+                ultima_msg_bot = msg
+                break
+        
+        deletadas = 0
+        async for msg in canal.history(limit=1000):
+            # Não deletar a última mensagem do bot
+            if ultima_msg_bot and msg.id == ultima_msg_bot.id:
+                continue
+            
+            try:
+                await msg.delete()
+                deletadas += 1
+                if deletadas % 50 == 0:
+                    await asyncio.sleep(0.5)
+            except:
+                pass
+        
+        # Enviar confirmação
+        embed = discord.Embed(
+            title="🧹 SALA LIMPA!",
+            description=f"✅ **{deletadas} mensagens deletadas!**\n📌 A última mensagem do bot foi mantida.",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.set_footer(text=f"Comando executado por {ctx.author.display_name}")
+        
+        # Se a última mensagem do bot existe, editar ela com a confirmação
+        if ultima_msg_bot:
+            # Verificar se o embed da mensagem do bot já existe
+            if ultima_msg_bot.embeds:
+                # Adicionar um novo campo de confirmação
+                embed_original = ultima_msg_bot.embeds[0]
+                # Criar um novo embed mantendo o original e adicionando a confirmação
+                novo_embed = discord.Embed(
+                    title=embed_original.title,
+                    description=embed_original.description,
+                    color=embed_original.color,
+                    timestamp=agora()
+                )
+                # Copiar campos do original
+                for field in embed_original.fields:
+                    novo_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+                # Adicionar campo de confirmação
+                novo_embed.add_field(
+                    name="🧹 LIMPEZA REALIZADA",
+                    value=f"✅ {deletadas} mensagens deletadas por {ctx.author.mention}",
+                    inline=False
+                )
+                novo_embed.set_footer(text=f"Última limpeza: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+                
+                await ultima_msg_bot.edit(embed=novo_embed)
+            else:
+                # Se não tiver embed, só enviar a confirmação
+                await canal.send(embed=embed)
+        else:
+            # Se não encontrou mensagem do bot, enviar nova
+            await canal.send(embed=embed)
+            
+    except Exception as e:
+        logger.error(f"Erro ao limpar sala: {e}")
+        await ctx.send(f"❌ **Erro ao limpar a sala:** {e}")
+
 # =========================================================
 # ==================== SEÇÃO 17: ON_READY OTIMIZADO =======
 # =========================================================
