@@ -3978,7 +3978,7 @@ async def adicionar_dinheiro_meta(user_id, valor):
 
 # ---------------------------------------------------------
 async def fechar_meta(user_id, data_inicio, data_fim):
-    """Fecha a meta individual. Mantém Meta e Ações SEPARADOS."""
+    """Fecha a meta individual e salva no histórico."""
     pool = await get_pool()
     if not pool:
         return None
@@ -3993,15 +3993,28 @@ async def fechar_meta(user_id, data_inicio, data_fim):
             acao = meta.get("acao") or "N/A"
             dinheiro_acoes = meta.get("dinheiro_acoes") or 0
             saldo_excedente = meta.get("saldo_excedente") or 0
+            
+            # ⚠️ DATA DE FECHAMENTO = AGORA
+            data_fechamento = agora_db()
 
             await conn.execute(
                 """
-                INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                INSERT INTO metas_historico (
+                    user_id, dinheiro, polvora, acao, dinheiro_acoes, 
+                    data_inicio, data_fim, data_fechamento
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
-                str(user_id), min(dinheiro, 300000), polvora, str(acao), dinheiro_acoes, data_inicio, data_fim, agora_db()
+                str(user_id), 
+                min(dinheiro, 300000), 
+                polvora, 
+                str(acao), 
+                dinheiro_acoes, 
+                data_inicio,  # Data de INÍCIO
+                data_fim,     # Data de FIM
+                data_fechamento  # ⚠️ DATA DE FECHAMENTO = AGORA
             )
 
+            # Resetar a meta, manter excedente
             await conn.execute(
                 """
                 UPDATE metas 
@@ -4012,10 +4025,10 @@ async def fechar_meta(user_id, data_inicio, data_fim):
             )
 
             return {
-                "dinheiro": min(dinheiro, 300000),  # APENAS META
+                "dinheiro": min(dinheiro, 300000),
                 "polvora": polvora,
                 "acao": acao,
-                "dinheiro_acoes": dinheiro_acoes,  # APENAS AÇÕES (SEPARADO)
+                "dinheiro_acoes": dinheiro_acoes,
                 "excedente": saldo_excedente
             }
     except Exception as e:
@@ -4023,6 +4036,7 @@ async def fechar_meta(user_id, data_inicio, data_fim):
         return None
 # ---------------------------------------------------------
 async def buscar_historico_metas(data_inicio, data_fim):
+    """Busca metas no histórico pelo período informado."""
     pool = await get_pool()
     if not pool:
         return []
@@ -4030,8 +4044,8 @@ async def buscar_historico_metas(data_inicio, data_fim):
         async with pool.acquire() as conn:
             return await conn.fetch(
                 """
-                SELECT * FROM metas_historico
-                WHERE data_fechamento BETWEEN $1 AND $2
+                SELECT * FROM metas_historico 
+                WHERE data_fechamento >= $1 AND data_fechamento <= $2
                 ORDER BY data_fechamento DESC
                 """,
                 data_inicio, data_fim
@@ -4050,6 +4064,9 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
         if not historico:
             await interaction.followup.send(f"📭 Nenhuma meta fechada no período **{data_inicio_str}** até **{data_fim_str}**.", ephemeral=True)
             return
+        
+        # ⚠️ DEBUG: Mostrar quantas metas encontrou
+        logger.info(f"📊 Relatório: {len(historico)} metas encontradas no período {data_inicio_str} a {data_fim_str}")
         
         # Calculando separados
         total_dinheiro = sum(r["dinheiro"] for r in historico)
@@ -4105,7 +4122,6 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             color=0x2ecc71, timestamp=agora()
         )
         
-        # ⚠️ RESUMO GERAL - TUDO EM UM ÚNICO FIELD (mas com quebras de linha)
         resumo_texto = (
             f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
             f"🎯 **Dinheiro de Ações:** {formatar_dinheiro(total_acoes)}\n"
@@ -4123,10 +4139,9 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
         await asyncio.sleep(0.5)
         
         # =========================================================
-        # 2. QUEM PAGOU - Dividir em grupos de até 5 para evitar limite
+        # 2. QUEM PAGOU
         # =========================================================
         if pagaram_ordenado:
-            # Dividir em grupos de 5 pessoas por embed
             for i in range(0, len(pagaram_ordenado), 5):
                 grupo = pagaram_ordenado[i:i+5]
                 embed = discord.Embed(
@@ -4146,9 +4161,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                     texto += f"   🎯 Ações: {formatar_dinheiro(item['total_acoes'])}\n"
                     texto += f"   📦 Total: {formatar_dinheiro(item['total_geral'])}\n\n"
                 
-                # ⚠️ Verificar se o texto não ultrapassa 1024 caracteres
                 if len(texto) > 1000:
-                    # Dividir em 2 fields se necessário
                     parte1 = texto[:900]
                     parte2 = texto[900:]
                     embed.add_field(name="📋 LISTA (parte 1)", value=parte1, inline=False)
@@ -4184,7 +4197,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                 await asyncio.sleep(0.3)
         
         # =========================================================
-        # 4. ISENTOS (GERENTES)
+        # 4. ISENTOS
         # =========================================================
         if isentos:
             for i in range(0, len(isentos), 10):
@@ -4221,7 +4234,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
         
 # ---------------------------------------------------------
 async def fechar_todas_metas(data_inicio, data_fim):
-    """Fecha todas as metas. Relatório mostra Meta e Ações SEPARADOS."""
+    """Fecha todas as metas e salva no histórico com a data correta."""
     pool = await get_pool()
     if not pool:
         return None, []
@@ -4233,6 +4246,9 @@ async def fechar_todas_metas(data_inicio, data_fim):
 
             relatorio = []
             guild = bot.get_guild(GUILD_ID)
+            
+            # ⚠️ DATA DE FECHAMENTO = AGORA (momento do fechamento)
+            data_fechamento = agora_db()
 
             for meta in metas:
                 user_id = meta["user_id"]
@@ -4248,14 +4264,25 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
                 saldo_excedente = meta.get("saldo_excedente") or 0
 
+                # ⚠️ SALVAR COM A DATA CORRETA
                 await conn.execute(
                     """
-                    INSERT INTO metas_historico (user_id, dinheiro, polvora, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    INSERT INTO metas_historico (
+                        user_id, dinheiro, polvora, acao, dinheiro_acoes, 
+                        data_inicio, data_fim, data_fechamento
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     """,
-                    user_id, min(dinheiro, 300000), polvora, acao, dinheiro_acoes, data_inicio, data_fim, agora_db()
+                    user_id, 
+                    min(dinheiro, 300000), 
+                    polvora, 
+                    acao, 
+                    dinheiro_acoes, 
+                    data_inicio,  # Data de INÍCIO da semana
+                    data_fim,     # Data de FIM da semana
+                    data_fechamento  # ⚠️ DATA DE FECHAMENTO = AGORA
                 )
 
+                # Resetar a meta, mas manter excedente
                 await conn.execute(
                     """
                     UPDATE metas 
@@ -4267,10 +4294,10 @@ async def fechar_todas_metas(data_inicio, data_fim):
 
                 relatorio.append({
                     "user_id": user_id,
-                    "dinheiro": min(dinheiro, 300000),  # APENAS META
+                    "dinheiro": min(dinheiro, 300000),
                     "polvora": polvora,
                     "acao": acao,
-                    "dinheiro_acoes": dinheiro_acoes,  # APENAS AÇÕES (SEPARADO)
+                    "dinheiro_acoes": dinheiro_acoes,
                     "total_meta": min(dinheiro, 300000),
                     "excedente": saldo_excedente,
                     "status": status
