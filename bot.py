@@ -4052,9 +4052,9 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             return
         
         # Calculando separados
-        total_dinheiro = sum(r["dinheiro"] for r in historico)  # APENAS META
+        total_dinheiro = sum(r["dinheiro"] for r in historico)
         total_polvora = sum(r["polvora"] for r in historico)
-        total_acoes = sum(r.get("dinheiro_acoes") or 0 for r in historico)  # APENAS AÇÕES
+        total_acoes = sum(r.get("dinheiro_acoes") or 0 for r in historico)
         total_geral = total_dinheiro + total_acoes
         
         guild = interaction.guild
@@ -4088,7 +4088,13 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
         
         pagaram_ordenado = sorted(pagaram, key=lambda x: x["total_geral"], reverse=True)
         
-        # EMBED RESUMO COM VALORES SEPARADOS
+        canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
+        if not canal_resultados:
+            canal_resultados = interaction.channel
+        
+        # =========================================================
+        # 1. EMBED RESUMO GERAL
+        # =========================================================
         titulo = f"📊 RELATÓRIO DE METAS FECHADAS"
         if titulo_extra:
             titulo = f"📊 {titulo_extra}"
@@ -4098,28 +4104,35 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             description=f"📅 **Período:** {data_inicio_str} até {data_fim_str}",
             color=0x2ecc71, timestamp=agora()
         )
-        embed_resumo.add_field(
-            name="📊 RESUMO GERAL",
-            value=(
-                f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
-                f"🎯 **Dinheiro de Ações:** {formatar_dinheiro(total_acoes)}\n"
-                f"💣 **Pólvora:** {fmt_num(total_polvora)} unidades\n"
-                f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
-                f"👥 **Total de metas fechadas:** {len(historico)}\n"
-                f"✅ **Pagaram:** {len(pagaram)}\n"
-                f"❌ **Não pagaram:** {len(nao_pagaram)}\n"
-                f"🟡 **Isentos (Gerentes):** {len(isentos)}"
-            ),
-            inline=False
+        
+        # ⚠️ RESUMO GERAL - TUDO EM UM ÚNICO FIELD (mas com quebras de linha)
+        resumo_texto = (
+            f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
+            f"🎯 **Dinheiro de Ações:** {formatar_dinheiro(total_acoes)}\n"
+            f"💣 **Pólvora:** {fmt_num(total_polvora)} unidades\n"
+            f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
+            f"👥 **Total de metas fechadas:** {len(historico)}\n"
+            f"✅ **Pagaram:** {len(pagaram)}\n"
+            f"❌ **Não pagaram:** {len(nao_pagaram)}\n"
+            f"🟡 **Isentos (Gerentes):** {len(isentos)}"
         )
+        embed_resumo.add_field(name="📊 RESUMO GERAL", value=resumo_texto, inline=False)
         embed_resumo.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
         
-        # EMBEDS DE QUEM PAGOU - MOSTRANDO SEPARADO
-        embeds_pagaram = []
+        await canal_resultados.send(embed=embed_resumo)
+        await asyncio.sleep(0.5)
+        
+        # =========================================================
+        # 2. QUEM PAGOU - Dividir em grupos de até 5 para evitar limite
+        # =========================================================
         if pagaram_ordenado:
-            for i in range(0, len(pagaram_ordenado), 10):
-                grupo = pagaram_ordenado[i:i+10]
-                embed = discord.Embed(title=f"✅ QUEM PAGOU ({len(pagaram)} membros) - Parte {i//10 + 1}", color=0x2ecc71)
+            # Dividir em grupos de 5 pessoas por embed
+            for i in range(0, len(pagaram_ordenado), 5):
+                grupo = pagaram_ordenado[i:i+5]
+                embed = discord.Embed(
+                    title=f"✅ QUEM PAGOU ({len(pagaram)} membros) - Parte {i//5 + 1}",
+                    color=0x2ecc71
+                )
                 texto = ""
                 for idx, item in enumerate(grupo, i + 1):
                     member = guild.get_member(int(item["user_id"])) if guild else None
@@ -4131,16 +4144,31 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                     texto += f"**{idx}.** {nome}\n"
                     texto += f"   💰 Meta: {formatar_dinheiro(item['total_meta'])}\n"
                     texto += f"   🎯 Ações: {formatar_dinheiro(item['total_acoes'])}\n"
-                    texto += f"   📦 Total: {formatar_dinheiro(item['total_geral'])}\n"
-                embed.add_field(name="📋 LISTA", value=texto, inline=False)
-                embeds_pagaram.append(embed)
+                    texto += f"   📦 Total: {formatar_dinheiro(item['total_geral'])}\n\n"
+                
+                # ⚠️ Verificar se o texto não ultrapassa 1024 caracteres
+                if len(texto) > 1000:
+                    # Dividir em 2 fields se necessário
+                    parte1 = texto[:900]
+                    parte2 = texto[900:]
+                    embed.add_field(name="📋 LISTA (parte 1)", value=parte1, inline=False)
+                    embed.add_field(name="📋 LISTA (parte 2)", value=parte2, inline=False)
+                else:
+                    embed.add_field(name="📋 LISTA", value=texto, inline=False)
+                
+                await canal_resultados.send(embed=embed)
+                await asyncio.sleep(0.3)
         
-        # EMBEDS DE QUEM NÃO PAGOU
-        embeds_nao_pagaram = []
+        # =========================================================
+        # 3. QUEM NÃO PAGOU
+        # =========================================================
         if nao_pagaram:
             for i in range(0, len(nao_pagaram), 10):
                 grupo = nao_pagaram[i:i+10]
-                embed = discord.Embed(title=f"❌ QUEM NÃO PAGOU ({len(nao_pagaram)} membros) - Parte {i//10 + 1}", color=0xe74c3c)
+                embed = discord.Embed(
+                    title=f"❌ QUEM NÃO PAGOU ({len(nao_pagaram)} membros) - Parte {i//10 + 1}",
+                    color=0xe74c3c
+                )
                 texto = ""
                 for idx, item in enumerate(grupo, i + 1):
                     member = guild.get_member(int(item["user_id"])) if guild else None
@@ -4150,15 +4178,21 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                         user = await pegar_usuario(int(item["user_id"]))
                         nome = user.display_name if user else f"ID: {item['user_id']}"
                     texto += f"**{idx}.** {nome} - ❌ ZERADO\n"
+                
                 embed.add_field(name="📋 LISTA", value=texto, inline=False)
-                embeds_nao_pagaram.append(embed)
+                await canal_resultados.send(embed=embed)
+                await asyncio.sleep(0.3)
         
-        # EMBEDS DE ISENTOS
-        embeds_isentos = []
+        # =========================================================
+        # 4. ISENTOS (GERENTES)
+        # =========================================================
         if isentos:
             for i in range(0, len(isentos), 10):
                 grupo = isentos[i:i+10]
-                embed = discord.Embed(title=f"🟡 META ISENTA ({len(isentos)} gerentes) - Parte {i//10 + 1}", color=0xf1c40f)
+                embed = discord.Embed(
+                    title=f"🟡 META ISENTA ({len(isentos)} gerentes) - Parte {i//10 + 1}",
+                    color=0xf1c40f
+                )
                 texto = ""
                 for idx, item in enumerate(grupo, i + 1):
                     member = guild.get_member(int(item["user_id"])) if guild else None
@@ -4168,36 +4202,23 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                         user = await pegar_usuario(int(item["user_id"]))
                         nome = user.display_name if user else f"ID: {item['user_id']}"
                     texto += f"**{idx}.** {nome} - 🟡 ISENTO (Gerente)\n"
+                
                 embed.add_field(name="📋 LISTA", value=texto, inline=False)
-                embeds_isentos.append(embed)
+                await canal_resultados.send(embed=embed)
+                await asyncio.sleep(0.3)
         
-        canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
-        if not canal_resultados:
-            canal_resultados = interaction.channel
-        
-        await canal_resultados.send(embed=embed_resumo)
-        await asyncio.sleep(0.5)
-        for embed in embeds_pagaram:
-            await canal_resultados.send(embed=embed)
-            await asyncio.sleep(0.3)
-        for embed in embeds_nao_pagaram:
-            await canal_resultados.send(embed=embed)
-            await asyncio.sleep(0.3)
-        for embed in embeds_isentos:
-            await canal_resultados.send(embed=embed)
-            await asyncio.sleep(0.3)
-        
-        total_embeds = 1 + len(embeds_pagaram) + len(embeds_nao_pagaram) + len(embeds_isentos)
+        total_embeds = 1 + (len(pagaram_ordenado) + 4) // 5 + (len(nao_pagaram) + 9) // 10 + (len(isentos) + 9) // 10
         await interaction.followup.send(
             f"✅ **Relatório enviado com sucesso!**\n"
-            f"📊 {len(historico)} metas encontradas\n"
+            f"📊 {len(historico)} metas processadas\n"
             f"📨 {total_embeds} mensagens enviadas",
             ephemeral=True
         )
         
     except Exception as e:
         logger.error(f"❌ Erro ao gerar relatório: {e}")
-        await interaction.followup.send(f"❌ Erro ao gerar relatório: {e}", ephemeral=True)
+        await interaction.followup.send(f"❌ Erro ao gerar relatório: {str(e)}", ephemeral=True)
+        
 # ---------------------------------------------------------
 async def fechar_todas_metas(data_inicio, data_fim):
     """Fecha todas as metas. Relatório mostra Meta e Ações SEPARADOS."""
