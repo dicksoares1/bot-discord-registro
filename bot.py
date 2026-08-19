@@ -10205,19 +10205,29 @@ async def cmd_atualizar_acesso_resp(ctx):
 @bot.event
 async def on_ready():
     global http_session, fila_clipes
+    
     if hasattr(bot, "ja_iniciado"):
         return
+    
     bot.ja_iniciado = True
+    
     logger.info("🔄 Iniciando configuração do bot...")
     logger.info(f"✅ Logado como {bot.user}")
+    
+    # Inicializar HTTP session
     if not http_session:
         http_session = aiohttp.ClientSession()
+    
+    # Conectar ao banco de dados
     db_pool = await conectar_db()
     if not db_pool:
         logger.critical("❌ Não foi possível conectar ao banco de dados!")
         return
+
     await criar_tabela_grupos()
     await criar_tabela_alugueis()
+    
+    # Carregar guild e membros
     guild = bot.get_guild(GUILD_ID)
     if guild:
         try:
@@ -10225,26 +10235,52 @@ async def on_ready():
             logger.info("👥 Membros carregados no cache.")
         except Exception as e:
             logger.error(f"Erro ao carregar membros: {e}")
+    
     logger.info(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+    
+    # Iniciar worker de edição
     if not hasattr(bot, "edit_worker_started"):
         bot.loop.create_task(edit_worker())
         bot.edit_worker_started = True
         logger.info("🛠️ Edit worker iniciado.")
+    
+    # Iniciar fila de clipes
     fila_clipes = asyncio.Queue()
     bot.loop.create_task(worker_clipes())
     logger.info("🎬 Sistema de clips ON")
+    
+    # Iniciar tarefas de background
     await iniciar_tarefas_background()
+    
+    # Iniciar limpeza de cache
     bot.loop.create_task(limpeza_cache_periodica())
+    
+    # Iniciar health check para Railway
     bot.loop.create_task(health_check())
+    
+    # Carregar dados iniciais
     await carregar_dados_iniciais()
+    
+    # Enviar painéis
     await enviar_paineis_iniciais(guild)
     await recriar_painel_grupos()
     await recriar_mensagens_vendas()
     await restaurar_botoes_vendas()
     await restaurar_acoes()
-    await setup_status()
+    
+    # ⚠️ ⚠️ ⚠️ RESTAURAR BOTÕES DAS METAS ⚠️ ⚠️ ⚠️
+    # Isso é CRÍTICO - deve ser chamado depois que tudo estiver carregado
+    logger.info("🔄 Iniciando restauração dos botões das metas...")
     await restaurar_botoes_metas()
+    logger.info("✅ Restauração dos botões das metas concluída!")
+    
+    # Garantir acesso dos responsáveis a todas as salas
     await atualizar_acesso_responsaveis()
+    
+    # Status do bot
+    await setup_status()
+    
+    # Limpeza de memória
     gc.collect()
     logger.info("🧹 Limpeza de memória executada")
     logger.info("=" * 50)
@@ -10439,22 +10475,54 @@ async def restaurar_botoes_metas():
         await carregar_metas_cache()
         
         contador = 0
-        for uid, dados in metas_cache.items():
+        for uid, dados in list(metas_cache.items()):
             canal = guild.get_channel(dados["canal_id"])
-            if canal:
-                # Verificar se a mensagem do embed existe
+            if not canal:
+                logger.warning(f"⚠️ Canal não encontrado para meta {uid}")
+                continue
+            
+            try:
+                # Buscar a mensagem do embed
+                mensagem_encontrada = False
                 async for msg in canal.history(limit=30):
                     if msg.author == bot.user and msg.embeds:
                         if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
-                            # Se não tiver botões ou estiver com view antiga, recriar
+                            mensagem_encontrada = True
+                            # Verificar se tem botões
                             if not msg.components:
+                                # Recriar o embed com a view correta
+                                logger.info(f"🔄 Recriando painel da meta {uid} no canal {canal.name}")
                                 await atualizar_embed_meta(int(uid))
                                 contador += 1
                                 await asyncio.sleep(0.5)
+                            else:
+                                # Verificar se os botões estão com custom_id fixo
+                                tem_fixo = False
+                                for component in msg.components:
+                                    for item in component.children:
+                                        if item.custom_id and "fixo" in item.custom_id:
+                                            tem_fixo = True
+                                            break
+                                if not tem_fixo:
+                                    logger.info(f"🔄 Recriando painel da meta {uid} (custom_id antigo)")
+                                    await atualizar_embed_meta(int(uid))
+                                    contador += 1
+                                    await asyncio.sleep(0.5)
                             break
+                
+                if not mensagem_encontrada:
+                    # Se não encontrou a mensagem do bot, criar
+                    logger.info(f"🔄 Criando painel da meta {uid} (mensagem não encontrada)")
+                    await atualizar_embed_meta(int(uid))
+                    contador += 1
+                    await asyncio.sleep(0.5)
+                    
+            except Exception as e:
+                logger.error(f"❌ Erro ao restaurar meta {uid}: {e}")
         
         logger.info(f"✅ {contador} painéis de metas restaurados com botões!")
         return contador
+        
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar botões das metas: {e}")
         return 0
