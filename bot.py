@@ -5539,109 +5539,148 @@ class MetaView(discord.ui.View):
         self.user_id = user_id
 
     # =========================================================
-    # ⚠️ BOTÕES COM custom_id FIXOS (NÃO MUDAM NUNCA)
+    # ⚠️ BOTÕES COM custom_id FIXOS E ÚNICOS
+    # ⚠️ O user_id NÃO está no custom_id para não quebrar após redeploy
     # =========================================================
 
     @discord.ui.button(label="💣 Vender Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_vender_polvora_fixo", emoji="💣")
     async def vender_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pool = await get_pool()
-        if not pool:
-            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
-            return
-        async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
-        if not meta:
-            guild = interaction.guild
-            member = guild.get_member(int(self.user_id))
-            if member:
-                await criar_sala_meta(member)
-                await asyncio.sleep(1)
-                await carregar_metas_cache()
-                await interaction.response.send_message("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
+        try:
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
                 return
-            else:
-                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
-                return
-        await interaction.response.send_modal(VenderPolvoraMetaModal(self.user_id))
+            
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            
+            if not meta:
+                guild = interaction.guild
+                member = guild.get_member(int(self.user_id))
+                if member:
+                    await criar_sala_meta(member)
+                    await asyncio.sleep(1)
+                    await carregar_metas_cache()
+                    await interaction.response.send_message("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
+                    return
+                else:
+                    await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                    return
+            
+            await interaction.response.send_modal(VenderPolvoraMetaModal(self.user_id))
+            
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Vender Pólvora: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
 
     @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰")
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pool = await get_pool()
-        if not pool:
-            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
-            return
-        async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
-        if not meta:
-            guild = interaction.guild
-            member = guild.get_member(int(self.user_id))
-            if member:
-                await criar_sala_meta(member)
-                await asyncio.sleep(1)
-                await carregar_metas_cache()
-                await interaction.response.send_message("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
+        try:
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
                 return
-            else:
-                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
-                return
-        await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
+            
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            
+            if not meta:
+                guild = interaction.guild
+                member = guild.get_member(int(self.user_id))
+                if member:
+                    await criar_sala_meta(member)
+                    await asyncio.sleep(1)
+                    await carregar_metas_cache()
+                    await interaction.response.send_message("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
+                    return
+                else:
+                    await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                    return
+            
+            await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
+            
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Adicionar Dinheiro: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
 
     @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga_fixo", emoji="✅")
     async def polvora_paga(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        is_admin = interaction.user.guild_permissions.administrator
+        try:
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
 
-        if not is_gerente and not is_admin:
-            await interaction.response.send_message("❌ Apenas **Gerentes** ou **ADM** podem marcar pólvora como paga!", ephemeral=True)
-            return
+            if not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas **Gerentes** ou **ADM** podem marcar pólvora como paga!", ephemeral=True)
+                return
 
-        pendente = await buscar_polvora_pendente(self.user_id)
-        if not pendente:
-            await interaction.response.send_message("📭 Este membro não tem pólvora pendente para pagar!", ephemeral=True)
-            return
+            pendente = await buscar_polvora_pendente(self.user_id)
+            if not pendente:
+                await interaction.response.send_message("📭 Este membro não tem pólvora pendente para pagar!", ephemeral=True)
+                return
 
-        view = ConfirmarPagamentoPolvoraView(self.user_id, pendente)
-        embed = discord.Embed(
-            title="💰 CONFIRMAR PAGAMENTO DE PÓLVORA",
-            description=f"👤 <@{self.user_id}>",
-            color=0xf1c40f
-        )
-        embed.add_field(name="📦 Quantidade", value=f"{fmt_num(pendente['quantidade'])} unidades", inline=True)
-        embed.add_field(name="💰 Valor total", value=formatar_dinheiro(pendente['valor']), inline=True)
-        embed.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
-        embed.set_footer(text="Clique em ✅ Confirmar Pagamento para finalizar")
+            view = ConfirmarPagamentoPolvoraView(self.user_id, pendente)
+            embed = discord.Embed(
+                title="💰 CONFIRMAR PAGAMENTO DE PÓLVORA",
+                description=f"👤 <@{self.user_id}>",
+                color=0xf1c40f
+            )
+            embed.add_field(name="📦 Quantidade", value=f"{fmt_num(pendente['quantidade'])} unidades", inline=True)
+            embed.add_field(name="💰 Valor total", value=formatar_dinheiro(pendente['valor']), inline=True)
+            embed.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
+            embed.set_footer(text="Clique em ✅ Confirmar Pagamento para finalizar")
 
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Pólvora Paga: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
 
     @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️")
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_dono = str(interaction.user.id) == str(self.user_id)
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        is_admin = interaction.user.guild_permissions.administrator
+        try:
+            is_dono = str(interaction.user.id) == str(self.user_id)
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
 
-        if not is_dono and not is_gerente and not is_admin:
-            await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
-            return
+            if not is_dono and not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
+                return
 
-        pool = await get_pool()
-        if not pool:
-            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
-            return
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+                return
 
-        async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
 
-        if not meta:
-            await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
-            return
+            if not meta:
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                return
 
-        dados = {
-            "dinheiro": meta["dinheiro"] or 0,
-            "polvora": meta["polvora"] or 0,
-            "saldo_excedente": meta.get("saldo_excedente") or 0
-        }
+            dados = {
+                "dinheiro": meta["dinheiro"] or 0,
+                "polvora": meta["polvora"] or 0,
+                "saldo_excedente": meta.get("saldo_excedente") or 0
+            }
 
-        await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
+            await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
+            
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Meta: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
 
 # ###############################################
 class FecharMetasAutomaticoButton(discord.ui.Button):
@@ -10185,6 +10224,48 @@ async def cmd_limpar_sala(ctx):
     except Exception as e:
         logger.error(f"Erro ao limpar sala: {e}")
         await ctx.send(f"❌ **Erro ao limpar a sala:** {e}")
+# ---------------------------------------------------------
+@bot.command(name="recriar_metas")
+@commands.has_permissions(administrator=True)
+async def cmd_recriar_metas(ctx):
+    """FORÇA a recriação de TODOS os painéis de metas (resolve botões quebrados)."""
+    await ctx.send("🔄 **RECRIANDO TODOS OS PAINÉIS DE METAS...**\n⏳ Isso pode levar alguns segundos.")
+    
+    try:
+        # Recarregar cache
+        await carregar_metas_cache()
+        
+        contador = 0
+        for uid in list(metas_cache.keys()):
+            try:
+                # Forçar recriação do embed
+                await atualizar_embed_meta(int(uid))
+                contador += 1
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"❌ Erro ao recriar meta {uid}: {e}")
+        
+        await ctx.send(f"✅ **{contador} painéis de metas recriados com sucesso!**\n📌 Todos os botões agora devem funcionar.")
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao recriar metas: {e}")
+        await ctx.send(f"❌ Erro ao recriar metas: {e}")
+
+# ---------------------------------------------------------
+@bot.command(name="recriar_meta")
+@commands.has_permissions(administrator=True)
+async def cmd_recriar_meta(ctx, member: discord.Member):
+    """Recria o painel de meta de um membro específico."""
+    await ctx.send(f"🔄 Recriando painel de meta de {member.mention}...")
+    
+    try:
+        await atualizar_embed_meta(member.id)
+        await ctx.send(f"✅ Painel de meta de {member.mention} recriado com sucesso!")
+    except Exception as e:
+        logger.error(f"❌ Erro ao recriar meta de {member.id}: {e}")
+        await ctx.send(f"❌ Erro ao recriar meta: {e}")
+
+
 # ---------------------------------------------------------
 
 @bot.command(name="atualizar_acesso_resp")
