@@ -5239,6 +5239,14 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
         await interaction.response.send_message(f"✅ **{formatar_dinheiro(valor)} adicionado à meta!**", ephemeral=True)
 
 # ###############################################
+class RelatorioMetasButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="📊 Gerar Relatório de Metas", style=discord.ButtonStyle.success, custom_id="relatorio_metas_btn", emoji="📊")
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(RelatorioMetasModal())
+        
+# ###############################################
 class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
     data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO", placeholder="Ex: 01/07/2026", required=True)
     data_fim = discord.ui.TextInput(label="📅 Data FIM", placeholder="Ex: 31/07/2026", required=True)
@@ -5383,7 +5391,6 @@ class FecharMetasAutomaticoButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="🔒 Fechar Metas (Automático - Semana Anterior)", style=discord.ButtonStyle.success, custom_id="fechar_metas_automatico_btn", emoji="🔒")
 
-    # ---------------------------------------------------------
     async def callback(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -5394,7 +5401,11 @@ class FecharMetasAutomaticoButton(discord.ui.Button):
         data_inicio_str = data_inicio.strftime("%d/%m/%Y")
         data_fim_str = data_fim.strftime("%d/%m/%Y")
         view = ConfirmarFechamentoAutomaticoView(data_inicio, data_fim, data_inicio_str, data_fim_str)
-        embed = discord.Embed(title="🔒 FECHAR METAS - SEMANA ANTERIOR", description=f"📅 **Período a ser fechado:**\n**{data_inicio_str}** a **{data_fim_str}**\n\n⚠️ **ATENÇÃO:** Esta ação irá:\n• Fechar TODAS as metas deste período\n• Gerar o relatório completo\n• Resetar as metas dos membros\n\n🔄 **Esta semana é calculada automaticamente!**\n📌 Sempre a semana anterior (Segunda a Domingo)", color=0xe67e22)
+        embed = discord.Embed(
+            title="🔒 FECHAR METAS - SEMANA ANTERIOR",
+            description=f"📅 **Período a ser fechado:**\n**{data_inicio_str}** a **{data_fim_str}**\n\n⚠️ **ATENÇÃO:** Esta ação irá:\n• Fechar TODAS as metas deste período\n• Gerar o relatório completo\n• Resetar as metas dos membros\n\n🔄 **Esta semana é calculada automaticamente!**\n📌 Sempre a semana anterior (Segunda a Domingo)",
+            color=0xe67e22
+        )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # ###############################################
@@ -5636,10 +5647,9 @@ async def enviar_painel_relatorio_metas():
     view = discord.ui.View(timeout=None)
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharMetasAutomaticoButton())
-    # ⚠️ BOTÃO ZERAR REMOVIDO - SEGURANÇA!
     
     await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495685092999279, embed, view)
-    logger.info("📊 Painel de gerenciamento de metas enviado (SEM botão zerar)")
+    logger.info("📊 Painel de gerenciamento de metas enviado")
 # ---------------------------------------------------------
 @tasks.loop(hours=1)
 async def verificar_avisos_meta():
