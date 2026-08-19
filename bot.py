@@ -6152,9 +6152,13 @@ CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 
 ACOES_SEMANA = {
     "Joalheria": 5,
-    "Banco Fleeca": 4,
+    "Banco Fleeca - Rota 68": 4,
+    "Banco Fleeca - Chaves": 4,
+    "Banco Fleeca - Praia": 4,
+    "Banco Fleeca - Shopping": 4,
     "Banco de Paleto": 1,
-    "Banco Central": 1,
+    "Banco Central Com Refém": 1,
+    "Banco Central Sem Refém": 1,
     "Nióbio": 1,
     "Loja de Armas (Ammunation)": None,
     "Loja de Bebidas": None,
@@ -6165,7 +6169,9 @@ ACOES_SEMANA = {
     "Companhia de Gás": None,
     "Life Invader": None,
     "Aeroporto de Sucata": None,
-    "Carro Forte": None,
+    "Carro Forte - Açougue": None,
+    "Carro Forte - Faculdade": None,
+    "Carro Forte - Grove Street": None,
     "Banco Bahamas": None,
     "Burgueshot (Bahamas)": None,
     "Refinaria (Bahamas)": None,
@@ -6173,6 +6179,9 @@ ACOES_SEMANA = {
     "🚁 Helicrash (15h)": None,
     "🚁 Helicrash (22h)": None,
     "🚁 Helicrash (02h)": None,
+    "Lan House - Jersey": None,
+    "Lan House - Brooklyn": None,
+    "Lan House - Manhattan": None,
 }
 
 CARGOS_PERMITIDOS_ESCALACAO = [
@@ -6193,15 +6202,15 @@ REGRAS_GERAIS_BAHAMAS = """
 
 1️⃣ **Bom senso** é a regra mais importante em ações fechadas ou de rua.
 
-2️⃣ 🚫 **Proibido** uso de drogas ilegais em ações fechadas (metanfetamina, cocaína, oxy, seringa medicinal, etc.).
+2️⃣ 🚫 **Proibido** uso de drogas ilegais em ações fechadas.
 
 3️⃣ 🚫 **Proibido** uso de capacete em qualquer ação fechada.
 
-4️⃣ 🚫 **Proibido** uso de armas de fogo durante Corridas Clandestinas, no resgate ou na fuga.
+4️⃣ 🚫 **Proibido** uso de armas de fogo durante Corridas Clandestinas.
 
-5️⃣ 🚫 **Proibido** usar mais de 1 colete em ações fechadas (lojas, bancos, carros-fortes etc.), sendo policial ou não.
+5️⃣ 🚫 **Proibido** usar mais de 1 colete em ações fechadas.
 
-6️⃣ 🚫 **Proibido** movimentação/rotação com qualquer veículo em ações fechadas (exceto helicóptero da polícia).
+6️⃣ 🚫 **Proibido** movimentação/rotação com qualquer veículo em ações fechadas.
 
 7️⃣ ✅ Liberado o comando `/gg` em ações fechadas e de rua das **00:00 às 12:00**.
 
@@ -6209,7 +6218,7 @@ REGRAS_GERAIS_BAHAMAS = """
 
 9️⃣ 🚫 **Proibido** uso de gasolina como arma em qualquer ação fechada.
 
-🔟 🚁 Helicóptero policial pode entrar sozinho no perímetro por **2 minutos**. Após isso, todo o contingente deve entrar.
+🔟 🚁 Helicóptero policial pode entrar sozinho no perímetro por **2 minutos**.
 
 1️⃣1️⃣ **Disputa de blips:** Apenas 1 pessoa por facção pode puxar a ação.
 """
@@ -6224,9 +6233,7 @@ REGRAS_ACOES = {
             "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
             "🤝 **Negociação:** Obrigatória.",
             "🚫 **Refém:** Proibido."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Loja de Bebidas": {
         "regras": [
@@ -6236,9 +6243,7 @@ REGRAS_ACOES = {
             "🤝 **Negociação:** Obrigatória.",
             "🚫 **Refém:** Proibido.",
             "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Loja de Departamento": {
         "regras": [
@@ -6248,9 +6253,7 @@ REGRAS_ACOES = {
             "🔫 **Armamento:** Todos de Pistola (exceto Glock Rajada).",
             "🤝 **Negociação:** Obrigatória.",
             "👤 **Refém:** Opcional, máximo."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Mergulhador": {
         "regras": [
@@ -6260,9 +6263,7 @@ REGRAS_ACOES = {
             "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
             "🚫 **Refém:** Proibido.",
             "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Grapeseed": {
         "regras": [
@@ -6272,9 +6273,7 @@ REGRAS_ACOES = {
             "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
             "🚫 **Refém:** Proibido.",
             "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Companhia de Gás": {
         "regras": [
@@ -6287,9 +6286,7 @@ REGRAS_ACOES = {
             "📌 1️⃣ Proibido subir em qualquer objeto/lugar durante a ação.",
             "📌 2️⃣ Proibido atirar contra policiais entrando no perímetro.",
             "📌 3️⃣ Todos os participantes devem estar dentro do perímetro para o embate começar."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Life Invader": {
         "regras": [
@@ -6300,9 +6297,7 @@ REGRAS_ACOES = {
             "🚫 **Refém:** Proibido.",
             "📌 Proibido subir em qualquer objeto/lugar durante a ação.",
             "📌 Proibido a utilização dos INTERIORES do perímetro (Life Invader, Cozinha/Piscina)."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Aeroporto de Sucata": {
         "regras": [
@@ -6311,21 +6306,7 @@ REGRAS_ACOES = {
             "🔫 **Armamento:** Obrigatório ter 6 pistolas.",
             "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
             "🚫 **Refém:** Proibido."
-        ],
-        "is_bahamas": False,
-        "limite": None
-    },
-    "Carro Forte": {
-        "regras": [
-            "👥 **Bandidos:** Obrigatório 6.",
-            "👮 **Máximo de policiais:** 8.",
-            "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.",
-            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
-            "🚫 **Refém:** Proibido.",
-            "📌 **Obs:** Proibido bugar head-glitch."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Carro Forte - Açougue": {
         "regras": [
@@ -6335,9 +6316,7 @@ REGRAS_ACOES = {
             "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
             "🚫 **Refém:** Proibido.",
             "📌 **Obs:** Proibido bugar head-glitch."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Carro Forte - Faculdade": {
         "regras": [
@@ -6347,9 +6326,7 @@ REGRAS_ACOES = {
             "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
             "🚫 **Refém:** Proibido.",
             "📌 **Obs:** Proibido bugar head-glitch."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Carro Forte - Grove Street": {
         "regras": [
@@ -6359,9 +6336,7 @@ REGRAS_ACOES = {
             "🚫 **Refém:** Proibido.",
             "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão).",
             "📌 **Obs:** Helicóptero somente para visual, sem atirador."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Joalheria": {
         "regras": [
@@ -6372,11 +6347,9 @@ REGRAS_ACOES = {
             "🤝 **Negociação:** Obrigatória.",
             "👤 **Refém:** Opcional, no máximo 3.",
             "📌 Proibido a utilização dos INTERIORES do perímetro (Prefeitura)."
-        ],
-        "is_bahamas": False,
-        "limite": 5
+        ]
     },
-    "Banco Fleeca": {
+    "Banco Fleeca - Rota 68": {
         "regras": [
             "👥 **Mínimo de bandidos:** 6 (mínimo de 3 dentro).",
             "👥 **Máximo de bandidos:** 8 (mínimo de 3 dentro).",
@@ -6386,9 +6359,7 @@ REGRAS_ACOES = {
             "🤝 **Negociação:** Obrigatória.",
             "👤 **Refém:** Opcional, no máximo 3.",
             "📌 Na fuga, só é permitido fazer o Fleeca Chaves."
-        ],
-        "is_bahamas": False,
-        "limite": 4
+        ]
     },
     "Banco Fleeca - Chaves": {
         "regras": [
@@ -6400,9 +6371,7 @@ REGRAS_ACOES = {
             "🤝 **Negociação:** Obrigatória.",
             "👤 **Refém:** Opcional, no máximo 3.",
             "📌 Regras de posicionamento: até 3 integrantes em locais altos/acessíveis no prédio e até 3 no interior do resort."
-        ],
-        "is_bahamas": False,
-        "limite": 4
+        ]
     },
     "Banco Fleeca - Praia": {
         "regras": [
@@ -6413,9 +6382,7 @@ REGRAS_ACOES = {
             "📌 Na casa de madeira fica limitado 3 bandidos.",
             "📌 Polícia não pode marcar saída.",
             "📌 Proibida a fuga."
-        ],
-        "is_bahamas": False,
-        "limite": 4
+        ]
     },
     "Banco Fleeca - Shopping": {
         "regras": [
@@ -6424,9 +6391,7 @@ REGRAS_ACOES = {
             "📌 Sem atirador: uso do interior do prédio proibido.",
             "📌 Limite máximo de pessoas no metrô: 3.",
             "📌 Proibida a fuga."
-        ],
-        "is_bahamas": False,
-        "limite": 4
+        ]
     },
     "Banco de Paleto": {
         "regras": [
@@ -6439,24 +6404,7 @@ REGRAS_ACOES = {
             "📌 Ação inicia quando a polícia entrar no perímetro.",
             "📌 Helicóptero só poderá ter o piloto.",
             "📌 Máximo de 6 pessoas dentro do GALINHEIRO."
-        ],
-        "is_bahamas": False,
-        "limite": 1
-    },
-    "Banco Central": {
-        "regras": [
-            "👥 **Bandidos:** Obrigatório 10.",
-            "👥 **Bandidos fora:** Máximo 3 em prédios ou 5 no chão.",
-            "🚗 **Máximo de veículos:** 3.",
-            "👮 **Máximo de policiais:** 12.",
-            "🔫 **Armamento:** Obrigatório RIFLE.",
-            "🤝 **Negociação:** Obrigatória.",
-            "🚫 **Refém:** Proibido.",
-            "📌 Proibido o uso do interior do apartamento em frente ao POSTAL.",
-            "📌 Obs: Proibido ter bandidos fora se a ação for na fuga."
-        ],
-        "is_bahamas": False,
-        "limite": 1
+        ]
     },
     "Banco Central Com Refém": {
         "regras": [
@@ -6471,9 +6419,20 @@ REGRAS_ACOES = {
             "📌 Não pode ser os dois ao mesmo tempo.",
             "📌 Proibido o uso do interior do apartamento em frente ao POSTAL.",
             "📌 Obs: Proibido ter bandidos fora se a ação for na fuga."
-        ],
-        "is_bahamas": False,
-        "limite": 1
+        ]
+    },
+    "Banco Central Sem Refém": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 10.",
+            "👥 **Bandidos fora:** Máximo 3 em prédios ou 5 no chão.",
+            "🚗 **Máximo de veículos:** 3.",
+            "👮 **Máximo de policiais:** 12.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "🤝 **Negociação:** Obrigatória.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Proibido o uso do interior do apartamento em frente ao POSTAL.",
+            "📌 Obs: Proibido ter bandidos fora se a ação for na fuga."
+        ]
     },
     "Nióbio": {
         "regras": [
@@ -6486,9 +6445,7 @@ REGRAS_ACOES = {
             "📌 A parte da água só poderá ser acessada para entrar ou sair do túnel do NIÓBIO.",
             "📌 Limite de 4 bandidos entre o corredor que dá acesso a água e o quadrado do quebrado.",
             "📌 Máximo de 4 bandidos no fundo do nióbio."
-        ],
-        "is_bahamas": False,
-        "limite": 1
+        ]
     },
     "🚁 Helicrash (13h)": {
         "regras": [
@@ -6500,9 +6457,7 @@ REGRAS_ACOES = {
             "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
             "💉 A reanimação é permitida somente após o término completo da ação.",
             "🚫 Proibido a utilização de GRANADEIRA."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "🚁 Helicrash (15h)": {
         "regras": [
@@ -6514,9 +6469,7 @@ REGRAS_ACOES = {
             "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
             "💉 A reanimação é permitida somente após o término completo da ação.",
             "🚫 Proibido a utilização de GRANADEIRA."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "🚁 Helicrash (22h)": {
         "regras": [
@@ -6528,9 +6481,7 @@ REGRAS_ACOES = {
             "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
             "💉 A reanimação é permitida somente após o término completo da ação.",
             "🚫 Proibido a utilização de GRANADEIRA."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "🚁 Helicrash (02h)": {
         "regras": [
@@ -6542,9 +6493,7 @@ REGRAS_ACOES = {
             "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
             "💉 A reanimação é permitida somente após o término completo da ação.",
             "🚫 Proibido a utilização de GRANADEIRA."
-        ],
-        "is_bahamas": False,
-        "limite": None
+        ]
     },
     "Loja de Armas (Bahamas)": {
         "regras": [
@@ -6555,8 +6504,7 @@ REGRAS_ACOES = {
             "🤝 **Negociação:** Obrigatória.",
             "🚫 **Refém:** Proibido."
         ],
-        "is_bahamas": True,
-        "limite": None
+        "is_bahamas": True
     },
     "Burgueshot (Bahamas)": {
         "regras": [
@@ -6567,8 +6515,7 @@ REGRAS_ACOES = {
             "🤝 **Negociação:** Obrigatória.",
             "👤 **Refém:** Opcional."
         ],
-        "is_bahamas": True,
-        "limite": None
+        "is_bahamas": True
     },
     "Refinaria (Bahamas)": {
         "regras": [
@@ -6579,8 +6526,7 @@ REGRAS_ACOES = {
             "🚫 **Refém:** Proibido.",
             "📌 Fica proibido o uso de atirador."
         ],
-        "is_bahamas": True,
-        "limite": None
+        "is_bahamas": True
     },
     "Lan House - (Bahamas)": {
         "regras": [
@@ -6592,8 +6538,7 @@ REGRAS_ACOES = {
             "👤 **Refém:** Opcional.",
             "📌 Limite de 4 pessoas dentro da Lan House."
         ],
-        "is_bahamas": True,
-        "limite": None
+        "is_bahamas": True
     },
     "Lan House - Jersey": {
         "regras": [
@@ -6605,8 +6550,7 @@ REGRAS_ACOES = {
             "👤 **Refém:** Opcional.",
             "📌 Limite de 4 pessoas dentro da Lan House."
         ],
-        "is_bahamas": True,
-        "limite": None
+        "is_bahamas": True
     },
     "Lan House - Brooklyn": {
         "regras": [
@@ -6618,8 +6562,7 @@ REGRAS_ACOES = {
             "👤 **Refém:** Opcional.",
             "📌 Limite de 4 pessoas dentro da Lan House."
         ],
-        "is_bahamas": True,
-        "limite": None
+        "is_bahamas": True
     },
     "Lan House - Manhattan": {
         "regras": [
@@ -6631,8 +6574,7 @@ REGRAS_ACOES = {
             "👤 **Refém:** Opcional.",
             "📌 Limite de 4 pessoas dentro da Lan House."
         ],
-        "is_bahamas": True,
-        "limite": None
+        "is_bahamas": True
     },
     "Banco Bahamas": {
         "regras": [
@@ -6645,8 +6587,7 @@ REGRAS_ACOES = {
             "📌 Limite de 6 pessoas no Salão.",
             "📌 Máximo de 4 bandidos na parte de baixo do Banco."
         ],
-        "is_bahamas": True,
-        "limite": None
+        "is_bahamas": True
     }
 }
 
@@ -6757,11 +6698,7 @@ class SelecionarAcaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
         options = []
-        
-        acoes_ordenadas = sorted(ACOES_SEMANA.keys(), key=lambda x: (0 if "Helicrash" not in x else 1, x))
-        
-        for nome in acoes_ordenadas:
-            limite = ACOES_SEMANA.get(nome)
+        for nome, limite in ACOES_SEMANA.items():
             emoji = "🚁" if "Helicrash" in nome else "🏪"
             if "Bahamas" in nome:
                 emoji = "🏝️"
@@ -6773,15 +6710,9 @@ class SelecionarAcaoView(discord.ui.View):
                 options.append(discord.SelectOption(label=nome, description=f"Limite: {limite}/semana", emoji=emoji))
             else:
                 options.append(discord.SelectOption(label=nome, description="Ilimitado", emoji=emoji))
-        
-        self.select = discord.ui.Select(
-            placeholder="📋 Escolha a ação",
-            options=options,
-            min_values=1,
-            max_values=1
-        )
-        self.select.callback = self.select_callback
-        self.add_item(self.select)
+        select = discord.ui.Select(placeholder="📋 Escolha a ação", options=options, max_values=1)
+        select.callback = self.select_callback
+        self.add_item(select)
         self.add_item(FecharButton())
 
     async def select_callback(self, interaction: discord.Interaction):
@@ -6803,25 +6734,22 @@ class SelecionarAcaoView(discord.ui.View):
         
         acao_id = await salvar_acao_db(acao_tipo, interaction.user.id)
         
-        regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."], "is_bahamas": False})
+        # Buscar regras
+        regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."]})
         regras = regras_data.get("regras", [])
         is_bahamas = regras_data.get("is_bahamas", False)
         
-        if "Helicrash" in acao_tipo:
-            cor = 0xe67e22
-            emoji = "🚁"
-        elif "Bahamas" in acao_tipo:
-            cor = 0x1abc9c
+        cor = 0xe67e22 if "Helicrash" in acao_tipo else 0x3498db
+        emoji = "🚁" if "Helicrash" in acao_tipo else "🎯"
+        if "Bahamas" in acao_tipo:
             emoji = "🏝️"
-        elif "Banco" in acao_tipo:
-            cor = 0xe74c3c
+            cor = 0x1abc9c
+        if "Banco" in acao_tipo:
             emoji = "🏦"
-        elif "Carro Forte" in acao_tipo:
-            cor = 0xf39c12
+            cor = 0xe74c3c
+        if "Carro Forte" in acao_tipo:
             emoji = "🚚"
-        else:
-            cor = 0x3498db
-            emoji = "🎯"
+            cor = 0xf39c12
         
         embed = discord.Embed(
             title=f"{emoji} ESCALAÇÃO - {acao_tipo}",
@@ -6829,6 +6757,7 @@ class SelecionarAcaoView(discord.ui.View):
             timestamp=agora()
         )
         
+        # ⚠️ ADICIONAR REGRAS NO EMBED
         embed.add_field(
             name="📌 REGRAS DA AÇÃO",
             value="\n".join(regras),
@@ -6839,6 +6768,14 @@ class SelecionarAcaoView(discord.ui.View):
             embed.add_field(
                 name="🏝️ REGRAS GERAIS - BAHAMAS",
                 value=REGRAS_GERAIS_BAHAMAS,
+                inline=False
+            )
+        
+        if "Helicrash" in acao_tipo:
+            horario = acao_tipo.split("(")[1].replace(")", "")
+            embed.add_field(
+                name="⏰ HORÁRIO",
+                value=f"{horario} (horário de Brasília)",
                 inline=False
             )
         
@@ -6889,6 +6826,7 @@ class SelecionarAcaoView(discord.ui.View):
         else:
             await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
 
+# ###############################################
 class FecharButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger)
@@ -6896,6 +6834,7 @@ class FecharButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await interaction.message.delete()
 
+# ###############################################
 class AcaoView(discord.ui.View):
     def __init__(self, acao_id, criador_id):
         super().__init__(timeout=None)
@@ -6907,27 +6846,22 @@ class AcaoView(discord.ui.View):
         if not any(role.id in CARGOS_PERMITIDOS_ESCALACAO for role in interaction.user.roles):
             await interaction.response.send_message("❌ Você não tem permissão para participar de ações!", ephemeral=True)
             return
-
         pool = await get_pool()
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
             return
-
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
                 await interaction.response.send_message("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
-
             ja_participa = await conn.fetchval("SELECT 1 FROM participantes_acoes WHERE acao_id=$1 AND user_id=$2", self.acao_id, str(interaction.user.id))
             if ja_participa:
                 await interaction.response.send_message("⚠️ Você já está participando!", ephemeral=True)
                 return
-
             await conn.execute("INSERT INTO participantes_acoes (acao_id, user_id) VALUES ($1, $2)", self.acao_id, str(interaction.user.id))
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
-
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você se inscreveu na ação **{acao['tipo']}**!", ephemeral=True)
 
@@ -6937,22 +6871,18 @@ class AcaoView(discord.ui.View):
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
             return
-
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
                 await interaction.response.send_message("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
-
             participa = await conn.fetchval("SELECT 1 FROM participantes_acoes WHERE acao_id=$1 AND user_id=$2", self.acao_id, str(interaction.user.id))
             if not participa:
                 await interaction.response.send_message("⚠️ Você não está participando desta ação!", ephemeral=True)
                 return
-
             await conn.execute("DELETE FROM participantes_acoes WHERE acao_id = $1 AND user_id = $2", self.acao_id, str(interaction.user.id))
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
-
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você saiu da ação **{acao['tipo']}**!", ephemeral=True)
 
@@ -6960,27 +6890,21 @@ class AcaoView(discord.ui.View):
     async def cancelar_acao(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_criador = interaction.user.id == self.criador_id
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-
         if not is_criador and not is_gerente:
             await interaction.response.send_message("❌ Apenas o criador ou gerentes podem cancelar a ação!", ephemeral=True)
             return
-
         await interaction.response.defer(ephemeral=True)
-
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
-
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
                 await interaction.followup.send("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
-
             await conn.execute("UPDATE acoes_semana SET status='cancelada' WHERE id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
-
         await interaction.message.delete()
         await interaction.followup.send(f"✅ Ação **{acao['tipo']}** cancelada e removida!", ephemeral=True)
         await enviar_painel_acoes(interaction.guild)
@@ -6989,39 +6913,30 @@ class AcaoView(discord.ui.View):
     async def concluir(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_criador = interaction.user.id == self.criador_id
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-
         if not is_criador and not is_gerente:
             await interaction.response.send_message("❌ Apenas o criador ou gerentes podem concluir!", ephemeral=True)
             return
-
         await interaction.response.defer(ephemeral=True)
-
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
-
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
                 await interaction.followup.send("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
-
             acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
             is_helicrash = "Helicrash" in acao["tipo"]
-
             if not participantes:
                 await interaction.followup.send("⚠️ Nenhum participante! Ação cancelada.", ephemeral=True)
                 await interaction.message.delete()
                 return
-
             await conn.execute("UPDATE acoes_semana SET status='concluida' WHERE id=$1", self.acao_id)
             if is_helicrash:
                 await conn.execute("UPDATE acoes_semana SET resultado='concluida', valor=0 WHERE id=$1", self.acao_id)
-
         lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes])
-
         if is_helicrash:
             embed_relatorio = discord.Embed(
                 title="🚁 RELATÓRIO DE HELICRASH",
@@ -7032,7 +6947,6 @@ class AcaoView(discord.ui.View):
             embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
             embed_relatorio.add_field(name="📅 Data", value=agora().strftime('%d/%m/%Y %H:%M'), inline=False)
             embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
-
             canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
             if canal_relatorio:
                 await canal_relatorio.send(embed=embed_relatorio)
@@ -7040,19 +6954,13 @@ class AcaoView(discord.ui.View):
                 await interaction.followup.send(f"✅ Helicrash **{acao['tipo']}** registrado!", ephemeral=True)
             else:
                 await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
-
             await enviar_painel_acoes(interaction.guild)
             return
-
-        embed_relatorio = discord.Embed(
-            title="🚨 RELATÓRIO DE AÇÃO",
-            color=0xe74c3c
-        )
+        embed_relatorio = discord.Embed(title="🚨 RELATÓRIO DE AÇÃO", color=0xe74c3c)
         embed_relatorio.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
         embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
         embed_relatorio.add_field(name="🎯 Resultado", value="⏳ Aguardando finalização...", inline=False)
         embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
-
         canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
         if canal_relatorio:
             msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
@@ -7066,7 +6974,6 @@ class AcaoView(discord.ui.View):
     async def atualizar_embed(self, interaction, participantes, acao):
         embed = interaction.message.embeds[0]
         lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum participante ainda."
-
         for i, field in enumerate(embed.fields):
             if field.name.startswith("👥 Participantes"):
                 embed.set_field_at(
@@ -7076,15 +6983,9 @@ class AcaoView(discord.ui.View):
                     inline=False
                 )
                 break
-        else:
-            embed.add_field(
-                name=f"👥 Participantes ({len(participantes)})",
-                value=lista_participantes,
-                inline=False
-            )
-
         await interaction.message.edit(embed=embed)
 
+# ###############################################
 class AcaoViewRestaurada(discord.ui.View):
     def __init__(self, acao_id, criador_id):
         super().__init__(timeout=None)
@@ -7250,10 +7151,7 @@ class AcaoViewRestaurada(discord.ui.View):
                 break
         await interaction.message.edit(embed=embed)
 
-# =========================================================
-# ==================== RESULTADO AÇÃO =====================
-# =========================================================
-
+# ###############################################
 class ResultadoAcaoView(discord.ui.View):
     def __init__(self, acao_id, mensagem_original):
         super().__init__(timeout=None)
@@ -7290,6 +7188,7 @@ class ResultadoAcaoView(discord.ui.View):
             return
         await interaction.response.send_modal(ResultadoPerdeuModal(self.acao_id, self.mensagem_original))
 
+# ###############################################
 class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
     dinheiro = discord.ui.TextInput(label="Valor total ganho (em reais)", placeholder="Ex: 50000", required=True)
 
@@ -7348,6 +7247,7 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         await enviar_painel_acoes(interaction.guild)
         await interaction.followup.send(f"✅ {depositos_ok} depósitos realizados!", ephemeral=True)
 
+# ###############################################
 class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
     confirmacao = discord.ui.TextInput(label="Digite CONFIRMAR para registrar a perda", required=True)
 
@@ -7384,6 +7284,7 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
         await enviar_painel_acoes(interaction.guild)
         await interaction.followup.send(f"✅ Ação registrada como PERDIDA!", ephemeral=True)
 
+# ###############################################
 class PainelAcoesView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -7415,6 +7316,7 @@ class PainelAcoesView(discord.ui.View):
         await enviar_painel_acoes(interaction.guild)
         await interaction.followup.send("✅ Todas as ações foram resetadas!", ephemeral=True)
 
+# ###############################################
 class RelatorioPeriodoModal(discord.ui.Modal, title="📊 Gerar Relatório"):
     data_inicio = discord.ui.TextInput(label="Data início (DD/MM/AAAA)")
     data_fim = discord.ui.TextInput(label="Data fim (DD/MM/AAAA)")
@@ -7440,10 +7342,7 @@ class RelatorioPeriodoModal(discord.ui.Modal, title="📊 Gerar Relatório"):
         embed.add_field(name="👥 Participações", value="\n".join(linhas) if linhas else "Nenhuma", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# =========================================================
-# ==================== FUNÇÃO DO PAINEL ===================
-# =========================================================
-
+# ---------------------------------------------------------
 async def restaurar_acoes():
     try:
         canal = bot.get_channel(CANAL_ESCALACOES_ID)
@@ -7473,6 +7372,7 @@ async def restaurar_acoes():
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar ações: {e}")
 
+# ---------------------------------------------------------
 async def enviar_painel_acoes(guild):
     canal = guild.get_channel(CANAL_ESCALACOES_ID)
     if not canal:
@@ -7510,7 +7410,6 @@ async def enviar_painel_acoes(guild):
     embed.add_field(name="📊 TOTAL", value=f"{total_feitas}/{total_meta} ações realizadas" if total_meta > 0 else f"{total_feitas} ações realizadas (sem limite)", inline=False)
     embed.set_footer(text=f"Atualizado em {agora().strftime('%d/%m/%Y %H:%M')}")
     await enviar_ou_atualizar_painel("painel_acoes", CANAL_ESCALACOES_ID, embed, PainelAcoesView())
-
 # =========================================================
 # ==================== SEÇÃO 7: LAVAGEM ===================
 # =========================================================
