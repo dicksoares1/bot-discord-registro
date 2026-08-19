@@ -6150,7 +6150,11 @@ async def cmd_testar_aviso_quarta(ctx):
 CANAL_ESCALACOES_ID = 1241406819545514064
 CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 
-ACOES_SEMANA = {
+# =========================================================
+# ==================== AÇÕES DO COMPLEXO ==================
+# =========================================================
+
+ACOES_COMPLEXO = {
     "Joalheria": 5,
     "Banco Fleeca - Rota 68": 4,
     "Banco Fleeca - Chaves": 4,
@@ -6162,7 +6166,6 @@ ACOES_SEMANA = {
     "Nióbio": 1,
     "Loja de Armas (Ammunation)": None,
     "Loja de Bebidas": None,
-    "Lan House - (Bahamas)": None,
     "Loja de Departamento": None,
     "Mergulhador": None,
     "Grapeseed": None,
@@ -6172,17 +6175,38 @@ ACOES_SEMANA = {
     "Carro Forte - Açougue": None,
     "Carro Forte - Faculdade": None,
     "Carro Forte - Grove Street": None,
+}
+
+# =========================================================
+# ==================== AÇÕES DE BAHAMAS ===================
+# =========================================================
+
+ACOES_BAHAMAS = {
     "Banco Bahamas": None,
     "Burgueshot (Bahamas)": None,
     "Refinaria (Bahamas)": None,
-    "🚁 Helicrash (13h)": None,
-    "🚁 Helicrash (15h)": None,
-    "🚁 Helicrash (22h)": None,
-    "🚁 Helicrash (02h)": None,
+    "Lan House - (Bahamas)": None,
     "Lan House - Jersey": None,
     "Lan House - Brooklyn": None,
     "Lan House - Manhattan": None,
 }
+
+# =========================================================
+# ==================== AÇÕES DE HELICRASH =================
+# =========================================================
+
+ACOES_HELICRASH = {
+    "🚁 Helicrash (13h)": None,
+    "🚁 Helicrash (15h)": None,
+    "🚁 Helicrash (22h)": None,
+    "🚁 Helicrash (02h)": None,
+}
+
+# =========================================================
+# ==================== MERGE PARA COMPATIBILIDADE =========
+# =========================================================
+
+ACOES_SEMANA = {**ACOES_COMPLEXO, **ACOES_BAHAMAS, **ACOES_HELICRASH}
 
 CARGOS_PERMITIDOS_ESCALACAO = [
     CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
@@ -6495,14 +6519,16 @@ REGRAS_ACOES = {
             "🚫 Proibido a utilização de GRANADEIRA."
         ]
     },
-    "Loja de Armas (Bahamas)": {
+    "Banco Bahamas": {
         "regras": [
-            "👥 **Mínimo de Bandidos:** 2.",
-            "👥 **Máximo de Bandidos:** 3.",
-            "👮 **Máximo de policiais:** 3.",
-            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "👥 **Máximo de Bandidos:** 10.",
+            "👮 **Máximo de Policiais:** 14.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
             "🤝 **Negociação:** Obrigatória.",
-            "🚫 **Refém:** Proibido."
+            "👤 **Refém:** Opcional.",
+            "📌 Proibido a utilização das estações de METRO (Subterraneo).",
+            "📌 Limite de 6 pessoas no Salão.",
+            "📌 Máximo de 4 bandidos na parte de baixo do Banco."
         ],
         "is_bahamas": True
     },
@@ -6573,19 +6599,6 @@ REGRAS_ACOES = {
             "🤝 **Negociação:** Obrigatória.",
             "👤 **Refém:** Opcional.",
             "📌 Limite de 4 pessoas dentro da Lan House."
-        ],
-        "is_bahamas": True
-    },
-    "Banco Bahamas": {
-        "regras": [
-            "👥 **Máximo de Bandidos:** 10.",
-            "👮 **Máximo de Policiais:** 14.",
-            "🔫 **Armamento:** Obrigatório RIFLE.",
-            "🤝 **Negociação:** Obrigatória.",
-            "👤 **Refém:** Opcional.",
-            "📌 Proibido a utilização das estações de METRO (Subterraneo).",
-            "📌 Limite de 6 pessoas no Salão.",
-            "📌 Máximo de 4 bandidos na parte de baixo do Banco."
         ],
         "is_bahamas": True
     }
@@ -6695,24 +6708,24 @@ async def concluir_acao_db(acao_id, resultado, valor=0):
 # =========================================================
 
 class SelecionarAcaoView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, acoes, titulo, emoji):
         super().__init__(timeout=60)
         options = []
-        for nome, limite in ACOES_SEMANA.items():
-            emoji = "🚁" if "Helicrash" in nome else "🏪"
+        for nome, limite in acoes.items():
+            emoji_acao = "🚁" if "Helicrash" in nome else "🏪"
             if "Bahamas" in nome:
-                emoji = "🏝️"
+                emoji_acao = "🏝️"
             if "Banco" in nome or "Joalheria" in nome:
-                emoji = "🏦"
+                emoji_acao = "🏦"
             if "Carro Forte" in nome:
-                emoji = "🚚"
+                emoji_acao = "🚚"
             if limite is not None:
-                options.append(discord.SelectOption(label=nome, description=f"Limite: {limite}/semana", emoji=emoji))
+                options.append(discord.SelectOption(label=nome, description=f"Limite: {limite}/semana", emoji=emoji_acao))
             else:
-                options.append(discord.SelectOption(label=nome, description="Ilimitado", emoji=emoji))
-        select = discord.ui.Select(placeholder="📋 Escolha a ação", options=options, max_values=1)
-        select.callback = self.select_callback
-        self.add_item(select)
+                options.append(discord.SelectOption(label=nome, description="Ilimitado", emoji=emoji_acao))
+        self.select = discord.ui.Select(placeholder=f"📋 {titulo}", options=options, max_values=1)
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
         self.add_item(FecharButton())
 
     async def select_callback(self, interaction: discord.Interaction):
@@ -6734,7 +6747,6 @@ class SelecionarAcaoView(discord.ui.View):
         
         acao_id = await salvar_acao_db(acao_tipo, interaction.user.id)
         
-        # Buscar regras
         regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."]})
         regras = regras_data.get("regras", [])
         is_bahamas = regras_data.get("is_bahamas", False)
@@ -6757,7 +6769,6 @@ class SelecionarAcaoView(discord.ui.View):
             timestamp=agora()
         )
         
-        # ⚠️ ADICIONAR REGRAS NO EMBED
         embed.add_field(
             name="📌 REGRAS DA AÇÃO",
             value="\n".join(regras),
@@ -7289,13 +7300,25 @@ class PainelAcoesView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🎯 Criar Nova Ação", style=discord.ButtonStyle.success, custom_id="criar_acao", emoji="🎯")
-    async def criar_acao(self, interaction: discord.Interaction, button):
+    @discord.ui.button(label="🏙️ Complexo", style=discord.ButtonStyle.primary, custom_id="acoes_complexo", emoji="🏙️")
+    async def acoes_complexo(self, interaction: discord.Interaction, button):
         await interaction.response.defer(ephemeral=True)
-        view = SelecionarAcaoView()
-        await interaction.followup.send("**Selecione o tipo de ação:**", view=view, ephemeral=True)
+        view = SelecionarAcaoView(ACOES_COMPLEXO, "ESCOLHA A AÇÃO DO COMPLEXO", "🏙️")
+        await interaction.followup.send("**🏙️ Selecione a ação do Complexo:**", view=view, ephemeral=True)
 
-    @discord.ui.button(label="📊 Ver Relatório", style=discord.ButtonStyle.primary, custom_id="acoes_relatorio", emoji="📊")
+    @discord.ui.button(label="🏝️ Bahamas", style=discord.ButtonStyle.primary, custom_id="acoes_bahamas", emoji="🏝️")
+    async def acoes_bahamas(self, interaction: discord.Interaction, button):
+        await interaction.response.defer(ephemeral=True)
+        view = SelecionarAcaoView(ACOES_BAHAMAS, "ESCOLHA A AÇÃO DE BAHAMAS", "🏝️")
+        await interaction.followup.send("**🏝️ Selecione a ação de Bahamas:**", view=view, ephemeral=True)
+
+    @discord.ui.button(label="🚁 Helicrash", style=discord.ButtonStyle.primary, custom_id="acoes_helicrash", emoji="🚁")
+    async def acoes_helicrash(self, interaction: discord.Interaction, button):
+        await interaction.response.defer(ephemeral=True)
+        view = SelecionarAcaoView(ACOES_HELICRASH, "ESCOLHA O HELICRASH", "🚁")
+        await interaction.followup.send("**🚁 Selecione o Helicrash:**", view=view, ephemeral=True)
+
+    @discord.ui.button(label="📊 Ver Relatório", style=discord.ButtonStyle.secondary, custom_id="acoes_relatorio", emoji="📊")
     async def relatorio(self, interaction: discord.Interaction, button):
         await interaction.response.send_modal(RelatorioPeriodoModal())
 
@@ -7378,37 +7401,64 @@ async def enviar_painel_acoes(guild):
     if not canal:
         logger.error("❌ Canal ações não encontrado")
         return
+    
+    # Buscar todas as ações (de todos os tipos)
     rows = await buscar_acoes_semana()
     feitas = {r["tipo"]: r["qtd"] for r in rows}
-    linhas = []
-    total_feitas = 0
-    total_meta = 0
-    for nome, limite in ACOES_SEMANA.items():
-        qtd = feitas.get(nome, 0)
-        total_feitas += qtd
-        if limite is None:
-            linhas.append(f"• {nome}: {qtd}")
-        else:
-            restante = max(limite - qtd, 0)
-            if qtd >= limite:
-                linhas.append(f"• {nome}: ✅ {qtd}/{limite} (COMPLETO)")
+    
+    # Calcular totais para cada grupo
+    def calcular_progresso(acoes_dict):
+        linhas = []
+        total_feitas = 0
+        total_meta = 0
+        for nome, limite in acoes_dict.items():
+            qtd = feitas.get(nome, 0)
+            total_feitas += qtd
+            if limite is None:
+                linhas.append(f"• {nome}: {qtd}")
             else:
-                linhas.append(f"• {nome}: {qtd}/{limite} (restam {restante})")
-            total_meta += limite
-    if total_meta > 0:
-        porcentagem = int((total_feitas / total_meta) * 100) if total_meta > 0 else 0
-        barra_progresso = "▓" * (porcentagem // 5) + "░" * (20 - (porcentagem // 5))
-        status_texto = f"📊 Progresso Semanal: {porcentagem}% {barra_progresso}\n\n"
-    else:
-        status_texto = ""
+                restante = max(limite - qtd, 0)
+                if qtd >= limite:
+                    linhas.append(f"• {nome}: ✅ {qtd}/{limite} (COMPLETO)")
+                else:
+                    linhas.append(f"• {nome}: {qtd}/{limite} (restam {restante})")
+                total_meta += limite
+        return linhas, total_feitas, total_meta
+    
+    # Calcular progresso de cada grupo
+    linhas_complexo, total_feitas_complexo, total_meta_complexo = calcular_progresso(ACOES_COMPLEXO)
+    linhas_bahamas, total_feitas_bahamas, total_meta_bahamas = calcular_progresso(ACOES_BAHAMAS)
+    linhas_helicrash, total_feitas_helicrash, total_meta_helicrash = calcular_progresso(ACOES_HELICRASH)
+    
+    total_geral_feitas = total_feitas_complexo + total_feitas_bahamas + total_feitas_helicrash
+    total_geral_meta = total_meta_complexo + total_meta_bahamas + total_meta_helicrash
+    
     embed = discord.Embed(
         title="📊 AÇÕES DA SEMANA",
-        description="**Controle de ações realizadas no período**",
+        description="**Controle de ações realizadas no período**\n\n"
+                    "**🏙️ COMPLEXO**\n" + "\n".join(linhas_complexo) + "\n\n"
+                    "**🏝️ BAHAMAS**\n" + "\n".join(linhas_bahamas) + "\n\n"
+                    "**🚁 HELICRASH**\n" + "\n".join(linhas_helicrash),
         color=0x2ecc71
     )
-    embed.add_field(name="📌 AÇÕES REALIZADAS", value=status_texto + "\n".join(linhas), inline=False)
-    embed.add_field(name="📊 TOTAL", value=f"{total_feitas}/{total_meta} ações realizadas" if total_meta > 0 else f"{total_feitas} ações realizadas (sem limite)", inline=False)
+    
+    if total_geral_meta > 0:
+        porcentagem = int((total_geral_feitas / total_geral_meta) * 100) if total_geral_meta > 0 else 0
+        barra_progresso = "▓" * (porcentagem // 5) + "░" * (20 - (porcentagem // 5))
+        embed.add_field(
+            name="📊 PROGRESSO GERAL",
+            value=f"{porcentagem}% {barra_progresso}\n{total_geral_feitas}/{total_geral_meta} ações realizadas",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="📊 PROGRESSO GERAL",
+            value=f"{total_geral_feitas} ações realizadas (sem limite)",
+            inline=False
+        )
+    
     embed.set_footer(text=f"Atualizado em {agora().strftime('%d/%m/%Y %H:%M')}")
+    
     await enviar_ou_atualizar_painel("painel_acoes", CANAL_ESCALACOES_ID, embed, PainelAcoesView())
 # =========================================================
 # ==================== SEÇÃO 7: LAVAGEM ===================
