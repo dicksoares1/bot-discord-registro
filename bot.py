@@ -6147,6 +6147,41 @@ async def cmd_testar_aviso_quarta(ctx):
 # ==================== SEÇÃO 6: AÇÕES =====================
 # =========================================================
 
+CANAL_ESCALACOES_ID = 1241406819545514064
+CANAL_RELATORIO_ACOES_ID = 1477308788531921019
+
+ACOES_SEMANA = {
+    "Joalheria": 5,
+    "Banco Fleeca": 4,
+    "Banco de Paleto": 1,
+    "Banco Central": 1,
+    "Nióbio": 1,
+    "Loja de Armas (Ammunation)": None,
+    "Loja de Bebidas": None,
+    "Lan House - (Bahamas)": None,
+    "Loja de Departamento": None,
+    "Mergulhador": None,
+    "Grapeseed": None,
+    "Companhia de Gás": None,
+    "Life Invader": None,
+    "Aeroporto de Sucata": None,
+    "Carro Forte": None,
+    "Banco Bahamas": None,
+    "Burgueshot (Bahamas)": None,
+    "Refinaria (Bahamas)": None,
+    "🚁 Helicrash (13h)": None,
+    "🚁 Helicrash (15h)": None,
+    "🚁 Helicrash (22h)": None,
+    "🚁 Helicrash (02h)": None,
+}
+
+CARGOS_PERMITIDOS_ESCALACAO = [
+    CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
+    CARGO_01_ID, CARGO_02_ID, CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID
+]
+
+acoes_ativas = {}
+
 # =========================================================
 # ==================== REGRAS DAS AÇÕES ===================
 # =========================================================
@@ -6180,9 +6215,6 @@ REGRAS_GERAIS_BAHAMAS = """
 """
 
 REGRAS_ACOES = {
-    # =========================================================
-    # ==================== LOJAS ==============================
-    # =========================================================
     "Loja de Armas (Ammunation)": {
         "regras": [
             "👥 **Bandidos:** Obrigatório 2.",
@@ -6220,10 +6252,6 @@ REGRAS_ACOES = {
         "is_bahamas": False,
         "limite": None
     },
-
-    # =========================================================
-    # ==================== CONFRONTO DIRETO ==================
-    # =========================================================
     "Mergulhador": {
         "regras": [
             "👥 **Bandidos:** Obrigatório 6.",
@@ -6287,10 +6315,6 @@ REGRAS_ACOES = {
         "is_bahamas": False,
         "limite": None
     },
-
-    # =========================================================
-    # ==================== CARRO FORTE =======================
-    # =========================================================
     "Carro Forte": {
         "regras": [
             "👥 **Bandidos:** Obrigatório 6.",
@@ -6339,10 +6363,6 @@ REGRAS_ACOES = {
         "is_bahamas": False,
         "limite": None
     },
-
-    # =========================================================
-    # ==================== JOALHERIA ==========================
-    # =========================================================
     "Joalheria": {
         "regras": [
             "👥 **Bandidos:** Obrigatório 7 (máximo de 3 fora e 4 dentro).",
@@ -6356,10 +6376,6 @@ REGRAS_ACOES = {
         "is_bahamas": False,
         "limite": 5
     },
-
-    # =========================================================
-    # ==================== BANCO FLECCA ======================
-    # =========================================================
     "Banco Fleeca": {
         "regras": [
             "👥 **Mínimo de bandidos:** 6 (mínimo de 3 dentro).",
@@ -6412,10 +6428,6 @@ REGRAS_ACOES = {
         "is_bahamas": False,
         "limite": 4
     },
-
-    # =========================================================
-    # ==================== BANCO DE PALETO ===================
-    # =========================================================
     "Banco de Paleto": {
         "regras": [
             "👥 **Bandidos:** Obrigatório 10.",
@@ -6431,10 +6443,6 @@ REGRAS_ACOES = {
         "is_bahamas": False,
         "limite": 1
     },
-
-    # =========================================================
-    # ==================== BANCO CENTRAL =====================
-    # =========================================================
     "Banco Central": {
         "regras": [
             "👥 **Bandidos:** Obrigatório 10.",
@@ -6467,10 +6475,6 @@ REGRAS_ACOES = {
         "is_bahamas": False,
         "limite": 1
     },
-
-    # =========================================================
-    # ==================== NIÓBIO ============================
-    # =========================================================
     "Nióbio": {
         "regras": [
             "👥 **Bandidos:** Obrigatório 12 (sem limites fora).",
@@ -6486,10 +6490,6 @@ REGRAS_ACOES = {
         "is_bahamas": False,
         "limite": 1
     },
-
-    # =========================================================
-    # ==================== HELICRASH =========================
-    # =========================================================
     "🚁 Helicrash (13h)": {
         "regras": [
             "👥 **Máximo de participantes por facção/grupo:** 10.",
@@ -6546,10 +6546,6 @@ REGRAS_ACOES = {
         "is_bahamas": False,
         "limite": None
     },
-
-    # =========================================================
-    # ==================== BAHAMAS ===========================
-    # =========================================================
     "Loja de Armas (Bahamas)": {
         "regras": [
             "👥 **Mínimo de Bandidos:** 2.",
@@ -6654,42 +6650,10 @@ REGRAS_ACOES = {
     }
 }
 
-CANAL_ESCALACOES_ID = 1241406819545514064
-CANAL_RELATORIO_ACOES_ID = 1477308788531921019
+# =========================================================
+# ==================== QUERIES DAS AÇÕES =================
+# =========================================================
 
-ACOES_SEMANA = {
-    "Joalheria": 5,
-    "Banco Fleeca": 4,
-    "Banco de Paleto": 1,
-    "Banco Central": 1,
-    "Nióbio": 1,
-    "Loja de Armas (Ammunation)": None,
-    "Loja de Bebidas": None,
-    "Lan House - (Bahamas)": None,
-    "Loja de Departamento": None,
-    "Mergulhador": None,
-    "Grapeseed": None,
-    "Companhia de Gás": None,
-    "Life Invader": None,
-    "Aeroporto de Sucata": None,
-    "Carro Forte": None,
-    "Banco Bahamas": None,
-    "Burgueshot (Bahamas)": None,
-    "Refinaria (Bahamas)": None,
-    "🚁 Helicrash (13h)": None,
-    "🚁 Helicrash (15h)": None,
-    "🚁 Helicrash (22h)": None,
-    "🚁 Helicrash (02h)": None,
-}
-
-CARGOS_PERMITIDOS_ESCALACAO = [
-    CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
-    CARGO_01_ID, CARGO_02_ID, CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID
-]
-
-acoes_ativas = {}
-
-# ---------------------------------------------------------
 async def salvar_acao_db(tipo, autor):
     pool = await get_pool()
     if not pool:
@@ -6704,7 +6668,6 @@ async def salvar_acao_db(tipo, autor):
         logger.error(f"❌ Erro ao salvar ação: {e}")
         return None
 
-# ---------------------------------------------------------
 async def buscar_acoes_semana():
     pool = await get_pool()
     if not pool:
@@ -6721,7 +6684,6 @@ async def buscar_acoes_semana():
         logger.error(f"❌ Erro ao buscar ações: {e}")
         return []
 
-# ---------------------------------------------------------
 async def participar_acao_db(acao_id, user_id):
     pool = await get_pool()
     if not pool:
@@ -6732,7 +6694,6 @@ async def participar_acao_db(acao_id, user_id):
     except Exception as e:
         logger.error(f"❌ Erro ao participar ação: {e}")
 
-# ---------------------------------------------------------
 async def remover_participante_db(acao_id, user_id):
     pool = await get_pool()
     if not pool:
@@ -6743,7 +6704,6 @@ async def remover_participante_db(acao_id, user_id):
     except Exception as e:
         logger.error(f"❌ Erro ao remover participante: {e}")
 
-# ---------------------------------------------------------
 async def buscar_participantes_db(acao_id):
     pool = await get_pool()
     if not pool:
@@ -6755,7 +6715,6 @@ async def buscar_participantes_db(acao_id):
         logger.error(f"❌ Erro ao buscar participantes: {e}")
         return []
 
-# ---------------------------------------------------------
 async def buscar_acao_db(acao_id):
     pool = await get_pool()
     if not pool:
@@ -6767,7 +6726,6 @@ async def buscar_acao_db(acao_id):
         logger.error(f"❌ Erro ao buscar ação: {e}")
         return None
 
-# ---------------------------------------------------------
 async def cancelar_acao_db(acao_id):
     pool = await get_pool()
     if not pool:
@@ -6778,7 +6736,6 @@ async def cancelar_acao_db(acao_id):
     except Exception as e:
         logger.error(f"❌ Erro ao cancelar ação: {e}")
 
-# ---------------------------------------------------------
 async def concluir_acao_db(acao_id, resultado, valor=0):
     pool = await get_pool()
     if not pool:
@@ -6792,8 +6749,10 @@ async def concluir_acao_db(acao_id, resultado, valor=0):
     except Exception as e:
         logger.error(f"❌ Erro ao concluir ação: {e}")
 
+# =========================================================
+# ==================== CLASSES DE VIEW ====================
+# =========================================================
 
-# ###############################################
 class SelecionarAcaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
@@ -6819,11 +6778,11 @@ class SelecionarAcaoView(discord.ui.View):
             placeholder="📋 Escolha a ação",
             options=options,
             min_values=1,
-            max_values=1,
-            custom_id="selecionar_acao_select"  # ⚠️ CUSTOM_ID ÚNICO
+            max_values=1
         )
         self.select.callback = self.select_callback
         self.add_item(self.select)
+        self.add_item(FecharButton())
 
     async def select_callback(self, interaction: discord.Interaction):
         acao_tipo = interaction.data["values"][0]
@@ -6921,6 +6880,7 @@ class SelecionarAcaoView(discord.ui.View):
         if canal:
             view = AcaoView(acao_id, interaction.user.id)
             await canal.send(embed=embed, view=view)
+            acoes_ativas[acao_id] = {"embed": embed, "criador_id": interaction.user.id}
             await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada com sucesso!", ephemeral=True)
             try:
                 await interaction.message.delete()
@@ -6928,14 +6888,20 @@ class SelecionarAcaoView(discord.ui.View):
                 pass
         else:
             await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
-# ###############################################
+
+class FecharButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.message.delete()
+
 class AcaoView(discord.ui.View):
     def __init__(self, acao_id, criador_id):
         super().__init__(timeout=None)
         self.acao_id = acao_id
         self.criador_id = criador_id
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="✅ Participar", style=discord.ButtonStyle.success, custom_id="acao_participar", emoji="✅")
     async def participar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(role.id in CARGOS_PERMITIDOS_ESCALACAO for role in interaction.user.roles):
@@ -6965,7 +6931,6 @@ class AcaoView(discord.ui.View):
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você se inscreveu na ação **{acao['tipo']}**!", ephemeral=True)
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="❌ Sair", style=discord.ButtonStyle.danger, custom_id="acao_sair", emoji="❌")
     async def sair(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await get_pool()
@@ -6991,7 +6956,6 @@ class AcaoView(discord.ui.View):
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você saiu da ação **{acao['tipo']}**!", ephemeral=True)
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="🚫 Cancelar Ação", style=discord.ButtonStyle.danger, custom_id="acao_cancelar", emoji="🚫")
     async def cancelar_acao(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_criador = interaction.user.id == self.criador_id
@@ -7021,7 +6985,6 @@ class AcaoView(discord.ui.View):
         await interaction.followup.send(f"✅ Ação **{acao['tipo']}** cancelada e removida!", ephemeral=True)
         await enviar_painel_acoes(interaction.guild)
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="📤 Concluir Escalação", style=discord.ButtonStyle.primary, custom_id="acao_concluir", emoji="📤")
     async def concluir(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_criador = interaction.user.id == self.criador_id
@@ -7100,11 +7063,8 @@ class AcaoView(discord.ui.View):
         else:
             await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
 
-    # ---------------------------------------------------------
     async def atualizar_embed(self, interaction, participantes, acao):
-        """Atualiza o embed com a lista de participantes."""
         embed = interaction.message.embeds[0]
-
         lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum participante ainda."
 
         for i, field in enumerate(embed.fields):
@@ -7124,7 +7084,7 @@ class AcaoView(discord.ui.View):
             )
 
         await interaction.message.edit(embed=embed)
-# ###############################################
+
 class AcaoViewRestaurada(discord.ui.View):
     def __init__(self, acao_id, criador_id):
         super().__init__(timeout=None)
@@ -7135,7 +7095,6 @@ class AcaoViewRestaurada(discord.ui.View):
         self.add_item(discord.ui.Button(label="🚫 Cancelar Ação", style=discord.ButtonStyle.danger, custom_id=f"acao_cancelar_{acao_id}", emoji="🚫"))
         self.add_item(discord.ui.Button(label="📤 Concluir Escalação", style=discord.ButtonStyle.primary, custom_id=f"acao_concluir_{acao_id}", emoji="📤"))
 
-    # ---------------------------------------------------------
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         if custom_id == f"acao_participar_{self.acao_id}":
@@ -7152,7 +7111,6 @@ class AcaoViewRestaurada(discord.ui.View):
             return False
         return True
 
-    # ---------------------------------------------------------
     async def participar(self, interaction: discord.Interaction, button):
         if not any(role.id in CARGOS_PERMITIDOS_ESCALACAO for role in interaction.user.roles):
             await interaction.response.send_message("❌ Você não tem permissão!", ephemeral=True)
@@ -7176,7 +7134,6 @@ class AcaoViewRestaurada(discord.ui.View):
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você se inscreveu na ação!", ephemeral=True)
 
-    # ---------------------------------------------------------
     async def sair(self, interaction: discord.Interaction, button):
         pool = await get_pool()
         if not pool:
@@ -7197,7 +7154,6 @@ class AcaoViewRestaurada(discord.ui.View):
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você saiu da ação!", ephemeral=True)
 
-    # ---------------------------------------------------------
     async def cancelar_acao(self, interaction: discord.Interaction, button):
         is_criador = interaction.user.id == self.criador_id
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -7220,7 +7176,6 @@ class AcaoViewRestaurada(discord.ui.View):
         await interaction.followup.send(f"✅ Ação cancelada e removida!", ephemeral=True)
         await enviar_painel_acoes(interaction.guild)
 
-    # ---------------------------------------------------------
     async def concluir(self, interaction: discord.Interaction, button):
         is_criador = interaction.user.id == self.criador_id
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -7281,54 +7236,30 @@ class AcaoViewRestaurada(discord.ui.View):
         else:
             await interaction.followup.send("❌ Canal não encontrado!", ephemeral=True)
 
-    # ---------------------------------------------------------
     async def atualizar_embed(self, interaction, participantes, acao):
         embed = interaction.message.embeds[0]
         lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum participante."
         for i, field in enumerate(embed.fields):
             if field.name.startswith("👥 Participantes"):
-                embed.set_field_at(i, name=f"👥 Participantes ({len(participantes)})", value=lista_participantes, inline=False)
+                embed.set_field_at(
+                    i,
+                    name=f"👥 Participantes ({len(participantes)})",
+                    value=lista_participantes,
+                    inline=False
+                )
                 break
         await interaction.message.edit(embed=embed)
 
-# ---------------------------------------------------------
-async def restaurar_acoes():
-    try:
-        canal = bot.get_channel(CANAL_ESCALACOES_ID)
-        if not canal:
-            logger.error("❌ Canal de escalações não encontrado!")
-            return
-        logger.info("🔄 Restaurando botões de ações...")
-        contador = 0
-        async for msg in canal.history(limit=500):
-            if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
-                embed = msg.embeds[0]
-                if embed.footer and "ID:" in embed.footer.text:
-                    try:
-                        acao_id = safe_int(embed.footer.text.split("ID:")[1].strip().split(" ")[0])
-                        acao = await buscar_acao_db(acao_id)
-                        if not acao or acao["status"] != "aberta":
-                            continue
-                        criador_id = int(acao["autor"])
-                        if not msg.components:
-                            view = AcaoViewRestaurada(acao_id, criador_id)
-                            await msg.edit(view=view)
-                            contador += 1
-                            await asyncio.sleep(1.0)
-                    except:
-                        pass
-        logger.info(f"✅ {contador} ações restauradas com botões!")
-    except Exception as e:
-        logger.error(f"❌ Erro ao restaurar ações: {e}")
+# =========================================================
+# ==================== RESULTADO AÇÃO =====================
+# =========================================================
 
-# ###############################################
 class ResultadoAcaoView(discord.ui.View):
     def __init__(self, acao_id, mensagem_original):
         super().__init__(timeout=None)
         self.acao_id = acao_id
         self.mensagem_original = mensagem_original
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="🏆 Ganhou", style=discord.ButtonStyle.success, custom_id="resultado_ganhou")
     async def ganhou(self, interaction: discord.Interaction, button):
         pool = await get_pool()
@@ -7344,7 +7275,6 @@ class ResultadoAcaoView(discord.ui.View):
             return
         await interaction.response.send_modal(ResultadoGanhouModal(self.acao_id, self.mensagem_original))
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="💀 Perdeu", style=discord.ButtonStyle.danger, custom_id="resultado_perdeu")
     async def perdeu(self, interaction: discord.Interaction, button):
         pool = await get_pool()
@@ -7360,7 +7290,6 @@ class ResultadoAcaoView(discord.ui.View):
             return
         await interaction.response.send_modal(ResultadoPerdeuModal(self.acao_id, self.mensagem_original))
 
-# ###############################################
 class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
     dinheiro = discord.ui.TextInput(label="Valor total ganho (em reais)", placeholder="Ex: 50000", required=True)
 
@@ -7369,7 +7298,6 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         self.acao_id = acao_id
         self.mensagem_original = mensagem_original
 
-    # ---------------------------------------------------------
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -7420,7 +7348,6 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         await enviar_painel_acoes(interaction.guild)
         await interaction.followup.send(f"✅ {depositos_ok} depósitos realizados!", ephemeral=True)
 
-# ###############################################
 class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
     confirmacao = discord.ui.TextInput(label="Digite CONFIRMAR para registrar a perda", required=True)
 
@@ -7429,7 +7356,6 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
         self.acao_id = acao_id
         self.mensagem_original = mensagem_original
 
-    # ---------------------------------------------------------
     async def on_submit(self, interaction: discord.Interaction):
         if self.confirmacao.value.strip().upper() != "CONFIRMAR":
             await interaction.response.send_message("❌ Confirmação incorreta!", ephemeral=True)
@@ -7458,7 +7384,6 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
         await enviar_painel_acoes(interaction.guild)
         await interaction.followup.send(f"✅ Ação registrada como PERDIDA!", ephemeral=True)
 
-# ###############################################
 class PainelAcoesView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -7490,13 +7415,10 @@ class PainelAcoesView(discord.ui.View):
         await enviar_painel_acoes(interaction.guild)
         await interaction.followup.send("✅ Todas as ações foram resetadas!", ephemeral=True)
 
-# ###############################################
-        
 class RelatorioPeriodoModal(discord.ui.Modal, title="📊 Gerar Relatório"):
     data_inicio = discord.ui.TextInput(label="Data início (DD/MM/AAAA)")
     data_fim = discord.ui.TextInput(label="Data fim (DD/MM/AAAA)")
 
-    # ---------------------------------------------------------
     async def on_submit(self, interaction: discord.Interaction):
         try:
             inicio = datetime.strptime(self.data_inicio.value, "%d/%m/%Y")
@@ -7518,7 +7440,39 @@ class RelatorioPeriodoModal(discord.ui.Modal, title="📊 Gerar Relatório"):
         embed.add_field(name="👥 Participações", value="\n".join(linhas) if linhas else "Nenhuma", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ---------------------------------------------------------
+# =========================================================
+# ==================== FUNÇÃO DO PAINEL ===================
+# =========================================================
+
+async def restaurar_acoes():
+    try:
+        canal = bot.get_channel(CANAL_ESCALACOES_ID)
+        if not canal:
+            logger.error("❌ Canal de escalações não encontrado!")
+            return
+        logger.info("🔄 Restaurando botões de ações...")
+        contador = 0
+        async for msg in canal.history(limit=500):
+            if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
+                embed = msg.embeds[0]
+                if embed.footer and "ID:" in embed.footer.text:
+                    try:
+                        acao_id = safe_int(embed.footer.text.split("ID:")[1].strip().split(" ")[0])
+                        acao = await buscar_acao_db(acao_id)
+                        if not acao or acao["status"] != "aberta":
+                            continue
+                        criador_id = int(acao["autor"])
+                        if not msg.components:
+                            view = AcaoViewRestaurada(acao_id, criador_id)
+                            await msg.edit(view=view)
+                            contador += 1
+                            await asyncio.sleep(1.0)
+                    except:
+                        pass
+        logger.info(f"✅ {contador} ações restauradas com botões!")
+    except Exception as e:
+        logger.error(f"❌ Erro ao restaurar ações: {e}")
+
 async def enviar_painel_acoes(guild):
     canal = guild.get_channel(CANAL_ESCALACOES_ID)
     if not canal:
