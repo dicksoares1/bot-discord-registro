@@ -5273,29 +5273,12 @@ class MetaView(discord.ui.View):
         super().__init__(timeout=None)
         self.user_id = user_id
 
-    # ⚠️ BOTÕES COM custom_id FIXOS (SEM o user_id)
+    # =========================================================
+    # ⚠️ BOTÕES COM custom_id FIXOS (NÃO MUDAM NUNCA)
+    # =========================================================
+
     @discord.ui.button(label="💣 Vender Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_vender_polvora_fixo", emoji="💣")
     async def vender_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # O user_id vem do objeto, não do custom_id
-        await self._handle_vender_polvora(interaction)
-
-    @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰")
-    async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_adicionar_dinheiro(interaction)
-
-    @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga_fixo", emoji="✅")
-    async def polvora_paga(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_polvora_paga(interaction)
-
-    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️")
-    async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_editar_meta(interaction)
-
-    # =========================================================
-    # MÉTODOS INTERNOS (separados para organização)
-    # =========================================================
-
-    async def _handle_vender_polvora(self, interaction: discord.Interaction):
         pool = await get_pool()
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
@@ -5316,7 +5299,8 @@ class MetaView(discord.ui.View):
                 return
         await interaction.response.send_modal(VenderPolvoraMetaModal(self.user_id))
 
-    async def _handle_adicionar_dinheiro(self, interaction: discord.Interaction):
+    @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰")
+    async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await get_pool()
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
@@ -5337,7 +5321,8 @@ class MetaView(discord.ui.View):
                 return
         await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
 
-    async def _handle_polvora_paga(self, interaction: discord.Interaction):
+    @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga_fixo", emoji="✅")
+    async def polvora_paga(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
 
@@ -5363,7 +5348,8 @@ class MetaView(discord.ui.View):
 
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    async def _handle_editar_meta(self, interaction: discord.Interaction):
+    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️")
+    async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
@@ -10180,7 +10166,7 @@ async def restaurar_botoes_metas():
         guild = bot.get_guild(GUILD_ID)
         if not guild:
             logger.error("❌ Guild não encontrada!")
-            return
+            return 0
         
         # Recarregar cache de metas
         await carregar_metas_cache()
@@ -10189,7 +10175,7 @@ async def restaurar_botoes_metas():
         for uid, dados in metas_cache.items():
             canal = guild.get_channel(dados["canal_id"])
             if canal:
-                # Verificar se a mensagem do embed existe e tem botões
+                # Verificar se a mensagem do embed existe
                 async for msg in canal.history(limit=30):
                     if msg.author == bot.user and msg.embeds:
                         if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
