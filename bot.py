@@ -5539,18 +5539,14 @@ class MetaView(discord.ui.View):
         self.user_id = user_id
 
     # =========================================================
-    # ⚠️ TODOS OS BOTÕES COM DEFER ANTES DE QUALQUER OPERAÇÃO
+    # BOTÃO: VENDER PÓLVORA
     # =========================================================
-
     @discord.ui.button(label="💣 Vender Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_vender_polvora_fixo", emoji="💣")
     async def vender_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ⚠️ 1º PASSO: DEFER (avisa o Discord que está processando)
-        await interaction.response.defer(ephemeral=True)
-        
         try:
             pool = await get_pool()
             if not pool:
-                await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
                 return
             
             async with pool.acquire() as conn:
@@ -5563,31 +5559,30 @@ class MetaView(discord.ui.View):
                     await criar_sala_meta(member)
                     await asyncio.sleep(1)
                     await carregar_metas_cache()
-                    await interaction.followup.send("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
+                    await interaction.response.send_message("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
                     return
                 else:
-                    await interaction.followup.send("❌ **Meta não encontrada!**", ephemeral=True)
+                    await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                     return
             
-            # ⚠️ ABRIR MODAL (já tem defer, pode abrir)
             await interaction.response.send_modal(VenderPolvoraMetaModal(self.user_id))
             
         except Exception as e:
             logger.error(f"❌ Erro no botão Vender Pólvora: {e}")
             try:
-                await interaction.followup.send(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
                 pass
 
+    # =========================================================
+    # BOTÃO: ADICIONAR DINHEIRO SUJO
+    # =========================================================
     @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰")
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ⚠️ 1º PASSO: DEFER
-        await interaction.response.defer(ephemeral=True)
-        
         try:
             pool = await get_pool()
             if not pool:
-                await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
                 return
             
             async with pool.acquire() as conn:
@@ -5600,38 +5595,37 @@ class MetaView(discord.ui.View):
                     await criar_sala_meta(member)
                     await asyncio.sleep(1)
                     await carregar_metas_cache()
-                    await interaction.followup.send("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
+                    await interaction.response.send_message("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
                     return
                 else:
-                    await interaction.followup.send("❌ **Meta não encontrada!**", ephemeral=True)
+                    await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                     return
             
-            # ⚠️ ABRIR MODAL
             await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
             
         except Exception as e:
             logger.error(f"❌ Erro no botão Adicionar Dinheiro: {e}")
             try:
-                await interaction.followup.send(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
                 pass
 
+    # =========================================================
+    # BOTÃO: PÓLVORA PAGA
+    # =========================================================
     @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga_fixo", emoji="✅")
     async def polvora_paga(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ⚠️ 1º PASSO: DEFER
-        await interaction.response.defer(ephemeral=True)
-        
         try:
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             is_admin = interaction.user.guild_permissions.administrator
 
             if not is_gerente and not is_admin:
-                await interaction.followup.send("❌ Apenas **Gerentes** ou **ADM** podem marcar pólvora como paga!", ephemeral=True)
+                await interaction.response.send_message("❌ Apenas **Gerentes** ou **ADM** podem marcar pólvora como paga!", ephemeral=True)
                 return
 
             pendente = await buscar_polvora_pendente(self.user_id)
             if not pendente:
-                await interaction.followup.send("📭 Este membro não tem pólvora pendente para pagar!", ephemeral=True)
+                await interaction.response.send_message("📭 Este membro não tem pólvora pendente para pagar!", ephemeral=True)
                 return
 
             view = ConfirmarPagamentoPolvoraView(self.user_id, pendente)
@@ -5645,40 +5639,39 @@ class MetaView(discord.ui.View):
             embed.add_field(name="💵 Preço por unidade", value=f"R$ {PRECO_POLVORA:.2f}", inline=True)
             embed.set_footer(text="Clique em ✅ Confirmar Pagamento para finalizar")
 
-            # ⚠️ ENVIAR MENSAGEM COM VIEW (já tem defer)
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
             
         except Exception as e:
             logger.error(f"❌ Erro no botão Pólvora Paga: {e}")
             try:
-                await interaction.followup.send(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
                 pass
 
+    # =========================================================
+    # BOTÃO: EDITAR META
+    # =========================================================
     @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️")
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ⚠️ 1º PASSO: DEFER
-        await interaction.response.defer(ephemeral=True)
-        
         try:
             is_dono = str(interaction.user.id) == str(self.user_id)
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             is_admin = interaction.user.guild_permissions.administrator
 
             if not is_dono and not is_gerente and not is_admin:
-                await interaction.followup.send("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
+                await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
                 return
 
             pool = await get_pool()
             if not pool:
-                await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
                 return
 
             async with pool.acquire() as conn:
                 meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
 
             if not meta:
-                await interaction.followup.send("❌ **Meta não encontrada!**", ephemeral=True)
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                 return
 
             dados = {
@@ -5687,13 +5680,12 @@ class MetaView(discord.ui.View):
                 "saldo_excedente": meta.get("saldo_excedente") or 0
             }
 
-            # ⚠️ ABRIR MODAL
             await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
             
         except Exception as e:
             logger.error(f"❌ Erro no botão Editar Meta: {e}")
             try:
-                await interaction.followup.send(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
                 pass
 # ###############################################
