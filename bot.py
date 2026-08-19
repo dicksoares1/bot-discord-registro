@@ -6851,28 +6851,35 @@ class AcaoView(discord.ui.View):
         super().__init__(timeout=None)
         self.acao_id = acao_id
         self.criador_id = criador_id
+        self.mensagem_original = None  # ⚠️ ARMAZENAR A MENSAGEM ORIGINAL
 
     @discord.ui.button(label="✅ Participar", style=discord.ButtonStyle.success, custom_id="acao_participar", emoji="✅")
     async def participar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(role.id in CARGOS_PERMITIDOS_ESCALACAO for role in interaction.user.roles):
             await interaction.response.send_message("❌ Você não tem permissão para participar de ações!", ephemeral=True)
             return
+
         pool = await get_pool()
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
                 await interaction.response.send_message("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
+
             ja_participa = await conn.fetchval("SELECT 1 FROM participantes_acoes WHERE acao_id=$1 AND user_id=$2", self.acao_id, str(interaction.user.id))
             if ja_participa:
                 await interaction.response.send_message("⚠️ Você já está participando!", ephemeral=True)
                 return
+
             await conn.execute("INSERT INTO participantes_acoes (acao_id, user_id) VALUES ($1, $2)", self.acao_id, str(interaction.user.id))
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
+
+        # ⚠️ ATUALIZAR O EMBED
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você se inscreveu na ação **{acao['tipo']}**!", ephemeral=True)
 
@@ -6882,18 +6889,22 @@ class AcaoView(discord.ui.View):
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
                 await interaction.response.send_message("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
+
             participa = await conn.fetchval("SELECT 1 FROM participantes_acoes WHERE acao_id=$1 AND user_id=$2", self.acao_id, str(interaction.user.id))
             if not participa:
                 await interaction.response.send_message("⚠️ Você não está participando desta ação!", ephemeral=True)
                 return
+
             await conn.execute("DELETE FROM participantes_acoes WHERE acao_id = $1 AND user_id = $2", self.acao_id, str(interaction.user.id))
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
+
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você saiu da ação **{acao['tipo']}**!", ephemeral=True)
 
@@ -6901,21 +6912,27 @@ class AcaoView(discord.ui.View):
     async def cancelar_acao(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_criador = interaction.user.id == self.criador_id
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+
         if not is_criador and not is_gerente:
             await interaction.response.send_message("❌ Apenas o criador ou gerentes podem cancelar a ação!", ephemeral=True)
             return
+
         await interaction.response.defer(ephemeral=True)
+
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
                 await interaction.followup.send("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
+
             await conn.execute("UPDATE acoes_semana SET status='cancelada' WHERE id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
+
         await interaction.message.delete()
         await interaction.followup.send(f"✅ Ação **{acao['tipo']}** cancelada e removida!", ephemeral=True)
         await enviar_painel_acoes(interaction.guild)
@@ -6924,30 +6941,39 @@ class AcaoView(discord.ui.View):
     async def concluir(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_criador = interaction.user.id == self.criador_id
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+
         if not is_criador and not is_gerente:
             await interaction.response.send_message("❌ Apenas o criador ou gerentes podem concluir!", ephemeral=True)
             return
+
         await interaction.response.defer(ephemeral=True)
+
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
                 await interaction.followup.send("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
+
             acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
             is_helicrash = "Helicrash" in acao["tipo"]
+
             if not participantes:
                 await interaction.followup.send("⚠️ Nenhum participante! Ação cancelada.", ephemeral=True)
                 await interaction.message.delete()
                 return
+
             await conn.execute("UPDATE acoes_semana SET status='concluida' WHERE id=$1", self.acao_id)
             if is_helicrash:
                 await conn.execute("UPDATE acoes_semana SET resultado='concluida', valor=0 WHERE id=$1", self.acao_id)
+
         lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes])
+
         if is_helicrash:
             embed_relatorio = discord.Embed(
                 title="🚁 RELATÓRIO DE HELICRASH",
@@ -6958,6 +6984,7 @@ class AcaoView(discord.ui.View):
             embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
             embed_relatorio.add_field(name="📅 Data", value=agora().strftime('%d/%m/%Y %H:%M'), inline=False)
             embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
+
             canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
             if canal_relatorio:
                 await canal_relatorio.send(embed=embed_relatorio)
@@ -6965,13 +6992,16 @@ class AcaoView(discord.ui.View):
                 await interaction.followup.send(f"✅ Helicrash **{acao['tipo']}** registrado!", ephemeral=True)
             else:
                 await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
+
             await enviar_painel_acoes(interaction.guild)
             return
+
         embed_relatorio = discord.Embed(title="🚨 RELATÓRIO DE AÇÃO", color=0xe74c3c)
         embed_relatorio.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
         embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
         embed_relatorio.add_field(name="🎯 Resultado", value="⏳ Aguardando finalização...", inline=False)
         embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
+
         canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
         if canal_relatorio:
             msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
@@ -6982,19 +7012,63 @@ class AcaoView(discord.ui.View):
         else:
             await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
 
+    # ---------------------------------------------------------
     async def atualizar_embed(self, interaction, participantes, acao):
-        embed = interaction.message.embeds[0]
-        lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Nenhum participante ainda."
-        for i, field in enumerate(embed.fields):
-            if field.name.startswith("👥 Participantes"):
-                embed.set_field_at(
-                    i,
-                    name=f"👥 Participantes ({len(participantes)})",
+        """Atualiza o embed com a lista de participantes."""
+        try:
+            # ⚠️ PEGAR A MENSAGEM ORIGINAL (a que tem o embed)
+            mensagem = interaction.message
+            
+            if not mensagem or not mensagem.embeds:
+                # Se não conseguir pegar pela interação, tentar buscar no canal
+                canal = interaction.channel
+                async for msg in canal.history(limit=10):
+                    if msg.author == bot.user and msg.embeds:
+                        for field in msg.embeds[0].fields:
+                            if field.name.startswith("👥 Participantes"):
+                                mensagem = msg
+                                break
+                        if mensagem:
+                            break
+            
+            if not mensagem or not mensagem.embeds:
+                logger.error("❌ Não foi possível encontrar a mensagem do embed para atualizar")
+                return
+            
+            embed = mensagem.embeds[0]
+            
+            # ⚠️ CRIAR A LISTA DE PARTICIPANTES
+            if participantes and len(participantes) > 0:
+                lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes])
+            else:
+                lista_participantes = "Nenhum participante ainda.\nClique no botão ✅ PARTICIPAR para se inscrever!"
+            
+            # ⚠️ ATUALIZAR O CAMPO DE PARTICIPANTES
+            campo_atualizado = False
+            for i, field in enumerate(embed.fields):
+                if field.name.startswith("👥 Participantes"):
+                    embed.set_field_at(
+                        i,
+                        name=f"👥 Participantes ({len(participantes) if participantes else 0})",
+                        value=lista_participantes,
+                        inline=False
+                    )
+                    campo_atualizado = True
+                    break
+            
+            # ⚠️ SE NÃO ENCONTROU O CAMPO, ADICIONAR
+            if not campo_atualizado:
+                embed.add_field(
+                    name=f"👥 Participantes ({len(participantes) if participantes else 0})",
                     value=lista_participantes,
                     inline=False
                 )
-                break
-        await interaction.message.edit(embed=embed)
+            
+            # ⚠️ EDITAR A MENSAGEM
+            await mensagem.edit(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao atualizar embed: {e}")
 
 # ###############################################
 class AcaoViewRestaurada(discord.ui.View):
