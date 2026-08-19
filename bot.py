@@ -6799,7 +6799,6 @@ class SelecionarAcaoView(discord.ui.View):
         super().__init__(timeout=60)
         options = []
         
-        # Ordenar para colocar os Helicrash no final
         acoes_ordenadas = sorted(ACOES_SEMANA.keys(), key=lambda x: (0 if "Helicrash" not in x else 1, x))
         
         for nome in acoes_ordenadas:
@@ -6816,20 +6815,16 @@ class SelecionarAcaoView(discord.ui.View):
             else:
                 options.append(discord.SelectOption(label=nome, description="Ilimitado", emoji=emoji))
         
-        # ⚠️ SELECT
         self.select = discord.ui.Select(
             placeholder="📋 Escolha a ação",
             options=options,
             min_values=1,
-            max_values=1
+            max_values=1,
+            custom_id="selecionar_acao_select"  # ⚠️ CUSTOM_ID ÚNICO
         )
         self.select.callback = self.select_callback
         self.add_item(self.select)
-        
-        # ⚠️ BOTÃO FECHAR
-        self.add_item(discord.ui.Button(label="❌ Fechar", style=discord.ButtonStyle.danger, custom_id="fechar_selecao"))
 
-    # ---------------------------------------------------------
     async def select_callback(self, interaction: discord.Interaction):
         acao_tipo = interaction.data["values"][0]
         await interaction.response.defer(ephemeral=True)
@@ -6849,12 +6844,10 @@ class SelecionarAcaoView(discord.ui.View):
         
         acao_id = await salvar_acao_db(acao_tipo, interaction.user.id)
         
-        # Buscar regras da ação
         regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."], "is_bahamas": False})
         regras = regras_data.get("regras", [])
         is_bahamas = regras_data.get("is_bahamas", False)
         
-        # Definir cores e emojis
         if "Helicrash" in acao_tipo:
             cor = 0xe67e22
             emoji = "🚁"
@@ -6871,21 +6864,18 @@ class SelecionarAcaoView(discord.ui.View):
             cor = 0x3498db
             emoji = "🎯"
         
-        # Montar embed
         embed = discord.Embed(
             title=f"{emoji} ESCALAÇÃO - {acao_tipo}",
             color=cor,
             timestamp=agora()
         )
         
-        # Adicionar regras
         embed.add_field(
             name="📌 REGRAS DA AÇÃO",
             value="\n".join(regras),
             inline=False
         )
         
-        # Adicionar regras gerais do Bahamas se for ação de Bahamas
         if is_bahamas:
             embed.add_field(
                 name="🏝️ REGRAS GERAIS - BAHAMAS",
@@ -6893,7 +6883,6 @@ class SelecionarAcaoView(discord.ui.View):
                 inline=False
             )
         
-        # Limite semanal
         if limite and limite is not None:
             async with pool.acquire() as conn:
                 qtd_feita = await conn.fetchval("SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND status='concluida' AND (resultado='ganhou' OR resultado='perdeu')", acao_tipo)
@@ -6903,14 +6892,12 @@ class SelecionarAcaoView(discord.ui.View):
                     inline=False
                 )
         
-        # Participantes
         embed.add_field(
             name="👥 PARTICIPANTES (0)",
             value="Nenhum participante ainda.\nClique no botão ✅ PARTICIPAR para se inscrever!",
             inline=False
         )
         
-        # Criador e data
         embed.add_field(
             name="👤 CRIADO POR",
             value=interaction.user.mention,
@@ -6922,7 +6909,6 @@ class SelecionarAcaoView(discord.ui.View):
             inline=True
         )
         
-        # Informação de como participar
         embed.add_field(
             name="📝 COMO PARTICIPAR",
             value="✅ Clique em **'Participar'** para se inscrever na ação.\n📤 Quando a escalação estiver completa, o criador clica em **'Concluir'**.",
@@ -6931,33 +6917,17 @@ class SelecionarAcaoView(discord.ui.View):
         
         embed.set_footer(text=f"ID: {acao_id}")
         
-        # Enviar mensagem no canal de escalações
         canal = interaction.guild.get_channel(CANAL_ESCALACOES_ID)
         if canal:
             view = AcaoView(acao_id, interaction.user.id)
             await canal.send(embed=embed, view=view)
-            acoes_ativas[acao_id] = {"embed": embed, "criador_id": interaction.user.id}
-            
-            # ⚠️ FECHAR O SELECT (responder ao usuário)
             await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada com sucesso!", ephemeral=True)
-            
-            # ⚠️ DELETAR A MENSAGEM DO SELECT
             try:
                 await interaction.message.delete()
             except:
                 pass
         else:
             await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
-
-    # ---------------------------------------------------------
-    @discord.ui.button(label="❌ Fechar", style=discord.ButtonStyle.danger, custom_id="fechar_selecao")
-    async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
-        try:
-            await interaction.message.delete()
-        except:
-            pass
-            
 # ###############################################
 class AcaoView(discord.ui.View):
     def __init__(self, acao_id, criador_id):
@@ -7493,19 +7463,16 @@ class PainelAcoesView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="🎯 Criar Nova Ação", style=discord.ButtonStyle.success, custom_id="criar_acao", emoji="🎯")
     async def criar_acao(self, interaction: discord.Interaction, button):
         await interaction.response.defer(ephemeral=True)
         view = SelecionarAcaoView()
         await interaction.followup.send("**Selecione o tipo de ação:**", view=view, ephemeral=True)
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="📊 Ver Relatório", style=discord.ButtonStyle.primary, custom_id="acoes_relatorio", emoji="📊")
     async def relatorio(self, interaction: discord.Interaction, button):
         await interaction.response.send_modal(RelatorioPeriodoModal())
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="♻️ Resetar Ações", style=discord.ButtonStyle.danger, custom_id="acoes_reset", emoji="♻️")
     async def reset(self, interaction: discord.Interaction, button):
         await interaction.response.defer(ephemeral=True)
@@ -7524,15 +7491,7 @@ class PainelAcoesView(discord.ui.View):
         await interaction.followup.send("✅ Todas as ações foram resetadas!", ephemeral=True)
 
 # ###############################################
-class FecharButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger)
-
-    # ---------------------------------------------------------
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.message.delete()
-
-# ###############################################
+        
 class RelatorioPeriodoModal(discord.ui.Modal, title="📊 Gerar Relatório"):
     data_inicio = discord.ui.TextInput(label="Data início (DD/MM/AAAA)")
     data_fim = discord.ui.TextInput(label="Data fim (DD/MM/AAAA)")
