@@ -6792,12 +6792,13 @@ async def concluir_acao_db(acao_id, resultado, valor=0):
     except Exception as e:
         logger.error(f"❌ Erro ao concluir ação: {e}")
 
-# ###############################################
+
 # ###############################################
 class SelecionarAcaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
         options = []
+        
         # Ordenar para colocar os Helicrash no final
         acoes_ordenadas = sorted(ACOES_SEMANA.keys(), key=lambda x: (0 if "Helicrash" not in x else 1, x))
         
@@ -6815,17 +6816,24 @@ class SelecionarAcaoView(discord.ui.View):
             else:
                 options.append(discord.SelectOption(label=nome, description="Ilimitado", emoji=emoji))
         
-        select = discord.ui.Select(placeholder="📋 Escolha a ação", options=options, max_values=1)
-        select.callback = self.select_callback
-        self.add_item(select)
-        self.add_item(FecharButton())
+        # ⚠️ SELECT
+        self.select = discord.ui.Select(
+            placeholder="📋 Escolha a ação",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+        
+        # ⚠️ BOTÃO FECHAR
+        self.add_item(discord.ui.Button(label="❌ Fechar", style=discord.ButtonStyle.danger, custom_id="fechar_selecao"))
 
     # ---------------------------------------------------------
     async def select_callback(self, interaction: discord.Interaction):
         acao_tipo = interaction.data["values"][0]
         await interaction.response.defer(ephemeral=True)
         
-        # Verificar limite
         limite = ACOES_SEMANA.get(acao_tipo)
         pool = await get_pool()
         if not pool:
@@ -6929,9 +6937,26 @@ class SelecionarAcaoView(discord.ui.View):
             view = AcaoView(acao_id, interaction.user.id)
             await canal.send(embed=embed, view=view)
             acoes_ativas[acao_id] = {"embed": embed, "criador_id": interaction.user.id}
+            
+            # ⚠️ FECHAR O SELECT (responder ao usuário)
             await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada com sucesso!", ephemeral=True)
+            
+            # ⚠️ DELETAR A MENSAGEM DO SELECT
+            try:
+                await interaction.message.delete()
+            except:
+                pass
         else:
             await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
+
+    # ---------------------------------------------------------
+    @discord.ui.button(label="❌ Fechar", style=discord.ButtonStyle.danger, custom_id="fechar_selecao")
+    async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
             
 # ###############################################
 class AcaoView(discord.ui.View):
