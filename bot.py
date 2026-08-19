@@ -4725,6 +4725,7 @@ async def zerar_exibicao_metas():
 
 # ---------------------------------------------------------
 async def criar_sala_meta(member: discord.Member):
+    """Cria a sala de meta com acesso para o membro e para os RESP_METAS."""
     guild = member.guild
     pool = await get_pool()
     if not pool:
@@ -4745,11 +4746,27 @@ async def criar_sala_meta(member: discord.Member):
                     "saldo_excedente": meta_existente.get("saldo_excedente") or 0
                 }
                 await atualizar_embed_meta(member.id)
+                
+                # ⚠️ GARANTIR ACESSO DO RESP_METAS NO CANAL EXISTENTE
+                cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+                if cargo_resp:
+                    for resp_member in guild.members:
+                        if cargo_resp in resp_member.roles:
+                            try:
+                                perms = canal_existe.permissions_for(resp_member)
+                                if not perms.view_channel:
+                                    await canal_existe.set_permissions(resp_member, view_channel=True, send_messages=True)
+                                    logger.info(f"✅ RESP_METAS {resp_member.display_name} adicionado ao canal {canal_existe.name}")
+                            except Exception as e:
+                                logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+                
                 return canal_existe
             else:
                 await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
                 if str(member.id) in metas_cache:
                     del metas_cache[str(member.id)]
+
+        # Verificar se já existe um canal com o nome do membro
         for canal in guild.text_channels:
             if member.display_name.lower() in canal.name.lower() and "📁" in canal.name:
                 await salvar_meta_db(member.id, canal.id, 0, 0, 0)
@@ -4762,13 +4779,29 @@ async def criar_sala_meta(member: discord.Member):
                     "saldo_excedente": 0
                 }
                 await atualizar_embed_meta(member.id)
+                
+                # ⚠️ GARANTIR ACESSO DO RESP_METAS NO CANAL EXISTENTE
+                cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+                if cargo_resp:
+                    for resp_member in guild.members:
+                        if cargo_resp in resp_member.roles:
+                            try:
+                                perms = canal.permissions_for(resp_member)
+                                if not perms.view_channel:
+                                    await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
+                                    logger.info(f"✅ RESP_METAS {resp_member.display_name} adicionado ao canal {canal.name}")
+                            except Exception as e:
+                                logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+                
                 return canal
+
         categoria_id = obter_categoria_meta(member)
         if not categoria_id:
             return None
         categoria = guild.get_channel(categoria_id)
         if not categoria:
             return None
+
         nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -4780,7 +4813,9 @@ async def criar_sala_meta(member: discord.Member):
         gerente_geral = guild.get_role(CARGO_GERENTE_GERAL_ID)
         if gerente_geral:
             overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
+
         canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
+
         await salvar_meta_db(member.id, canal.id, 0, 0, 0)
         metas_cache[str(member.id)] = {
             "canal_id": canal.id,
@@ -4792,6 +4827,18 @@ async def criar_sala_meta(member: discord.Member):
         }
         await asyncio.sleep(1)
         await atualizar_embed_meta(member.id)
+
+        # ⚠️ DAR ACESSO AO RESP_METAS AUTOMATICAMENTE ⚠️
+        cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+        if cargo_resp:
+            for resp_member in guild.members:
+                if cargo_resp in resp_member.roles:
+                    try:
+                        await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
+                        logger.info(f"✅ RESP_METAS {resp_member.display_name} adicionado ao canal {canal.name}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+
         return canal
     except Exception as e:
         logger.error(f"❌ Erro ao criar sala meta: {e}")
@@ -5226,8 +5273,29 @@ class MetaView(discord.ui.View):
         super().__init__(timeout=None)
         self.user_id = user_id
 
+    # ⚠️ BOTÕES COM custom_id FIXOS (SEM o user_id)
     @discord.ui.button(label="💣 Vender Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_vender_polvora_fixo", emoji="💣")
     async def vender_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # O user_id vem do objeto, não do custom_id
+        await self._handle_vender_polvora(interaction)
+
+    @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰")
+    async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_adicionar_dinheiro(interaction)
+
+    @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga_fixo", emoji="✅")
+    async def polvora_paga(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_polvora_paga(interaction)
+
+    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️")
+    async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_editar_meta(interaction)
+
+    # =========================================================
+    # MÉTODOS INTERNOS (separados para organização)
+    # =========================================================
+
+    async def _handle_vender_polvora(self, interaction: discord.Interaction):
         pool = await get_pool()
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
@@ -5248,8 +5316,7 @@ class MetaView(discord.ui.View):
                 return
         await interaction.response.send_modal(VenderPolvoraMetaModal(self.user_id))
 
-    @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰")
-    async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _handle_adicionar_dinheiro(self, interaction: discord.Interaction):
         pool = await get_pool()
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
@@ -5270,8 +5337,7 @@ class MetaView(discord.ui.View):
                 return
         await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
 
-    @discord.ui.button(label="💰 Pólvora Paga", style=discord.ButtonStyle.success, custom_id="meta_polvora_paga_fixo", emoji="✅")
-    async def polvora_paga(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _handle_polvora_paga(self, interaction: discord.Interaction):
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
 
@@ -5297,8 +5363,7 @@ class MetaView(discord.ui.View):
 
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️")
-    async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _handle_editar_meta(self, interaction: discord.Interaction):
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
@@ -5326,15 +5391,6 @@ class MetaView(discord.ui.View):
         }
 
         await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
-        
-# ###############################################
-class RelatorioMetasButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="📊 Gerar Relatório de Metas", style=discord.ButtonStyle.success, custom_id="relatorio_metas_btn", emoji="📊")
-
-    # ---------------------------------------------------------
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(RelatorioMetasModal())
 
 # ###############################################
 class FecharMetasAutomaticoButton(discord.ui.Button):
@@ -9506,8 +9562,23 @@ async def on_member_join(member):
 async def on_member_update(before, after):
     if after.bot:
         return
+    
+    # =========================================================
+    # VERIFICAR SE GANHOU O CARGO RESP_METAS
+    # =========================================================
+    tinha_resp = any(r.id == CARGO_RESP_METAS_ID for r in before.roles)
+    tem_resp = any(r.id == CARGO_RESP_METAS_ID for r in after.roles)
+    
+    if not tinha_resp and tem_resp:
+        logger.info(f"🔵 {after.name} ganhou cargo de RESP_METAS, dando acesso a todas as salas...")
+        await atualizar_acesso_responsaveis()
+    
+    # =========================================================
+    # VERIFICAR SE GANHOU CARGO DE AGREGADO (CRIAR SALA)
+    # =========================================================
     tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
     tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
+    
     if not tinha_agregado and tem_agregado:
         await asyncio.sleep(2)
         logger.info(f"🔵 {after.name} ganhou cargo de Agregado, criando sala...")
@@ -9517,6 +9588,7 @@ async def on_member_update(before, after):
                 meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(after.id))
         else:
             meta = None
+        
         if not meta:
             sala = await criar_sala_meta(after)
             if sala:
@@ -9532,9 +9604,83 @@ async def on_member_update(before, after):
             else:
                 await atualizar_embed_meta(after.id)
                 logger.info(f"📊 Painel atualizado para {after.name}")
+        
+        # ⚠️ DAR ACESSO AO RESP_METAS NA NOVA SALA (se foi criada)
+        cargo_resp = after.guild.get_role(CARGO_RESP_METAS_ID)
+        if cargo_resp and sala:
+            for resp_member in after.guild.members:
+                if cargo_resp in resp_member.roles:
+                    try:
+                        await sala.set_permissions(resp_member, view_channel=True, send_messages=True)
+                        logger.info(f"✅ RESP_METAS {resp_member.display_name} adicionado ao canal {sala.name}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+        
         return
+    
+    # =========================================================
+    # ATUALIZAR CATEGORIA DA META SE O CARGO DO MEMBRO MUDOU
+    # =========================================================
     if str(after.id) in metas_cache:
         await atualizar_categoria_meta(after)
+
+# ---------------------------------------------------------
+async def atualizar_acesso_responsaveis():
+    """Garante que todos os membros com cargo RESP_METAS tenham acesso a TODAS as salas de meta."""
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            logger.error("❌ Guild não encontrada!")
+            return
+        
+        # Buscar todos os membros com cargo RESP_METAS
+        cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+        if not cargo_resp:
+            logger.error(f"❌ Cargo RESP_METAS não encontrado! ID: {CARGO_RESP_METAS_ID}")
+            return
+        
+        membros_resp = [m for m in guild.members if cargo_resp in m.roles]
+        if not membros_resp:
+            logger.info("📭 Nenhum membro com cargo RESP_METAS encontrado.")
+            return
+        
+        logger.info(f"🔄 Atualizando acesso de {len(membros_resp)} responsáveis...")
+        
+        # Lista de categorias que o RESP_METAS deve ter acesso
+        categorias_permitidas = [
+            CATEGORIA_META_GERENTE_ID,
+            CATEGORIA_META_RESPONSAVEIS_ID,
+            CATEGORIA_META_SOLDADO_ID,
+            CATEGORIA_META_MEMBRO_ID,
+            CATEGORIA_META_AGREGADO_ID
+        ]
+        
+        # Para cada meta, verificar se está em uma categoria permitida
+        for uid, dados in metas_cache.items():
+            canal = guild.get_channel(dados["canal_id"])
+            if not canal:
+                continue
+            
+            # Verificar se o canal está em uma categoria permitida
+            if canal.category_id not in categorias_permitidas:
+                continue
+            
+            # Para cada responsável, dar permissão
+            for membro in membros_resp:
+                # Verificar permissões atuais
+                perms = canal.permissions_for(membro)
+                if not perms.view_channel:
+                    # Adicionar permissão
+                    try:
+                        await canal.set_permissions(membro, view_channel=True, send_messages=True)
+                        logger.info(f"✅ Acesso concedido a {membro.display_name} no canal {canal.name}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao dar acesso a {membro.display_name}: {e}")
+        
+        logger.info(f"✅ Acesso dos responsáveis atualizado para {len(metas_cache)} salas!")
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar acesso dos responsáveis: {e}")
 
 # ---------------------------------------------------------
 @bot.event
@@ -9786,6 +9932,17 @@ async def cmd_limpar_sala(ctx):
     except Exception as e:
         logger.error(f"Erro ao limpar sala: {e}")
         await ctx.send(f"❌ **Erro ao limpar a sala:** {e}")
+# ---------------------------------------------------------
+
+@bot.command(name="atualizar_acesso_resp")
+@commands.has_permissions(administrator=True)
+async def cmd_atualizar_acesso_resp(ctx):
+    """Atualiza o acesso de todos os RESP_METAS a todas as salas de meta."""
+    await ctx.send("🔄 Atualizando acesso dos responsáveis...")
+    await atualizar_acesso_responsaveis()
+    await ctx.send("✅ Acesso dos responsáveis atualizado!")
+
+# ---------------------------------------------------------
 
 # =========================================================
 # ==================== SEÇÃO 17: ON_READY OTIMIZADO =======
@@ -9833,6 +9990,8 @@ async def on_ready():
     await restaurar_botoes_vendas()
     await restaurar_acoes()
     await setup_status()
+    await restaurar_botoes_metas()
+    await atualizar_acesso_responsaveis()
     gc.collect()
     logger.info("🧹 Limpeza de memória executada")
     logger.info("=" * 50)
@@ -10011,6 +10170,41 @@ async def restaurar_producoes():
                 logger.info(f"🔄 Produção restaurada: {pid}")
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar produções: {e}")
+
+# ---------------------------------------------------------
+async def restaurar_botoes_metas():
+    """Restaura os botões das metas após reinicialização."""
+    try:
+        logger.info("🔄 Restaurando botões das metas...")
+        
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            logger.error("❌ Guild não encontrada!")
+            return
+        
+        # Recarregar cache de metas
+        await carregar_metas_cache()
+        
+        contador = 0
+        for uid, dados in metas_cache.items():
+            canal = guild.get_channel(dados["canal_id"])
+            if canal:
+                # Verificar se a mensagem do embed existe e tem botões
+                async for msg in canal.history(limit=30):
+                    if msg.author == bot.user and msg.embeds:
+                        if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
+                            # Se não tiver botões ou estiver com view antiga, recriar
+                            if not msg.components:
+                                await atualizar_embed_meta(int(uid))
+                                contador += 1
+                                await asyncio.sleep(0.5)
+                            break
+        
+        logger.info(f"✅ {contador} painéis de metas restaurados com botões!")
+        return contador
+    except Exception as e:
+        logger.error(f"❌ Erro ao restaurar botões das metas: {e}")
+        return 0
 
 # =========================================================
 # ==================== SEÇÃO 18: SHUTDOWN =================
