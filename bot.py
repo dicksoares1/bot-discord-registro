@@ -8866,7 +8866,7 @@ class PainelGruposView(discord.ui.View):
         import time
         self.uid = str(int(time.time()))[-6:]
         
-        # ⚠️ ADICIONAR SELECT (se houver grupos)
+        # ⚠️ SÓ O SELECT NO __init__
         if grupos and len(grupos) > 0:
             options = []
             for grupo in grupos[:25]:
@@ -8892,20 +8892,7 @@ class PainelGruposView(discord.ui.View):
                 select.callback = self.select_callback
                 self.add_item(select)
         
-        # ⚠️ BOTÕES - APENAS 1 VEZ CADA
-        self.add_item(discord.ui.Button(
-            label="➕ NOVO GRUPO",
-            style=discord.ButtonStyle.success,
-            custom_id=f"novo_{self.uid}",
-            emoji="➕"
-        ))
-        
-        self.add_item(discord.ui.Button(
-            label="🔄 ATUALIZAR",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"atualizar_{self.uid}",
-            emoji="🔄"
-        ))
+        # ⚠️ NÃO ADICIONAR BOTÕES AQUI! ELES VÊM DOS DECORATORS ABAIXO
 
     # =========================================================
     # SELECT CALLBACK
@@ -8966,7 +8953,7 @@ class PainelGruposView(discord.ui.View):
             await interaction.followup.send(f"❌ ERRO: {str(e)[:100]}", ephemeral=True)
 
     # =========================================================
-    # ⚠️ BOTÕES - SÓ OS DECORATORS, NADA NO __init__ ALÉM DO SELECT
+    # ⚠️ BOTÕES - APENAS OS DECORATORS (1 VEZ CADA)
     # =========================================================
 
     @discord.ui.button(label="➕ NOVO GRUPO", style=discord.ButtonStyle.success, custom_id="novo_padrao", emoji="➕")
