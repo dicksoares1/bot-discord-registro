@@ -8865,33 +8865,71 @@ class PainelGruposView(discord.ui.View):
         self.grupos = grupos
         import time
         self.uid = str(int(time.time()))[-6:]
+        
+        # ⚠️ ADICIONAR SELECT (se houver grupos)
         if grupos and len(grupos) > 0:
             options = []
             for grupo in grupos[:25]:
                 nome = grupo['nome_org'][:45]
                 tipo = grupo.get('tipo_org', 'PISTA SEM PAINEL')
                 emoji = TIPOS_ORGANIZACAO.get(tipo, {}).get('emoji', '🏷️')
-                options.append(discord.SelectOption(label=nome, description=f"{emoji} {grupo['lider_nome'][:20]}", value=grupo['grupo_id'], emoji="🏷️"))
+                options.append(
+                    discord.SelectOption(
+                        label=nome,
+                        description=f"{emoji} {grupo['lider_nome'][:20]}",
+                        value=grupo['grupo_id'],
+                        emoji="🏷️"
+                    )
+                )
             if options:
-                select = discord.ui.Select(placeholder="📋 SELECIONE UM GRUPO...", options=options, min_values=1, max_values=1, custom_id=f"select_{self.uid}")
+                select = discord.ui.Select(
+                    placeholder="📋 SELECIONE UM GRUPO...",
+                    options=options,
+                    min_values=1,
+                    max_values=1,
+                    custom_id=f"select_{self.uid}"
+                )
                 select.callback = self.select_callback
                 self.add_item(select)
-        self.add_item(discord.ui.Button(label="➕ NOVO GRUPO", style=discord.ButtonStyle.success, custom_id=f"novo_{self.uid}", emoji="➕"))
-        self.add_item(discord.ui.Button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id=f"atualizar_{self.uid}", emoji="🔄"))
+        
+        # ⚠️ BOTÕES - APENAS 1 VEZ CADA
+        self.add_item(discord.ui.Button(
+            label="➕ NOVO GRUPO",
+            style=discord.ButtonStyle.success,
+            custom_id=f"novo_{self.uid}",
+            emoji="➕"
+        ))
+        
+        self.add_item(discord.ui.Button(
+            label="🔄 ATUALIZAR",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"atualizar_{self.uid}",
+            emoji="🔄"
+        ))
 
-    # ---------------------------------------------------------
+    # =========================================================
+    # SELECT CALLBACK
+    # =========================================================
     async def select_callback(self, interaction: discord.Interaction):
         try:
             grupo_id = interaction.data["values"][0]
             await interaction.response.defer(ephemeral=True)
+            
             dados = await carregar_grupo_db(grupo_id)
             if not dados:
                 await interaction.followup.send("❌ GRUPO NÃO ENCONTRADO!", ephemeral=True)
                 return
+            
             compras = await carregar_compras_grupo_db(grupo_id)
             tipo_org = dados.get('tipo_org', 'PISTA SEM PAINEL')
             info_tipo = TIPOS_ORGANIZACAO.get(tipo_org, TIPOS_ORGANIZACAO['PISTA SEM PAINEL'])
-            embed = discord.Embed(title=f"{info_tipo['emoji']} {dados['nome_org']}", color=0x3498db, timestamp=agora())
+            
+            embed = discord.Embed(
+                title=f"{info_tipo['emoji']} {dados['nome_org']}",
+                color=0x3498db,
+                timestamp=agora()
+            )
+            
             info = f"**👤 LÍDER:** {dados['lider_nome']}\n"
             info += f"**📱 TELEFONE:** {dados['lider_telefone']}\n"
             if dados.get('braco_nome'):
@@ -8901,7 +8939,9 @@ class PainelGruposView(discord.ui.View):
             info += f"\n**🔫 PRODUTO:** {dados['produto']}\n"
             info += f"\n**📌 TIPO:** {info_tipo['nome']}\n"
             info += f"**📝 {info_tipo['descricao']}**"
+            
             embed.add_field(name="📋 INFORMAÇÕES", value=info, inline=False)
+            
             pt = compras.get("PT", {})
             sub = compras.get("SUB", {})
             compras_texto = ""
@@ -8914,15 +8954,21 @@ class PainelGruposView(discord.ui.View):
             else:
                 compras_texto = "📭 NENHUMA COMPRA"
             embed.add_field(name="📦 COMPRAS", value=compras_texto, inline=False)
+            
             if dados.get('observacoes'):
                 embed.add_field(name="📝 OBS", value=dados['observacoes'], inline=False)
+            
             view = GrupoView(grupo_id, dados['nome_org'])
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            
         except Exception as e:
             logger.error(f"❌ ERRO: {e}")
             await interaction.followup.send(f"❌ ERRO: {str(e)[:100]}", ephemeral=True)
 
-    # ---------------------------------------------------------
+    # =========================================================
+    # ⚠️ BOTÕES - SÓ OS DECORATORS, NADA NO __init__ ALÉM DO SELECT
+    # =========================================================
+
     @discord.ui.button(label="➕ NOVO GRUPO", style=discord.ButtonStyle.success, custom_id="novo_padrao", emoji="➕")
     async def novo_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -8930,6 +8976,7 @@ class PainelGruposView(discord.ui.View):
         if not is_admin and not is_gerente:
             await interaction.response.send_message("❌ APENAS ADM OU GERENTES!", ephemeral=True)
             return
+        
         view = EscolherTipoView("registrar")
         embed = discord.Embed(
             title="📌 SELECIONE O TIPO DE ORGANIZAÇÃO",
@@ -8945,13 +8992,11 @@ class PainelGruposView(discord.ui.View):
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    # ---------------------------------------------------------
     @discord.ui.button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="atualizar_padrao", emoji="🔄")
     async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await recriar_painel_grupos()
         await interaction.followup.send("✅ PAINEL ATUALIZADO!", ephemeral=True)
-
 # ###############################################
 class GrupoView(discord.ui.View):
     def __init__(self, grupo_id, nome_org):
