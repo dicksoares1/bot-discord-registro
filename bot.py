@@ -201,6 +201,7 @@ CANAL_COMPRAS_REGISTRADAS_ID = 1270467793363669053
 
 CANAL_CLIPES_ID = 1229526645837271134
 CANAL_POSTAGEM_X = 1486353689680547900
+CANAL_BOAS_VINDAS = 1229526645111656562
 
 # =========================================================
 # SEÇÃO 4: BOT E INTENTS
@@ -10057,7 +10058,6 @@ async def worker_clipes():
 # ---------------------------------------------------------
 # EVENTO: on_member_join
 # ---------------------------------------------------------
-
 @bot.event
 async def on_member_join(member):
     if member.bot:
@@ -10066,9 +10066,17 @@ async def on_member_join(member):
         cargo_em_registro = member.guild.get_role(EM_REGISTRO_ROLE_ID)
         if cargo_em_registro:
             await member.add_roles(cargo_em_registro)
+        canal = bot.get_channel(CANAL_BOAS_VINDAS)
+        if canal:
+            membros_total = len([m for m in member.guild.members if not m.bot])
+            embed = discord.Embed(title="🎉 BEM-VINDO À VIDA RASA 442!", description=f"{member.mention} acabou de chegar!", color=0x2ecc71, timestamp=agora())
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.add_field(name="📋 PRÓXIMO PASSO", value=f"**Clique no botão 📋 Fazer Registro** no canal <#{CANAL_REGISTRO_ID}> para se cadastrar.", inline=False)
+            embed.add_field(name="📌 INFORMAÇÕES", value=f"👤 Você é o **{membros_total}º** membro!", inline=False)
+            embed.set_footer(text="Vida Rasa 442 • Sistema Automático")
+            await canal.send(embed=embed)
     except Exception as e:
-        logger.error(f"❌ Erro ao adicionar cargo 'Em Registro' para {member.name}: {e}")
-
+        logger.error(f"❌ Erro ao processar entrada de {member.name}: {e}")
 # ---------------------------------------------------------
 # EVENTO: on_member_update
 # ---------------------------------------------------------
@@ -10653,6 +10661,37 @@ async def cmd_help_vdr(ctx):
     embed.set_footer(text="Sistema VDR • v3.3.1")
     await ctx.send(embed=embed)
 
+# ---------------------------------------------------------
+# COMANDO: !status (VERSÃO COMPLETA)
+# ---------------------------------------------------------
+@bot.command(name="status")
+async def cmd_status(ctx):
+    estoque = await carregar_estoque()
+    estoque_insumos = await carregar_estoque_insumos()
+    metas_ativas = len(metas_cache)
+    producoes_ativas = len(producoes_tasks)
+    pool = await get_pool()
+    vendas_hoje = 0
+    if pool:
+        async with pool.acquire() as conn:
+            hoje = agora().strftime("%d/%m/%Y")
+            row = await conn.fetchval("SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE data = $1", hoje)
+            vendas_hoje = row or 0
+    guild = ctx.guild
+    membros_online = len([m for m in guild.members if m.status != discord.Status.offline])
+    membros_total = len([m for m in guild.members if not m.bot])
+    embed = discord.Embed(title="📊 STATUS - VIDA RASA 442", color=0x1e3a8a, timestamp=agora())
+    embed.set_thumbnail(url=bot.user.display_avatar.url)
+    embed.add_field(name="🟢 SISTEMA", value=f"✅ Online\n⏱️ {int(metricas.get_uptime() // 3600)}h {(int(metricas.get_uptime()) % 3600) // 60}m", inline=True)
+    embed.add_field(name="👥 MEMBROS", value=f"🟢 {membros_online} online\n👤 {membros_total} total", inline=True)
+    embed.add_field(name="📊 MÉTRICAS", value=f"📝 {metricas.comandos_executados} comandos\n📦 {cache.size()} cache", inline=True)
+    embed.add_field(name="📦 ESTOQUE", value=f"🔫 PT: {fmt_num(estoque['PT'])} pacotes\n🔫 SUB: {fmt_num(estoque['SUB'])} pacotes", inline=True)
+    embed.add_field(name="💊 INSUMOS", value=f"💊 {fmt_num(estoque_insumos['capsulas'])} cápsulas\n📦 {fmt_num(estoque_insumos['embalagens'])} embalagens", inline=True)
+    embed.add_field(name="🏭 PRODUÇÃO", value=f"🏭 {producoes_ativas} ativas\n📊 {metas_ativas} metas", inline=True)
+    embed.add_field(name="💰 VENDAS HOJE", value=formatar_dinheiro(vendas_hoje), inline=True)
+    embed.set_footer(text=f"🔄 {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+    await ctx.send(embed=embed)
+
 # =========================================================
 # ==================== TASKS BACKGROUND ===================
 # =========================================================
@@ -10817,27 +10856,35 @@ async def on_ready():
     logger.info("=" * 50)
 
 # ---------------------------------------------------------
-# ASYNC: setup_status
+# ASYNC: setup_status (VERSÃO PROFISSIONAL)
 # ---------------------------------------------------------
-
 async def setup_status():
-    @tasks.loop(minutes=5)
+    async def get_stats():
+        return {
+            "membros": len([m for m in bot.get_guild(GUILD_ID).members if not m.bot]) if bot.get_guild(GUILD_ID) else 0,
+            "producoes": len([p for p in producoes_tasks if not p.done()]),
+            "metas": len(metas_cache),
+            "estoque_pt": (await carregar_estoque()).get('PT', 0),
+            "estoque_sub": (await carregar_estoque()).get('SUB', 0),
+        }
+    @tasks.loop(minutes=3)
     async def atualizar_status():
         try:
-            guild = bot.get_guild(GUILD_ID)
-            if guild:
-                membros = len([m for m in guild.members if not m.bot])
-                await bot.change_presence(
-                    activity=discord.Activity(
-                        type=discord.ActivityType.watching,
-                        name=f"{membros} membros • v3.3.1"
-                    )
-                )
+            stats = await get_stats()
+            statuses = [
+                f"🎮 {stats['membros']} membros",
+                f"🏭 {stats['producoes']} produções",
+                f"💰 {stats['metas']} metas",
+                f"🔫 PT {stats['estoque_pt']} • SUB {stats['estoque_sub']}",
+                f"🕒 {agora().strftime('%H:%M')} • VDR 442",
+            ]
+            import random
+            status_text = random.choice(statuses)
+            await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=status_text))
         except Exception as e:
             logger.error(f"Erro ao atualizar status: {e}")
     if not atualizar_status.is_running():
         atualizar_status.start()
-
 # ---------------------------------------------------------
 # ASYNC: carregar_dados_iniciais
 # ---------------------------------------------------------
