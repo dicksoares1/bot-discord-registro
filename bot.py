@@ -3187,20 +3187,17 @@ class StatusView(discord.ui.View):
         self.entrega_atual = entrega_atual
         self.entrega_ja_entregue = False
         self.proxima_criada = False
-        self.pago_ja_clicado = False  # ⚠️ NOVO: controla se PAGO já foi clicado
+        self.pago_ja_clicado = False
 
-        # Verificar se é venda única ou parcelada
         is_venda_unica = (total_entregas == 1)
 
-        # Regra do botão ENTREGUE
         if is_venda_unica:
-            entregue_disabled = False  # Venda única: liberado
+            entregue_disabled = False
         elif entrega_atual == 1 and total_entregas > 1:
-            entregue_disabled = True   # Primeira entrega: desabilitado
+            entregue_disabled = True
         else:
-            entregue_disabled = False  # Já tem entrega anterior: liberado
+            entregue_disabled = False
 
-        # Botão PAGO (sempre habilitado inicialmente)
         self.add_item(discord.ui.Button(
             label="💰 Pago",
             style=discord.ButtonStyle.primary,
@@ -3209,7 +3206,6 @@ class StatusView(discord.ui.View):
             disabled=False
         ))
 
-        # Botão ENTREGUE
         self.add_item(discord.ui.Button(
             label="✅ Entregue",
             style=discord.ButtonStyle.success,
@@ -3218,7 +3214,6 @@ class StatusView(discord.ui.View):
             disabled=entregue_disabled
         ))
 
-        # Botão CRIAR PRÓXIMA ENTREGA
         if not is_venda_unica and entrega_atual < total_entregas:
             self.add_item(discord.ui.Button(
                 label=f"📦 Criar Próxima Entrega ({entrega_atual + 1}/{total_entregas})",
@@ -3236,7 +3231,6 @@ class StatusView(discord.ui.View):
                 disabled=True
             ))
 
-        # Botão CANCELAR
         self.add_item(discord.ui.Button(
             label="❌ Pedido cancelado",
             style=discord.ButtonStyle.danger,
@@ -3248,15 +3242,10 @@ class StatusView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
 
-    # =========================================================
-    # INTERACTION CHECK
-    # =========================================================
-
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
 
         if custom_id == "status_pago_fixo":
-            # ⚠️ VERIFICAR SE JÁ FOI CLICADO
             if self.pago_ja_clicado:
                 await interaction.response.send_message("⚠️ Este pedido já foi marcado como pago!", ephemeral=True)
                 return False
@@ -3265,7 +3254,6 @@ class StatusView(discord.ui.View):
             return False
         elif custom_id == "status_entregue_fixo":
             await interaction.response.defer()
-            # Verificar se o botão está desabilitado
             for item in self.children:
                 if item.custom_id == "status_entregue_fixo" and item.disabled:
                     await interaction.followup.send("⚠️ **Você precisa criar a próxima entrega antes de marcar esta como entregue!**", ephemeral=True)
@@ -3281,10 +3269,6 @@ class StatusView(discord.ui.View):
             await self.cancelado(interaction, None)
             return False
         return True
-
-    # =========================================================
-    # MÉTODOS AUXILIARES
-    # =========================================================
 
     def get_status(self, embed):
         for i, field in enumerate(embed.fields):
@@ -3306,10 +3290,6 @@ class StatusView(discord.ui.View):
 
     def entrega_ja_foi_entregue(self, linhas):
         return any(l.startswith("✅") for l in linhas)
-
-    # =========================================================
-    # BOTÃO PAGO
-    # =========================================================
 
     async def pago(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
@@ -3334,7 +3314,6 @@ class StatusView(discord.ui.View):
 
         finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
 
-        # ⚠️ DESABILITAR BOTÃO PAGO
         self.pago_ja_clicado = True
         for child in self.children:
             if child.custom_id == "status_pago_fixo":
@@ -3350,10 +3329,6 @@ class StatusView(discord.ui.View):
             await interaction.message.edit(embed=embed, view=StatusView(disabled=True, entrega_id=self.entrega_id))
         else:
             await interaction.message.edit(embed=embed, view=self)
-
-    # =========================================================
-    # BOTÃO ENTREGUE
-    # =========================================================
 
     async def entregue(self, interaction: discord.Interaction, button):
         if self.entrega_ja_entregue:
@@ -3371,7 +3346,6 @@ class StatusView(discord.ui.View):
             await interaction.followup.send("⚠️ **Esta entrega já foi entregue!**", ephemeral=True)
             return
 
-        # Extrair pacotes do embed
         pacotes_pt = 0
         pacotes_sub = 0
         for field in embed.fields:
@@ -3392,7 +3366,6 @@ class StatusView(discord.ui.View):
                 except:
                     pass
 
-        # Verificar estoque
         if pacotes_pt > 0:
             estoque_suficiente = await verificar_estoque_suficiente("PT", pacotes_pt)
             if not estoque_suficiente:
@@ -3448,7 +3421,6 @@ class StatusView(discord.ui.View):
         else:
             await interaction.message.edit(embed=embed, view=self)
 
-        # Enviar mensagem para o baú
         if pacotes_pt > 0 or pacotes_sub > 0:
             canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
             if canal_bau:
@@ -3464,10 +3436,6 @@ class StatusView(discord.ui.View):
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
-
-    # =========================================================
-    # BOTÃO CRIAR PRÓXIMA ENTREGA
-    # =========================================================
 
     async def criar_proxima(self, interaction: discord.Interaction, button):
         if not self.entrega_id:
@@ -3580,7 +3548,6 @@ class StatusView(discord.ui.View):
             config = ORGANIZACOES_CONFIG.get(organizacao, {"emoji": "🏷️", "cor": 0x1e3a8a})
             grupo = await buscar_grupo_por_organizacao(organizacao)
 
-            # 1. EDITAR A MENSAGEM ANTERIOR (liberar botão ENTREGUE)
             mensagem_anterior = interaction.message
 
             view_anterior = StatusView(
@@ -3588,7 +3555,6 @@ class StatusView(discord.ui.View):
                 total_entregas=total_entregas,
                 entrega_atual=entrega_atual
             )
-            # Liberar o botão ENTREGUE
             for child in view_anterior.children:
                 if child.custom_id == "status_entregue_fixo":
                     child.disabled = False
@@ -3596,7 +3562,6 @@ class StatusView(discord.ui.View):
 
             await mensagem_anterior.edit(view=view_anterior)
 
-            # 2. CRIAR A PRÓXIMA ENTREGA
             titulo_embed = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
             descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições"
 
@@ -3662,570 +3627,6 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao criar próxima entrega: {e}")
             await interaction.followup.send(f"❌ **Erro ao criar próxima entrega:** {str(e)}", ephemeral=True)
-
-    # =========================================================
-    # BOTÃO CANCELADO
-    # =========================================================
-
-    async def cancelado(self, interaction: discord.Interaction, button):
-        embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status(embed)
-
-        if self.pedido_pago(linhas):
-            await interaction.followup.send("⚠️ Este pedido já foi pago e não pode ser cancelado.", ephemeral=True)
-            return
-
-        if self.pedido_cancelado(linhas):
-            await interaction.followup.send("⚠️ Este pedido já foi cancelado.", ephemeral=True)
-            return
-
-        pacotes_pt = 0
-        pacotes_sub = 0
-
-        if self.entrega_ja_foi_entregue(linhas):
-            for field in embed.fields:
-                if field.name == "🔫 PT":
-                    try:
-                        linhas_field = field.value.split("\n")
-                        for l in linhas_field:
-                            if "📦" in l:
-                                pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                    except:
-                        pass
-                if field.name == "🔫 SUB":
-                    try:
-                        linhas_field = field.value.split("\n")
-                        for l in linhas_field:
-                            if "📦" in l:
-                                pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                    except:
-                        pass
-
-            if pacotes_pt > 0 or pacotes_sub > 0:
-                titulo = embed.title
-                pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
-
-                if pacotes_pt > 0:
-                    await atualizar_estoque("PT", pacotes_pt, "adicionar")
-                if pacotes_sub > 0:
-                    await atualizar_estoque("SUB", pacotes_sub, "adicionar")
-
-                canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
-                if canal_bau:
-                    try:
-                        texto = f"🔄 **REVERSÃO DE ESTOQUE - PEDIDO CANCELADO**\n\n"
-                        texto += f"👤 Cancelado por: {interaction.user.mention}\n"
-                        texto += f"📦 Pedido #{pedido_numero}\n"
-                        if pacotes_pt > 0:
-                            texto += f"🔫 PT: +{pacotes_pt} pacotes (reabastecido)\n"
-                        if pacotes_sub > 0:
-                            texto += f"🔫 SUB: +{pacotes_sub} pacotes (reabastecido)"
-                        await canal_bau.send(texto)
-                    except Exception as e:
-                        logger.error(f"Erro envio baú reversão: {e}")
-
-        agora_str = agora().strftime("%d/%m/%Y %H:%M")
-        user = interaction.user.mention
-
-        if self.entrega_ja_foi_entregue(linhas):
-            linhas = [f"❌ Pedido cancelado por {user} • {agora_str}\n🔄 **ESTOQUE REVERTIDO**"]
-        else:
-            linhas = [f"❌ Pedido cancelado por {user} • {agora_str}"]
-
-        embed = self.set_status(embed, idx, linhas)
-        await interaction.message.edit(embed=embed, view=StatusView(disabled=True, entrega_id=self.entrega_id))
-
-        if self.entrega_id:
-            await finalizar_entregas(self.entrega_id)
-
-        await enviar_painel_vendas()
-        await enviar_painel_fabricacao()class StatusView(discord.ui.View):
-    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1):
-        super().__init__(timeout=None)
-        self.entrega_id = entrega_id
-        self.total_entregas = total_entregas
-        self.entrega_atual = entrega_atual
-        self.entrega_ja_entregue = False
-        self.proxima_criada = False
-        self.pago_ja_clicado = False  # ⚠️ NOVO: controla se PAGO já foi clicado
-
-        # Verificar se é venda única ou parcelada
-        is_venda_unica = (total_entregas == 1)
-
-        # Regra do botão ENTREGUE
-        if is_venda_unica:
-            entregue_disabled = False  # Venda única: liberado
-        elif entrega_atual == 1 and total_entregas > 1:
-            entregue_disabled = True   # Primeira entrega: desabilitado
-        else:
-            entregue_disabled = False  # Já tem entrega anterior: liberado
-
-        # Botão PAGO (sempre habilitado inicialmente)
-        self.add_item(discord.ui.Button(
-            label="💰 Pago",
-            style=discord.ButtonStyle.primary,
-            custom_id="status_pago_fixo",
-            emoji="💰",
-            disabled=False
-        ))
-
-        # Botão ENTREGUE
-        self.add_item(discord.ui.Button(
-            label="✅ Entregue",
-            style=discord.ButtonStyle.success,
-            custom_id="status_entregue_fixo",
-            emoji="✅",
-            disabled=entregue_disabled
-        ))
-
-        # Botão CRIAR PRÓXIMA ENTREGA
-        if not is_venda_unica and entrega_atual < total_entregas:
-            self.add_item(discord.ui.Button(
-                label=f"📦 Criar Próxima Entrega ({entrega_atual + 1}/{total_entregas})",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"criar_proxima_fixo_{entrega_id}" if entrega_id else "criar_proxima_fixo",
-                emoji="📦",
-                disabled=False
-            ))
-        else:
-            self.add_item(discord.ui.Button(
-                label="📦 Entrega Única" if is_venda_unica else "📦 Última Entrega",
-                style=discord.ButtonStyle.secondary,
-                custom_id="entrega_unica_fixo",
-                emoji="📦",
-                disabled=True
-            ))
-
-        # Botão CANCELAR
-        self.add_item(discord.ui.Button(
-            label="❌ Pedido cancelado",
-            style=discord.ButtonStyle.danger,
-            custom_id="status_cancelado_fixo",
-            emoji="❌"
-        ))
-
-        if disabled:
-            for item in self.children:
-                item.disabled = True
-
-    # =========================================================
-    # INTERACTION CHECK
-    # =========================================================
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        custom_id = interaction.data.get("custom_id", "")
-
-        if custom_id == "status_pago_fixo":
-            # ⚠️ VERIFICAR SE JÁ FOI CLICADO
-            if self.pago_ja_clicado:
-                await interaction.response.send_message("⚠️ Este pedido já foi marcado como pago!", ephemeral=True)
-                return False
-            await interaction.response.defer()
-            await self.pago(interaction, None)
-            return False
-        elif custom_id == "status_entregue_fixo":
-            await interaction.response.defer()
-            # Verificar se o botão está desabilitado
-            for item in self.children:
-                if item.custom_id == "status_entregue_fixo" and item.disabled:
-                    await interaction.followup.send("⚠️ **Você precisa criar a próxima entrega antes de marcar esta como entregue!**", ephemeral=True)
-                    return False
-            await self.entregue(interaction, None)
-            return False
-        elif custom_id.startswith("criar_proxima_fixo"):
-            await interaction.response.defer()
-            await self.criar_proxima(interaction, None)
-            return False
-        elif custom_id == "status_cancelado_fixo":
-            await interaction.response.defer()
-            await self.cancelado(interaction, None)
-            return False
-        return True
-
-    # =========================================================
-    # MÉTODOS AUXILIARES
-    # =========================================================
-
-    def get_status(self, embed):
-        for i, field in enumerate(embed.fields):
-            if field.name == "📌 Status":
-                return i, field.value.split("\n")
-        return None, []
-
-    def set_status(self, embed, idx, linhas):
-        if not linhas:
-            linhas = ["📦 A entregar"]
-        embed.set_field_at(idx, name="📌 Status", value="\n".join(linhas), inline=False)
-        return embed
-
-    def pedido_pago(self, linhas):
-        return any(l.startswith("💰") for l in linhas)
-
-    def pedido_cancelado(self, linhas):
-        return any(l.startswith("❌") for l in linhas)
-
-    def entrega_ja_foi_entregue(self, linhas):
-        return any(l.startswith("✅") for l in linhas)
-
-    # =========================================================
-    # BOTÃO PAGO
-    # =========================================================
-
-    async def pago(self, interaction: discord.Interaction, button):
-        embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status(embed)
-
-        if self.pedido_cancelado(linhas):
-            await interaction.followup.send("⚠️ Este pedido foi cancelado.", ephemeral=True)
-            return
-
-        if self.pedido_pago(linhas):
-            await interaction.followup.send("⚠️ Este pedido já foi pago.", ephemeral=True)
-            return
-
-        agora_str = agora().strftime("%d/%m/%Y %H:%M")
-        user = interaction.user.mention
-
-        linhas = [l for l in linhas if not l.startswith("⏳")]
-        linhas = [l for l in linhas if not l.startswith("💰")]
-        linhas.append(f"💰 Pago • Recebido por {user} • {agora_str}")
-
-        embed = self.set_status(embed, idx, linhas)
-
-        finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
-
-        # ⚠️ DESABILITAR BOTÃO PAGO
-        self.pago_ja_clicado = True
-        for child in self.children:
-            if child.custom_id == "status_pago_fixo":
-                child.disabled = True
-                break
-
-        if finalizado:
-            embed.color = 0x2ecc71
-            embed.title = "🎉 VENDA CONCLUÍDA"
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
-            await interaction.message.edit(embed=embed, view=StatusView(disabled=True, entrega_id=self.entrega_id))
-        else:
-            await interaction.message.edit(embed=embed, view=self)
-
-    # =========================================================
-    # BOTÃO ENTREGUE
-    # =========================================================
-
-    async def entregue(self, interaction: discord.Interaction, button):
-        if self.entrega_ja_entregue:
-            await interaction.followup.send("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
-            return
-
-        embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status(embed)
-
-        if self.pedido_cancelado(linhas):
-            await interaction.followup.send("⚠️ Este pedido foi cancelado.", ephemeral=True)
-            return
-
-        if self.entrega_ja_foi_entregue(linhas):
-            await interaction.followup.send("⚠️ **Esta entrega já foi entregue!**", ephemeral=True)
-            return
-
-        # Extrair pacotes do embed
-        pacotes_pt = 0
-        pacotes_sub = 0
-        for field in embed.fields:
-            if field.name == "🔫 PT":
-                try:
-                    linhas_field = field.value.split("\n")
-                    for l in linhas_field:
-                        if "📦" in l:
-                            pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except:
-                    pass
-            if field.name == "🔫 SUB":
-                try:
-                    linhas_field = field.value.split("\n")
-                    for l in linhas_field:
-                        if "📦" in l:
-                            pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except:
-                    pass
-
-        # Verificar estoque
-        if pacotes_pt > 0:
-            estoque_suficiente = await verificar_estoque_suficiente("PT", pacotes_pt)
-            if not estoque_suficiente:
-                estoque_atual = await carregar_estoque()
-                await interaction.followup.send(
-                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n"
-                    f"🔫 PT: {pacotes_pt} pacotes necessários\n"
-                    f"📦 Estoque atual: {estoque_atual['PT']} pacotes",
-                    ephemeral=True
-                )
-                return
-
-        if pacotes_sub > 0:
-            estoque_suficiente = await verificar_estoque_suficiente("SUB", pacotes_sub)
-            if not estoque_suficiente:
-                estoque_atual = await carregar_estoque()
-                await interaction.followup.send(
-                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n"
-                    f"🔫 SUB: {pacotes_sub} pacotes necessários\n"
-                    f"📦 Estoque atual: {estoque_atual['SUB']} pacotes",
-                    ephemeral=True
-                )
-                return
-
-        self.entrega_ja_entregue = True
-
-        titulo = embed.title
-        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
-
-        if pacotes_pt > 0:
-            await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
-        if pacotes_sub > 0:
-            await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
-
-        agora_str = agora().strftime("%d/%m/%Y %H:%M")
-        user = interaction.user
-
-        linhas = [l for l in linhas if not l.startswith("📦")]
-        linhas = [l for l in linhas if not l.startswith("✅")]
-        linhas.append(f"✅ Entregue por {user.mention} • {agora_str}")
-
-        embed = self.set_status(embed, idx, linhas)
-
-        finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
-
-        if finalizado:
-            embed.color = 0x2ecc71
-            embed.title = "🎉 VENDA CONCLUÍDA"
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**\n📊 **Estoque atualizado**", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
-            await interaction.message.edit(embed=embed, view=StatusView(disabled=True, entrega_id=self.entrega_id))
-        else:
-            await interaction.message.edit(embed=embed, view=self)
-
-        # Enviar mensagem para o baú
-        if pacotes_pt > 0 or pacotes_sub > 0:
-            canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
-            if canal_bau:
-                try:
-                    texto = f"📦 **Retirada do Baú**\n\n👤 Retirado por: {interaction.user.mention}\n"
-                    if pacotes_pt > 0:
-                        texto += f"🔫 PT: {pacotes_pt} pacotes\n"
-                    if pacotes_sub > 0:
-                        texto += f"🔫 SUB: {pacotes_sub} pacotes"
-                    await canal_bau.send(texto)
-                except Exception as e:
-                    logger.error(f"Erro envio baú: {e}")
-
-        await enviar_painel_vendas()
-        await enviar_painel_fabricacao()
-
-    # =========================================================
-    # BOTÃO CRIAR PRÓXIMA ENTREGA
-    # =========================================================
-
-    async def criar_proxima(self, interaction: discord.Interaction, button):
-        if not self.entrega_id:
-            await interaction.followup.send("❌ Esta venda não tem entregas parceladas.", ephemeral=True)
-            return
-
-        if self.proxima_criada:
-            await interaction.followup.send("⚠️ **A próxima entrega já foi criada!**", ephemeral=True)
-            return
-
-        try:
-            pool = await get_pool()
-            if not pool:
-                await interaction.followup.send("❌ Banco de dados indisponível.", ephemeral=True)
-                return
-
-            async with pool.acquire() as conn:
-                entrega = await conn.fetchrow("SELECT * FROM entregas_parceladas WHERE id = $1 AND ativo = true", self.entrega_id)
-
-            if not entrega:
-                await interaction.followup.send("❌ **Entrega não encontrada!**", ephemeral=True)
-                return
-
-            entrega_atual = entrega["entrega_atual"]
-            total_entregas = entrega["total_entregas"]
-
-            if entrega_atual >= total_entregas:
-                await interaction.followup.send(f"✅ **Todas as {total_entregas} entregas já foram concluídas!**", ephemeral=True)
-                self.proxima_criada = True
-                for child in self.children:
-                    if "criar_proxima" in child.custom_id:
-                        child.disabled = True
-                        child.label = "✅ Todas criadas"
-                await interaction.message.edit(view=self)
-                return
-
-            proxima_entrega_num = entrega_atual + 1
-            pedido_original = entrega["pedido_original"]
-
-            async with pool.acquire() as conn2:
-                detalhes = await conn2.fetchrow("SELECT entregas_json FROM entregas_detalhes WHERE entrega_id = $1", self.entrega_id)
-
-            if detalhes and detalhes["entregas_json"]:
-                entregas_lista = json.loads(detalhes["entregas_json"])
-            else:
-                async with pool.acquire() as conn3:
-                    primeira = await conn3.fetchrow("SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1", pedido_original)
-
-                pt_por_entrega = primeira["pt_por_entrega"] if primeira else entrega["pt_por_entrega"]
-                sub_por_entrega = primeira["sub_por_entrega"] if primeira else entrega["sub_por_entrega"]
-
-                entregas_lista = []
-                LIMITE_DIARIO = 8000
-                pt_total = pt_por_entrega * total_entregas
-                sub_total = sub_por_entrega * total_entregas
-                pt_restante = pt_total
-                sub_restante = sub_total
-
-                for i in range(total_entregas):
-                    entrega_num = i + 1
-                    if pt_restante > 0:
-                        if entrega_num == total_entregas:
-                            pt_valor = pt_restante
-                        else:
-                            pt_valor = min(LIMITE_DIARIO, pt_restante)
-                        pt_restante -= pt_valor
-                    else:
-                        pt_valor = 0
-
-                    if sub_restante > 0:
-                        if entrega_num == total_entregas:
-                            sub_valor = sub_restante
-                        else:
-                            sub_valor = min(LIMITE_DIARIO, sub_restante)
-                        sub_restante -= sub_valor
-                    else:
-                        sub_valor = 0
-
-                    entregas_lista.append({"pt": pt_valor, "sub": sub_valor})
-
-            idx = proxima_entrega_num - 1
-            if idx >= len(entregas_lista):
-                await interaction.followup.send(f"❌ **Erro: Entrega {proxima_entrega_num} não encontrada!**", ephemeral=True)
-                return
-
-            entrega_data = entregas_lista[idx]
-            pt_entrega = entrega_data["pt"]
-            sub_entrega = entrega_data["sub"]
-
-            if pt_entrega == 0 and sub_entrega == 0:
-                await interaction.followup.send(f"✅ **Todas as entregas foram concluídas!**", ephemeral=True)
-                self.proxima_criada = True
-                for child in self.children:
-                    if "criar_proxima" in child.custom_id:
-                        child.disabled = True
-                        child.label = "✅ Todas criadas"
-                await interaction.message.edit(view=self)
-                return
-
-            vendedor_id = entrega["vendedor_id"]
-            organizacao = entrega["organizacao"]
-            observacoes = entrega["observacoes"]
-            canal_id = int(entrega["canal_id"])
-
-            canal = bot.get_channel(canal_id)
-            if not canal:
-                await interaction.followup.send(f"❌ **Canal {canal_id} não encontrado!**", ephemeral=True)
-                return
-
-            config = ORGANIZACOES_CONFIG.get(organizacao, {"emoji": "🏷️", "cor": 0x1e3a8a})
-            grupo = await buscar_grupo_por_organizacao(organizacao)
-
-            # 1. EDITAR A MENSAGEM ANTERIOR (liberar botão ENTREGUE)
-            mensagem_anterior = interaction.message
-
-            view_anterior = StatusView(
-                entrega_id=self.entrega_id,
-                total_entregas=total_entregas,
-                entrega_atual=entrega_atual
-            )
-            # Liberar o botão ENTREGUE
-            for child in view_anterior.children:
-                if child.custom_id == "status_entregue_fixo":
-                    child.disabled = False
-                    break
-
-            await mensagem_anterior.edit(view=view_anterior)
-
-            # 2. CRIAR A PRÓXIMA ENTREGA
-            titulo_embed = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
-            descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições"
-
-            embed_novo = discord.Embed(title=titulo_embed, description=descricao, color=config["cor"])
-
-            resumo = ""
-            for i, e in enumerate(entregas_lista, 1):
-                if i < proxima_entrega_num:
-                    status = "✅"
-                elif i == proxima_entrega_num:
-                    status = "🔴"
-                else:
-                    status = "⏳"
-                resumo += f"{status} Entrega {i}/{total_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
-
-            embed_novo.add_field(name="🚨 RESUMO DAS ENTREGAS", value=resumo, inline=False)
-            embed_novo.add_field(name="👤 Vendedor", value=f"<@{vendedor_id}>", inline=False)
-            embed_novo.add_field(name="🏷 Organização", value=f"{config['emoji']} {organizacao}", inline=False)
-
-            pacotes_pt = pt_entrega // 50
-            pacotes_sub = sub_entrega // 50
-
-            embed_novo.add_field(name="🔫 PT", value=f"{fmt_num(pt_entrega)} munições\n📦 {pacotes_pt} pacotes", inline=True)
-            embed_novo.add_field(name="🔫 SUB", value=f"{fmt_num(sub_entrega)} munições\n📦 {pacotes_sub} pacotes", inline=True)
-
-            valor_entrega = (pt_entrega * 50) + (sub_entrega * 90)
-            embed_novo.add_field(name="💰 Valor (esta entrega)", value=f"**{formatar_dinheiro(valor_entrega)}**", inline=False)
-
-            embed_novo.add_field(name="📋 STATUS DAS ENTREGAS", value=f"**Total de entregas:** {total_entregas}\n**Entrega atual:** {proxima_entrega_num}/{total_entregas}\n**Próxima entrega:** 🔒 Aguardando esta ser ENTREGUE", inline=False)
-            embed_novo.add_field(name="📌 Status", value="📦 A Entregar\n⏳ Pagamento pendente", inline=False)
-
-            if observacoes:
-                embed_novo.add_field(name="📝 Observações", value=observacoes, inline=False)
-
-            if grupo:
-                embed_novo.add_field(name="📊 INTEGRAÇÃO COM GRUPO", value=f"✅ Compra registrada automaticamente no grupo **{organizacao}**", inline=False)
-
-            embed_novo.set_footer(text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas} • ID: {self.entrega_id}")
-
-            view_novo = StatusView(
-                entrega_id=self.entrega_id,
-                total_entregas=total_entregas,
-                entrega_atual=proxima_entrega_num
-            )
-
-            msg = await safe_request(canal.send, embed=embed_novo, view=view_novo)
-
-            if msg:
-                await atualizar_entrega_parcelada(self.entrega_id, proxima_entrega_num, str(msg.id), None)
-
-            self.proxima_criada = True
-            for child in self.children:
-                if "criar_proxima" in child.custom_id:
-                    child.disabled = True
-                    child.label = f"✅ Próxima criada ({proxima_entrega_num}/{total_entregas})"
-
-            await interaction.message.edit(view=self)
-            await interaction.followup.send(f"✅ **Entrega {proxima_entrega_num}/{total_entregas} criada com sucesso!**\n✅ A entrega anterior agora tem o botão ENTREGUE liberado!", ephemeral=True)
-
-            await enviar_painel_vendas()
-            await enviar_painel_fabricacao()
-
-        except Exception as e:
-            logger.error(f"❌ Erro ao criar próxima entrega: {e}")
-            await interaction.followup.send(f"❌ **Erro ao criar próxima entrega:** {str(e)}", ephemeral=True)
-
-    # =========================================================
-    # BOTÃO CANCELADO
-    # =========================================================
 
     async def cancelado(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
