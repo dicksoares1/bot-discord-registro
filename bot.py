@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(datetime.UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -1286,7 +1286,217 @@ async def pegar_usuario(uid):
         return user
     except:
         return None
+        
+# =========================================================
+# ==================== SISTEMA DE REGISTRO ================
+# =========================================================
 
+# ---------------------------------------------------------
+# ASYNC: salvar_registro_historico
+# ---------------------------------------------------------
+
+async def salvar_registro_historico(user_id, user_name, passaporte, nome, vulgo, telefone, indicado, tipo):
+    pool = await get_pool()
+    if not pool:
+        logger.error("❌ Banco de dados não disponível para salvar registro")
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO registros_historico (
+                    user_id, user_name, passaporte, nome, vulgo,
+                    telefone, indicado, tipo, data_registro
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            """, str(user_id), user_name, passaporte, nome, vulgo, telefone, indicado, tipo, agora_db())
+    except Exception as e:
+        logger.error(f"❌ Erro ao salvar registro histórico: {e}")
+
+# ---------------------------------------------------------
+# ASYNC: verificar_registro_existente
+# ---------------------------------------------------------
+
+async def verificar_registro_existente(user_id):
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchval("SELECT 1 FROM registros_historico WHERE user_id = $1", str(user_id))
+    except Exception as e:
+        logger.error(f"❌ Erro ao verificar registro: {e}")
+        return False
+
+# ---------------------------------------------------------
+# ASYNC: enviar_painel_registro
+# ---------------------------------------------------------
+
+async def enviar_painel_registro():
+    canal = bot.get_channel(CANAL_REGISTRO_ID)
+    if not canal:
+        logger.error("❌ Canal registro não encontrado")
+        return
+    embed = discord.Embed(title="📋 Registro", description="Clique no botão abaixo para realizar seu registro.", color=0x2ecc71)
+    await enviar_ou_atualizar_painel("painel_registro", CANAL_REGISTRO_ID, embed, RegistroView())
+    logger.info("✅ Painel de registro criado")
+
+# =========================================================
+# CLASS: RegistroModal
+# =========================================================
+
+class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
+    passaporte = discord.ui.TextInput(label="📋 Passaporte", placeholder="Digite seu passaporte", required=True)
+    nome = discord.ui.TextInput(label="👤 Nome (igual está na cidade)", placeholder="Ex: Rodrigo Santos", required=True)
+    vulgo = discord.ui.TextInput(label="🏷️ Vulgo (opcional)", placeholder="Ex: Ruivo, Juca, Dreck, etc", required=False)
+    telefone = discord.ui.TextInput(label="📱 Telefone In Game", placeholder="Ex: (11) 99999-9999", required=True)
+    indicado = discord.ui.TextInput(label="👤 Indicado por (opcional)", placeholder="Nome de quem te indicou", required=False)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        membro = interaction.user
+        guild = interaction.guild
+        nome_formatado = capitalizar_nome(self.nome.value)
+        vulgo_formatado = capitalizar_nome(self.vulgo.value) if self.vulgo.value else None
+        if vulgo_formatado:
+            nick = f"{self.passaporte.value} - {nome_formatado} | {vulgo_formatado}"
+        else:
+            nick = f"{self.passaporte.value} - {nome_formatado}"
+        try:
+            await membro.edit(nick=nick)
+        except Exception as e:
+            logger.error(f"❌ Erro ao editar nick: {e}")
+        view = TipoRegistroView(
+            nome=nome_formatado,
+            passaporte=self.passaporte.value,
+            vulgo=vulgo_formatado,
+            telefone=self.telefone.value,
+            indicado=self.indicado.value if self.indicado.value else None
+        )
+        await interaction.response.send_message(
+            "**Selecione o tipo de entrada:**\n\n"
+            f"📋 **Passaporte:** {self.passaporte.value}\n"
+            f"👤 **Nome:** {nome_formatado}\n"
+            f"🏷️ **Vulgo:** {vulgo_formatado or 'Não informado'}\n"
+            f"📱 **Telefone:** {self.telefone.value}\n"
+            f"👤 **Indicado por:** {self.indicado.value or 'Não informado'}",
+            view=view, ephemeral=True
+        )
+
+# =========================================================
+# CLASS: TipoRegistroSelect
+# =========================================================
+
+class TipoRegistroSelect(discord.ui.Select):
+    def __init__(self, nome, passaporte, vulgo, telefone, indicado):
+        self.nome = nome
+        self.passaporte = passaporte
+        self.vulgo = vulgo
+        self.telefone = telefone
+        self.indicado = indicado
+        options = [
+            discord.SelectOption(label="Agregado", description="Se tornar membro da facção", emoji="🕴️"),
+            discord.SelectOption(label="Amigo", description="Apenas para resenha ou reunião", emoji="🤝")
+        ]
+        super().__init__(placeholder="Escolha o tipo de acesso", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        membro = interaction.user
+        agregado = guild.get_role(AGREGADO_ROLE_ID)
+        amigos = guild.get_role(1309121290241704046)
+        convidado = guild.get_role(CONVIDADO_ROLE_ID)
+        em_registro = guild.get_role(EM_REGISTRO_ROLE_ID)
+        escolha = self.values[0]
+        if em_registro:
+            try:
+                await membro.remove_roles(em_registro)
+            except Exception as e:
+                logger.error(f"❌ Erro ao remover cargo 'Em Registro': {e}")
+        if escolha == "Agregado":
+            if agregado:
+                try:
+                    await membro.add_roles(agregado)
+                except Exception as e:
+                    logger.error(f"❌ Erro ao adicionar cargo 'Agregado': {e}")
+        elif escolha == "Amigo":
+            if amigos:
+                try:
+                    await membro.add_roles(amigos)
+                except Exception as e:
+                    logger.error(f"❌ Erro ao adicionar cargo 'Amigos': {e}")
+        if convidado:
+            try:
+                await membro.remove_roles(convidado)
+            except:
+                pass
+        await salvar_registro_historico(
+            membro.id, membro.name, self.passaporte, self.nome,
+            self.vulgo, self.telefone, self.indicado, escolha
+        )
+        canal_log = interaction.guild.get_channel(CANAL_LOG_REGISTRO_ID)
+        if canal_log:
+            embed = discord.Embed(
+                title="🎉 NOVO MEMBRO REGISTRADO!",
+                description=f"**{membro.mention}** acabou de se registrar na **Vida Rasa**!",
+                color=0x2ecc71, timestamp=agora()
+            )
+            if membro.display_avatar:
+                embed.set_thumbnail(url=membro.display_avatar.url)
+            informacoes = (
+                f"**📋 Passaporte:** `{self.passaporte}`\n"
+                f"**👤 Nome:** {self.nome}\n"
+                f"**🏷️ Vulgo:** {self.vulgo or '❌ Não informado'}\n"
+                f"**📱 Telefone:** {self.telefone}\n"
+                f"**👤 Indicado por:** {self.indicado or '❌ Não informado'}\n"
+                f"**🎯 Tipo:** {escolha}"
+            )
+            embed.add_field(name="📋 INFORMAÇÕES DO MEMBRO", value=informacoes, inline=False)
+            embed.add_field(name="📌 STATUS", value=f"✅ **Registro concluído**\n🔹 Cargo atribuído: **{escolha}**\n🆔 ID: `{membro.id}`", inline=False)
+            embed.add_field(name="🎯 CARGO ATRIBUÍDO", value=f"{'🕴️' if escolha == 'Agregado' else '🤝'} **{escolha}**", inline=False)
+            embed.set_footer(text=f"Registro realizado com sucesso • Sistema Automático")
+            try:
+                await canal_log.send(embed=embed)
+                await interaction.response.send_message(
+                    f"✅ **Registro concluído com sucesso!**\n\n"
+                    f"📋 Você foi registrado como: **{escolha}**\n"
+                    f"👤 Nome: {self.nome}\n"
+                    f"📨 Seu registro foi enviado para o histórico!",
+                    ephemeral=True
+                )
+            except:
+                await interaction.response.send_message(
+                    f"✅ **Registro concluído com sucesso!**\n\n"
+                    f"📋 Você foi registrado como: **{escolha}**\n"
+                    f"⚠️ **Mas houve um erro ao enviar para o histórico!**",
+                    ephemeral=True
+                )
+
+# =========================================================
+# CLASS: TipoRegistroView
+# =========================================================
+
+class TipoRegistroView(discord.ui.View):
+    def __init__(self, nome, passaporte, vulgo, telefone, indicado):
+        super().__init__(timeout=300)
+        self.add_item(TipoRegistroSelect(nome, passaporte, vulgo, telefone, indicado))
+
+# =========================================================
+# CLASS: RegistroView
+# =========================================================
+
+class RegistroView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📋 Fazer Registro", style=discord.ButtonStyle.success, custom_id="registro_fazer")
+    async def registro(self, interaction: discord.Interaction, button: discord.ui.Button):
+        existe = await verificar_registro_existente(interaction.user.id)
+        if existe:
+            await interaction.response.send_message(
+                "❌ **Você já está registrado!**\nCaso precise atualizar seus dados, procure um administrador.",
+                ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(RegistroModal())
+        
 # =========================================================
 # ==================== SISTEMA DE METAS ===================
 # =========================================================
@@ -10865,7 +11075,13 @@ async def verificar_avisos_quarta_forcado():
 try:
     import signal
     for sig in (signal.SIGINT, signal.SIGTERM):
-        asyncio.get_event_loop().add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
+        try:
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
+            break
+        except RuntimeError:
+            # Se não houver loop rodando, registra depois
+            pass
 except:
     pass
 
@@ -10876,6 +11092,20 @@ if __name__ == "__main__":
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+    
+    # Registrar signal handlers depois que o loop estiver rodando
+    try:
+        import signal
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                asyncio.get_running_loop().add_signal_handler(
+                    sig, lambda: asyncio.create_task(shutdown())
+                )
+            except RuntimeError:
+                pass
+    except:
+        pass
+    
     try:
         bot.run(TOKEN, reconnect=True)
     except discord.LoginFailure:
