@@ -3193,12 +3193,16 @@ class StatusView(discord.ui.View):
         is_venda_unica = (total_entregas == 1)
         is_ultima_entrega = (entrega_atual == total_entregas)
 
-        # ⚠️ REGRA DO BOTÃO ENTREGUE (SIMPLIFICADA)
-        # Se entregue_force_liberado=True → SEMPRE liberado
-        # Se não, segue a regra normal
+        # ⚠️ REGRA DO BOTÃO ENTREGUE:
+        # - Se forçado a liberar (entregue_force_liberado=True) → liberado
+        # - Venda única → liberado
+        # - Última entrega → liberado
+        # - Primeira entrega e tem mais de 1 → desabilitado
         if entregue_force_liberado:
             entregue_disabled = False
         elif is_venda_unica:
+            entregue_disabled = False
+        elif is_ultima_entrega:
             entregue_disabled = False
         elif entrega_atual == 1 and total_entregas > 1:
             entregue_disabled = True
@@ -3506,6 +3510,7 @@ class StatusView(discord.ui.View):
                 entregue_force_liberado=False
             ))
         else:
+            # ⚠️ RECRIAR VIEW COM ENTREGUE DESABILITADO (já foi entregue)
             nova_view = StatusView(
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
@@ -3514,6 +3519,11 @@ class StatusView(discord.ui.View):
                 mensagem_original=interaction.message,
                 entregue_force_liberado=False
             )
+            # ⚠️ FORÇAR O BOTÃO ENTREGUE A FICAR DESABILITADO
+            for child in nova_view.children:
+                if child.custom_id == "status_entregue_fixo":
+                    child.disabled = True
+                    break
             await interaction.message.edit(embed=embed, view=nova_view)
 
         if pacotes_pt > 0 or pacotes_sub > 0:
@@ -3549,7 +3559,7 @@ class StatusView(discord.ui.View):
         await interaction.response.send_modal(modal)
 
     # =========================================================
-    # BOTÃO CRIAR PRÓXIMA ENTREGA (CORRIGIDO)
+    # BOTÃO CRIAR PRÓXIMA ENTREGA
     # =========================================================
 
     async def criar_proxima(self, interaction: discord.Interaction, button):
@@ -3668,14 +3678,13 @@ class StatusView(discord.ui.View):
             # =========================================================
             mensagem_anterior = interaction.message
 
-            # ⚠️ FORÇAR O ENTREGUE A FICAR LIBERADO USANDO entregue_force_liberado=True
             view_anterior = StatusView(
                 entrega_id=self.entrega_id,
                 total_entregas=total_entregas,
                 entrega_atual=entrega_atual,
                 pago_ja_clicado=self.pago_ja_clicado,
                 mensagem_original=mensagem_anterior,
-                entregue_force_liberado=True  # ⚠️ AQUI É O PULO DO GATO
+                entregue_force_liberado=True  # ⚠️ LIBERA O ENTREGUE
             )
 
             await mensagem_anterior.edit(view=view_anterior)
@@ -3722,14 +3731,14 @@ class StatusView(discord.ui.View):
 
             embed_novo.set_footer(text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas} • ID: {self.entrega_id}")
 
-            # ⚠️ A PRÓXIMA ENTREGA COMEÇA COM ENTREGUE DESABILITADO (padrão)
+            # ⚠️ ÚLTIMA ENTREGA: ENTREGUE JÁ VIENE LIBERADO
             view_novo = StatusView(
                 entrega_id=self.entrega_id,
                 total_entregas=total_entregas,
                 entrega_atual=proxima_entrega_num,
                 pago_ja_clicado=False,
                 mensagem_original=None,
-                entregue_force_liberado=False
+                entregue_force_liberado=False  # A regra vai liberar automaticamente por ser a última
             )
 
             msg = await safe_request(canal.send, embed=embed_novo, view=view_novo)
@@ -3737,7 +3746,6 @@ class StatusView(discord.ui.View):
             if msg:
                 await atualizar_entrega_parcelada(self.entrega_id, proxima_entrega_num, str(msg.id), None)
 
-            # ⚠️ DESABILITAR O BOTÃO "CRIAR PRÓXIMA" DA ENTREGA ATUAL
             self.proxima_criada = True
             for child in self.children:
                 if "criar_proxima" in child.custom_id:
@@ -3852,6 +3860,7 @@ class StatusView(discord.ui.View):
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
         
+      
           
 # ###############################################
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
