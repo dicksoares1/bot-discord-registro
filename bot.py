@@ -3180,14 +3180,15 @@ async def buscar_grupo_por_organizacao(nome_org):
 
 # ###############################################
 class StatusView(discord.ui.View):
-    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False):
+    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
         self.total_entregas = total_entregas
         self.entrega_atual = entrega_atual
         self.entrega_ja_entregue = False
         self.proxima_criada = False
-        self.pago_ja_clicado = pago_ja_clicado  # ⚠️ RECEBE O ESTADO
+        self.pago_ja_clicado = pago_ja_clicado
+        self.mensagem_original = mensagem_original  # ⚠️ ARMAZENA A MENSAGEM PARA EDITAR
 
         is_venda_unica = (total_entregas == 1)
 
@@ -3198,30 +3199,32 @@ class StatusView(discord.ui.View):
         else:
             entregue_disabled = False
 
-        # ⚠️ BOTÃO PAGO - DESABILITADO SE JÁ FOI CLICADO
+        # Botão PAGO
         self.add_item(discord.ui.Button(
             label="💰 Pago",
             style=discord.ButtonStyle.primary,
             custom_id="status_pago_fixo",
             emoji="💰",
-            disabled=self.pago_ja_clicado  # ⚠️ AQUI ESTÁ A CORREÇÃO
+            disabled=self.pago_ja_clicado or disabled
         ))
 
+        # Botão ENTREGUE
         self.add_item(discord.ui.Button(
             label="✅ Entregue",
             style=discord.ButtonStyle.success,
             custom_id="status_entregue_fixo",
             emoji="✅",
-            disabled=entregue_disabled
+            disabled=entregue_disabled or disabled
         ))
 
+        # Botão CRIAR PRÓXIMA ENTREGA
         if not is_venda_unica and entrega_atual < total_entregas:
             self.add_item(discord.ui.Button(
                 label=f"📦 Criar Próxima Entrega ({entrega_atual + 1}/{total_entregas})",
                 style=discord.ButtonStyle.primary,
                 custom_id=f"criar_proxima_fixo_{entrega_id}" if entrega_id else "criar_proxima_fixo",
                 emoji="📦",
-                disabled=False
+                disabled=disabled
             ))
         else:
             self.add_item(discord.ui.Button(
@@ -3232,11 +3235,22 @@ class StatusView(discord.ui.View):
                 disabled=True
             ))
 
+        # Botão EDITAR VENDA
+        self.add_item(discord.ui.Button(
+            label="✏️ Editar Venda",
+            style=discord.ButtonStyle.primary,
+            custom_id="editar_venda_fixo",
+            emoji="✏️",
+            disabled=disabled  # ⚠️ DESABILITADO QUANDO CONCLUÍDO
+        ))
+
+        # Botão CANCELAR
         self.add_item(discord.ui.Button(
             label="❌ Pedido cancelado",
             style=discord.ButtonStyle.danger,
             custom_id="status_cancelado_fixo",
-            emoji="❌"
+            emoji="❌",
+            disabled=disabled
         ))
 
         if disabled:
@@ -3269,6 +3283,10 @@ class StatusView(discord.ui.View):
             await interaction.response.defer()
             await self.criar_proxima(interaction, None)
             return False
+        elif custom_id == "editar_venda_fixo":
+            await interaction.response.defer()
+            await self.editar_venda(interaction, None)
+            return False
         elif custom_id == "status_cancelado_fixo":
             await interaction.response.defer()
             await self.cancelado(interaction, None)
@@ -3300,6 +3318,36 @@ class StatusView(discord.ui.View):
     def entrega_ja_foi_entregue(self, linhas):
         return any(l.startswith("✅") for l in linhas)
 
+    def extrair_dados_venda(self, embed):
+        """Extrai os dados da venda do embed."""
+        dados = {
+            "pt": 0,
+            "sub": 0,
+            "organizacao": "Desconhecida",
+            "vendedor": "",
+            "observacoes": ""
+        }
+        
+        for field in embed.fields:
+            if field.name == "🔫 PT":
+                try:
+                    dados["pt"] = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                except:
+                    pass
+            if field.name == "🔫 SUB":
+                try:
+                    dados["sub"] = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                except:
+                    pass
+            if field.name == "🏷 Organização":
+                dados["organizacao"] = field.value.strip()
+            if field.name == "👤 Vendedor":
+                dados["vendedor"] = field.value.strip()
+            if field.name == "📝 Observações":
+                dados["observacoes"] = field.value.strip()
+        
+        return dados
+
     # =========================================================
     # BOTÃO PAGO
     # =========================================================
@@ -3327,8 +3375,8 @@ class StatusView(discord.ui.View):
 
         finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
 
-        # ⚠️ CRIAR NOVA VIEW COM O BOTÃO PAGO DESABILITADO
         if finalizado:
+            # ⚠️ VENDA CONCLUÍDA - DESABILITAR TUDO
             embed.color = 0x2ecc71
             embed.title = "🎉 VENDA CONCLUÍDA"
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -3339,15 +3387,16 @@ class StatusView(discord.ui.View):
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
                 entrega_atual=self.entrega_atual,
-                pago_ja_clicado=True  # ⚠️ PASSA O ESTADO
+                pago_ja_clicado=True,
+                mensagem_original=interaction.message
             ))
         else:
-            # ⚠️ RECRIAR VIEW COM O BOTÃO PAGO DESABILITADO
             nova_view = StatusView(
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
                 entrega_atual=self.entrega_atual,
-                pago_ja_clicado=True  # ⚠️ PASSA O ESTADO
+                pago_ja_clicado=True,
+                mensagem_original=interaction.message
             )
             await interaction.message.edit(embed=embed, view=nova_view)
 
@@ -3437,6 +3486,7 @@ class StatusView(discord.ui.View):
         finalizado = any(l.startswith("💰") for l in linhas) and any(l.startswith("✅") for l in linhas)
 
         if finalizado:
+            # ⚠️ VENDA CONCLUÍDA - DESABILITAR TUDO
             embed.color = 0x2ecc71
             embed.title = "🎉 VENDA CONCLUÍDA"
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -3447,14 +3497,16 @@ class StatusView(discord.ui.View):
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
                 entrega_atual=self.entrega_atual,
-                pago_ja_clicado=True
+                pago_ja_clicado=True,
+                mensagem_original=interaction.message
             ))
         else:
             nova_view = StatusView(
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
                 entrega_atual=self.entrega_atual,
-                pago_ja_clicado=self.pago_ja_clicado
+                pago_ja_clicado=self.pago_ja_clicado,
+                mensagem_original=interaction.message
             )
             await interaction.message.edit(embed=embed, view=nova_view)
 
@@ -3473,6 +3525,24 @@ class StatusView(discord.ui.View):
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
+
+    # =========================================================
+    # BOTÃO EDITAR VENDA
+    # =========================================================
+
+    async def editar_venda(self, interaction: discord.Interaction, button):
+        """Abre o modal para editar a venda."""
+        embed = interaction.message.embeds[0]
+        dados = self.extrair_dados_venda(embed)
+        
+        # ⚠️ ABRIR MODAL COM OS DADOS ATUAIS
+        modal = EditarVendaModal(interaction.message)
+        modal.qtd_pt.default = str(dados["pt"])
+        modal.qtd_sub.default = str(dados["sub"])
+        modal.organizacao.default = dados["organizacao"].replace("🏷️ ", "").strip()
+        modal.observacao.default = dados["observacoes"]
+        
+        await interaction.response.send_modal(modal)
 
     # =========================================================
     # BOTÃO CRIAR PRÓXIMA ENTREGA
@@ -3595,7 +3665,8 @@ class StatusView(discord.ui.View):
                 entrega_id=self.entrega_id,
                 total_entregas=total_entregas,
                 entrega_atual=entrega_atual,
-                pago_ja_clicado=self.pago_ja_clicado  # ⚠️ MANTER ESTADO DO PAGO
+                pago_ja_clicado=self.pago_ja_clicado,
+                mensagem_original=mensagem_anterior
             )
             for child in view_anterior.children:
                 if child.custom_id == "status_entregue_fixo":
@@ -3647,7 +3718,8 @@ class StatusView(discord.ui.View):
                 entrega_id=self.entrega_id,
                 total_entregas=total_entregas,
                 entrega_atual=proxima_entrega_num,
-                pago_ja_clicado=False  # ⚠️ NOVA ENTREGA: PAGO NÃO FOI CLICADO AINDA
+                pago_ja_clicado=False,
+                mensagem_original=None
             )
 
             msg = await safe_request(canal.send, embed=embed_novo, view=view_novo)
@@ -3746,7 +3818,8 @@ class StatusView(discord.ui.View):
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
-            pago_ja_clicado=self.pago_ja_clicado
+            pago_ja_clicado=self.pago_ja_clicado,
+            mensagem_original=interaction.message
         ))
 
         if self.entrega_id:
@@ -3754,105 +3827,6 @@ class StatusView(discord.ui.View):
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
-        
-# ###############################################
-class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
-    qtd_pt = discord.ui.TextInput(label="Nova Quantidade PT", placeholder="Digite a nova quantidade de PT")
-    qtd_sub = discord.ui.TextInput(label="Nova Quantidade SUB", placeholder="Digite a nova quantidade de SUB")
-    organizacao = discord.ui.TextInput(label="Nova Organização (opcional)", placeholder="Digite o novo nome da organização", required=False)
-    observacao = discord.ui.TextInput(label="Nova Observação (opcional)", style=discord.TextStyle.paragraph, required=False)
-
-    def __init__(self, message):
-        super().__init__()
-        self.message = message
-
-    # ---------------------------------------------------------
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            pt = safe_int(self.qtd_pt.value)
-            sub = safe_int(self.qtd_sub.value)
-        except:
-            await interaction.response.send_message("❌ Valores inválidos.", ephemeral=True)
-            return
-        pacotes_pt = pt // 50
-        pacotes_sub = sub // 50
-        total = (pt * 50) + (sub * 90)
-        valor_formatado = formatar_dinheiro(total)
-        embed = self.message.embeds[0]
-        pt_antigo = 0
-        sub_antigo = 0
-        valor_antigo = 0
-        organizacao_antiga = "Desconhecida"
-        for field in embed.fields:
-            if field.name == "🔫 PT":
-                try:
-                    pt_antigo = safe_int(field.value.split(" munições")[0])
-                except:
-                    pass
-            if field.name == "🔫 SUB":
-                try:
-                    sub_antigo = safe_int(field.value.split(" munições")[0])
-                except:
-                    pass
-            if field.name == "💰 Total":
-                try:
-                    valor_antigo = float(field.value.replace("**R$ ", "").replace("**", "").replace(".", "").replace(",", "."))
-                except:
-                    pass
-            if field.name == "🏷 Organização":
-                organizacao_antiga = field.value
-        pacotes_pt_antigo = pt_antigo // 50
-        pacotes_sub_antigo = sub_antigo // 50
-        for i, field in enumerate(embed.fields):
-            if field.name == "🔫 PT":
-                embed.set_field_at(i, name="🔫 PT", value=f"{pt} munições\n📦 {pacotes_pt} pacotes", inline=True)
-            if field.name == "🔫 SUB":
-                embed.set_field_at(i, name="🔫 SUB", value=f"{sub} munições\n📦 {pacotes_sub} pacotes", inline=True)
-            if field.name == "💰 Total":
-                embed.set_field_at(i, name="💰 Total", value=f"**{valor_formatado}**", inline=False)
-            if field.name == "🏷 Organização" and self.organizacao.value:
-                embed.set_field_at(i, name="🏷 Organização", value=self.organizacao.value.strip(), inline=False)
-            if field.name == "📝 Observações" and self.observacao.value:
-                embed.set_field_at(i, name="📝 Observações", value=self.observacao.value.strip(), inline=False)
-        titulo = embed.title
-        pedido_numero = safe_int(titulo.split("#")[1])
-        await atualizar_valor_venda_db(pedido_numero, total)
-        await self.message.edit(embed=embed)
-        alteracoes = []
-        if pt_antigo != pt:
-            alteracoes.append(f"PT: {pt_antigo} → {pt}")
-        if sub_antigo != sub:
-            alteracoes.append(f"SUB: {sub_antigo} → {sub}")
-        if valor_antigo != total:
-            alteracoes.append(f"Valor: {formatar_dinheiro(valor_antigo)} → {valor_formatado}")
-        if self.organizacao.value:
-            alteracoes.append("Organização alterada")
-        if self.observacao.value:
-            alteracoes.append("Observação alterada")
-        org_nome_final = self.organizacao.value.strip().upper() if self.organizacao.value else organizacao_antiga
-        if org_nome_final:
-            grupo = await buscar_grupo_por_organizacao(org_nome_final)
-            if grupo:
-                diff_pt = pacotes_pt - pacotes_pt_antigo
-                diff_sub = pacotes_sub - pacotes_sub_antigo
-                if diff_pt > 0:
-                    await registrar_compra_grupo_db(grupo["grupo_id"], "PT", diff_pt, diff_pt * 50)
-                elif diff_pt < 0:
-                    await registrar_compra_grupo_db(grupo["grupo_id"], "PT", diff_pt, diff_pt * 50)
-                if diff_sub > 0:
-                    await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", diff_sub, diff_sub * 90)
-                elif diff_sub < 0:
-                    await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", diff_sub, diff_sub * 90)
-                await recriar_painel_grupos()
-        canal_log = interaction.guild.get_channel(1478381934026424391)
-        if canal_log:
-            embed_log = discord.Embed(title="✏️ Venda Editada", color=0xf1c40f)
-            embed_log.add_field(name="👤 Editado por", value=interaction.user.mention, inline=False)
-            embed_log.add_field(name="🧾 Pedido", value=embed.title, inline=False)
-            embed_log.add_field(name="🔧 Alterações", value="\n".join(alteracoes) if alteracoes else "Nenhuma", inline=False)
-            await canal_log.send(embed=embed_log)
-        msg_resposta = f"✅ **Venda editada com sucesso!**\n\n📦 **Pedido #{pedido_numero:04d}**\n🔫 **PT:** {pt} munições ({pacotes_pt} pacotes)\n🔫 **SUB:** {sub} munições ({pacotes_sub} pacotes)\n💰 **Total:** {valor_formatado}"
-        await interaction.response.send_message(msg_resposta, ephemeral=True)
 
 # ###############################################
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
@@ -4023,6 +3997,138 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
+# ###############################################
+
+class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
+    def __init__(self, message):
+        super().__init__(timeout=300)
+        self.message = message
+    
+    qtd_pt = discord.ui.TextInput(
+        label="🔫 Nova Quantidade PT",
+        placeholder="Digite a nova quantidade de PT (deixe em branco para manter)",
+        required=False,
+        max_length=15
+    )
+    qtd_sub = discord.ui.TextInput(
+        label="🔫 Nova Quantidade SUB",
+        placeholder="Digite a nova quantidade de SUB (deixe em branco para manter)",
+        required=False,
+        max_length=15
+    )
+    organizacao = discord.ui.TextInput(
+        label="🏷️ Nova Organização",
+        placeholder="Digite a nova organização (deixe em branco para manter)",
+        required=False,
+        max_length=50
+    )
+    observacao = discord.ui.TextInput(
+        label="📝 Nova Observação",
+        placeholder="Digite a nova observação (deixe em branco para manter)",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=500
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        embed = self.message.embeds[0]
+        
+        # ⚠️ Extrair valores atuais
+        pt_atual = 0
+        sub_atual = 0
+        organizacao_atual = ""
+        observacao_atual = ""
+        
+        for field in embed.fields:
+            if field.name == "🔫 PT":
+                try:
+                    pt_atual = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                except:
+                    pass
+            if field.name == "🔫 SUB":
+                try:
+                    sub_atual = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                except:
+                    pass
+            if field.name == "🏷 Organização":
+                organizacao_atual = field.value.replace("🏷️ ", "").strip()
+            if field.name == "📝 Observações":
+                observacao_atual = field.value.strip()
+        
+        # ⚠️ Usar valores atuais se o campo estiver vazio
+        nova_pt = safe_int(self.qtd_pt.value) if self.qtd_pt.value else pt_atual
+        nova_sub = safe_int(self.qtd_sub.value) if self.qtd_sub.value else sub_atual
+        nova_organizacao = self.organizacao.value.strip() if self.organizacao.value else organizacao_atual
+        nova_observacao = self.observacao.value.strip() if self.observacao.value else observacao_atual
+        
+        if nova_pt < 0 or nova_sub < 0:
+            await interaction.followup.send("❌ Valores não podem ser negativos!", ephemeral=True)
+            return
+        
+        if nova_pt == 0 and nova_sub == 0:
+            await interaction.followup.send("❌ Pelo menos PT ou SUB deve ser maior que 0!", ephemeral=True)
+            return
+        
+        pacotes_pt = nova_pt // 50
+        pacotes_sub = nova_sub // 50
+        total = (nova_pt * 50) + (nova_sub * 90)
+        valor_formatado = formatar_dinheiro(total)
+        
+        # ⚠️ Atualizar o embed
+        for i, field in enumerate(embed.fields):
+            if field.name == "🔫 PT":
+                embed.set_field_at(i, name="🔫 PT", value=f"{fmt_num(nova_pt)} munições\n📦 {pacotes_pt} pacotes", inline=True)
+            elif field.name == "🔫 SUB":
+                embed.set_field_at(i, name="🔫 SUB", value=f"{fmt_num(nova_sub)} munições\n📦 {pacotes_sub} pacotes", inline=True)
+            elif field.name == "💰 Valor (esta entrega)":
+                embed.set_field_at(i, name="💰 Valor (esta entrega)", value=f"**{valor_formatado}**", inline=False)
+            elif field.name == "🏷 Organização":
+                embed.set_field_at(i, name="🏷 Organização", value=nova_organizacao, inline=False)
+            elif field.name == "📝 Observações":
+                if nova_observacao:
+                    embed.set_field_at(i, name="📝 Observações", value=nova_observacao, inline=False)
+                else:
+                    # Remover o campo se estiver vazio
+                    embed.remove_field(i)
+        
+        # ⚠️ Se não tinha observação e agora tem, adicionar
+        if nova_observacao and not any(field.name == "📝 Observações" for field in embed.fields):
+            embed.add_field(name="📝 Observações", value=nova_observacao, inline=False)
+        
+        # ⚠️ Atualizar título se for entrega parcelada
+        titulo = embed.title
+        if "/" in titulo and "ENTREGA" in titulo:
+            # Mantém o título mas pode atualizar o valor total
+            pass
+        
+        # ⚠️ Salvar no banco (atualizar valor da venda)
+        titulo = embed.title
+        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
+        if pedido_numero > 0:
+            await atualizar_valor_venda_db(pedido_numero, total)
+        
+        await self.message.edit(embed=embed)
+        
+        embed_confirmacao = discord.Embed(
+            title="✅ VENDA EDITADA!",
+            description=f"📦 **Pedido #{pedido_numero:04d}**",
+            color=0x2ecc71
+        )
+        embed_confirmacao.add_field(name="🔫 PT", value=f"{fmt_num(nova_pt)} munições ({pacotes_pt} pacotes)", inline=True)
+        embed_confirmacao.add_field(name="🔫 SUB", value=f"{fmt_num(nova_sub)} munições ({pacotes_sub} pacotes)", inline=True)
+        embed_confirmacao.add_field(name="💰 Total", value=valor_formatado, inline=True)
+        embed_confirmacao.add_field(name="🏷️ Organização", value=nova_organizacao, inline=False)
+        if nova_observacao:
+            embed_confirmacao.add_field(name="📝 Observação", value=nova_observacao, inline=False)
+        
+        await interaction.followup.send(embed=embed_confirmacao, ephemeral=True)
+        
+        # ⚠️ Atualizar painéis
+        await enviar_painel_vendas()
+        await enviar_painel_fabricacao()
+
 # ###############################################
 class CalculadoraView(discord.ui.View):
     def __init__(self):
