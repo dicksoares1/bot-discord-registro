@@ -3180,7 +3180,7 @@ async def buscar_grupo_por_organizacao(nome_org):
 
 # ###############################################
 class StatusView(discord.ui.View):
-    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None):
+    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, forcar_entregue_liberado: bool = False):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
         self.total_entregas = total_entregas
@@ -3193,11 +3193,14 @@ class StatusView(discord.ui.View):
         is_venda_unica = (total_entregas == 1)
         is_ultima_entrega = (entrega_atual == total_entregas)
 
-        # ⚠️ REGRA DO BOTÃO ENTREGUE
-        # - Venda única: liberado
-        # - Primeira entrega: desabilitado (só libera após criar próxima)
-        # - Demais entregas: liberado (já tem entrega anterior)
-        if is_venda_unica:
+        # ⚠️ REGRA DO BOTÃO ENTREGUE:
+        # - Se forçado a liberar (forcar_entregue_liberado=True) → liberado
+        # - Venda única → liberado
+        # - Primeira entrega e tem mais de 1 → desabilitado
+        # - Demais casos → liberado
+        if forcar_entregue_liberado:
+            entregue_disabled = False
+        elif is_venda_unica:
             entregue_disabled = False
         elif entrega_atual == 1 and total_entregas > 1:
             entregue_disabled = True
@@ -3223,7 +3226,6 @@ class StatusView(discord.ui.View):
         ))
 
         # ⚠️ BOTÃO CRIAR PRÓXIMA ENTREGA
-        # Só aparece se NÃO for venda única E NÃO for a última entrega
         if not is_venda_unica and not is_ultima_entrega:
             self.add_item(discord.ui.Button(
                 label=f"📦 Criar Próxima Entrega ({entrega_atual + 1}/{total_entregas})",
@@ -3279,7 +3281,6 @@ class StatusView(discord.ui.View):
             return False
         elif custom_id == "status_entregue_fixo":
             await interaction.response.defer()
-            # Verificar se o botão está desabilitado
             for item in self.children:
                 if item.custom_id == "status_entregue_fixo" and item.disabled:
                     await interaction.followup.send("⚠️ **Você precisa criar a próxima entrega antes de marcar esta como entregue!**", ephemeral=True)
@@ -3663,23 +3664,19 @@ class StatusView(discord.ui.View):
             # ⚠️ 1. EDITAR A MENSAGEM ANTERIOR (liberar botão ENTREGUE)
             mensagem_anterior = interaction.message
 
-            # ⚠️ RECRIAR A VIEW DA MENSAGEM ANTERIOR COM ENTREGUE LIBERADO
+            # ⚠️ RECRIAR A VIEW DA MENSAGEM ANTERIOR COM forcar_entregue_liberado=True
             view_anterior = StatusView(
                 entrega_id=self.entrega_id,
                 total_entregas=total_entregas,
                 entrega_atual=entrega_atual,
                 pago_ja_clicado=self.pago_ja_clicado,
-                mensagem_original=mensagem_anterior
+                mensagem_original=mensagem_anterior,
+                forcar_entregue_liberado=True  # ⚠️ FORÇA O ENTREGUE A FICAR LIBERADO
             )
-            # ⚠️ FORÇAR O BOTÃO ENTREGUE A FICAR LIBERADO
-            for child in view_anterior.children:
-                if child.custom_id == "status_entregue_fixo":
-                    child.disabled = False
-                    break
 
             await mensagem_anterior.edit(view=view_anterior)
 
-            # ⚠️ 2. CRIAR A PRÓXIMA ENTREGA
+            # ⚠️ 2. CRIAR A PRÓXIMA ENTREGA (começa com ENTREGUE desabilitado)
             titulo_embed = f"📦 ENTREGA {proxima_entrega_num}/{total_entregas} • Pedido #{pedido_original:04d}"
             descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt_entrega)} + SUB {fmt_num(sub_entrega)} munições"
 
@@ -3719,13 +3716,14 @@ class StatusView(discord.ui.View):
 
             embed_novo.set_footer(text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas} • ID: {self.entrega_id}")
 
-            # ⚠️ A PRÓXIMA ENTREGA COMEÇA COM ENTREGUE DESABILITADO (pois é a primeira dela)
+            # ⚠️ A PRÓXIMA ENTREGA COMEÇA COM ENTREGUE DESABILITADO (padrão)
             view_novo = StatusView(
                 entrega_id=self.entrega_id,
                 total_entregas=total_entregas,
                 entrega_atual=proxima_entrega_num,
                 pago_ja_clicado=False,
-                mensagem_original=None
+                mensagem_original=None,
+                forcar_entregue_liberado=False
             )
 
             msg = await safe_request(canal.send, embed=embed_novo, view=view_novo)
@@ -3802,7 +3800,6 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        # ENVIAR MENSAGEM NO BAÚ GALPÃO
         canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_ID)
         if canal_bau:
             try:
@@ -3847,10 +3844,7 @@ class StatusView(discord.ui.View):
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
-        
-        await interaction.followup.send(f"✅ **Pedido #{pedido_numero:04d} cancelado com sucesso!**\n📦 Estoque revertido." if pacotes_pt > 0 or pacotes_sub > 0 else f"✅ **Pedido #{pedido_numero:04d} cancelado com sucesso!**")
-        
-     
+    
 # ###############################################
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="🏷️ Organização", placeholder="Digite o nome da organização (ex: VDR, POLICIA)", required=True)
