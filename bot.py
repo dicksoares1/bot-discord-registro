@@ -3180,7 +3180,7 @@ async def buscar_grupo_por_organizacao(nome_org):
 
 # ###############################################
 class StatusView(discord.ui.View):
-    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, entregue_force_liberado: bool = False):
+    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, forcar_entregue_liberado: bool = False):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
         self.total_entregas = total_entregas
@@ -3193,12 +3193,8 @@ class StatusView(discord.ui.View):
         is_venda_unica = (total_entregas == 1)
         is_ultima_entrega = (entrega_atual == total_entregas)
 
-        # ⚠️ REGRA DO BOTÃO ENTREGUE:
-        # - Se forçado a liberar (entregue_force_liberado=True) → liberado
-        # - Venda única → liberado
-        # - Última entrega → liberado
-        # - Primeira entrega e tem mais de 1 → desabilitado
-        if entregue_force_liberado:
+        # ⚠️ REGRA DO BOTÃO ENTREGUE
+        if forcar_entregue_liberado:
             entregue_disabled = False
         elif is_venda_unica:
             entregue_disabled = False
@@ -3396,7 +3392,7 @@ class StatusView(discord.ui.View):
                 entrega_atual=self.entrega_atual,
                 pago_ja_clicado=True,
                 mensagem_original=interaction.message,
-                entregue_force_liberado=False
+                forcar_entregue_liberado=False
             ))
         else:
             nova_view = StatusView(
@@ -3405,7 +3401,7 @@ class StatusView(discord.ui.View):
                 entrega_atual=self.entrega_atual,
                 pago_ja_clicado=True,
                 mensagem_original=interaction.message,
-                entregue_force_liberado=False
+                forcar_entregue_liberado=False
             )
             await interaction.message.edit(embed=embed, view=nova_view)
 
@@ -3507,17 +3503,16 @@ class StatusView(discord.ui.View):
                 entrega_atual=self.entrega_atual,
                 pago_ja_clicado=True,
                 mensagem_original=interaction.message,
-                entregue_force_liberado=False
+                forcar_entregue_liberado=False
             ))
         else:
-            # ⚠️ RECRIAR VIEW COM ENTREGUE DESABILITADO (já foi entregue)
             nova_view = StatusView(
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
                 entrega_atual=self.entrega_atual,
                 pago_ja_clicado=self.pago_ja_clicado,
                 mensagem_original=interaction.message,
-                entregue_force_liberado=False
+                forcar_entregue_liberado=False
             )
             # ⚠️ FORÇAR O BOTÃO ENTREGUE A FICAR DESABILITADO
             for child in nova_view.children:
@@ -3559,7 +3554,7 @@ class StatusView(discord.ui.View):
         await interaction.response.send_modal(modal)
 
     # =========================================================
-    # BOTÃO CRIAR PRÓXIMA ENTREGA
+    # BOTÃO CRIAR PRÓXIMA ENTREGA (CORRIGIDO)
     # =========================================================
 
     async def criar_proxima(self, interaction: discord.Interaction, button):
@@ -3684,8 +3679,14 @@ class StatusView(discord.ui.View):
                 entrega_atual=entrega_atual,
                 pago_ja_clicado=self.pago_ja_clicado,
                 mensagem_original=mensagem_anterior,
-                entregue_force_liberado=True  # ⚠️ LIBERA O ENTREGUE
+                forcar_entregue_liberado=True  # ⚠️ FORÇA O ENTREGUE A FICAR LIBERADO
             )
+
+            # ⚠️ FORÇAR MANUALMENTE O BOTÃO ENTREGUE A FICAR LIBERADO
+            for child in view_anterior.children:
+                if child.custom_id == "status_entregue_fixo":
+                    child.disabled = False
+                    break
 
             await mensagem_anterior.edit(view=view_anterior)
 
@@ -3731,14 +3732,14 @@ class StatusView(discord.ui.View):
 
             embed_novo.set_footer(text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {proxima_entrega_num}/{total_entregas} • ID: {self.entrega_id}")
 
-            # ⚠️ ÚLTIMA ENTREGA: ENTREGUE JÁ VIENE LIBERADO
+            # ⚠️ A PRÓXIMA ENTREGA (ÚLTIMA) JÁ VIENE COM ENTREGUE LIBERADO
             view_novo = StatusView(
                 entrega_id=self.entrega_id,
                 total_entregas=total_entregas,
                 entrega_atual=proxima_entrega_num,
                 pago_ja_clicado=False,
                 mensagem_original=None,
-                entregue_force_liberado=False  # A regra vai liberar automaticamente por ser a última
+                forcar_entregue_liberado=False
             )
 
             msg = await safe_request(canal.send, embed=embed_novo, view=view_novo)
@@ -3851,7 +3852,7 @@ class StatusView(discord.ui.View):
             entrega_atual=self.entrega_atual,
             pago_ja_clicado=self.pago_ja_clicado,
             mensagem_original=interaction.message,
-            entregue_force_liberado=False
+            forcar_entregue_liberado=False
         ))
 
         if self.entrega_id:
@@ -3860,8 +3861,6 @@ class StatusView(discord.ui.View):
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
         
-      
-          
 # ###############################################
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="🏷️ Organização", placeholder="Digite o nome da organização (ex: VDR, POLICIA)", required=True)
