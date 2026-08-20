@@ -24,7 +24,7 @@ import psutil
 import signal
 from discord.ext import commands, tasks
 from discord.utils import escape_markdown
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from zoneinfo import ZoneInfo
 
 # =========================================================
@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         log_entry = {
-            "timestamp": datetime.now(datetime.UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -11087,23 +11087,25 @@ except:
 
 if __name__ == "__main__":
     logger.info("🚀 Iniciando bot v3.3.1...")
+    
+    # Garantir que temos um loop de eventos
     try:
-        asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     
-    # Registrar signal handlers depois que o loop estiver rodando
+    # Registrar signal handlers para shutdown gracioso
     try:
         import signal
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                asyncio.get_running_loop().add_signal_handler(
-                    sig, lambda: asyncio.create_task(shutdown())
-                )
+                loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
+                break
             except RuntimeError:
+                # Se não conseguir adicionar o signal handler, ignora
                 pass
-    except:
+    except Exception:
         pass
     
     try:
