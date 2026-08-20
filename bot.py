@@ -3748,71 +3748,83 @@ class StatusView(discord.ui.View):
     # =========================================================
 
     async def cancelado(self, interaction: discord.Interaction, button):
+        """Cancela o pedido mesmo se já foi pago ou entregue. Reverte o estoque."""
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
-        if self.pedido_pago(linhas):
-            await interaction.followup.send("⚠️ Este pedido já foi pago e não pode ser cancelado.", ephemeral=True)
-            return
+        # ⚠️ REMOVIDAS AS RESTRIÇÕES DE PAGO/ENTREGUE
+        # Agora cancela mesmo se já foi pago ou entregue
 
-        if self.pedido_cancelado(linhas):
-            await interaction.followup.send("⚠️ Este pedido já foi cancelado.", ephemeral=True)
-            return
-
+        # ⚠️ VERIFICAR SE JÁ FOI ENTREGUE PARA REVERTER ESTOQUE
         pacotes_pt = 0
         pacotes_sub = 0
+        
+        # Extrair pacotes do embed
+        for field in embed.fields:
+            if field.name == "🔫 PT":
+                try:
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
+                except:
+                    pass
+            if field.name == "🔫 SUB":
+                try:
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
+                except:
+                    pass
 
-        if self.entrega_ja_foi_entregue(linhas):
-            for field in embed.fields:
-                if field.name == "🔫 PT":
-                    try:
-                        linhas_field = field.value.split("\n")
-                        for l in linhas_field:
-                            if "📦" in l:
-                                pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                    except:
-                        pass
-                if field.name == "🔫 SUB":
-                    try:
-                        linhas_field = field.value.split("\n")
-                        for l in linhas_field:
-                            if "📦" in l:
-                                pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                    except:
-                        pass
+        # ⚠️ REVERTER ESTOQUE SE JÁ FOI RETIRADO (se tiver status de entregue)
+        if self.entrega_ja_foi_entregue(linhas) or self.pedido_pago(linhas):
+            titulo = embed.title
+            pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
 
-            if pacotes_pt > 0 or pacotes_sub > 0:
-                titulo = embed.title
-                pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
+            if pacotes_pt > 0:
+                await atualizar_estoque("PT", pacotes_pt, "adicionar")
+                logger.info(f"🔄 Estoque PT reabastecido: +{pacotes_pt} pacotes (Pedido #{pedido_numero})")
+            
+            if pacotes_sub > 0:
+                await atualizar_estoque("SUB", pacotes_sub, "adicionar")
+                logger.info(f"🔄 Estoque SUB reabastecido: +{pacotes_sub} pacotes (Pedido #{pedido_numero})")
 
-                if pacotes_pt > 0:
-                    await atualizar_estoque("PT", pacotes_pt, "adicionar")
-                if pacotes_sub > 0:
-                    await atualizar_estoque("SUB", pacotes_sub, "adicionar")
-
-                canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
-                if canal_bau:
-                    try:
-                        texto = f"🔄 **REVERSÃO DE ESTOQUE - PEDIDO CANCELADO**\n\n"
-                        texto += f"👤 Cancelado por: {interaction.user.mention}\n"
-                        texto += f"📦 Pedido #{pedido_numero}\n"
-                        if pacotes_pt > 0:
-                            texto += f"🔫 PT: +{pacotes_pt} pacotes (reabastecido)\n"
-                        if pacotes_sub > 0:
-                            texto += f"🔫 SUB: +{pacotes_sub} pacotes (reabastecido)"
-                        await canal_bau.send(texto)
-                    except Exception as e:
-                        logger.error(f"Erro envio baú reversão: {e}")
+            # Enviar mensagem para o baú sobre a reversão
+            canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+            if canal_bau:
+                try:
+                    texto = f"🔄 **REVERSÃO DE ESTOQUE - PEDIDO CANCELADO**\n\n"
+                    texto += f"👤 Cancelado por: {interaction.user.mention}\n"
+                    texto += f"📦 Pedido #{pedido_numero}\n"
+                    if pacotes_pt > 0:
+                        texto += f"🔫 PT: +{pacotes_pt} pacotes (reabastecido)\n"
+                    if pacotes_sub > 0:
+                        texto += f"🔫 SUB: +{pacotes_sub} pacotes (reabastecido)"
+                    texto += f"\n📌 Status anterior: {'Pago e Entregue' if self.entrega_ja_foi_entregue(linhas) and self.pedido_pago(linhas) else 'Pago' if self.pedido_pago(linhas) else 'Entregue'}"
+                    await canal_bau.send(texto)
+                except Exception as e:
+                    logger.error(f"Erro envio baú reversão: {e}")
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         user = interaction.user.mention
 
-        if self.entrega_ja_foi_entregue(linhas):
-            linhas = [f"❌ Pedido cancelado por {user} • {agora_str}\n🔄 **ESTOQUE REVERTIDO**"]
-        else:
-            linhas = [f"❌ Pedido cancelado por {user} • {agora_str}"]
+        # ⚠️ MARCAR COMO CANCELADO (sobrescreve o status)
+        linhas = [f"❌ Pedido cancelado por {user} • {agora_str}"]
+        
+        # Se foi pago e/ou entregue, adicionar informação de reversão
+        if self.pedido_pago(linhas_antigas := self.get_status(embed)[1]) or self.entrega_ja_foi_entregue(linhas_antigas):
+            if self.pedido_pago(linhas_antigas) and self.entrega_ja_foi_entregue(linhas_antigas):
+                linhas.append("🔄 **ESTOQUE REVERTIDO** (Pago e Entregue)")
+            elif self.pedido_pago(linhas_antigas):
+                linhas.append("🔄 **ESTOQUE REVERTIDO** (Pagamento realizado)")
+            elif self.entrega_ja_foi_entregue(linhas_antigas):
+                linhas.append("🔄 **ESTOQUE REVERTIDO** (Entregue)")
 
         embed = self.set_status(embed, idx, linhas)
+        
+        # ⚠️ DESABILITAR TODOS OS BOTÕES
         await interaction.message.edit(embed=embed, view=StatusView(
             disabled=True,
             entrega_id=self.entrega_id,
@@ -3822,12 +3834,14 @@ class StatusView(discord.ui.View):
             mensagem_original=interaction.message
         ))
 
+        # ⚠️ DESATIVAR ENTREGAS PARCELADAS (se houver)
         if self.entrega_id:
             await finalizar_entregas(self.entrega_id)
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
-
+        
+     
 # ###############################################
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="🏷️ Organização", placeholder="Digite o nome da organização (ex: VDR, POLICIA)", required=True)
