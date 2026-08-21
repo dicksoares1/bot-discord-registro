@@ -23,7 +23,6 @@ import tweepy
 import time as time_module
 import logging
 import logging.handlers
-import colorlog
 import psutil
 import signal
 import random
