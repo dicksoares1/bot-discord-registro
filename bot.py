@@ -1178,31 +1178,31 @@ lavagens_pendentes = {}
 # 1. SISTEMA DE BOTÕES PERSISTENTES
 # =========================================================
 class BotaoPersistente:
-@staticmethod
-async def salvar_botao(mensagem_id, canal_id, tipo, dados=None):
-    pool = await get_pool()
-    if not pool:
-        return
-    try:
-        async with pool.acquire() as conn:
-            # Verificar se já existe
-            existente = await conn.fetchval(
-                "SELECT 1 FROM botoes_persistentes WHERE mensagem_id = $1 AND canal_id = $2",
-                str(mensagem_id), str(canal_id)
-            )
-            if existente:
-                await conn.execute("""
-                    UPDATE botoes_persistentes
-                    SET tipo = $1, dados = $2, criado_em = NOW()
-                    WHERE mensagem_id = $3 AND canal_id = $4
-                """, tipo, json.dumps(dados) if dados else None, str(mensagem_id), str(canal_id))
-            else:
-                await conn.execute("""
-                    INSERT INTO botoes_persistentes (mensagem_id, canal_id, tipo, dados)
-                    VALUES ($1, $2, $3, $4)
-                """, str(mensagem_id), str(canal_id), tipo, json.dumps(dados) if dados else None)
-    except Exception as e:
-        logger.error(f"❌ Erro ao salvar botão persistente: {e}")
+    @staticmethod
+    async def salvar_botao(mensagem_id, canal_id, tipo, dados=None):
+        pool = await get_pool()
+        if not pool:
+            return
+        try:
+            async with pool.acquire() as conn:
+                # Verificar se já existe
+                existente = await conn.fetchval(
+                    "SELECT 1 FROM botoes_persistentes WHERE mensagem_id = $1 AND canal_id = $2",
+                    str(mensagem_id), str(canal_id)
+                )
+                if existente:
+                    await conn.execute("""
+                        UPDATE botoes_persistentes
+                        SET tipo = $1, dados = $2, criado_em = NOW()
+                        WHERE mensagem_id = $3 AND canal_id = $4
+                    """, tipo, json.dumps(dados) if dados else None, str(mensagem_id), str(canal_id))
+                else:
+                    await conn.execute("""
+                        INSERT INTO botoes_persistentes (mensagem_id, canal_id, tipo, dados)
+                        VALUES ($1, $2, $3, $4)
+                    """, str(mensagem_id), str(canal_id), tipo, json.dumps(dados) if dados else None)
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar botão persistente: {e}")
 
     @staticmethod
     async def restaurar_botoes():
