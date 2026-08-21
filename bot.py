@@ -1515,18 +1515,6 @@ def seguro(max_calls=None, period=None, cargos_permitidos=None):
         return wrapper
     return decorator
 
-# =========================================================
-# 4. COMANDO PARA RESETAR RATE LIMIT
-# =========================================================
-@bot.command(name="reset_rate")
-@commands.has_permissions(administrator=True)
-async def cmd_reset_rate(ctx, member: discord.Member = None):
-    if member:
-        await rate_limiter_avancado.reset(member.id)
-        await ctx.send(f"✅ Rate limit resetado para {member.mention}", ephemeral=True)
-    else:
-        await rate_limiter_avancado.reset(ctx.author.id)
-        await ctx.send(f"✅ Seu rate limit foi resetado", ephemeral=True)
 
 # =========================================================
 # ==================== PARTE 6: SISTEMA DE REGISTRO =======
