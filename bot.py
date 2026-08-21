@@ -1178,21 +1178,31 @@ lavagens_pendentes = {}
 # 1. SISTEMA DE BOTÕES PERSISTENTES
 # =========================================================
 class BotaoPersistente:
-    @staticmethod
-    async def salvar_botao(mensagem_id, canal_id, tipo, dados=None):
-        pool = await get_pool()
-        if not pool:
-            return
-        try:
-            async with pool.acquire() as conn:
+@staticmethod
+async def salvar_botao(mensagem_id, canal_id, tipo, dados=None):
+    pool = await get_pool()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            # Verificar se já existe
+            existente = await conn.fetchval(
+                "SELECT 1 FROM botoes_persistentes WHERE mensagem_id = $1 AND canal_id = $2",
+                str(mensagem_id), str(canal_id)
+            )
+            if existente:
+                await conn.execute("""
+                    UPDATE botoes_persistentes
+                    SET tipo = $1, dados = $2, criado_em = NOW()
+                    WHERE mensagem_id = $3 AND canal_id = $4
+                """, tipo, json.dumps(dados) if dados else None, str(mensagem_id), str(canal_id))
+            else:
                 await conn.execute("""
                     INSERT INTO botoes_persistentes (mensagem_id, canal_id, tipo, dados)
                     VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (mensagem_id, canal_id)
-                    DO UPDATE SET tipo = $3, dados = $4, criado_em = NOW()
                 """, str(mensagem_id), str(canal_id), tipo, json.dumps(dados) if dados else None)
-        except Exception as e:
-            logger.error(f"❌ Erro ao salvar botão persistente: {e}")
+    except Exception as e:
+        logger.error(f"❌ Erro ao salvar botão persistente: {e}")
 
     @staticmethod
     async def restaurar_botoes():
@@ -10611,7 +10621,7 @@ async def setup_status():
     async def get_stats():
         return {
             "membros": len([m for m in bot.get_guild(GUILD_ID).members if not m.bot]) if bot.get_guild(GUILD_ID) else 0,
-            "producoes": len([p for p in producoes_tasks if not p.done()]),
+            "producoes": len([p for p in producoes_tasks if not p.done()]) if producoes_tasks else 0,
             "metas": len(metas_cache),
             "estoque_pt": (await carregar_estoque()).get('PT', 0),
             "estoque_sub": (await carregar_estoque()).get('SUB', 0),
