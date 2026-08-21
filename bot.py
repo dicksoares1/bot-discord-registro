@@ -28,6 +28,89 @@ from datetime import datetime, timedelta, time, timezone
 from zoneinfo import ZoneInfo
 
 # =========================================================
+# SISTEMA DE BOTÕES PERSISTENTES
+# =========================================================
+
+class BotaoPersistente:
+    """Sistema para manter botões funcionando após reinicialização."""
+    
+    @staticmethod
+    async def salvar_botao(mensagem_id, canal_id, tipo, dados=None):
+        """Salva um botão no banco para ser restaurado depois."""
+        pool = await get_pool()
+        if not pool:
+            return
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO botoes_persistentes (mensagem_id, canal_id, tipo, dados)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (mensagem_id, canal_id) 
+                    DO UPDATE SET tipo = $3, dados = $4, criado_em = NOW()
+                """, str(mensagem_id), str(canal_id), tipo, json.dumps(dados) if dados else None)
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar botão persistente: {e}")
+    
+    @staticmethod
+    async def restaurar_botoes():
+        """Restaura todos os botões salvos após reinicialização."""
+        pool = await get_pool()
+        if not pool:
+            return
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT mensagem_id, canal_id, tipo, dados 
+                    FROM botoes_persistentes
+                    ORDER BY criado_em DESC
+                """)
+            
+            for row in rows:
+                canal = bot.get_channel(int(row["canal_id"]))
+                if not canal:
+                    continue
+                try:
+                    msg = await canal.fetch_message(int(row["mensagem_id"]))
+                    if not msg:
+                        continue
+                    
+                    tipo = row["tipo"]
+                    dados = json.loads(row["dados"]) if row["dados"] else {}
+                    
+                    # Recriar a view correta baseada no tipo
+                    view = BotaoPersistente.criar_view(tipo, dados)
+                    if view:
+                        await msg.edit(view=view)
+                        logger.info(f"🔄 Botão restaurado: {tipo} - {row['mensagem_id']}")
+                except discord.NotFound:
+                    # Mensagem deletada, remover do banco
+                    await conn.execute(
+                        "DELETE FROM botoes_persistentes WHERE mensagem_id = $1 AND canal_id = $2",
+                        row["mensagem_id"], row["canal_id"]
+                    )
+                except Exception as e:
+                    logger.error(f"❌ Erro ao restaurar botão {row['mensagem_id']}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Erro ao restaurar botões: {e}")
+    
+    @staticmethod
+    def criar_view(tipo, dados):
+        """Cria a view correta baseada no tipo do botão."""
+        if tipo == "meta":
+            return MetaView(dados.get("user_id"))
+        elif tipo == "venda":
+            return StatusView(
+                entrega_id=dados.get("entrega_id"),
+                total_entregas=dados.get("total_entregas", 1),
+                entrega_atual=dados.get("entrega_atual", 1),
+                disabled=dados.get("disabled", False)
+            )
+        elif tipo == "acao":
+            return AcaoViewRestaurada(dados.get("acao_id"), dados.get("criador_id"))
+        elif tipo == "producao":
+            return SegundaTaskView(dados.get("pid"))
+        return None
+# =========================================================
 # SEÇÃO 2: CONFIGURAÇÃO DE LOG
 # =========================================================
 
@@ -1021,6 +1104,17 @@ async def inicializar_tabelas(pool):
                 item_nome VARCHAR(100) UNIQUE NOT NULL,
                 quantidade INT DEFAULT 0,
                 ultima_atualizacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        # Adicione no final da função inicializar_tabelas()
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS botoes_persistentes (
+                id SERIAL PRIMARY KEY,
+                mensagem_id VARCHAR(30) NOT NULL,
+                canal_id VARCHAR(30) NOT NULL,
+                tipo VARCHAR(50) NOT NULL,
+                dados JSONB,
+                criado_em TIMESTAMP DEFAULT NOW()
             )
         """)
 
@@ -2093,7 +2187,8 @@ async def atualizar_embed_meta(user_id):
                     await asyncio.sleep(0.3)
                 except:
                     pass
-        await canal.send(embed=embed, view=MetaView(user_id))
+        msg = await canal.send(embed=embed, view=MetaView(user_id))
+        await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
         await verificar_meta_concluida(user_id, valor_progresso)
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
@@ -3976,6 +4071,7 @@ async def acompanhar_producao(pid):
                     view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
                     msg = await safe_request(canal.send, embed=embed, view=view)
                     if msg:
+                        await BotaoPersistente.salvar_botao(msg.id, canal.id, "producao", {"pid": pid})
                         prod["msg_id"] = msg.id
                         await salvar_producao(pid, prod)
                     else:
@@ -5193,9 +5289,20 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
     )
 
     msg = await safe_request(canal.send, embed=embed, view=view)
-
+    
     if msg and entrega_id:
+        await BotaoPersistente.salvar_botao(msg.id, canal.id, "venda", {
+            "entrega_id": entrega_id,
+            "total_entregas": total_entregas,
+            "entrega_atual": entrega_atual
+        })
         await atualizar_entrega_parcelada(entrega_id, entrega_atual, str(msg.id), None)
+    elif msg and not entrega_id:
+        await BotaoPersistente.salvar_botao(msg.id, canal.id, "venda", {
+            "entrega_id": None,
+            "total_entregas": total_entregas,
+            "entrega_atual": entrega_atual
+        })
 
     return msg
 
@@ -6652,77 +6759,81 @@ class SelecionarAcaoView(discord.ui.View):
         self.add_item(self.select)
         self.add_item(FecharButton())
 
-    async def select_callback(self, interaction: discord.Interaction):
-        acao_tipo = interaction.data["values"][0]
-        await interaction.response.defer(ephemeral=True)
-        pode_fazer = await verificar_limite_categoria(acao_tipo)
-        if not pode_fazer:
-            categoria = ACAO_PARA_CATEGORIA.get(acao_tipo, "Desconhecida")
-            dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
-            limite = dados_categoria.get("limite", "?")
-            await interaction.followup.send(f"❌ **Limite semanal da categoria {categoria} atingido!**\n📊 Limite: **{limite}** ação(ões) por semana\n📌 Ação: **{acao_tipo}**", ephemeral=True)
-            return
-        pool = await get_pool()
-        if not pool:
-            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
-            return
-        acao_id = await salvar_acao_db(acao_tipo, interaction.user.id)
-        regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."]})
-        regras = regras_data.get("regras", [])
-        is_bahamas = regras_data.get("is_bahamas", False)
-        cor = 0xe67e22 if "Helicrash" in acao_tipo else 0x3498db
-        emoji = "🚁" if "Helicrash" in acao_tipo else "🎯"
-        if "Bahamas" in acao_tipo:
-            emoji = "🏝️"
-            cor = 0x1abc9c
-        if "Banco" in acao_tipo:
-            emoji = "🏦"
-            cor = 0xe74c3c
-        if "Carro Forte" in acao_tipo:
-            emoji = "🚚"
-            cor = 0xf39c12
-        embed = discord.Embed(title=f"{emoji} ESCALAÇÃO - {acao_tipo}", color=cor, timestamp=agora())
-        embed.add_field(name="📌 REGRAS DA AÇÃO", value="\n".join(regras), inline=False)
-        if is_bahamas:
-            embed.add_field(name="🏝️ REGRAS GERAIS - BAHAMAS", value=REGRAS_GERAIS_BAHAMAS, inline=False)
-        if "Helicrash" in acao_tipo:
-            horario = acao_tipo.split("(")[1].replace(")", "")
-            embed.add_field(name="⏰ HORÁRIO", value=f"{horario} (horário de Brasília)", inline=False)
-        categoria = ACAO_PARA_CATEGORIA.get(acao_tipo)
-        if categoria:
-            dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
-            limite = dados_categoria.get("limite")
-            if limite is not None:
-                async with pool.acquire() as conn:
-                    acoes_da_categoria = dados_categoria["acoes"]
-                    placeholders = ",".join([f"${i+1}" for i in range(len(acoes_da_categoria))])
-                    query = f"""
-                        SELECT COUNT(*) FROM acoes_semana 
-                        WHERE tipo IN ({placeholders}) 
-                        AND status = 'concluida' 
-                        AND (resultado = 'ganhou' OR resultado = 'perdeu')
-                        AND data > NOW() - INTERVAL '7 days'
-                    """
-                    qtd_feita = await conn.fetchval(query, *acoes_da_categoria)
-                    restante = max(0, limite - qtd_feita)
-                    embed.add_field(name=f"📊 LIMITE DA CATEGORIA {categoria.upper()}", value=f"{qtd_feita}/{limite} ações realizadas\n✅ Restam: {restante}", inline=False)
-        embed.add_field(name="👥 PARTICIPANTES (0)", value="Nenhum participante ainda.\nClique no botão ✅ PARTICIPAR para se inscrever!", inline=False)
-        embed.add_field(name="👤 CRIADO POR", value=interaction.user.mention, inline=True)
-        embed.add_field(name="📅 DATA", value=agora().strftime('%d/%m/%Y %H:%M'), inline=True)
-        embed.add_field(name="📝 COMO PARTICIPAR", value="✅ Clique em **'Participar'** para se inscrever na ação.\n📤 Quando a escalação estiver completa, o criador clica em **'Concluir'**.", inline=False)
-        embed.set_footer(text=f"ID: {acao_id}")
-        canal = interaction.guild.get_channel(CANAL_ESCALACOES_ID)
-        if canal:
-            view = AcaoView(acao_id, interaction.user.id)
-            await canal.send(embed=embed, view=view)
-            acoes_ativas[acao_id] = {"embed": embed, "criador_id": interaction.user.id}
-            await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada com sucesso!", ephemeral=True)
-            try:
-                await interaction.message.delete()
-            except:
-                pass
-        else:
-            await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
+async def select_callback(self, interaction: discord.Interaction):
+    acao_tipo = interaction.data["values"][0]
+    await interaction.response.defer(ephemeral=True)
+    pode_fazer = await verificar_limite_categoria(acao_tipo)
+    if not pode_fazer:
+        categoria = ACAO_PARA_CATEGORIA.get(acao_tipo, "Desconhecida")
+        dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
+        limite = dados_categoria.get("limite", "?")
+        await interaction.followup.send(f"❌ **Limite semanal da categoria {categoria} atingido!**\n📊 Limite: **{limite}** ação(ões) por semana\n📌 Ação: **{acao_tipo}**", ephemeral=True)
+        return
+    pool = await get_pool()
+    if not pool:
+        await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+        return
+    acao_id = await salvar_acao_db(acao_tipo, interaction.user.id)
+    regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."]})
+    regras = regras_data.get("regras", [])
+    is_bahamas = regras_data.get("is_bahamas", False)
+    cor = 0xe67e22 if "Helicrash" in acao_tipo else 0x3498db
+    emoji = "🚁" if "Helicrash" in acao_tipo else "🎯"
+    if "Bahamas" in acao_tipo:
+        emoji = "🏝️"
+        cor = 0x1abc9c
+    if "Banco" in acao_tipo:
+        emoji = "🏦"
+        cor = 0xe74c3c
+    if "Carro Forte" in acao_tipo:
+        emoji = "🚚"
+        cor = 0xf39c12
+    embed = discord.Embed(title=f"{emoji} ESCALAÇÃO - {acao_tipo}", color=cor, timestamp=agora())
+    embed.add_field(name="📌 REGRAS DA AÇÃO", value="\n".join(regras), inline=False)
+    if is_bahamas:
+        embed.add_field(name="🏝️ REGRAS GERAIS - BAHAMAS", value=REGRAS_GERAIS_BAHAMAS, inline=False)
+    if "Helicrash" in acao_tipo:
+        horario = acao_tipo.split("(")[1].replace(")", "")
+        embed.add_field(name="⏰ HORÁRIO", value=f"{horario} (horário de Brasília)", inline=False)
+    categoria = ACAO_PARA_CATEGORIA.get(acao_tipo)
+    if categoria:
+        dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
+        limite = dados_categoria.get("limite")
+        if limite is not None:
+            async with pool.acquire() as conn:
+                acoes_da_categoria = dados_categoria["acoes"]
+                placeholders = ",".join([f"${i+1}" for i in range(len(acoes_da_categoria))])
+                query = f"""
+                    SELECT COUNT(*) FROM acoes_semana 
+                    WHERE tipo IN ({placeholders}) 
+                    AND status = 'concluida' 
+                    AND (resultado = 'ganhou' OR resultado = 'perdeu')
+                    AND data > NOW() - INTERVAL '7 days'
+                """
+                qtd_feita = await conn.fetchval(query, *acoes_da_categoria)
+                restante = max(0, limite - qtd_feita)
+                embed.add_field(name=f"📊 LIMITE DA CATEGORIA {categoria.upper()}", value=f"{qtd_feita}/{limite} ações realizadas\n✅ Restam: {restante}", inline=False)
+    embed.add_field(name="👥 PARTICIPANTES (0)", value="Nenhum participante ainda.\nClique no botão ✅ PARTICIPAR para se inscrever!", inline=False)
+    embed.add_field(name="👤 CRIADO POR", value=interaction.user.mention, inline=True)
+    embed.add_field(name="📅 DATA", value=agora().strftime('%d/%m/%Y %H:%M'), inline=True)
+    embed.add_field(name="📝 COMO PARTICIPAR", value="✅ Clique em **'Participar'** para se inscrever na ação.\n📤 Quando a escalação estiver completa, o criador clica em **'Concluir'**.", inline=False)
+    embed.set_footer(text=f"ID: {acao_id}")
+    canal = interaction.guild.get_channel(CANAL_ESCALACOES_ID)
+    if canal:
+        view = AcaoView(acao_id, interaction.user.id)
+        msg = await canal.send(embed=embed, view=view)
+        await BotaoPersistente.salvar_botao(msg.id, canal.id, "acao", {
+            "acao_id": acao_id,
+            "criador_id": interaction.user.id
+        })
+        acoes_ativas[acao_id] = {"embed": embed, "criador_id": interaction.user.id}
+        await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada com sucesso!", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+    else:
+        await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
 
 # =========================================================
 # CLASS: FecharButton
@@ -10420,7 +10531,7 @@ async def on_ready():
     
     # Iniciar tarefas de background
     await iniciar_tarefas_background()
-    
+    await BotaoPersistente.restaurar_botoes()
     # Iniciar limpeza de cache
     bot.loop.create_task(limpeza_cache_periodica())
     
@@ -10436,14 +10547,8 @@ async def on_ready():
     await recriar_mensagens_vendas()
     await restaurar_botoes_vendas()
     await restaurar_acoes()
-    
-    # Restaurar botões das metas
     await restaurar_botoes_metas()
-    
-    # Garantir acesso dos responsáveis
     await atualizar_acesso_responsaveis()
-    
-    # Status do bot
     await setup_status()
     
     # Limpeza de memória
