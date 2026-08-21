@@ -6264,51 +6264,99 @@ class RelatorioModal(discord.ui.Modal, title="📊 Relatório de Vendas"):
 # =========================================================
 
 # ---------------------------------------------------------
-# 5.1: CONSTANTES DAS AÇÕES
+# 5.1: CONSTANTES DAS AÇÕES (COM CATEGORIAS)
 # ---------------------------------------------------------
 
-ACOES_COMPLEXO = {
-    "Joalheria": 5,
-    "Banco Fleeca - Rota 68": 4,
-    "Banco Fleeca - Chaves": 4,
-    "Banco Fleeca - Praia": 4,
-    "Banco Fleeca - Shopping": 4,
-    "Banco de Paleto": 1,
-    "Banco Central Com Refém": 1,
-    "Banco Central Sem Refém": 1,
-    "Nióbio": 1,
-    "Loja de Armas (Ammunation)": None,
-    "Loja de Bebidas": None,
-    "Loja de Departamento": None,
-    "Mergulhador": None,
-    "Grapeseed": None,
-    "Companhia de Gás": None,
-    "Life Invader": None,
-    "Aeroporto de Sucata": None,
-    "Carro Forte - Açougue": None,
-    "Carro Forte - Faculdade": None,
-    "Carro Forte - Grove Street": None,
+# Definição das categorias e seus limites semanais
+CATEGORIAS_ACOES = {
+    "Fleeca": {
+        "limite": 4,
+        "acoes": [
+            "Banco Fleeca - Rota 68",
+            "Banco Fleeca - Chaves",
+            "Banco Fleeca - Praia",
+            "Banco Fleeca - Shopping"
+        ]
+    },
+    "Banco Central": {
+        "limite": 1,
+        "acoes": [
+            "Banco Central Com Refém",
+            "Banco Central Sem Refém"
+        ]
+    },
+    "Joalheria": {
+        "limite": 5,
+        "acoes": ["Joalheria"]
+    },
+    "Banco de Paleto": {
+        "limite": 1,
+        "acoes": ["Banco de Paleto"]
+    },
+    "Nióbio": {
+        "limite": 1,
+        "acoes": ["Nióbio"]
+    },
+    "Complexo Outras": {
+        "limite": None,  # Ilimitado
+        "acoes": [
+            "Loja de Armas (Ammunation)",
+            "Loja de Bebidas",
+            "Loja de Departamento",
+            "Mergulhador",
+            "Grapeseed",
+            "Companhia de Gás",
+            "Life Invader",
+            "Aeroporto de Sucata",
+            "Carro Forte - Açougue",
+            "Carro Forte - Faculdade",
+            "Carro Forte - Grove Street"
+        ]
+    },
+    "Bahamas": {
+        "limite": None,  # Ilimitado
+        "acoes": [
+            "Banco Bahamas",
+            "Burgueshot (Bahamas)",
+            "Refinaria (Bahamas)",
+            "Lan House - (Bahamas)",
+            "Lan House - Jersey",
+            "Lan House - Brooklyn",
+            "Lan House - Manhattan"
+        ]
+    },
+    "Helicrash": {
+        "limite": None,  # Ilimitado (ou coloque um número se quiser)
+        "acoes": [
+            "🚁 Helicrash (13h)",
+            "🚁 Helicrash (15h)",
+            "🚁 Helicrash (22h)",
+            "🚁 Helicrash (02h)"
+        ]
+    }
 }
 
-ACOES_BAHAMAS = {
-    "Banco Bahamas": None,
-    "Burgueshot (Bahamas)": None,
-    "Refinaria (Bahamas)": None,
-    "Lan House - (Bahamas)": None,
-    "Lan House - Jersey": None,
-    "Lan House - Brooklyn": None,
-    "Lan House - Manhattan": None,
-}
+# Mapeamento reverso: ação -> categoria
+ACAO_PARA_CATEGORIA = {}
+for categoria, dados in CATEGORIAS_ACOES.items():
+    for acao in dados["acoes"]:
+        ACAO_PARA_CATEGORIA[acao] = categoria
 
-ACOES_HELICRASH = {
-    "🚁 Helicrash (13h)": None,
-    "🚁 Helicrash (15h)": None,
-    "🚁 Helicrash (22h)": None,
-    "🚁 Helicrash (02h)": None,
-}
+# Listas para compatibilidade com o código existente
+ACOES_COMPLEXO = {}
+ACOES_BAHAMAS = {}
+ACOES_HELICRASH = {}
+
+for categoria, dados in CATEGORIAS_ACOES.items():
+    for acao in dados["acoes"]:
+        if categoria == "Bahamas":
+            ACOES_BAHAMAS[acao] = dados["limite"]
+        elif categoria == "Helicrash":
+            ACOES_HELICRASH[acao] = dados["limite"]
+        else:
+            ACOES_COMPLEXO[acao] = dados["limite"]
 
 ACOES_SEMANA = {**ACOES_COMPLEXO, **ACOES_BAHAMAS, **ACOES_HELICRASH}
-
 CARGOS_PERMITIDOS_ESCALACAO = [
     CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
     CARGO_01_ID, CARGO_02_ID, CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID
@@ -6320,25 +6368,15 @@ REGRAS_GERAIS_BAHAMAS = """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 1️⃣ **Bom senso** é a regra mais importante em ações fechadas ou de rua.
-
 2️⃣ 🚫 **Proibido** uso de drogas ilegais em ações fechadas.
-
 3️⃣ 🚫 **Proibido** uso de capacete em qualquer ação fechada.
-
 4️⃣ 🚫 **Proibido** uso de armas de fogo durante Corridas Clandestinas.
-
 5️⃣ 🚫 **Proibido** usar mais de 1 colete em ações fechadas.
-
 6️⃣ 🚫 **Proibido** movimentação/rotação com qualquer veículo em ações fechadas.
-
 7️⃣ ✅ Liberado o comando `/gg` em ações fechadas e de rua das **00:00 às 12:00**.
-
 8️⃣ 👮 Policiais devem entrar **simultaneamente** no perímetro da ação.
-
 9️⃣ 🚫 **Proibido** uso de gasolina como arma em qualquer ação fechada.
-
 🔟 🚁 Helicóptero policial pode entrar sozinho no perímetro por **2 minutos**.
-
 1️⃣1️⃣ **Disputa de blips:** Apenas 1 pessoa por facção pode puxar a ação.
 """
 
@@ -6700,6 +6738,42 @@ REGRAS_ACOES = {
 }
 
 # ---------------------------------------------------------
+# ASYNC: verificar_limite_categoria
+# ---------------------------------------------------------
+
+async def verificar_limite_categoria(acao_tipo):
+    """Verifica se uma ação pode ser realizada baseado no limite da categoria."""
+    categoria = ACAO_PARA_CATEGORIA.get(acao_tipo)
+    if not categoria:
+        return True  # Se não tem categoria, permite
+    
+    dados_categoria = CATEGORIAS_ACOES.get(categoria)
+    if not dados_categoria:
+        return True
+    
+    limite = dados_categoria["limite"]
+    if limite is None:
+        return True  # Ilimitado
+    
+    pool = await get_pool()
+    if not pool:
+        return True
+    
+    async with pool.acquire() as conn:
+        # Conta quantas ações da categoria já foram concluídas esta semana
+        acoes_da_categoria = dados_categoria["acoes"]
+        placeholders = ",".join([f"${i+1}" for i in range(len(acoes_da_categoria))])
+        query = f"""
+            SELECT COUNT(*) FROM acoes_semana 
+            WHERE tipo IN ({placeholders}) 
+            AND status = 'concluida' 
+            AND (resultado = 'ganhou' OR resultado = 'perdeu')
+            AND data > NOW() - INTERVAL '7 days'
+        """
+        qtd = await conn.fetchval(query, *acoes_da_categoria)
+        return qtd < limite
+
+# ---------------------------------------------------------
 # ASYNC: salvar_acao_db
 # ---------------------------------------------------------
 
@@ -6859,7 +6933,7 @@ async def restaurar_acoes():
         logger.error(f"❌ Erro ao restaurar ações: {e}")
 
 # ---------------------------------------------------------
-# ASYNC: enviar_painel_acoes
+# ASYNC: enviar_painel_acoes (VERSÃO COM CATEGORIAS)
 # ---------------------------------------------------------
 
 async def enviar_painel_acoes(guild):
@@ -6868,195 +6942,169 @@ async def enviar_painel_acoes(guild):
         logger.error("❌ Canal ações não encontrado")
         return
     
-    rows = await buscar_acoes_semana()
+    pool = await get_pool()
+    if not pool:
+        return
+    
+    # Buscar ações concluídas da semana
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT tipo, COUNT(*) as qtd
+            FROM acoes_semana
+            WHERE status = 'concluida' 
+            AND (resultado = 'ganhou' OR resultado = 'perdeu')
+            AND data > NOW() - INTERVAL '7 days'
+            GROUP BY tipo
+        """)
+    
     feitas = {r["tipo"]: r["qtd"] for r in rows}
     
-    def calcular_progresso(acoes_dict):
-        linhas = []
-        total_feitas = 0
-        total_meta = 0
-        for nome, limite in acoes_dict.items():
-            qtd = feitas.get(nome, 0)
-            total_feitas += qtd
-            if limite is None:
-                linhas.append(f"• {nome}: {qtd}")
-            else:
-                restante = max(limite - qtd, 0)
-                if qtd >= limite:
-                    linhas.append(f"• {nome}: ✅ {qtd}/{limite} (COMPLETO)")
-                else:
-                    linhas.append(f"• {nome}: {qtd}/{limite} (restam {restante})")
-                total_meta += limite
-        return linhas, total_feitas, total_meta
+    # Construir descrição por CATEGORIA
+    descricao = "**📊 AÇÕES DA SEMANA - POR CATEGORIA**\n\n"
     
-    linhas_complexo, total_feitas_complexo, total_meta_complexo = calcular_progresso(ACOES_COMPLEXO)
-    linhas_bahamas, total_feitas_bahamas, total_meta_bahamas = calcular_progresso(ACOES_BAHAMAS)
-    linhas_helicrash, total_feitas_helicrash, total_meta_helicrash = calcular_progresso(ACOES_HELICRASH)
+    total_geral_feitas = 0
+    total_geral_meta = 0
     
-    total_geral_feitas = total_feitas_complexo + total_feitas_bahamas + total_feitas_helicrash
-    total_geral_meta = total_meta_complexo + total_meta_bahamas + total_meta_helicrash
+    for categoria, dados in CATEGORIAS_ACOES.items():
+        limite = dados["limite"]
+        acoes = dados["acoes"]
+        
+        # Contar quantas ações da categoria foram feitas
+        qtd_feita = sum(feitas.get(acao, 0) for acao in acoes)
+        total_geral_feitas += qtd_feita
+        
+        emoji = "🏙️"
+        if categoria == "Bahamas":
+            emoji = "🏝️"
+        elif categoria == "Helicrash":
+            emoji = "🚁"
+        elif categoria == "Fleeca":
+            emoji = "🏦"
+        elif categoria == "Banco Central":
+            emoji = "🏛️"
+        
+        if limite is None:
+            descricao += f"**{emoji} {categoria}:** {qtd_feita} realizadas (ILIMITADO)\n"
+        else:
+            total_geral_meta += limite
+            restante = max(0, limite - qtd_feita)
+            status = "✅ COMPLETO" if qtd_feita >= limite else f"⏳ {restante} restantes"
+            descricao += f"**{emoji} {categoria}:** {qtd_feita}/{limite} - {status}\n"
+    
+    # Progresso geral
+    if total_geral_meta > 0:
+        porcentagem = int((total_geral_feitas / total_geral_meta) * 100)
+        barra_progresso = "▓" * (porcentagem // 5) + "░" * (20 - (porcentagem // 5))
+        descricao += f"\n**📊 PROGRESSO GERAL:** {porcentagem}% {barra_progresso}"
+        descricao += f"\n{total_geral_feitas}/{total_geral_meta} ações realizadas"
     
     embed = discord.Embed(
         title="📊 AÇÕES DA SEMANA",
-        description="**Controle de ações realizadas no período**\n\n"
-                    "**🏙️ COMPLEXO**\n" + "\n".join(linhas_complexo) + "\n\n"
-                    "**🏝️ BAHAMAS**\n" + "\n".join(linhas_bahamas) + "\n\n"
-                    "**🚁 HELICRASH**\n" + "\n".join(linhas_helicrash),
-        color=0x2ecc71
+        description=descricao,
+        color=0x2ecc71,
+        timestamp=agora()
     )
-    
-    if total_geral_meta > 0:
-        porcentagem = int((total_geral_feitas / total_geral_meta) * 100) if total_geral_meta > 0 else 0
-        barra_progresso = "▓" * (porcentagem // 5) + "░" * (20 - (porcentagem // 5))
-        embed.add_field(
-            name="📊 PROGRESSO GERAL",
-            value=f"{porcentagem}% {barra_progresso}\n{total_geral_feitas}/{total_geral_meta} ações realizadas",
-            inline=False
-        )
-    else:
-        embed.add_field(
-            name="📊 PROGRESSO GERAL",
-            value=f"{total_geral_feitas} ações realizadas (sem limite)",
-            inline=False
-        )
-    
     embed.set_footer(text=f"Atualizado em {agora().strftime('%d/%m/%Y %H:%M')}")
     
     await enviar_ou_atualizar_painel("painel_acoes", CANAL_ESCALACOES_ID, embed, PainelAcoesView())
 
-# =========================================================
-# CLASS: SelecionarAcaoView
-# =========================================================
+# ---------------------------------------------------------
+# CLASS: SelecionarAcaoView - select_callback CORRIGIDO
+# ---------------------------------------------------------
 
-class SelecionarAcaoView(discord.ui.View):
-    def __init__(self, acoes, titulo, emoji):
-        super().__init__(timeout=60)
-        options = []
-        for nome, limite in acoes.items():
-            emoji_acao = "🚁" if "Helicrash" in nome else "🏪"
-            if "Bahamas" in nome:
-                emoji_acao = "🏝️"
-            if "Banco" in nome or "Joalheria" in nome:
-                emoji_acao = "🏦"
-            if "Carro Forte" in nome:
-                emoji_acao = "🚚"
-            if limite is not None:
-                options.append(discord.SelectOption(label=nome, description=f"Limite: {limite}/semana", emoji=emoji_acao))
-            else:
-                options.append(discord.SelectOption(label=nome, description="Ilimitado", emoji=emoji_acao))
-        self.select = discord.ui.Select(placeholder=f"📋 {titulo}", options=options, max_values=1)
-        self.select.callback = self.select_callback
-        self.add_item(self.select)
-        self.add_item(FecharButton())
-
-    async def select_callback(self, interaction: discord.Interaction):
-        acao_tipo = interaction.data["values"][0]
-        await interaction.response.defer(ephemeral=True)
-        
-        limite = ACOES_SEMANA.get(acao_tipo)
-        pool = await get_pool()
-        if not pool:
-            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
-            return
-        
-        if limite and limite is not None:
-            async with pool.acquire() as conn:
-                qtd = await conn.fetchval("SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND status='concluida' AND (resultado='ganhou' OR resultado='perdeu')", acao_tipo)
-                if qtd >= limite:
-                    await interaction.followup.send(f"❌ Ação **{acao_tipo}** já atingiu o limite semanal de **{limite}** vez(es)!", ephemeral=True)
-                    return
-        
-        acao_id = await salvar_acao_db(acao_tipo, interaction.user.id)
-        
-        regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."]})
-        regras = regras_data.get("regras", [])
-        is_bahamas = regras_data.get("is_bahamas", False)
-        
-        cor = 0xe67e22 if "Helicrash" in acao_tipo else 0x3498db
-        emoji = "🚁" if "Helicrash" in acao_tipo else "🎯"
-        if "Bahamas" in acao_tipo:
-            emoji = "🏝️"
-            cor = 0x1abc9c
-        if "Banco" in acao_tipo:
-            emoji = "🏦"
-            cor = 0xe74c3c
-        if "Carro Forte" in acao_tipo:
-            emoji = "🚚"
-            cor = 0xf39c12
-        
-        embed = discord.Embed(
-            title=f"{emoji} ESCALAÇÃO - {acao_tipo}",
-            color=cor,
-            timestamp=agora()
+async def select_callback(self, interaction: discord.Interaction):
+    acao_tipo = interaction.data["values"][0]
+    await interaction.response.defer(ephemeral=True)
+    
+    # Verificar limite por CATEGORIA
+    pode_fazer = await verificar_limite_categoria(acao_tipo)
+    if not pode_fazer:
+        categoria = ACAO_PARA_CATEGORIA.get(acao_tipo, "Desconhecida")
+        dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
+        limite = dados_categoria.get("limite", "?")
+        await interaction.followup.send(
+            f"❌ **Limite semanal da categoria {categoria} atingido!**\n"
+            f"📊 Limite: **{limite}** ação(ões) por semana\n"
+            f"📌 Ação: **{acao_tipo}**",
+            ephemeral=True
         )
-        
-        embed.add_field(
-            name="📌 REGRAS DA AÇÃO",
-            value="\n".join(regras),
-            inline=False
-        )
-        
-        if is_bahamas:
-            embed.add_field(
-                name="🏝️ REGRAS GERAIS - BAHAMAS",
-                value=REGRAS_GERAIS_BAHAMAS,
-                inline=False
-            )
-        
-        if "Helicrash" in acao_tipo:
-            horario = acao_tipo.split("(")[1].replace(")", "")
-            embed.add_field(
-                name="⏰ HORÁRIO",
-                value=f"{horario} (horário de Brasília)",
-                inline=False
-            )
-        
-        if limite and limite is not None:
+        return
+    
+    pool = await get_pool()
+    if not pool:
+        await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+        return
+    
+    acao_id = await salvar_acao_db(acao_tipo, interaction.user.id)
+    
+    regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."]})
+    regras = regras_data.get("regras", [])
+    is_bahamas = regras_data.get("is_bahamas", False)
+    
+    cor = 0xe67e22 if "Helicrash" in acao_tipo else 0x3498db
+    emoji = "🚁" if "Helicrash" in acao_tipo else "🎯"
+    if "Bahamas" in acao_tipo:
+        emoji = "🏝️"
+        cor = 0x1abc9c
+    if "Banco" in acao_tipo:
+        emoji = "🏦"
+        cor = 0xe74c3c
+    if "Carro Forte" in acao_tipo:
+        emoji = "🚚"
+        cor = 0xf39c12
+    
+    embed = discord.Embed(title=f"{emoji} ESCALAÇÃO - {acao_tipo}", color=cor, timestamp=agora())
+    embed.add_field(name="📌 REGRAS DA AÇÃO", value="\n".join(regras), inline=False)
+    
+    if is_bahamas:
+        embed.add_field(name="🏝️ REGRAS GERAIS - BAHAMAS", value=REGRAS_GERAIS_BAHAMAS, inline=False)
+    
+    if "Helicrash" in acao_tipo:
+        horario = acao_tipo.split("(")[1].replace(")", "")
+        embed.add_field(name="⏰ HORÁRIO", value=f"{horario} (horário de Brasília)", inline=False)
+    
+    # Mostrar progresso da CATEGORIA
+    categoria = ACAO_PARA_CATEGORIA.get(acao_tipo)
+    if categoria:
+        dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
+        limite = dados_categoria.get("limite")
+        if limite is not None:
             async with pool.acquire() as conn:
-                qtd_feita = await conn.fetchval("SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND status='concluida' AND (resultado='ganhou' OR resultado='perdeu')", acao_tipo)
+                acoes_da_categoria = dados_categoria["acoes"]
+                placeholders = ",".join([f"${i+1}" for i in range(len(acoes_da_categoria))])
+                query = f"""
+                    SELECT COUNT(*) FROM acoes_semana 
+                    WHERE tipo IN ({placeholders}) 
+                    AND status = 'concluida' 
+                    AND (resultado = 'ganhou' OR resultado = 'perdeu')
+                    AND data > NOW() - INTERVAL '7 days'
+                """
+                qtd_feita = await conn.fetchval(query, *acoes_da_categoria)
+                restante = max(0, limite - qtd_feita)
                 embed.add_field(
-                    name="📊 LIMITE SEMANAL",
-                    value=f"{qtd_feita}/{limite} ações realizadas",
+                    name=f"📊 LIMITE DA CATEGORIA {categoria.upper()}",
+                    value=f"{qtd_feita}/{limite} ações realizadas\n✅ Restam: {restante}",
                     inline=False
                 )
-        
-        embed.add_field(
-            name="👥 PARTICIPANTES (0)",
-            value="Nenhum participante ainda.\nClique no botão ✅ PARTICIPAR para se inscrever!",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="👤 CRIADO POR",
-            value=interaction.user.mention,
-            inline=True
-        )
-        embed.add_field(
-            name="📅 DATA",
-            value=agora().strftime('%d/%m/%Y %H:%M'),
-            inline=True
-        )
-        
-        embed.add_field(
-            name="📝 COMO PARTICIPAR",
-            value="✅ Clique em **'Participar'** para se inscrever na ação.\n📤 Quando a escalação estiver completa, o criador clica em **'Concluir'**.",
-            inline=False
-        )
-        
-        embed.set_footer(text=f"ID: {acao_id}")
-        
-        canal = interaction.guild.get_channel(CANAL_ESCALACOES_ID)
-        if canal:
-            view = AcaoView(acao_id, interaction.user.id)
-            await canal.send(embed=embed, view=view)
-            acoes_ativas[acao_id] = {"embed": embed, "criador_id": interaction.user.id}
-            await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada com sucesso!", ephemeral=True)
-            try:
-                await interaction.message.delete()
-            except:
-                pass
-        else:
-            await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
+    
+    embed.add_field(name="👥 PARTICIPANTES (0)", value="Nenhum participante ainda.\nClique no botão ✅ PARTICIPAR para se inscrever!", inline=False)
+    embed.add_field(name="👤 CRIADO POR", value=interaction.user.mention, inline=True)
+    embed.add_field(name="📅 DATA", value=agora().strftime('%d/%m/%Y %H:%M'), inline=True)
+    embed.add_field(name="📝 COMO PARTICIPAR", value="✅ Clique em **'Participar'** para se inscrever na ação.\n📤 Quando a escalação estiver completa, o criador clica em **'Concluir'**.", inline=False)
+    embed.set_footer(text=f"ID: {acao_id}")
+    
+    canal = interaction.guild.get_channel(CANAL_ESCALACOES_ID)
+    if canal:
+        view = AcaoView(acao_id, interaction.user.id)
+        await canal.send(embed=embed, view=view)
+        acoes_ativas[acao_id] = {"embed": embed, "criador_id": interaction.user.id}
+        await interaction.followup.send(f"✅ Ação **{acao_tipo}** criada com sucesso!", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+    else:
+        await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
 
 # =========================================================
 # CLASS: FecharButton
