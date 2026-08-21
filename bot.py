@@ -5328,12 +5328,18 @@ class StatusView(discord.ui.View):
         for i, field in enumerate(embed.fields):
             if field.name == "📌 Status":
                 return i, field.value.split("\n")
-        return None, []
+        return None, ["📦 A entregar"]
 
     def set_status(self, embed, idx, linhas):
         if not linhas:
             linhas = ["📦 A entregar"]
-        embed.set_field_at(idx, name="📌 Status", value="\n".join(linhas), inline=False)
+        if idx is None:
+            embed.add_field(name="📌 Status", value="\n".join(linhas), inline=False)
+            return embed
+        try:
+            embed.set_field_at(idx, name="📌 Status", value="\n".join(linhas), inline=False)
+        except IndexError:
+            embed.add_field(name="📌 Status", value="\n".join(linhas), inline=False)
         return embed
 
     def pedido_pago(self, linhas):
