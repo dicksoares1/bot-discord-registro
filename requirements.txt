@@ -4,3 +4,4 @@ aiohttp>=3.8.0
 tweepy>=4.12.0
 python-dotenv>=1.0.0
 psutil>=5.9.0
+pynacl
