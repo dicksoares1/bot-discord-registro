@@ -11957,7 +11957,7 @@ async def enviar_paineis_iniciais(guild):
             ("Botão Ausência", enviar_painel_ausencia),
             ("Painel Grupos", enviar_painel_grupos),
             ("Relatório Metas", enviar_painel_relatorio_metas),
-            ("Mensagens", enviar_painel_mensagens_vendas),
+            ("Mensagens", enviar_painel_mensagens),
         ]
         for i, (nome, func) in enumerate(paineis):
             try:
