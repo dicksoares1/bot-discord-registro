@@ -6417,11 +6417,11 @@ class StatusView(discord.ui.View):
                         f"📦 ITENS RETIRADOS: {itens}"
                     )
 
-                    await canal_bau.send(texto_bau)
+                    await canal_bau.send(f"```\n{texto_bau}\n```")
 
                 except Exception as e:
                     logger.error(f"Erro envio baú: {e}")
-
+                    
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
