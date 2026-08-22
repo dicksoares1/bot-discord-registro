@@ -5753,16 +5753,12 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
     cor = config.get("cor", 0x1a1a2e)
     emoji_org = config.get("emoji", "🏷️")
 
-    # Buscar o nome do vendedor (apelido no Discord - SEM @)
     vendedor_nome = "Desconhecido"
     if vendedor_id:
         vendedor_nome = await pegar_apelido(vendedor_id, interaction.guild)
     else:
         vendedor_nome = interaction.user.display_name
 
-    # =========================================================
-    # TÍTULO E DESCRIÇÃO
-    # =========================================================
     if total_entregas > 1:
         titulo = f"📦 ENTREGA {entrega_atual}/{total_entregas} • Pedido #{pedido_numero:04d}"
         descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt)} + SUB {fmt_num(sub)} munições"
@@ -5770,9 +5766,6 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
         titulo = f"📦 NOVA ENCOMENDA • Pedido #{pedido_numero:04d}"
         descricao = "✅ Entrega única"
 
-    # =========================================================
-    # EMBED
-    # =========================================================
     embed = discord.Embed(
         title=titulo,
         description=descricao,
@@ -5780,7 +5773,6 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
         timestamp=agora()
     )
 
-    # Thumbnail da organização
     if org_nome == "VDR":
         embed.set_thumbnail(url="https://i.imgur.com/vdr_logo.png")
     elif org_nome == "POLICIA":
@@ -5913,9 +5905,6 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
             icon_url=bot.user.display_avatar.url if bot.user else None
         )
 
-    # =========================================================
-    # VIEW
-    # =========================================================
     view = StatusView(
         entrega_id=entrega_id,
         total_entregas=total_entregas,
