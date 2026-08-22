@@ -3987,22 +3987,27 @@ async def acompanhar_producao(pid):
             if not prod:
                 logger.error(f"❌ Produção {pid} não encontrada no banco")
                 return
+
             if isinstance(prod["inicio"], str):
                 inicio = str_para_datetime_completa(prod["inicio"])
             else:
                 inicio = prod["inicio"]
                 if isinstance(inicio, datetime) and inicio.tzinfo is None:
                     inicio = inicio.replace(tzinfo=BRASIL)
+
             if isinstance(prod["fim"], str):
                 fim = str_para_datetime_completa(prod["fim"])
             else:
                 fim = prod["fim"]
                 if isinstance(fim, datetime) and fim.tzinfo is None:
                     fim = fim.replace(tzinfo=BRASIL)
+
             if not inicio or not fim:
                 await asyncio.sleep(10)
                 continue
+
             agora_dt = agora()
+
             if agora_dt >= fim:
                 canal = bot.get_channel(prod["canal_id"])
                 if canal:
@@ -4014,16 +4019,113 @@ async def acompanhar_producao(pid):
                 else:
                     await finalizar_producao(pid, None, prod)
                 return
+
             canal = bot.get_channel(prod["canal_id"])
             if not canal:
                 await asyncio.sleep(10)
                 continue
+
             if msg is None:
                 try:
                     msg = await safe_fetch_message(canal, prod["msg_id"])
                 except:
                     desc = await gerar_desc_producao(prod)
-                    embed = discord.Embed(title="🏭 Produção", description=desc, color=0x3498db)
+                    embed = discord.Embed(
+                        title="🏭 ── PRODUÇÃO EM ANDAMENTO ── 🏭",
+                        description="🔫 Sistema de Produção • VDR 442",
+                        color=0x3498db,
+                        timestamp=agora()
+                    )
+
+                    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+                    embed.set_author(
+                        name="🛡 Vida Rasa 442 • Produção",
+                        icon_url=bot.user.display_avatar.url if bot.user else None
+                    )
+
+                    embed.add_field(
+                        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        value="",
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="🏭 GALPÃO",
+                        value=f"```yaml\n{prod['galpao']}\n```",
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="👤 INICIADO POR",
+                        value=f"```yaml\n<@{prod['autor']}>\n```",
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        value="",
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="💣 PÓLVORA",
+                        value=(
+                            f"```yaml\n"
+                            f"Por galpão: {prod.get('polvora_por_galpao', 400)}\n"
+                            f"Total: {prod.get('polvora', 400)}\n"
+                            f"```"
+                        ),
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="📊 QUANTIDADE",
+                        value=f"```yaml\n{prod.get('qtd_galpoes', 1)} galpão(ões)\n```",
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        value="",
+                        inline=False
+                    )
+
+                    if prod.get("obs"):
+                        embed.add_field(
+                            name="📝 OBSERVAÇÃO",
+                            value=f"```yaml\n{prod['obs']}\n```",
+                            inline=False
+                        )
+
+                    embed.add_field(
+                        name="📅 HORÁRIOS",
+                        value=(
+                            f"```yaml\n"
+                            f"Início: {inicio.strftime('%H:%M')}\n"
+                            f"Término: {fim.strftime('%H:%M')}\n"
+                            f"```"
+                        ),
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        value="",
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="⏳ AGUARDANDO INÍCIO",
+                        value="```yaml\nA produção vai começar em breve...\n```",
+                        inline=False
+                    )
+
+                    embed.set_footer(
+                        text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+                        icon_url=bot.user.display_avatar.url if bot.user else None
+                    )
+
                     view = None if prod.get("segunda_task_confirmada") else SegundaTaskView(pid)
                     msg = await safe_request(canal.send, embed=embed, view=view)
                     if msg:
@@ -4033,6 +4135,7 @@ async def acompanhar_producao(pid):
                     else:
                         await asyncio.sleep(5)
                         continue
+
             if msg:
                 total = (fim - inicio).total_seconds()
                 restante = (fim - agora_dt).total_seconds()
@@ -4042,19 +4145,147 @@ async def acompanhar_producao(pid):
                 pct = 1 - (restante / total)
                 pct = max(0, min(1, pct))
                 pct_int = int(pct * 100)
+
                 if pct_int != ultimo_pct or pct_int % 5 == 0:
                     ultimo_pct = pct_int
-                    desc = await gerar_desc_producao(prod, pct, restante)
+                    mins = int(restante // 60)
+                    segundos = int(restante % 60)
+
+                    embed = discord.Embed(
+                        title="🏭 ── PRODUÇÃO EM ANDAMENTO ── 🏭",
+                        description="🔫 Sistema de Produção • VDR 442",
+                        color=0x3498db,
+                        timestamp=agora()
+                    )
+
+                    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+                    embed.set_author(
+                        name="🛡 Vida Rasa 442 • Produção",
+                        icon_url=bot.user.display_avatar.url if bot.user else None
+                    )
+
+                    embed.add_field(
+                        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        value="",
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="🏭 GALPÃO",
+                        value=f"```yaml\n{prod['galpao']}\n```",
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="👤 INICIADO POR",
+                        value=f"```yaml\n<@{prod['autor']}>\n```",
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        value="",
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="💣 PÓLVORA",
+                        value=(
+                            f"```yaml\n"
+                            f"Por galpão: {prod.get('polvora_por_galpao', 400)}\n"
+                            f"Total: {prod.get('polvora', 400)}\n"
+                            f"```"
+                        ),
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="📊 QUANTIDADE",
+                        value=f"```yaml\n{prod.get('qtd_galpoes', 1)} galpão(ões)\n```",
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        value="",
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="⏳ RESTANTE",
+                        value=f"```yaml\n{mins}m {segundos}s\n```",
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="📊 PROGRESSO",
+                        value=f"```yaml\n{int(pct * 100)}%\n```",
+                        inline=True
+                    )
+
+                    embed.add_field(
+                        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        value="",
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="📅 HORÁRIOS",
+                        value=(
+                            f"```yaml\n"
+                            f"Início: {inicio.strftime('%H:%M')}\n"
+                            f"Término: {fim.strftime('%H:%M')}\n"
+                            f"```"
+                        ),
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        value="",
+                        inline=False
+                    )
+
+                    barra_progresso = "▓" * int(pct * 20) + "░" * (20 - int(pct * 20))
+                    embed.add_field(
+                        name=f"📊 PROGRESSO • {int(pct * 100)}%",
+                        value=f"```prolog\n{barra_progresso}\n```",
+                        inline=False
+                    )
+
+                    if prod.get("obs"):
+                        embed.add_field(
+                            name="📝 OBSERVAÇÃO",
+                            value=f"```yaml\n{prod['obs']}\n```",
+                            inline=False
+                        )
+
+                    if prod.get("segunda_task_confirmada"):
+                        uid = prod["segunda_task_confirmada"]["user"]
+                        embed.add_field(
+                            name="✅ SEGUNDA TASK",
+                            value=f"```yaml\nConcluída por: <@{uid}>\n```",
+                            inline=False
+                        )
+
+                    embed.set_footer(
+                        text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+                        icon_url=bot.user.display_avatar.url if bot.user else None
+                    )
+
                     try:
-                        await safe_request(msg.edit, embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e))
+                        await safe_request(msg.edit, embed=embed)
                     except discord.NotFound:
                         msg = None
                         continue
                     except discord.HTTPException as e:
                         if e.status == 429:
                             await asyncio.sleep(5)
+
         except Exception as e:
             logger.error(f"❌ Erro no acompanhar_producao {pid}: {e}")
+
         await asyncio.sleep(10)
 
 async def finalizar_producao(pid, msg, prod):
@@ -4064,15 +4295,18 @@ async def finalizar_producao(pid, msg, prod):
         galpao = prod["galpao"]
         qtd_galpoes = prod.get("qtd_galpoes", 1)
         polvora_por_galpao = prod.get("polvora_por_galpao", polvora_total // qtd_galpoes if qtd_galpoes > 0 else polvora_total)
+
         if "NORTE" in galpao.upper():
             base_por_galpao = 1777 if segunda else 1688
         elif "SUL" in galpao.upper():
             base_por_galpao = 1618 if segunda else 1608
         else:
             base_por_galpao = 1777 if segunda else 1688
+
         capsulas_por_galpao = (base_por_galpao * polvora_por_galpao) // 400
         capsulas_total = capsulas_por_galpao * qtd_galpoes
         peso_total = capsulas_total * 0.05
+
         pool = await get_pool()
         if pool:
             async with pool.acquire() as conn:
@@ -4088,40 +4322,225 @@ async def finalizar_producao(pid, msg, prod):
                     "INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) VALUES ($1, $2, $3, $4)",
                     "capsulas", capsulas_total, str(prod["autor"]), f"Produção do {galpao} - {qtd_galpoes} galpões - {polvora_total} pólvora"
                 )
+
         if msg:
             try:
-                desc = msg.embeds[0].description if msg.embeds and len(msg.embeds) > 0 else ""
-                linhas = desc.split("\n")
-                novas_linhas = []
-                for linha in linhas:
-                    if not linha.startswith("⏳ **Restante:**") and not "▓" in linha and not "░" in linha:
-                        if linha.strip():
-                            novas_linhas.append(linha)
-                desc = "\n".join(novas_linhas)
-                desc += (f"\n\n🔵 **Produção Finalizada**\n\n🧪 Produziu **{fmt_num(capsulas_total)} cápsulas**\n"
-                        f"📦 **Por galpão:** {fmt_num(capsulas_por_galpao)} cápsulas\n"
-                        f"🏭 **Quantidade de galpões:** {qtd_galpoes}\n"
-                        f"⚖️ Peso total: **{peso_total:.2f} kg**\n"
-                        f"💣 Pólvora total utilizada: **{polvora_total}**\n"
-                        f"💣 Pólvora por galpão: **{polvora_por_galpao}**\n\n"
-                        f"💊 As cápsulas foram adicionadas ao estoque de insumos!")
-                await safe_request(msg.edit, embed=discord.Embed(title="🏭 Produção", description=desc, color=0x34495e), view=None)
+                embed = discord.Embed(
+                    title="🏭 ── PRODUÇÃO FINALIZADA ── 🏭",
+                    description="🔫 Sistema de Produção • VDR 442",
+                    color=0x2ecc71,
+                    timestamp=agora()
+                )
+
+                embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+                embed.set_author(
+                    name="🛡 Vida Rasa 442 • Produção Concluída",
+                    icon_url=bot.user.display_avatar.url if bot.user else None
+                )
+
+                embed.add_field(
+                    name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    value="",
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="🏭 GALPÃO",
+                    value=f"```yaml\n{galpao}\n```",
+                    inline=True
+                )
+
+                embed.add_field(
+                    name="👤 PRODUZIDO POR",
+                    value=f"```yaml\n<@{prod['autor']}>\n```",
+                    inline=True
+                )
+
+                embed.add_field(
+                    name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    value="",
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="💊 CÁPSULAS PRODUZIDAS",
+                    value=f"```yaml\n{fmt_num(capsulas_total)} unidades\n```",
+                    inline=True
+                )
+
+                embed.add_field(
+                    name="📦 POR GALPÃO",
+                    value=f"```yaml\n{fmt_num(capsulas_por_galpao)} cápsulas\n```",
+                    inline=True
+                )
+
+                embed.add_field(
+                    name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    value="",
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="🏭 QUANTIDADE",
+                    value=f"```yaml\n{qtd_galpoes} galpão(ões)\n```",
+                    inline=True
+                )
+
+                embed.add_field(
+                    name="⚖️ PESO TOTAL",
+                    value=f"```yaml\n{peso_total:.2f} kg\n```",
+                    inline=True
+                )
+
+                embed.add_field(
+                    name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    value="",
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="💣 PÓLVORA UTILIZADA",
+                    value=(
+                        f"```yaml\n"
+                        f"Por galpão: {polvora_por_galpao}\n"
+                        f"Total: {polvora_total}\n"
+                        f"```"
+                    ),
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    value="",
+                    inline=False
+                )
+
+                if segunda:
+                    embed.add_field(
+                        name="✅ SEGUNDA TASK",
+                        value=f"```yaml\nConcluída por: <@{segunda['user']}>\n```",
+                        inline=False
+                    )
+
+                embed.add_field(
+                    name="✅ STATUS",
+                    value="💊 **As cápsulas foram adicionadas ao estoque de insumos!**",
+                    inline=False
+                )
+
+                embed.set_footer(
+                    text=f"🛡 Vida Rasa 442 • Finalizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+                    icon_url=bot.user.display_avatar.url if bot.user else None
+                )
+
+                await safe_request(msg.edit, embed=embed, view=None)
+
             except Exception as e:
                 logger.error(f"Erro ao editar mensagem final: {e}")
+
         await deletar_producao(pid)
         if pid in producoes_tasks:
             del producoes_tasks[pid]
+
         canal_bau = bot.get_channel(CANAL_BAU_GALPAO_ID)
         if canal_bau:
-            embed_bau = discord.Embed(title="🏭 PRODUÇÃO DE CÁPSULAS FINALIZADA", color=0x2ecc71, timestamp=agora())
-            embed_bau.add_field(name="🏭 Galpão", value=galpao, inline=True)
-            embed_bau.add_field(name="🏭 Quantidade", value=f"{qtd_galpoes} galpão(ões)", inline=True)
-            embed_bau.add_field(name="💊 Cápsulas produzidas", value=f"**{fmt_num(capsulas_total)}** unidades", inline=True)
-            embed_bau.add_field(name="📦 Por galpão", value=f"{fmt_num(capsulas_por_galpao)} cápsulas", inline=True)
-            embed_bau.add_field(name="💣 Pólvora total", value=f"**{polvora_total}**", inline=True)
-            embed_bau.add_field(name="👤 Produzido por", value=f"<@{prod['autor']}>", inline=True)
+            embed_bau = discord.Embed(
+                title="🏭 ── PRODUÇÃO FINALIZADA ── 🏭",
+                description="🔫 Sistema de Produção • VDR 442",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+
+            embed_bau.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+            embed_bau.set_author(
+                name="🛡 Vida Rasa 442 • Produção Concluída",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
+            embed_bau.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            embed_bau.add_field(
+                name="🏭 GALPÃO",
+                value=f"```yaml\n{galpao}\n```",
+                inline=True
+            )
+
+            embed_bau.add_field(
+                name="🏭 QUANTIDADE",
+                value=f"```yaml\n{qtd_galpoes} galpão(ões)\n```",
+                inline=True
+            )
+
+            embed_bau.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            embed_bau.add_field(
+                name="💊 CÁPSULAS PRODUZIDAS",
+                value=f"```yaml\n{fmt_num(capsulas_total)} unidades\n```",
+                inline=True
+            )
+
+            embed_bau.add_field(
+                name="📦 POR GALPÃO",
+                value=f"```yaml\n{fmt_num(capsulas_por_galpao)} cápsulas\n```",
+                inline=True
+            )
+
+            embed_bau.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            embed_bau.add_field(
+                name="💣 PÓLVORA TOTAL",
+                value=f"```yaml\n{polvora_total}\n```",
+                inline=True
+            )
+
+            embed_bau.add_field(
+                name="👤 PRODUZIDO POR",
+                value=f"```yaml\n<@{prod['autor']}>\n```",
+                inline=True
+            )
+
+            embed_bau.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            if segunda:
+                embed_bau.add_field(
+                    name="✅ SEGUNDA TASK",
+                    value=f"```yaml\nConcluída por: <@{segunda['user']}>\n```",
+                    inline=False
+                )
+
+            embed_bau.add_field(
+                name="✅ STATUS",
+                value="💊 **Cápsulas adicionadas ao estoque de insumos!**",
+                inline=False
+            )
+
+            embed_bau.set_footer(
+                text=f"🛡 Vida Rasa 442 • Finalizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
             await canal_bau.send(embed=embed_bau)
+
         await enviar_painel_fabricacao()
+
     except Exception as e:
         logger.error(f"❌ ERRO ao finalizar produção {pid}: {e}")
 
