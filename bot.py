@@ -2507,7 +2507,7 @@ async def fixar_painel_meta_no_final(user_id):
             return
         try:
             await mensagem_painel.delete()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.5)
             await atualizar_embed_meta(user_id)
         except Exception as e:
             logger.error(f"Erro ao recolocar painel: {e}")
@@ -2858,7 +2858,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             embed_resumo.add_field(name="📊 RESUMO POR CARGO", value=resumo_grupos, inline=False)
         embed_resumo.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
         await canal_resultados.send(embed=embed_resumo)
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
         for grupo_key, grupo_data in grupos.items():
             if not grupo_data["itens"]:
                 continue
@@ -6074,7 +6074,7 @@ async def restaurar_botoes_vendas():
 
                     await safe_request(msg.edit, view=view)
                     contador += 1
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1.5)
 
         logger.info(f"✅ {contador} mensagens de venda restauradas com status correto!")
         logger.info(f"⏭️ {ignorados} mensagens ignoradas")
@@ -6142,7 +6142,7 @@ async def recriar_mensagens_vendas():
 
                         await safe_request(msg.edit, view=view)
                         contador += 1
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1.5)
 
                     except Exception as e:
                         logger.error(f"❌ Erro ao recriar mensagem {msg.id}: {e}")
@@ -10739,7 +10739,7 @@ class LavagemView(discord.ui.View):
         )
 
         await canal.send(embed=embed_resumo)
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
 
         # =========================================================
         # AGRUPAR LAVAGENS POR USUÁRIO
@@ -10849,7 +10849,7 @@ class LavagemView(discord.ui.View):
                     enviados += 1
             except:
                 falhas += 1
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.5)
 
         await interaction.followup.send(
             f"✅ **DM enviada para {enviados} membros.**\n"
@@ -10893,7 +10893,7 @@ class LavagemView(discord.ui.View):
                     enviados += 1
             except:
                 falhas += 1
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.5)
         await interaction.followup.send(
             f"✅ **DM enviada para {enviados} membros.**\n"
             f"❌ Falhas: {falhas}",
@@ -12466,7 +12466,7 @@ async def cmd_recriar_metas(ctx):
             try:
                 await atualizar_embed_meta(int(uid))
                 contador += 1
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.5)
             except Exception as e:
                 logger.error(f"❌ Erro ao recriar meta {uid}: {e}")
         await ctx.send(f"✅ **{contador} painéis de metas recriados com sucesso!**")
@@ -12533,7 +12533,7 @@ async def cmd_limpar_sala(ctx):
                 await msg.delete()
                 deletadas += 1
                 if deletadas % 50 == 0:
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1.5)
             except:
                 pass
         embed = discord.Embed(
@@ -13124,7 +13124,7 @@ async def restaurar_botoes_metas():
                             if not msg.components:
                                 await atualizar_embed_meta(int(uid))
                                 contador += 1
-                                await asyncio.sleep(0.5)
+                                await asyncio.sleep(1.5)
                             else:
                                 tem_fixo = False
                                 for component in msg.components:
@@ -13135,12 +13135,12 @@ async def restaurar_botoes_metas():
                                 if not tem_fixo:
                                     await atualizar_embed_meta(int(uid))
                                     contador += 1
-                                    await asyncio.sleep(0.5)
+                                    await asyncio.sleep(1.5)
                             break
                 if not mensagem_encontrada:
                     await atualizar_embed_meta(int(uid))
                     contador += 1
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1.5)
             except Exception as e:
                 logger.error(f"❌ Erro ao restaurar meta {uid}: {e}")
         logger.info(f"✅ {contador} painéis de metas restaurados com botões!")
