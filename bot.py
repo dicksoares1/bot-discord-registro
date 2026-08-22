@@ -5788,21 +5788,18 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
     )
 
     # =========================================================
-    # VENDEDOR (COM ```)
+    # VENDEDOR E ORGANIZAÇÃO LADO A LADO (COM ```)
     # =========================================================
     embed.add_field(
         name="👤 VENDEDOR",
         value=f"```\n{vendedor_nome}\n```",
-        inline=False
+        inline=True
     )
 
-    # =========================================================
-    # ORGANIZAÇÃO (COM ```)
-    # =========================================================
     embed.add_field(
         name="🏷️ ORGANIZAÇÃO",
         value=f"```\n{org_nome}\n```",
-        inline=False
+        inline=True
     )
 
     # =========================================================
@@ -5825,21 +5822,18 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
         )
 
     # =========================================================
-    # PT (COM ```)
+    # PT E SUB LADO A LADO (COM ```)
     # =========================================================
     embed.add_field(
         name="🔫 PT",
         value=f"```\n{fmt_num(pt)} munições\n{pacotes_pt} pacotes\n```",
-        inline=False
+        inline=True
     )
 
-    # =========================================================
-    # SUB (COM ```)
-    # =========================================================
     embed.add_field(
         name="🔫 SUB",
         value=f"```\n{fmt_num(sub)} munições\n{pacotes_sub} pacotes\n```",
-        inline=False
+        inline=True
     )
 
     # =========================================================
