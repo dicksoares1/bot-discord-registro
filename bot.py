@@ -5109,53 +5109,140 @@ class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagen
         await interaction.followup.send(f"✅ **{fmt_num(quantidade)} embalagens adicionadas!**", ephemeral=True)
         await enviar_painel_fabricacao()
 
-class EditarEstoqueModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE DE MUNIÇÃO"):
+class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE COMPLETO"):
+    def __init__(self):
+        super().__init__(timeout=300)
+
     pt = discord.ui.TextInput(
         label="🔫 Quantidade de PT (pacotes)",
         placeholder="Digite a quantidade atual de PT",
-        required=True,
+        required=False,
         max_length=10
     )
+
     sub = discord.ui.TextInput(
         label="🔫 Quantidade de SUB (pacotes)",
         placeholder="Digite a quantidade atual de SUB",
-        required=True,
+        required=False,
+        max_length=10
+    )
+
+    capsulas = discord.ui.TextInput(
+        label="💊 Quantidade de Cápsulas",
+        placeholder="Digite a quantidade atual de cápsulas",
+        required=False,
+        max_length=10
+    )
+
+    embalagens = discord.ui.TextInput(
+        label="📦 Quantidade de Embalagens",
+        placeholder="Digite a quantidade atual de embalagens",
+        required=False,
         max_length=10
     )
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        try:
-            nova_pt = int(self.pt.value.replace(".", "").replace(",", ""))
-            nova_sub = int(self.sub.value.replace(".", "").replace(",", ""))
-            if nova_pt < 0 or nova_sub < 0:
-                raise ValueError("Valores não podem ser negativos")
-        except ValueError:
-            await interaction.followup.send("❌ **Valores inválidos!** Digite números positivos.", ephemeral=True)
-            return
+
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
         try:
             async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE estoque_municoes SET quantidade = $1, ultima_atualizacao = NOW() WHERE tipo = 'PT'",
-                    nova_pt
-                )
-                await conn.execute(
-                    "UPDATE estoque_municoes SET quantidade = $1, ultima_atualizacao = NOW() WHERE tipo = 'SUB'",
-                    nova_sub
-                )
+                # Só atualiza se o campo foi preenchido
+                if self.pt.value and self.pt.value.strip():
+                    nova_pt = int(self.pt.value.replace(".", "").replace(",", ""))
+                    if nova_pt < 0:
+                        raise ValueError("Valores não podem ser negativos")
+                    await conn.execute(
+                        "UPDATE estoque_municoes SET quantidade = $1, ultima_atualizacao = NOW() WHERE tipo = 'PT'",
+                        nova_pt
+                    )
+
+                if self.sub.value and self.sub.value.strip():
+                    nova_sub = int(self.sub.value.replace(".", "").replace(",", ""))
+                    if nova_sub < 0:
+                        raise ValueError("Valores não podem ser negativos")
+                    await conn.execute(
+                        "UPDATE estoque_municoes SET quantidade = $1, ultima_atualizacao = NOW() WHERE tipo = 'SUB'",
+                        nova_sub
+                    )
+
+                if self.capsulas.value and self.capsulas.value.strip():
+                    nova_capsulas = int(self.capsulas.value.replace(".", "").replace(",", ""))
+                    if nova_capsulas < 0:
+                        raise ValueError("Valores não podem ser negativos")
+                    await conn.execute(
+                        "UPDATE estoque_capsulas SET quantidade = $1, ultima_atualizacao = NOW() WHERE id = 1",
+                        nova_capsulas
+                    )
+
+                if self.embalagens.value and self.embalagens.value.strip():
+                    nova_embalagens = int(self.embalagens.value.replace(".", "").replace(",", ""))
+                    if nova_embalagens < 0:
+                        raise ValueError("Valores não podem ser negativos")
+                    await conn.execute(
+                        "UPDATE estoque_embalagens SET quantidade = $1, ultima_atualizacao = NOW() WHERE id = 1",
+                        nova_embalagens
+                    )
+
             await enviar_painel_fabricacao()
+
+            # Buscar valores atualizados para mostrar
+            estoque_atual = await carregar_estoque()
+            insumos_atual = await carregar_estoque_insumos()
+
             embed = discord.Embed(
-                title="✅ ESTOQUE ATUALIZADO!",
-                description=f"🔫 **PT:** {fmt_num(nova_pt)} pacotes\n🔫 **SUB:** {fmt_num(nova_sub)} pacotes",
+                title="✅ ── ESTOQUE ATUALIZADO ── ✅",
+                description="📦 Sistema de Estoque • VDR 442",
                 color=0x2ecc71,
                 timestamp=agora()
             )
-            embed.set_footer(text=f"Atualizado por {interaction.user.display_name}")
+
+            embed.set_author(
+                name="🛡 Vida Rasa 442 • Estoque",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            embed.add_field(
+                name="🔫 MUNIÇÕES",
+                value=(
+                    f"```yaml\n"
+                    f"PT: {fmt_num(estoque_atual['PT'])} pacotes\n"
+                    f"SUB: {fmt_num(estoque_atual['SUB'])} pacotes\n"
+                    f"```"
+                ),
+                inline=True
+            )
+
+            embed.add_field(
+                name="💊 INSUMOS",
+                value=(
+                    f"```yaml\n"
+                    f"Cápsulas: {fmt_num(insumos_atual['capsulas'])} unidades\n"
+                    f"Embalagens: {fmt_num(insumos_atual['embalagens'])} unidades\n"
+                    f"```"
+                ),
+                inline=True
+            )
+
+            embed.set_footer(
+                text=f"🛡 Vida Rasa 442 • Atualizado por {interaction.user.display_name}",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
             await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except ValueError as e:
+            await interaction.followup.send(f"❌ {str(e)}", ephemeral=True)
         except Exception as e:
             logger.error(f"❌ Erro ao editar estoque: {e}")
             await interaction.followup.send(f"❌ Erro ao editar estoque: {e}", ephemeral=True)
@@ -5164,7 +5251,10 @@ class FabricacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary, custom_id="fabricacao_norte")
+    # =========================================================
+    # LINHA 0: PRODUÇÃO
+    # =========================================================
+    @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary, custom_id="fabricacao_norte", row=0)
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await get_pool()
         if not pool:
@@ -5177,7 +5267,7 @@ class FabricacaoView(discord.ui.View):
             return
         await interaction.response.send_modal(ProducaoCompletaModal("GALPÕES NORTE", TEMPO_BASE_NORTE))
 
-    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.secondary, custom_id="fabricacao_sul")
+    @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.primary, custom_id="fabricacao_sul", row=0)
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await get_pool()
         if not pool:
@@ -5190,47 +5280,46 @@ class FabricacaoView(discord.ui.View):
             return
         await interaction.response.send_modal(ProducaoCompletaModal("GALPÕES SUL", TEMPO_BASE_SUL))
 
-    @discord.ui.button(label="💊 Registrar Cápsulas", style=discord.ButtonStyle.primary, custom_id="registrar_capsulas", emoji="💊")
-    async def registrar_capsulas(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RegistrarCapsulasModal())
-
-    @discord.ui.button(label="📦 Registrar Embalagens", style=discord.ButtonStyle.primary, custom_id="registrar_embalagens", emoji="📦")
-    async def registrar_embalagens(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RegistrarEmbalagensModal())
-
-    @discord.ui.button(label="🔫 Produzir Munição", style=discord.ButtonStyle.success, custom_id="fabricacao_municao", emoji="🎯")
+    @discord.ui.button(label="🔫 Produzir Munição", style=discord.ButtonStyle.success, custom_id="fabricacao_municao", emoji="🎯", row=0)
     async def produzir_municao(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ProducaoMunicaoModal())
 
-    @discord.ui.button(label="📊 Estoque", style=discord.ButtonStyle.secondary, custom_id="ver_estoque_completo", emoji="📊")
-    async def ver_estoque_completo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        estoque_municoes = await carregar_estoque()
-        estoque_insumos = await carregar_estoque_insumos()
-        embed = discord.Embed(title="📊 ESTOQUE COMPLETO", color=0x3498db)
-        embed.add_field(name="🔫 MUNIÇÕES", value=f"**PT:** {fmt_num(estoque_municoes['PT'])} pacotes ({fmt_num(estoque_municoes['PT'] * 50)} munições)\n**SUB:** {fmt_num(estoque_municoes['SUB'])} pacotes ({fmt_num(estoque_municoes['SUB'] * 50)} munições)", inline=False)
-        embed.add_field(name="💊 INSUMOS", value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades", inline=False)
-        await interaction.followup.send(embed=embed, ephemeral=True)
+    # =========================================================
+    # LINHA 1: INSUMOS E RELATÓRIOS
+    # =========================================================
+    @discord.ui.button(label="💊 Registrar Cápsulas", style=discord.ButtonStyle.primary, custom_id="registrar_capsulas", emoji="💊", row=1)
+    async def registrar_capsulas(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RegistrarCapsulasModal())
 
-    @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.secondary, custom_id="fabricacao_relatorio")
+    @discord.ui.button(label="📦 Registrar Embalagens", style=discord.ButtonStyle.primary, custom_id="registrar_embalagens", emoji="📦", row=1)
+    async def registrar_embalagens(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RegistrarEmbalagensModal())
+
+    @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.secondary, custom_id="fabricacao_relatorio", emoji="📊", row=1)
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioProducaoModal())
 
-    @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="atualizar_painel_btn", emoji="🔄")
-    async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        await enviar_painel_fabricacao()
-        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
-
-    @discord.ui.button(label="📅 Alugar Galpão", style=discord.ButtonStyle.primary, custom_id="alugar_galpao", emoji="📅")
+    # =========================================================
+    # LINHA 2: GERENCIAMENTO
+    # =========================================================
+    @discord.ui.button(label="📅 Alugar Galpão", style=discord.ButtonStyle.primary, custom_id="alugar_galpao", emoji="📅", row=2)
     async def alugar_galpao(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AlugarGalpaoModal())
 
-    @discord.ui.button(label="📊 Alugueis", style=discord.ButtonStyle.secondary, custom_id="ver_alugueis", emoji="📊")
+    @discord.ui.button(label="📊 Alugueis", style=discord.ButtonStyle.secondary, custom_id="ver_alugueis", emoji="📊", row=2)
     async def ver_alugueis(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         alugueis = await carregar_alugueis()
-        embed = discord.Embed(title="📅 STATUS DOS ALUGUEIS", color=0x3498db, timestamp=agora())
+        embed = discord.Embed(
+            title="📅 ── STATUS DOS ALUGUEIS ── 📅",
+            description="🏭 VDR 442 • Galpões",
+            color=0x1a1a2e,
+            timestamp=agora()
+        )
+        embed.set_author(
+            name="🛡 Vida Rasa 442 • Alugueis",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
         for galpao, dados in alugueis.items():
             dias = dados["dias"]
             inicio = dados["inicio"]
@@ -5243,22 +5332,40 @@ class FabricacaoView(discord.ui.View):
                     status = "🔴 EXPIRADO"
             else:
                 status = "⚪ NÃO ALUGADO"
-            embed.add_field(name=f"🏭 {galpao}", value=f"**Dias alugados:** {dias}\n**Status:** {status}", inline=True)
+            embed.add_field(
+                name=f"🏭 {galpao}",
+                value=f"```yaml\nDias alugados: {dias}\nStatus: {status}\n```",
+                inline=True
+            )
+        embed.set_footer(
+            text="🛡 Vida Rasa 442",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="✏️ Editar Estoque", style=discord.ButtonStyle.primary, custom_id="editar_estoque_btn", emoji="✏️")
+    @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="atualizar_painel_btn", emoji="🔄", row=2)
+    async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_fabricacao()
+        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+
+    @discord.ui.button(label="✏️ Editar Estoque", style=discord.ButtonStyle.primary, custom_id="editar_estoque_btn", emoji="✏️", row=2)
     async def editar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+
         if not is_admin and not is_gerente:
             await interaction.response.send_message("❌ Apenas **Administradores** ou **Gerentes** podem editar o estoque!", ephemeral=True)
             return
+
         estoque = await carregar_estoque()
-        modal = EditarEstoqueModal()
+        insumos = await carregar_estoque_insumos()
+        modal = EditarEstoqueCompletoModal()
         modal.pt.placeholder = f"Atual: {fmt_num(estoque['PT'])} pacotes"
         modal.sub.placeholder = f"Atual: {fmt_num(estoque['SUB'])} pacotes"
+        modal.capsulas.placeholder = f"Atual: {fmt_num(insumos['capsulas'])} unidades"
+        modal.embalagens.placeholder = f"Atual: {fmt_num(insumos['embalagens'])} unidades"
         await interaction.response.send_modal(modal)
-
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 Relatório de Produção"):
     data_inicio = discord.ui.TextInput(
         label="Data inicial (DD/MM/AAAA)",
