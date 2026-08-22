@@ -5968,18 +5968,26 @@ async def restaurar_botoes_vendas():
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
                 titulo = msg.embeds[0].title if msg.embeds[0].title else ""
-                if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper():
+                if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper() or "VENDA" in titulo.upper():
                     embed = msg.embeds[0]
 
                     # =========================================================
-                    # ANALISAR O STATUS DO PEDIDO
+                    # ANALISAR O STATUS DO PEDIDO (PELO CAMPO "Status" LÁ EM BAIXO)
                     # =========================================================
                     pago = False
                     entregue = False
                     cancelado = False
+                    concluida = False
 
+                    # Verificar se tem "VENDA CONCLUÍDA" no título
+                    if "VENDA CONCLUÍDA" in titulo.upper():
+                        concluida = True
+                        pago = True
+                        entregue = True
+
+                    # Procurar o campo "Status" (que é o que realmente mostra o progresso)
                     for field in embed.fields:
-                        if field.name == "📌 STATUS DO PEDIDO":
+                        if field.name == "Status" or field.name == "📌 Status":
                             valor = field.value
                             if "💰" in valor or "Pago" in valor:
                                 pago = True
@@ -5989,13 +5997,24 @@ async def restaurar_botoes_vendas():
                                 cancelado = True
                             break
 
+                    # Se não achou o campo "Status", procurar em todo lugar
+                    if not pago and not entregue and not cancelado:
+                        for field in embed.fields:
+                            valor = field.value
+                            if "💰" in valor or "Pago" in valor:
+                                pago = True
+                            if "✅" in valor or "Entregue" in valor:
+                                entregue = True
+                            if "❌" in valor or "cancelado" in valor.lower():
+                                cancelado = True
+
                     # =========================================================
                     # DETERMINAR SE OS BOTÕES DEVEM ESTAR DESABILITADOS
                     # =========================================================
-                    if cancelado:
+                    if cancelado or concluida:
                         disabled = True
                         pago_ja_clicado = True
-                        logger.info(f"🔄 Venda #{msg.id} - CANCELADA - Botões desabilitados")
+                        logger.info(f"🔄 Venda #{msg.id} - {'CONCLUÍDA' if concluida else 'CANCELADA'} - Botões desabilitados")
                     elif pago and entregue:
                         disabled = True
                         pago_ja_clicado = True
@@ -6211,16 +6230,37 @@ class StatusView(discord.ui.View):
 
     def set_status(self, embed, idx, linhas):
         if not linhas:
-            linhas = ["📦 A entregar"]
+            linhas = ["📦 A Entregar"]
+        
+        # Atualizar o campo "📌 STATUS DO PEDIDO" se existir
+        for i, field in enumerate(embed.fields):
+            if field.name == "📌 STATUS DO PEDIDO":
+                # Verificar o status atual
+                if "💰" in "\n".join(linhas) and "✅" in "\n".join(linhas):
+                    novo_status = "✅ Pago e Entregue"
+                elif "💰" in "\n".join(linhas):
+                    novo_status = "💰 Pago"
+                elif "✅" in "\n".join(linhas):
+                    novo_status = "✅ Entregue"
+                elif "❌" in "\n".join(linhas):
+                    novo_status = "❌ Cancelado"
+                else:
+                    novo_status = "📦 A Entregar\n⏳ Pagamento pendente"
+                
+                embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value=novo_status, inline=False)
+                break
+        
+        # Atualizar o campo "📌 Status" (o que já existia)
         if idx is None:
             embed.add_field(name="📌 Status", value="\n".join(linhas), inline=False)
             return embed
+        
         try:
             embed.set_field_at(idx, name="📌 Status", value="\n".join(linhas), inline=False)
         except IndexError:
             embed.add_field(name="📌 Status", value="\n".join(linhas), inline=False)
+        
         return embed
-
     def pedido_pago(self, linhas):
         return any(l.startswith("💰") for l in linhas)
 
@@ -6277,7 +6317,16 @@ class StatusView(discord.ui.View):
         linhas = [l for l in linhas if not l.startswith("💰")]
         linhas.append(f"💰 Pago • Recebido por {pagador_apelido} • {agora_str}")
 
+        # =========================================================
+        # ATUALIZAR AMBOS OS CAMPOS DE STATUS
+        # =========================================================
         embed = self.set_status(embed, idx, linhas)
+
+        # Também atualizar o campo "STATUS DO PEDIDO"
+        for i, field in enumerate(embed.fields):
+            if field.name == "📌 STATUS DO PEDIDO":
+                embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value=f"💰 Pago • {agora_str}", inline=False)
+                break
 
         pago_foi_clicado = any(l.startswith("💰") for l in linhas)
         entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
@@ -6291,6 +6340,13 @@ class StatusView(discord.ui.View):
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
+            
+            # Atualizar STATUS DO PEDIDO para concluído
+            for i, field in enumerate(embed.fields):
+                if field.name == "📌 STATUS DO PEDIDO":
+                    embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="✅ Pago e Entregue", inline=False)
+                    break
+            
             await interaction.message.edit(embed=embed, view=StatusView(
                 disabled=True,
                 entrega_id=self.entrega_id,
@@ -6394,7 +6450,16 @@ class StatusView(discord.ui.View):
         linhas = [l for l in linhas if not l.startswith("✅")]
         linhas.append(f"✅ Entregue por {entregador_apelido} • {agora_str}")
 
+        # =========================================================
+        # ATUALIZAR AMBOS OS CAMPOS DE STATUS
+        # =========================================================
         embed = self.set_status(embed, idx, linhas)
+
+        # Também atualizar o campo "STATUS DO PEDIDO"
+        for i, field in enumerate(embed.fields):
+            if field.name == "📌 STATUS DO PEDIDO":
+                embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value=f"✅ Entregue • {agora_str}", inline=False)
+                break
 
         pago_foi_clicado = any(l.startswith("💰") for l in linhas)
         entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
@@ -6408,6 +6473,13 @@ class StatusView(discord.ui.View):
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**\n📊 **Estoque atualizado**", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
+            
+            # Atualizar STATUS DO PEDIDO para concluído
+            for i, field in enumerate(embed.fields):
+                if field.name == "📌 STATUS DO PEDIDO":
+                    embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="✅ Pago e Entregue", inline=False)
+                    break
+            
             await interaction.message.edit(embed=embed, view=StatusView(
                 disabled=True,
                 entrega_id=self.entrega_id,
@@ -6475,7 +6547,184 @@ class StatusView(discord.ui.View):
 
                 except Exception as e:
                     logger.error(f"Erro envio baú: {e}")
-                    
+
+        await enviar_painel_vendas()
+        await enviar_painel_fabricacao()    async def entregue(self, interaction: discord.Interaction, button):
+        if self.entrega_ja_entregue:
+            await interaction.followup.send("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
+            return
+
+        embed = interaction.message.embeds[0]
+        idx, linhas = self.get_status(embed)
+
+        if self.pedido_cancelado(linhas):
+            await interaction.followup.send("⚠️ Este pedido foi cancelado.", ephemeral=True)
+            return
+
+        if self.entrega_ja_foi_entregue(linhas):
+            await interaction.followup.send("⚠️ **Esta entrega já foi entregue!**", ephemeral=True)
+            return
+
+        pacotes_pt = 0
+        pacotes_sub = 0
+        for field in embed.fields:
+            if field.name == "🔫 PT":
+                try:
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
+                except:
+                    pass
+            if field.name == "🔫 SUB":
+                try:
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
+                except:
+                    pass
+
+        if pacotes_pt > 0:
+            estoque_suficiente = await verificar_estoque_suficiente("PT", pacotes_pt)
+            if not estoque_suficiente:
+                estoque_atual = await carregar_estoque()
+                await interaction.followup.send(
+                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n"
+                    f"🔫 PT: {pacotes_pt} pacotes necessários\n"
+                    f"📦 Estoque atual: {estoque_atual['PT']} pacotes",
+                    ephemeral=True
+                )
+                return
+
+        if pacotes_sub > 0:
+            estoque_suficiente = await verificar_estoque_suficiente("SUB", pacotes_sub)
+            if not estoque_suficiente:
+                estoque_atual = await carregar_estoque()
+                await interaction.followup.send(
+                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n"
+                    f"🔫 SUB: {pacotes_sub} pacotes necessários\n"
+                    f"📦 Estoque atual: {estoque_atual['SUB']} pacotes",
+                    ephemeral=True
+                )
+                return
+
+        self.entrega_ja_entregue = True
+
+        titulo = embed.title
+        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
+
+        if pacotes_pt > 0:
+            await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
+        if pacotes_sub > 0:
+            await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
+
+        agora_str = agora().strftime("%d/%m/%Y %H:%M")
+
+        entregador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
+
+        linhas = [l for l in linhas if not l.startswith("📦")]
+        linhas = [l for l in linhas if not l.startswith("✅")]
+        linhas.append(f"✅ Entregue por {entregador_apelido} • {agora_str}")
+
+        # =========================================================
+        # ATUALIZAR AMBOS OS CAMPOS DE STATUS
+        # =========================================================
+        embed = self.set_status(embed, idx, linhas)
+
+        # Também atualizar o campo "STATUS DO PEDIDO"
+        for i, field in enumerate(embed.fields):
+            if field.name == "📌 STATUS DO PEDIDO":
+                embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value=f"✅ Entregue • {agora_str}", inline=False)
+                break
+
+        pago_foi_clicado = any(l.startswith("💰") for l in linhas)
+        entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
+
+        finalizado = pago_foi_clicado and entregue_foi_clicado
+        is_ultima_entrega = (self.entrega_atual == self.total_entregas)
+
+        if finalizado:
+            embed.color = 0x2ecc71
+            embed.title = "🎉 VENDA CONCLUÍDA"
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+            embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**\n📊 **Estoque atualizado**", inline=False)
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
+            
+            # Atualizar STATUS DO PEDIDO para concluído
+            for i, field in enumerate(embed.fields):
+                if field.name == "📌 STATUS DO PEDIDO":
+                    embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="✅ Pago e Entregue", inline=False)
+                    break
+            
+            await interaction.message.edit(embed=embed, view=StatusView(
+                disabled=True,
+                entrega_id=self.entrega_id,
+                total_entregas=self.total_entregas,
+                entrega_atual=self.entrega_atual,
+                pago_ja_clicado=True,
+                mensagem_original=interaction.message
+            ))
+
+            if not is_ultima_entrega:
+                await self.criar_proxima_entrega(interaction, embed, pedido_numero)
+
+        else:
+            nova_view = StatusView(
+                disabled=False,
+                entrega_id=self.entrega_id,
+                total_entregas=self.total_entregas,
+                entrega_atual=self.entrega_atual,
+                pago_ja_clicado=self.pago_ja_clicado,
+                mensagem_original=interaction.message
+            )
+            for child in nova_view.children:
+                if child.custom_id == "status_entregue_fixo":
+                    child.disabled = True
+            await interaction.message.edit(embed=embed, view=nova_view)
+
+        if pacotes_pt > 0 or pacotes_sub > 0:
+            canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+            if canal_bau:
+                try:
+                    entregador_apelido_bau = await pegar_apelido(interaction.user.id, interaction.guild)
+
+                    org_retirada = "VDR"
+                    if self.entrega_id:
+                        try:
+                            pool = await get_pool()
+                            if pool:
+                                async with pool.acquire() as conn:
+                                    row = await conn.fetchrow("SELECT organizacao FROM entregas_parceladas WHERE id = $1", self.entrega_id)
+                                    if row:
+                                        org_retirada = row["organizacao"]
+                        except:
+                            pass
+
+                    itens = ""
+                    if pacotes_pt > 0 and pacotes_sub > 0:
+                        itens = f"PT: {pacotes_pt} pacotes / SUB: {pacotes_sub} pacotes"
+                    elif pacotes_pt > 0:
+                        itens = f"PT: {pacotes_pt} pacotes"
+                    elif pacotes_sub > 0:
+                        itens = f"SUB: {pacotes_sub} pacotes"
+                    else:
+                        itens = "Nenhum item retirado"
+
+                    texto_bau = (
+                        f"📦 ── SAÍDA DO BAÚ ── 📦\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"👤 RETIRADO POR: {entregador_apelido_bau}\n"
+                        f"🏷️ PARA A ENTREGA DA ORG: {org_retirada}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📦 ITENS RETIRADOS: {itens}"
+                    )
+
+                    await canal_bau.send(f"```\n{texto_bau}\n```")
+
+                except Exception as e:
+                    logger.error(f"Erro envio baú: {e}")
+
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
