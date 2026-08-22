@@ -5961,51 +5961,99 @@ async def restaurar_botoes_vendas():
         if not canal:
             logger.error("❌ Canal de encomendas não encontrado para restaurar botões!")
             return
+
         contador = 0
+        ignorados = 0
+
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
                 titulo = msg.embeds[0].title if msg.embeds[0].title else ""
                 if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper():
-                    if not msg.components:
-                        entrega_id = None
-                        if msg.embeds[0].footer:
-                            texto_footer = msg.embeds[0].footer.text
-                            if "ID:" in texto_footer:
-                                try:
-                                    parte_id = texto_footer.split("ID:")[1].strip().split(" ")[0]
-                                    entrega_id = safe_int(parte_id)
-                                except:
-                                    pass
-                        total_entregas = 1
-                        entrega_atual = 1
-                        if msg.embeds[0].description:
-                            if "entregas no total" in msg.embeds[0].description:
-                                try:
-                                    total_entregas = safe_int(msg.embeds[0].description.split("tem")[1].split("entregas")[0].strip())
-                                except:
-                                    pass
-                            if "ENTREGA" in titulo:
-                                try:
-                                    parte = titulo.split("ENTREGA")[1].strip().split("/")[0].strip()
-                                    entrega_atual = safe_int(parte)
-                                except:
-                                    pass
-                        ja_concluida = False
-                        for field in msg.embeds[0].fields:
-                            if field.name == "📌 Status" and "CONCLUÍDA" in field.value:
-                                ja_concluida = True
-                                break
-                        if ja_concluida:
-                            continue
-                        view = StatusView(
-                            entrega_id=entrega_id,
-                            total_entregas=total_entregas,
-                            entrega_atual=entrega_atual
-                        )
-                        await safe_request(msg.edit, view=view)
-                        contador += 1
-                        await asyncio.sleep(1.0)
-        logger.info(f"✅ {contador} mensagens de venda restauradas com botões!")
+                    embed = msg.embeds[0]
+
+                    # =========================================================
+                    # ANALISAR O STATUS DO PEDIDO
+                    # =========================================================
+                    pago = False
+                    entregue = False
+                    cancelado = False
+
+                    for field in embed.fields:
+                        if field.name == "📌 Status":
+                            valor = field.value
+                            if "💰" in valor or "Pago" in valor:
+                                pago = True
+                            if "✅" in valor or "Entregue" in valor:
+                                entregue = True
+                            if "❌" in valor or "cancelado" in valor.lower():
+                                cancelado = True
+                            break
+
+                    # =========================================================
+                    # DETERMINAR SE OS BOTÕES DEVEM ESTAR DESABILITADOS
+                    # =========================================================
+                    if cancelado:
+                        disabled = True
+                        pago_ja_clicado = True
+                    elif pago and entregue:
+                        disabled = True
+                        pago_ja_clicado = True
+                    elif pago:
+                        disabled = False
+                        pago_ja_clicado = True
+                    elif entregue:
+                        disabled = False
+                        pago_ja_clicado = False
+                    else:
+                        disabled = False
+                        pago_ja_clicado = False
+
+                    # =========================================================
+                    # EXTRAIR INFORMAÇÕES DO EMBED
+                    # =========================================================
+                    entrega_id = None
+                    if embed.footer:
+                        texto_footer = embed.footer.text
+                        if "ID:" in texto_footer:
+                            try:
+                                parte_id = texto_footer.split("ID:")[1].strip().split(" ")[0]
+                                entrega_id = safe_int(parte_id)
+                            except:
+                                pass
+
+                    total_entregas = 1
+                    entrega_atual = 1
+                    if embed.description:
+                        if "entregas no total" in embed.description:
+                            try:
+                                total_entregas = safe_int(embed.description.split("tem")[1].split("entregas")[0].strip())
+                            except:
+                                pass
+                    if "ENTREGA" in titulo:
+                        try:
+                            parte = titulo.split("ENTREGA")[1].strip().split("/")[0].strip()
+                            entrega_atual = safe_int(parte)
+                        except:
+                            pass
+
+                    # =========================================================
+                    # CRIAR VIEW COM O STATUS CORRETO
+                    # =========================================================
+                    view = StatusView(
+                        entrega_id=entrega_id,
+                        total_entregas=total_entregas,
+                        entrega_atual=entrega_atual,
+                        disabled=disabled,
+                        pago_ja_clicado=pago_ja_clicado
+                    )
+
+                    await safe_request(msg.edit, view=view)
+                    contador += 1
+                    await asyncio.sleep(0.5)
+
+        logger.info(f"✅ {contador} mensagens de venda restauradas com status correto!")
+        logger.info(f"⏭️ {ignorados} mensagens ignoradas")
+
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar botões de vendas: {e}")
 
