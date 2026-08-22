@@ -6315,7 +6315,7 @@ class StatusView(discord.ui.View):
                 pago_ja_clicado=True,
                 mensagem_original=interaction.message
             )
-            await interaction.message.edit(embed=embed, view=nova_view)w)
+            await interaction.message.edit(embed=embed, view=nova_view)
 
     async def entregue(self, interaction: discord.Interaction, button):
         if self.entrega_ja_entregue:
