@@ -9101,71 +9101,71 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
         if cargo:
             await interaction.user.add_roles(cargo)
         canal_registro = interaction.guild.get_channel(CANAL_REGISTRO_AUSENCIA_ID)
-        if canal_registro:
-        embed_ausencia = discord.Embed(
-            title="📋 ── AUSÊNCIA REGISTRADA ── 📋",
-            description=f"👤 {interaction.user.mention} está ausente!",
-            color=0xe67e22,
-            timestamp=agora()
-        )
+        
+        if True:  # ← SEU IF AQUI
+            embed_ausencia = discord.Embed(
+                title="📋 ── AUSÊNCIA REGISTRADA ── 📋",
+                description=f"👤 {interaction.user.mention} está ausente!",
+                color=0xe67e22,
+                timestamp=agora()
+            )
 
-        embed_ausencia.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
+            embed_ausencia.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
 
-        embed_ausencia.set_author(
-            name="🛡 Vida Rasa 442 • Sistema de Ausência",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
+            embed_ausencia.set_author(
+                name="🛡 Vida Rasa 442 • Sistema de Ausência",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
 
-        embed_ausencia.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
-        )
-
-        embed_ausencia.add_field(
-            name="👤 NOME",
-            value=f"```yaml\n{self.nome.value}\n```",
-            inline=True
-        )
-
-        embed_ausencia.add_field(
-            name="⏳ TOTAL DE DIAS",
-            value=f"```yaml\n{dias_ausencia} dia(s)\n```",
-            inline=True
-        )
-
-        embed_ausencia.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
-        )
-
-        embed_ausencia.add_field(
-            name="📅 PERÍODO",
-            value=f"```yaml\n{self.data_inicio.value} a {self.data_fim.value}\n```",
-            inline=False
-        )
-
-        embed_ausencia.add_field(
-            name="📝 MOTIVO",
-            value=f"```yaml\n{self.motivo.value}\n```",
-            inline=False
-        )
-
-        if dias_ausencia >= 15:
             embed_ausencia.add_field(
-                name="⚠️ ATENÇÃO",
-                value="🔴 **Ausência prolongada!** Gerência notificada.",
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
                 inline=False
             )
 
-        embed_ausencia.set_footer(
-            text=f"🛡 Vida Rasa 442 • Solicitado em {agora().strftime('%d/%m/%Y às %H:%M')}",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
+            embed_ausencia.add_field(
+                name="👤 NOME",
+                value=f"```yaml\n{self.nome.value}\n```",
+                inline=True
+            )
 
-        await canal_registro.send(embed=embed_ausencia)
+            embed_ausencia.add_field(
+                name="⏳ TOTAL DE DIAS",
+                value=f"```yaml\n{dias_ausencia} dia(s)\n```",
+                inline=True
+            )
 
+            embed_ausencia.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            embed_ausencia.add_field(
+                name="📅 PERÍODO",
+                value=f"```yaml\n{self.data_inicio.value} a {self.data_fim.value}\n```",
+                inline=False
+            )
+
+            embed_ausencia.add_field(
+                name="📝 MOTIVO",
+                value=f"```yaml\n{self.motivo.value}\n```",
+                inline=False
+            )
+
+            if dias_ausencia >= 15:
+                embed_ausencia.add_field(
+                    name="⚠️ ATENÇÃO",
+                    value="🔴 **Ausência prolongada!** Gerência notificada.",
+                    inline=False
+                )
+
+            embed_ausencia.set_footer(
+                text=f"🛡 Vida Rasa 442 • Solicitado em {agora().strftime('%d/%m/%Y às %H:%M')}",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
+            await canal_registro.send(embed=embed_ausencia)
 # =========================================================
 # 4. VIEWS DE AUSÊNCIA
 # =========================================================
