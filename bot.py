@@ -5979,7 +5979,7 @@ async def restaurar_botoes_vendas():
                     cancelado = False
 
                     for field in embed.fields:
-                        if field.name == "📌 Status":
+                        if field.name == "📌 STATUS DO PEDIDO":
                             valor = field.value
                             if "💰" in valor or "Pago" in valor:
                                 pago = True
@@ -5995,18 +5995,23 @@ async def restaurar_botoes_vendas():
                     if cancelado:
                         disabled = True
                         pago_ja_clicado = True
+                        logger.info(f"🔄 Venda #{msg.id} - CANCELADA - Botões desabilitados")
                     elif pago and entregue:
                         disabled = True
                         pago_ja_clicado = True
+                        logger.info(f"🔄 Venda #{msg.id} - PAGA E ENTREGUE - Botões desabilitados")
                     elif pago:
                         disabled = False
                         pago_ja_clicado = True
+                        logger.info(f"🔄 Venda #{msg.id} - PAGA - Botão Pago desabilitado")
                     elif entregue:
                         disabled = False
                         pago_ja_clicado = False
+                        logger.info(f"🔄 Venda #{msg.id} - ENTREGUE - Botão Entregue desabilitado")
                     else:
                         disabled = False
                         pago_ja_clicado = False
+                        logger.info(f"🔄 Venda #{msg.id} - PENDENTE - Todos ativos")
 
                     # =========================================================
                     # EXTRAIR INFORMAÇÕES DO EMBED
@@ -6044,7 +6049,8 @@ async def restaurar_botoes_vendas():
                         total_entregas=total_entregas,
                         entrega_atual=entrega_atual,
                         disabled=disabled,
-                        pago_ja_clicado=pago_ja_clicado
+                        pago_ja_clicado=pago_ja_clicado,
+                        mensagem_original=msg
                     )
 
                     await safe_request(msg.edit, view=view)
