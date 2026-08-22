@@ -9349,33 +9349,36 @@ class LavagemView(discord.ui.View):
         total_repassado = sum(item["liquido"] for item in dados)
         total_lavagens = len(dados)
 
-        embed = discord.Embed(
+        # =========================================================
+        # EMBED DO RELATÓRIO - ESTILO MÁFIA
+        # =========================================================
+        embed_resumo = discord.Embed(
             title="🧼 ── RELATÓRIO DE LAVAGEM ── 🧼",
             description="💰 Sistema Financeiro • VDR 442",
             color=0x1abc9c,
             timestamp=agora()
         )
 
-        embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else bot.user.display_avatar.url)
+        embed_resumo.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else bot.user.display_avatar.url)
 
-        embed.set_author(
+        embed_resumo.set_author(
             name="🛡 Vida Rasa 442 • Relatório de Lavagem",
             icon_url=bot.user.display_avatar.url if bot.user else None
         )
 
-        embed.add_field(
+        embed_resumo.add_field(
             name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
             value="",
             inline=False
         )
 
-        embed.add_field(
+        embed_resumo.add_field(
             name="📊 RESUMO GERAL",
             value=(
                 f"```yaml\n"
                 f"📋 Total de lavagens: {total_lavagens}\n"
                 f"💰 Total de dinheiro sujo: {formatar_dinheiro(total_sujo)}\n"
-                f"💵 Total repassado (80%): {formatar_dinheiro(total_repassado)}\n"
+                f"💵 Total a repassar (80%): {formatar_dinheiro(total_repassado)}\n"
                 f"📊 Taxa aplicada: 20%\n"
                 f"📅 Gerado em: {agora().strftime('%d/%m/%Y %H:%M')}\n"
                 f"```"
@@ -9383,12 +9386,17 @@ class LavagemView(discord.ui.View):
             inline=False
         )
 
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
+        embed_resumo.set_footer(
+            text=f"🛡 Vida Rasa 442 • Relatório gerado por {interaction.user.display_name}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
         )
 
+        await canal.send(embed=embed_resumo)
+        await asyncio.sleep(0.5)
+
+        # =========================================================
+        # LISTA DE LAVAGENS POR USUÁRIO
+        # =========================================================
         usuarios = {}
         for item in dados:
             uid = item["user_id"]
@@ -9398,15 +9406,18 @@ class LavagemView(discord.ui.View):
             usuarios[uid]["repassado"] += item["liquido"]
             usuarios[uid]["quantidade"] += 1
 
+        # Ordenar por valor a repassar (maior para menor)
         usuarios_ordenados = sorted(usuarios.items(), key=lambda x: x[1]["repassado"], reverse=True)
 
+        # Criar lista para enviar em partes (máximo 15 por embed)
         parte = 1
-        total_partes = (len(usuarios_ordenados) + 10) // 10
+        total_partes = (len(usuarios_ordenados) + 15) // 15
 
-        for i in range(0, len(usuarios_ordenados), 10):
-            grupo = usuarios_ordenados[i:i+10]
-            embed_parte = discord.Embed(
-                title=f"🧼 ── LAVAGENS POR USUÁRIO ── 🧼",
+        for i in range(0, len(usuarios_ordenados), 15):
+            grupo = usuarios_ordenados[i:i+15]
+
+            embed_lista = discord.Embed(
+                title=f"🧼 ── LISTA DE REPASSES ── 🧼",
                 description=f"📋 Parte {parte}/{total_partes} • VDR 442",
                 color=0x1abc9c,
                 timestamp=agora()
@@ -9416,7 +9427,15 @@ class LavagemView(discord.ui.View):
             for idx, (uid, dados_user) in enumerate(grupo, i + 1):
                 try:
                     user = await bot.fetch_user(int(uid))
-                    nome = user.display_name if user else uid
+                    if user:
+                        # Tenta pegar o apelido no servidor
+                        member = interaction.guild.get_member(int(uid))
+                        if member and member.display_name:
+                            nome = member.display_name
+                        else:
+                            nome = user.display_name or user.name
+                    else:
+                        nome = uid
                 except:
                     nome = uid
 
@@ -9424,49 +9443,59 @@ class LavagemView(discord.ui.View):
                     f"**{idx}.** {nome}\n"
                     f"   📋 {dados_user['quantidade']} lavagem(ns)\n"
                     f"   💰 Sujo: {formatar_dinheiro(dados_user['sujo'])}\n"
-                    f"   💵 Repassado: {formatar_dinheiro(dados_user['repassado'])}\n\n"
+                    f"   💵 A repassar: {formatar_dinheiro(dados_user['repassado'])}\n\n"
                 )
 
-            embed_parte.add_field(
-                name="📋 LISTA DE LAVAGENS",
+            embed_lista.add_field(
+                name="📋 LISTA DE REPASSES",
                 value=texto if texto else "Nenhum registro",
                 inline=False
             )
 
-            embed_parte.set_footer(
+            embed_lista.set_footer(
                 text=f"🛡 Vida Rasa 442 • Parte {parte}/{total_partes}",
                 icon_url=bot.user.display_avatar.url if bot.user else None
             )
 
-            await canal.send(embed=embed_parte)
+            await canal.send(embed=embed_lista)
             parte += 1
             await asyncio.sleep(0.5)
 
-        embed_final = discord.Embed(
-            title="✅ ── RELATÓRIO ENVIADO ── ✅",
-            description=(
-                f"📊 **Total de lavagens:** {total_lavagens}\n"
-                f"💰 **Total sujo:** {formatar_dinheiro(total_sujo)}\n"
-                f"💵 **Total repassado:** {formatar_dinheiro(total_repassado)}\n"
-                f"👥 **Usuários envolvidos:** {len(usuarios)}"
-            ),
-            color=0x2ecc71,
-            timestamp=agora()
-        )
-        embed_final.set_footer(
-            text=f"🛡 Vida Rasa 442 • Relatório gerado por {interaction.user.display_name}",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
-        await canal.send(embed=embed_final)
+        # =========================================================
+        # MENSAGEM FINAL DE RESUMO RÁPIDO (para facilitar repasses)
+        # =========================================================
+        texto_resumo = "📋 **RESUMO PARA REPASSES**\n\n"
+        for idx, (uid, dados_user) in enumerate(usuarios_ordenados, 1):
+            try:
+                user = await bot.fetch_user(int(uid))
+                if user:
+                    member = interaction.guild.get_member(int(uid))
+                    if member and member.display_name:
+                        nome = member.display_name
+                    else:
+                        nome = user.display_name or user.name
+                else:
+                    nome = uid
+            except:
+                nome = uid
+
+            texto_resumo += f"{idx}. **{nome}** → 💵 {formatar_dinheiro(dados_user['repassado'])}\n"
+
+        if len(texto_resumo) > 2000:
+            # Se for muito grande, enviar em partes
+            partes_texto = [texto_resumo[i:i+1900] for i in range(0, len(texto_resumo), 1900)]
+            for parte_texto in partes_texto:
+                await canal.send(f"```yaml\n{parte_texto}\n```")
+        else:
+            await canal.send(f"```yaml\n{texto_resumo}\n```")
 
         await interaction.followup.send(
             f"✅ **Relatório enviado com sucesso!**\n"
             f"📋 {total_lavagens} lavagens registradas\n"
             f"👥 {len(usuarios)} usuários envolvidos\n"
-            f"📨 {total_partes + 1} mensagens enviadas",
+            f"📨 {total_partes + 2} mensagens enviadas",
             ephemeral=True
         )
-
     @discord.ui.button(label="📩 Avisar TODOS no DM", style=discord.ButtonStyle.primary, custom_id="lavagem_dm", emoji="📩")
     async def avisar_todos(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not pode_gerenciar_lavagem(interaction.user):
