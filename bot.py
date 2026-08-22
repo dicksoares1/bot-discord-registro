@@ -5742,7 +5742,203 @@ async def buscar_grupo_por_organizacao(nome_org):
 # 3. FUNÇÃO DE CRIAR EMBED DE ENTREGA
 # =========================================================
 
-📌 STATUS DO PEDIDO
+async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_entregas, pt, sub, org_nome, config, observacoes, entrega_id=None, vendedor_id=None, grupo=None, entregas_lista=None):
+    canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
+    if not canal:
+        await interaction.followup.send("❌ Canal de encomendas não encontrado!", ephemeral=True)
+        return
+
+    pacotes_pt = pt // 50
+    pacotes_sub = sub // 50
+    cor = config.get("cor", 0x1a1a2e)
+    emoji_org = config.get("emoji", "🏷️")
+
+    # Buscar o nome do vendedor (apelido no Discord - SEM @)
+    vendedor_nome = "Desconhecido"
+    if vendedor_id:
+        vendedor_nome = await pegar_apelido(vendedor_id, interaction.guild)
+    else:
+        vendedor_nome = interaction.user.display_name
+
+    # =========================================================
+    # TÍTULO E DESCRIÇÃO
+    # =========================================================
+    if total_entregas > 1:
+        titulo = f"📦 ENTREGA {entrega_atual}/{total_entregas} • Pedido #{pedido_numero:04d}"
+        descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt)} + SUB {fmt_num(sub)} munições"
+    else:
+        titulo = f"📦 NOVA ENCOMENDA • Pedido #{pedido_numero:04d}"
+        descricao = "✅ Entrega única"
+
+    # =========================================================
+    # EMBED
+    # =========================================================
+    embed = discord.Embed(
+        title=titulo,
+        description=descricao,
+        color=cor,
+        timestamp=agora()
+    )
+
+    # Thumbnail da organização
+    if org_nome == "VDR":
+        embed.set_thumbnail(url="https://i.imgur.com/vdr_logo.png")
+    elif org_nome == "POLICIA":
+        embed.set_thumbnail(url="https://i.imgur.com/policia_logo.png")
+    elif org_nome == "MAFIA":
+        embed.set_thumbnail(url="https://i.imgur.com/mafia_logo.png")
+    else:
+        embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+    embed.set_author(
+        name=f"{emoji_org} {org_nome} - Sistema de Encomendas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    # =========================================================
+    # VENDEDOR (COM ```)
+    # =========================================================
+    embed.add_field(
+        name="👤 VENDEDOR",
+        value=f"```\n{vendedor_nome}\n```",
+        inline=False
+    )
+
+    # =========================================================
+    # ORGANIZAÇÃO (COM ```)
+    # =========================================================
+    embed.add_field(
+        name="🏷️ ORGANIZAÇÃO",
+        value=f"```\n{org_nome}\n```",
+        inline=False
+    )
+
+    # =========================================================
+    # RESUMO DAS ENTREGAS (se for parcelado) (COM ```)
+    # =========================================================
+    if total_entregas > 1 and entregas_lista:
+        resumo = ""
+        for i, e in enumerate(entregas_lista, 1):
+            if i < entrega_atual:
+                status = "✅"
+            elif i == entrega_atual:
+                status = "🔴"
+            else:
+                status = "⏳"
+            resumo += f"{status} Entrega {i}/{total_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
+        embed.add_field(
+            name="📋 RESUMO DAS ENTREGAS",
+            value=f"```\n{resumo}\n```",
+            inline=False
+        )
+
+    # =========================================================
+    # PT (COM ```)
+    # =========================================================
+    embed.add_field(
+        name="🔫 PT",
+        value=f"```\n{fmt_num(pt)} munições\n{pacotes_pt} pacotes\n```",
+        inline=False
+    )
+
+    # =========================================================
+    # SUB (COM ```)
+    # =========================================================
+    embed.add_field(
+        name="🔫 SUB",
+        value=f"```\n{fmt_num(sub)} munições\n{pacotes_sub} pacotes\n```",
+        inline=False
+    )
+
+    # =========================================================
+    # VALOR (COM ```)
+    # =========================================================
+    valor_entrega = (pt * 50) + (sub * 90)
+    embed.add_field(
+        name="💰 VALOR",
+        value=f"```\n{formatar_dinheiro(valor_entrega)}\n```",
+        inline=False
+    )
+
+    # =========================================================
+    # STATUS DAS ENTREGAS (se for parcelado) (COM ```)
+    # =========================================================
+    if total_entregas > 1:
+        embed.add_field(
+            name="📋 STATUS DAS ENTREGAS",
+            value=f"```\nTotal de entregas: {total_entregas}\nEntrega atual: {entrega_atual}/{total_entregas}\nPróxima entrega: Aguardando esta ser ENTREGUE\n```",
+            inline=False
+        )
+
+    # =========================================================
+    # STATUS DO PEDIDO (COM ```)
+    # =========================================================
+    embed.add_field(
+        name="📌 STATUS DO PEDIDO",
+        value=f"```\n📦 A Entregar\n⏳ Pagamento pendente\n```",
+        inline=False
+    )
+
+    # =========================================================
+    # OBSERVAÇÕES (COM ```)
+    # =========================================================
+    if observacoes:
+        embed.add_field(
+            name="📝 OBSERVAÇÕES",
+            value=f"```\n{observacoes}\n```",
+            inline=False
+        )
+
+    # =========================================================
+    # INTEGRAÇÃO COM GRUPO (COM ```)
+    # =========================================================
+    if grupo:
+        embed.add_field(
+            name="📊 INTEGRAÇÃO COM GRUPO",
+            value=f"```\n✅ Compra registrada em {org_nome}\n```",
+            inline=False
+        )
+
+    # =========================================================
+    # RODAPÉ
+    # =========================================================
+    if entrega_id:
+        embed.set_footer(
+            text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas} • ID: {entrega_id}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    else:
+        embed.set_footer(
+            text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+    # =========================================================
+    # VIEW
+    # =========================================================
+    view = StatusView(
+        entrega_id=entrega_id,
+        total_entregas=total_entregas,
+        entrega_atual=entrega_atual
+    )
+
+    msg = await safe_request(canal.send, embed=embed, view=view)
+
+    if msg and entrega_id:
+        await BotaoPersistente.salvar_botao(msg.id, canal.id, "venda", {
+            "entrega_id": entrega_id,
+            "total_entregas": total_entregas,
+            "entrega_atual": entrega_atual
+        })
+        await atualizar_entrega_parcelada(entrega_id, entrega_atual, str(msg.id), None)
+    elif msg and not entrega_id:
+        await BotaoPersistente.salvar_botao(msg.id, canal.id, "venda", {
+            "entrega_id": None,
+            "total_entregas": total_entregas,
+            "entrega_atual": entrega_atual
+        })
+
+    return msg
 # =========================================================
 # 4. FUNÇÕES DE PAINEL E RESTAURAÇÃO
 # =========================================================
