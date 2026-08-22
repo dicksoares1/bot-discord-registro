@@ -536,6 +536,24 @@ async def pegar_usuario(uid):
         return user
     except:
         return None
+
+# =========================================================
+# 8. FUNÇÕES DE APELIDO
+# =========================================================
+
+async def pegar_apelido(user_id, guild=None):
+    """Pega o apelido (display_name) de um usuário pelo ID"""
+    try:
+        if guild:
+            member = guild.get_member(int(user_id))
+            if member:
+                return member.display_name
+        user = await bot.fetch_user(int(user_id))
+        if user:
+            return user.display_name or user.name
+        return str(user_id)
+    except:
+        return str(user_id)
 # =========================================================
 # ==================== PARTE 3: BANCO DE DADOS ============
 # =========================================================
@@ -4025,11 +4043,14 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(10)
                 continue
 
+            # Buscar guild para pegar apelido
+            guild = bot.get_guild(GUILD_ID)
+            autor_apelido = await pegar_apelido(prod["autor"], guild)
+
             if msg is None:
                 try:
                     msg = await safe_fetch_message(canal, prod["msg_id"])
                 except:
-                    desc = await gerar_desc_producao(prod)
                     embed = discord.Embed(
                         title="🏭 ── PRODUÇÃO EM ANDAMENTO ── 🏭",
                         description="🔫 Sistema de Produção • VDR 442",
@@ -4058,7 +4079,7 @@ async def acompanhar_producao(pid):
 
                     embed.add_field(
                         name="👤 INICIADO POR",
-                        value=f"```yaml\n<@{prod['autor']}>\n```",
+                        value=f"```yaml\n{autor_apelido}\n```",
                         inline=True
                     )
 
@@ -4179,7 +4200,7 @@ async def acompanhar_producao(pid):
 
                     embed.add_field(
                         name="👤 INICIADO POR",
-                        value=f"```yaml\n<@{prod['autor']}>\n```",
+                        value=f"```yaml\n{autor_apelido}\n```",
                         inline=True
                     )
 
@@ -4262,10 +4283,10 @@ async def acompanhar_producao(pid):
                         )
 
                     if prod.get("segunda_task_confirmada"):
-                        uid = prod["segunda_task_confirmada"]["user"]
+                        segunda_apelido = await pegar_apelido(prod["segunda_task_confirmada"]["user"], guild)
                         embed.add_field(
                             name="✅ SEGUNDA TASK",
-                            value=f"```yaml\nConcluída por: <@{uid}>\n```",
+                            value=f"```yaml\nConcluída por: {segunda_apelido}\n```",
                             inline=False
                         )
 
@@ -4323,6 +4344,10 @@ async def finalizar_producao(pid, msg, prod):
                     "capsulas", capsulas_total, str(prod["autor"]), f"Produção do {galpao} - {qtd_galpoes} galpões - {polvora_total} pólvora"
                 )
 
+        # Buscar guild para pegar apelidos
+        guild = bot.get_guild(GUILD_ID)
+        autor_apelido = await pegar_apelido(prod["autor"], guild)
+
         if msg:
             try:
                 embed = discord.Embed(
@@ -4353,7 +4378,7 @@ async def finalizar_producao(pid, msg, prod):
 
                 embed.add_field(
                     name="👤 PRODUZIDO POR",
-                    value=f"```yaml\n<@{prod['autor']}>\n```",
+                    value=f"```yaml\n{autor_apelido}\n```",
                     inline=True
                 )
 
@@ -4417,9 +4442,10 @@ async def finalizar_producao(pid, msg, prod):
                 )
 
                 if segunda:
+                    segunda_apelido = await pegar_apelido(segunda["user"], guild)
                     embed.add_field(
                         name="✅ SEGUNDA TASK",
-                        value=f"```yaml\nConcluída por: <@{segunda['user']}>\n```",
+                        value=f"```yaml\nConcluída por: {segunda_apelido}\n```",
                         inline=False
                     )
 
@@ -4509,7 +4535,7 @@ async def finalizar_producao(pid, msg, prod):
 
             embed_bau.add_field(
                 name="👤 PRODUZIDO POR",
-                value=f"```yaml\n<@{prod['autor']}>\n```",
+                value=f"```yaml\n{autor_apelido}\n```",
                 inline=True
             )
 
@@ -4520,9 +4546,10 @@ async def finalizar_producao(pid, msg, prod):
             )
 
             if segunda:
+                segunda_apelido = await pegar_apelido(segunda["user"], guild)
                 embed_bau.add_field(
                     name="✅ SEGUNDA TASK",
-                    value=f"```yaml\nConcluída por: <@{segunda['user']}>\n```",
+                    value=f"```yaml\nConcluída por: {segunda_apelido}\n```",
                     inline=False
                 )
 
