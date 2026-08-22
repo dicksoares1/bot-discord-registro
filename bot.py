@@ -1210,12 +1210,15 @@ class BotaoPersistente:
         if not pool:
             return
         try:
+            # Buscar os dados primeiro
             async with pool.acquire() as conn:
                 rows = await conn.fetch("""
                     SELECT mensagem_id, canal_id, tipo, dados
                     FROM botoes_persistentes
                     ORDER BY criado_em DESC
                 """)
+
+            # Processar cada linha separadamente (FORA da conexão)
             for row in rows:
                 canal = bot.get_channel(int(row["canal_id"]))
                 if not canal:
@@ -1231,10 +1234,15 @@ class BotaoPersistente:
                         await msg.edit(view=view)
                         logger.info(f"🔄 Botão restaurado: {tipo} - {row['mensagem_id']}")
                 except discord.NotFound:
-                    await conn.execute(
-                        "DELETE FROM botoes_persistentes WHERE mensagem_id = $1 AND canal_id = $2",
-                        row["mensagem_id"], row["canal_id"]
-                    )
+                    # Se a mensagem não existe, deletar do banco (USAR UMA NOVA CONEXÃO)
+                    try:
+                        async with pool.acquire() as conn_delete:
+                            await conn_delete.execute(
+                                "DELETE FROM botoes_persistentes WHERE mensagem_id = $1 AND canal_id = $2",
+                                row["mensagem_id"], row["canal_id"]
+                            )
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao deletar botão {row['mensagem_id']}: {e}")
                 except Exception as e:
                     logger.error(f"❌ Erro ao restaurar botão {row['mensagem_id']}: {e}")
         except Exception as e:
@@ -5253,13 +5261,33 @@ async def recriar_mensagens_vendas():
         if not canal:
             logger.error("❌ Canal de encomendas não encontrado!")
             return
+
         contador = 0
+        ignoradas = 0
+
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
                 titulo = msg.embeds[0].title if msg.embeds[0].title else ""
+
                 if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper():
                     try:
                         embed = msg.embeds[0]
+
+                        # VERIFICAR SE A VENDA JÁ ESTÁ CONCLUÍDA
+                        # (todos os botões desabilitados)
+                        ja_concluida = False
+                        for field in embed.fields:
+                            if field.name == "📌 Status":
+                                if "CONCLUÍDA" in field.value or "PEDIDO CANCELADO" in field.value.upper():
+                                    ja_concluida = True
+                                break
+
+                        # Se já está concluída, PULAR
+                        if ja_concluida:
+                            ignoradas += 1
+                            continue
+
+                        # Verificar se tem ID no footer
                         entrega_id = None
                         if embed.footer:
                             texto_footer = embed.footer.text
@@ -5269,6 +5297,7 @@ async def recriar_mensagens_vendas():
                                     entrega_id = safe_int(parte_id)
                                 except:
                                     pass
+
                         total_entregas = 1
                         if embed.description:
                             if "entregas no total" in embed.description:
@@ -5276,20 +5305,24 @@ async def recriar_mensagens_vendas():
                                     total_entregas = safe_int(embed.description.split("tem")[1].split("entregas")[0].strip())
                                 except:
                                     pass
-                        ja_concluida = False
-                        for field in embed.fields:
-                            if field.name == "📌 Status" and "CONCLUÍDA" in field.value:
-                                ja_concluida = True
-                                break
-                        if ja_concluida:
-                            continue
-                        view = StatusView(entrega_id=entrega_id, total_entregas=total_entregas)
+
+                        # Criar view com botões ATIVOS (não desabilitados)
+                        view = StatusView(
+                            entrega_id=entrega_id,
+                            total_entregas=total_entregas,
+                            disabled=False  # BOTÕES ATIVOS
+                        )
+
                         await safe_request(msg.edit, view=view)
                         contador += 1
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(0.5)
+
                     except Exception as e:
                         logger.error(f"❌ Erro ao recriar mensagem {msg.id}: {e}")
-        logger.info(f"✅ {contador} mensagens de venda recriadas com botões fixos!")
+
+        logger.info(f"✅ {contador} mensagens de venda recriadas com botões!")
+        logger.info(f"⏭️ {ignoradas} mensagens ignoradas (já concluídas)")
+
     except Exception as e:
         logger.error(f"❌ Erro ao recriar mensagens de vendas: {e}")
 
