@@ -12945,6 +12945,17 @@ async def cmd_status(ctx):
     embed.set_footer(text=f"🔄 {agora().strftime('%d/%m/%Y %H:%M:%S')}")
     await ctx.send(embed=embed)
 
+@bot.command(name="enviar_bau")
+@commands.has_permissions(administrator=True)
+async def cmd_enviar_bau(ctx):
+    """Envia os painéis do baú manualmente"""
+    await ctx.send("🔄 Enviando painéis do baú...")
+    await enviar_painel_bau_membro_entrou()
+    await enviar_painel_bau_membro_saiu()
+    await enviar_painel_armas_entrou()
+    await enviar_painel_armas_saiu()
+    await ctx.send("✅ Painéis do baú enviados!")
+
 # =========================================================
 # 21. COMANDO: !dashboard
 # =========================================================
