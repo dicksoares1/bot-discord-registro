@@ -1861,12 +1861,18 @@ async def carregar_metas_db():
         return []
     try:
         async with pool.acquire() as conn:
-            return await conn.fetch("SELECT * FROM metas")
+            # =========================================================
+            # REMOVER polvora DA CONSULTA
+            # =========================================================
+            return await conn.fetch("""
+                SELECT user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente 
+                FROM metas
+            """)
     except Exception as e:
         logger.error(f"❌ Erro ao carregar metas: {e}")
         return []
 
-async def salvar_meta_db(user_id, canal_id, dinheiro, acao):
+async def salvar_meta_db(user_id, canal_id, dinheiro, polvora, acao):
     pool = await get_pool()
     if not pool:
         return
@@ -1877,9 +1883,9 @@ async def salvar_meta_db(user_id, canal_id, dinheiro, acao):
             await conn.execute(
                 """
                 INSERT INTO metas (user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente)
-                VALUES ($1,$2,$3,$4,$5,0,0)
+                VALUES ($1,$2,$3,$4,0,0)
                 ON CONFLICT (user_id)
-                DO UPDATE SET canal_id=$2, dinheiro=$3, acao=$5
+                DO UPDATE SET canal_id=$2, dinheiro=$3, acao=$4
                 """,
                 str(user_id), str(canal_id), dinheiro, acao
             )
@@ -2161,7 +2167,6 @@ async def criar_sala_meta(member: discord.Member):
                 metas_cache[str(member.id)] = {
                     "canal_id": canal_id,
                     "dinheiro": meta_existente["dinheiro"],
-                    "polvora": meta_existente["polvora"],
                     "acao": meta_existente["acao"],
                     "dinheiro_acoes": meta_existente.get("dinheiro_acoes") or 0,
                     "saldo_excedente": meta_existente.get("saldo_excedente") or 0
