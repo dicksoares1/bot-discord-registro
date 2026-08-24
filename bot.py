@@ -13617,44 +13617,54 @@ async def criar_imagem_log_mensagem(titulo, cor, autor, canal, conteudo, mensage
 # 3.1 LOG - MENSAGEM DELETADA
 @bot.event
 async def on_message_delete(message):
+    logger.info(f"🔍 EVENTO on_message_delete DETECTADO! Mensagem: {message.id}")
+    
     if message.author.bot:
+        logger.info("⏭️ Mensagem ignorada (autor é um bot)")
         return
 
     canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
     if not canal_log:
+        logger.error(f"❌ Canal de logs NÃO ENCONTRADO! ID: {CANAL_LOGS_GERAIS_ID}")
         return
 
-    # Criar imagem
-    imagem = await criar_imagem_log_mensagem(
-        titulo="🗑️ MENSAGEM DE TEXTO DELETADA",
-        cor="deletada",
-        autor=message.author.display_name,
-        canal=f"#{message.channel.name}",
-        conteudo=message.content[:500] if message.content else "(📎 Mensagem sem texto)",
-        mensagem_id=str(message.id),
-        user_id=str(message.author.id),
-        server_id=str(message.guild.id),
-        channel_id=str(message.channel.id)
-    )
+    logger.info(f"✅ Canal de logs encontrado: {canal_log.name}")
 
-    # Embed
-    embed = discord.Embed(
-        title="🗑️ MENSAGEM DELETADA",
-        description=f"👤 **{message.author.display_name}** deletou uma mensagem",
-        color=0xe74c3c,
-        timestamp=agora()
-    )
-    embed.add_field(name="📌 Canal", value=f"#{message.channel.name}", inline=True)
-    embed.add_field(name="📝 Conteúdo", value=message.content[:500] if message.content else "📎 (sem texto)", inline=False)
-    if message.attachments:
-        embed.add_field(name="📎 Anexos", value=f"{len(message.attachments)} arquivo(s)", inline=False)
-    embed.set_footer(text=f"Vida Rasa 442 • ID: {message.id}")
+    try:
+        imagem = await criar_imagem_log_mensagem(
+            titulo="🗑️ MENSAGEM DE TEXTO DELETADA",
+            cor="deletada",
+            autor=message.author.display_name,
+            canal=f"#{message.channel.name}",
+            conteudo=message.content[:500] if message.content else "📎 (sem texto)",
+            mensagem_id=str(message.id),
+            user_id=str(message.author.id),
+            server_id=str(message.guild.id),
+            channel_id=str(message.channel.id)
+        )
 
-    if imagem and PIL_AVAILABLE:
-        file = discord.File(imagem, filename="log.png")
-        await canal_log.send(file=file, embed=embed)
-    else:
-        await canal_log.send(embed=embed)
+        embed = discord.Embed(
+            title="🗑️ MENSAGEM DELETADA",
+            description=f"👤 **{message.author.display_name}** deletou uma mensagem",
+            color=0xe74c3c,
+            timestamp=agora()
+        )
+        embed.add_field(name="📌 Canal", value=f"#{message.channel.name}", inline=True)
+        embed.add_field(name="📝 Conteúdo", value=message.content[:500] if message.content else "📎 (sem texto)", inline=False)
+        if message.attachments:
+            embed.add_field(name="📎 Anexos", value=f"{len(message.attachments)} arquivo(s)", inline=False)
+        embed.set_footer(text=f"Vida Rasa 442 • ID: {message.id}")
+
+        if imagem and PIL_AVAILABLE:
+            file = discord.File(imagem, filename="log.png")
+            await canal_log.send(file=file, embed=embed)
+            logger.info("✅ Log com imagem enviado com sucesso!")
+        else:
+            await canal_log.send(embed=embed)
+            logger.info("✅ Log sem imagem enviado com sucesso!")
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar log: {e}")
 
 # 3.2 LOG - MENSAGEM EDITADA
 @bot.event
