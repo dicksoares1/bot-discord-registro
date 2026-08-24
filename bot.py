@@ -8383,24 +8383,66 @@ TIPOS_ORGANIZACAO = {
 async def salvar_grupo_db(grupo_id, nome_org, lider_nome, lider_telefone, braco_nome, braco_telefone, produto, tipo_org="PISTA SEM PAINEL", observacoes=""):
     pool = await get_pool()
     if not pool:
-        return
+        logger.error("❌ Banco de dados indisponível para salvar grupo!")
+        return False
+    
     try:
         async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO grupos (
-                    grupo_id, nome_org, lider_nome, lider_telefone,
-                    braco_nome, braco_telefone, produto, tipo_org, observacoes,
-                    data_criacao, ativo
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true)
-                """,
-                grupo_id, nome_org.upper(), lider_nome.upper(), lider_telefone.upper(),
-                braco_nome.upper() if braco_nome else None,
-                braco_telefone.upper() if braco_telefone else None,
-                produto.upper(), tipo_org, observacoes.upper() if observacoes else "", agora_db()
+            # Verificar se o grupo já existe
+            existente = await conn.fetchval(
+                "SELECT grupo_id FROM grupos WHERE grupo_id = $1", 
+                grupo_id
             )
+            
+            if existente:
+                logger.warning(f"⚠️ Grupo {grupo_id} já existe! Atualizando...")
+                await conn.execute(
+                    """
+                    UPDATE grupos SET
+                        nome_org = $2, lider_nome = $3, lider_telefone = $4,
+                        braco_nome = $5, braco_telefone = $6, produto = $7,
+                        tipo_org = $8, observacoes = $9, data_atualizacao = NOW(),
+                        ativo = true
+                    WHERE grupo_id = $1
+                    """,
+                    grupo_id, 
+                    nome_org.upper(), 
+                    lider_nome.upper(), 
+                    lider_telefone.upper(),
+                    braco_nome.upper() if braco_nome else None,
+                    braco_telefone.upper() if braco_telefone else None,
+                    produto.upper(), 
+                    tipo_org, 
+                    observacoes.upper() if observacoes else ""
+                )
+            else:
+                # Inserir novo grupo
+                await conn.execute(
+                    """
+                    INSERT INTO grupos (
+                        grupo_id, nome_org, lider_nome, lider_telefone,
+                        braco_nome, braco_telefone, produto, tipo_org, observacoes,
+                        data_criacao, ativo
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true)
+                    """,
+                    grupo_id, 
+                    nome_org.upper(), 
+                    lider_nome.upper(), 
+                    lider_telefone.upper(),
+                    braco_nome.upper() if braco_nome else None,
+                    braco_telefone.upper() if braco_telefone else None,
+                    produto.upper(), 
+                    tipo_org, 
+                    observacoes.upper() if observacoes else "",
+                    agora_db()
+                )
+            
+            logger.info(f"✅ Grupo {nome_org} salvo com sucesso! ID: {grupo_id}")
+            return True
+            
     except Exception as e:
-        logger.error(f"❌ ERRO: {e}")
+        logger.error(f"❌ ERRO AO SALVAR GRUPO: {e}")
+        return False
 
 async def carregar_grupo_db(grupo_id):
     pool = await get_pool()
@@ -8837,19 +8879,25 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+
         lider_parts = self.lider.value.strip().split(" - ")
         lider_nome = lider_parts[0] if lider_parts else self.lider.value
         lider_telefone = lider_parts[1] if len(lider_parts) > 1 else "NÃO INFORMADO"
+
         braco_nome = None
         braco_telefone = None
         if self.braco.value:
             braco_parts = self.braco.value.strip().split(" - ")
             braco_nome = braco_parts[0] if braco_parts else self.braco.value
             braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "NÃO INFORMADO"
+
         tipo_org = self.tipo_org.value.strip().upper()
         import time
         grupo_id = f"GRUPO_{int(time.time())}_{interaction.user.id}"
-        await salvar_grupo_db(
+
+        logger.info(f"📝 Salvando grupo: {self.nome_org.value.strip().upper()}")
+
+        sucesso = await salvar_grupo_db(
             grupo_id,
             self.nome_org.value.strip().upper(),
             lider_nome.upper(),
@@ -8860,8 +8908,13 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
             tipo_org,
             ""
         )
-        await recriar_painel_grupos()
-        await interaction.followup.send(f"✅ **GRUPO {self.nome_org.value.upper()} REGISTRADO!**", ephemeral=True)
+
+        if sucesso:
+            await recriar_painel_grupos()
+            await interaction.followup.send(f"✅ **GRUPO {self.nome_org.value.upper()} REGISTRADO!**", ephemeral=True)
+        else:
+            await interaction.followup.send(f"❌ **ERRO AO REGISTRAR GRUPO!** Verifique os logs.", ephemeral=True)
+
         await asyncio.sleep(5)
         try:
             await interaction.delete_original_response()
