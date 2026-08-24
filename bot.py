@@ -642,20 +642,37 @@ async def atualizar_bau_estoque(item_nome, quantidade, operacao="adicionar"):
     
     try:
         async with pool.acquire() as conn:
-            if operacao == "adicionar":
+            # Primeiro, verificar se o item já existe
+            existente = await conn.fetchval(
+                "SELECT quantidade FROM bau_estoque WHERE item_nome = $1",
+                item_nome
+            )
+            
+            if existente is not None:
+                # Item existe, atualizar
+                if operacao == "adicionar":
+                    nova_quantidade = existente + quantidade
+                else:
+                    nova_quantidade = existente - quantidade
+                    if nova_quantidade < 0:
+                        nova_quantidade = 0
+                
+                await conn.execute("""
+                    UPDATE bau_estoque 
+                    SET quantidade = $1, ultima_atualizacao = NOW()
+                    WHERE item_nome = $2
+                """, nova_quantidade, item_nome)
+            else:
+                # Item não existe, inserir
+                if operacao == "remover":
+                    # Se está removendo um item que não existe, não faz nada
+                    return
+                
                 await conn.execute("""
                     INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao)
                     VALUES ($1, $2, NOW())
-                    ON CONFLICT (item_nome)
-                    DO UPDATE SET quantidade = bau_estoque.quantidade + $2, ultima_atualizacao = NOW()
                 """, item_nome, quantidade)
-            else:
-                await conn.execute("""
-                    INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao)
-                    VALUES ($1, -$2, NOW())
-                    ON CONFLICT (item_nome)
-                    DO UPDATE SET quantidade = bau_estoque.quantidade - $2, ultima_atualizacao = NOW()
-                """, item_nome, quantidade)
+                
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar estoque do baú: {e}")
 
