@@ -1,2 +1,5 @@
 [build]
 install = ["ffmpeg"]
+
+[buildpacks]
+install = ["ffmpeg"]
