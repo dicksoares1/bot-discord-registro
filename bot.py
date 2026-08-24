@@ -161,6 +161,11 @@ CANAL_POSTAGEM_X = 1486353689680547900
 # Sismtema de logs
 CANAL_LOGS_GERAIS_ID = 1541438570705977564
 
+CANAL_BAU_MEMBRO_ENTROU_ID = 1337358932158578719
+CANAL_BAU_MEMBRO_SAIU_ID = 1337358898784632882
+CANAL_ARMAS_ENTROU_ID = 1500983878045798430
+CANAL_ARMAS_SAIU_ID = 1500983930533187734
+
 # =========================================================
 # 8. CARGOS PERMITIDOS (LISTAS)
 # =========================================================
@@ -12941,565 +12946,6 @@ async def cmd_dashboard(ctx):
     await ctx.send(embed=embed)
 
 # =========================================================
-# ==================== PARTE 19: TASKS E EVENTOS ==========
-# =========================================================
-
-# =========================================================
-# 1. TASKS BACKGROUND
-# =========================================================
-async def iniciar_tarefas_background():
-    try:
-        if not verificar_lives.is_running():
-            verificar_lives.start()
-    except Exception as e:
-        logger.error(f"Erro loop lives: {e}")
-    try:
-        if not relatorio_semanal_polvoras.is_running():
-            relatorio_semanal_polvoras.start()
-    except Exception as e:
-        logger.error(f"Erro loop polvora: {e}")
-    try:
-        if not verificar_ausencias_expiradas.is_running():
-            verificar_ausencias_expiradas.start()
-    except Exception as e:
-        logger.error(f"Erro loop ausência: {e}")
-    try:
-        if not limpar_lavagens_pendentes.is_running():
-            limpar_lavagens_pendentes.start()
-    except Exception as e:
-        logger.error(f"Erro loop limpeza lavagens: {e}")
-    try:
-        if not verificar_avisos_meta.is_running():
-            verificar_avisos_meta.start()
-    except Exception as e:
-        logger.error(f"Erro loop avisos: {e}")
-    try:
-        if not limpar_cache_lives.is_running():
-            limpar_cache_lives.start()
-    except Exception as e:
-        logger.error(f"Erro loop cache lives: {e}")
-
-async def limpeza_cache_periodica():
-    while True:
-        try:
-            await asyncio.sleep(3600)
-            removidos = await cache.clean_expired()
-            if removidos > 0:
-                logger.info(f"🧹 Cache limpo: {removidos} entradas removidas")
-        except Exception as e:
-            logger.error(f"Erro na limpeza de cache: {e}")
-
-# =========================================================
-# 2. EDIT WORKER
-# =========================================================
-async def edit_worker():
-    while True:
-        try:
-            coro = await edit_queue.get()
-            await coro
-            await asyncio.sleep(1.2)
-        except discord.NotFound:
-            pass
-        except discord.HTTPException as e:
-            if e.status == 429:
-                await asyncio.sleep(3)
-            else:
-                logger.error(f"Erro HTTP edit_worker: {e}")
-        except Exception as e:
-            logger.error(f"Erro no edit_worker: {e}")
-        edit_queue.task_done()
-
-# =========================================================
-# 3. FUNÇÃO ENVIAR_OU_ATUALIZAR_PAINEL
-# =========================================================
-async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
-    canal = bot.get_channel(canal_id)
-    if not canal:
-        logger.error(f"❌ Canal não encontrado para painel: {nome}")
-        return
-    pool = await get_pool()
-    if not pool:
-        logger.error(f"❌ Banco de dados não disponível para painel: {nome}")
-        return
-    try:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1", nome)
-            if row:
-                try:
-                    canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
-                    msg = await safe_fetch_message(canal_salvo, int(row["mensagem_id"]))
-                    if msg:
-                        await msg.edit(embed=embed, view=view)
-                        return
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao atualizar painel {nome}: {e}")
-            msg = await safe_request(canal.send, embed=embed, view=view)
-            if msg:
-                await conn.execute(
-                    "INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ($1,$2,$3) ON CONFLICT (nome) DO UPDATE SET canal_id=$2, mensagem_id=$3",
-                    nome, str(canal_id), str(msg.id)
-                )
-    except Exception as e:
-        logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
-
-# =========================================================
-# 4. HEALTH CHECK AVANÇADO
-# =========================================================
-async def health_check_avancado():
-    while True:
-        try:
-            await asyncio.sleep(30)
-            if bot.is_closed():
-                logger.warning("⚠️ Bot desconectado! Reconectando...")
-                await bot.close()
-                await bot.start(TOKEN)
-                continue
-            pool = get_db()
-            if not pool or pool._closed:
-                logger.warning("⚠️ Pool do banco inativo! Reconectando...")
-                await conectar_db()
-                continue
-            tasks_ativas = [
-                ("verificar_lives", verificar_lives),
-                ("verificar_ausencias", verificar_ausencias_expiradas),
-                ("verificar_avisos_meta", verificar_avisos_meta),
-                ("limpar_lavagens_pendentes", limpar_lavagens_pendentes),
-                ("limpar_cache_lives", limpar_cache_lives),
-                ("relatorio_semanal_polvoras", relatorio_semanal_polvoras)
-            ]
-            for nome, task in tasks_ativas:
-                if hasattr(task, 'is_running') and not task.is_running():
-                    logger.warning(f"⚠️ Task {nome} parada! Reiniciando...")
-                    try:
-                        task.start()
-                    except Exception as e:
-                        logger.error(f"❌ Erro ao reiniciar {nome}: {e}")
-            try:
-                import psutil
-                memoria = psutil.Process().memory_info().rss / 1024 / 1024
-                if memoria > 500:
-                    logger.warning(f"⚠️ Memória alta: {memoria:.2f} MB. Limpando cache...")
-                    await cache.clear()
-                    gc.collect()
-            except:
-                pass
-            await verificar_heartbeat_producoes()
-            if int(time_module.time()) % 300 == 0:
-                logger.info(f"📊 Stats - Metas: {len(metas_cache)}, Produções: {len(producoes_tasks)}, Cache: {cache.size()}")
-        except Exception as e:
-            logger.error(f"❌ Erro no health check: {e}")
-            await asyncio.sleep(10)
-
-# =========================================================
-# 5. SETUP STATUS
-# =========================================================
-async def setup_status():
-    async def get_stats():
-        return {
-            "membros": len([m for m in bot.get_guild(GUILD_ID).members if not m.bot]) if bot.get_guild(GUILD_ID) else 0,
-            "producoes": len([p for p in producoes_tasks.values() if hasattr(p, 'done') and not p.done()]) if producoes_tasks else 0,
-            "metas": len(metas_cache),
-            "estoque_pt": (await carregar_estoque()).get('PT', 0),
-            "estoque_sub": (await carregar_estoque()).get('SUB', 0),
-        }
-
-    @tasks.loop(minutes=3)
-    async def atualizar_status():
-        try:
-            stats = await get_stats()
-            statuses = [
-                f"🎮 {stats['membros']} membros",
-                f"🏭 {stats['producoes']} produções",
-                f"💰 {stats['metas']} metas",
-                f"🔫 PT {stats['estoque_pt']} • SUB {stats['estoque_sub']}",
-                f"🕒 {agora().strftime('%H:%M')} • VDR 442",
-            ]
-            status_text = random.choice(statuses)
-            await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=status_text))
-        except Exception as e:
-            logger.error(f"Erro ao atualizar status: {e}")
-
-    if not atualizar_status.is_running():
-        atualizar_status.start()
-
-# =========================================================
-# 6. EVENTO ON_READY
-# =========================================================
-@bot.event
-async def on_ready():
-    global http_session, fila_clipes
-    if hasattr(bot, "ja_iniciado"):
-        return
-    bot.ja_iniciado = True
-    logger.info("🔄 Iniciando configuração do bot...")
-    logger.info(f"✅ Logado como {bot.user}")
-    if not http_session:
-        http_session = aiohttp.ClientSession()
-    db_pool = await conectar_db()
-    if not db_pool:
-        logger.critical("❌ Não foi possível conectar ao banco de dados!")
-        return
-    guild = bot.get_guild(GUILD_ID)
-    if guild:
-        try:
-            await guild.chunk()
-        except Exception as e:
-            logger.error(f"Erro ao carregar membros: {e}")
-    logger.info(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
-    if not hasattr(bot, "edit_worker_started"):
-        bot.loop.create_task(edit_worker())
-        bot.edit_worker_started = True
-    fila_clipes = asyncio.Queue()
-    bot.loop.create_task(worker_clipes())
-    await iniciar_tarefas_background()
-    bot.loop.create_task(limpeza_cache_periodica())
-    bot.loop.create_task(health_check_avancado())
-    await carregar_dados_iniciais()
-    await enviar_paineis_iniciais(guild)
-    await recriar_painel_grupos()
-    await recriar_mensagens_vendas()
-    await restaurar_botoes_vendas()
-    await restaurar_acoes()
-    await restaurar_botoes_metas()
-    await atualizar_acesso_responsaveis()
-    await setup_status()
-    await BotaoPersistente.restaurar_botoes()
-    gc.collect()
-    logger.info("=" * 50)
-    logger.info("✅ BOT ONLINE 100% ESTÁVEL - v4")
-    logger.info("=" * 50)
-
-# =========================================================
-# 7. FUNÇÃO CARREGAR_DADOS_INICIAIS
-# =========================================================
-async def carregar_dados_iniciais():
-    try:
-        rows = await carregar_metas_db()
-        for r in rows:
-            metas_cache[str(r["user_id"])] = {
-                "canal_id": int(r["canal_id"]),
-                "dinheiro": r["dinheiro"],
-                "polvora": r["polvora"],
-                "acao": r["acao"],
-                "dinheiro_acoes": r.get("dinheiro_acoes") or 0
-            }
-    except Exception as e:
-        logger.error(f"Erro ao carregar metas: {e}")
-    await restaurar_producoes()
-
-# =========================================================
-# 8. FUNÇÃO ENVIAR_PAINEIS_INICIAIS
-# =========================================================
-async def enviar_paineis_iniciais(guild):
-    try:
-        paineis = [
-            ("Registro", enviar_painel_registro),
-            ("Fabricação", enviar_painel_fabricacao),
-            ("Lives", enviar_painel_lives),
-            ("Pólvora", enviar_painel_polvoras),
-            ("Lavagem", enviar_painel_lavagem),
-            ("Vendas", enviar_painel_vendas),
-            ("Relatório Financeiro", enviar_painel_relatorio_financeiro),
-            ("Registrar Compra", enviar_painel_registrar_compra),
-            ("Solicitar Sala", enviar_painel_solicitar_sala),
-            ("Botão Ausência", enviar_painel_ausencia),
-            ("Painel Grupos", enviar_painel_grupos),
-            ("Relatório Metas", enviar_painel_relatorio_metas),
-            ("Mensagens", enviar_painel_mensagens),
-        ]
-        for i, (nome, func) in enumerate(paineis):
-            try:
-                await func()
-                if i < len(paineis) - 1:
-                    await asyncio.sleep(2)
-            except Exception as e:
-                logger.error(f"❌ Erro ao enviar painel {nome}: {e}")
-                await asyncio.sleep(3)
-        if guild:
-            try:
-                await enviar_painel_acoes(guild)
-                await asyncio.sleep(2)
-            except Exception as e:
-                logger.error(f"❌ Erro ao enviar painel de ações: {e}")
-        try:
-            await recriar_painel_grupos()
-        except Exception as e:
-            logger.error(f"❌ Erro ao forçar atualização grupos: {e}")
-    except Exception as e:
-        logger.error(f"❌ Erro geral ao enviar painéis: {e}")
-
-# =========================================================
-# 9. FUNÇÃO RESTAURAR_PRODUCOES
-# =========================================================
-async def restaurar_producoes():
-    try:
-        pool = await get_pool()
-        if not pool:
-            return
-        async with pool.acquire() as conn:
-            rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
-        for row in rows:
-            pid = row["pid"]
-            if pid not in producoes_tasks or producoes_tasks[pid].done():
-                if pid in producoes_tasks:
-                    del producoes_tasks[pid]
-                task = asyncio.create_task(acompanhar_producao(pid))
-                producoes_tasks[pid] = task
-    except Exception as e:
-        logger.error(f"❌ Erro ao restaurar produções: {e}")
-
-# =========================================================
-# 10. FUNÇÃO RESTAURAR_BOTOES_METAS
-# =========================================================
-async def restaurar_botoes_metas():
-    try:
-        guild = bot.get_guild(GUILD_ID)
-        if not guild:
-            logger.error("❌ Guild não encontrada!")
-            return 0
-        await carregar_metas_cache()
-        contador = 0
-        for uid, dados in list(metas_cache.items()):
-            canal = guild.get_channel(dados["canal_id"])
-            if not canal:
-                continue
-            try:
-                mensagem_encontrada = False
-                async for msg in canal.history(limit=30):
-                    if msg.author == bot.user and msg.embeds:
-                        if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
-                            mensagem_encontrada = True
-                            if not msg.components:
-                                await atualizar_embed_meta(int(uid))
-                                contador += 1
-                                await asyncio.sleep(1.5)
-                            else:
-                                tem_fixo = False
-                                for component in msg.components:
-                                    for item in component.children:
-                                        if item.custom_id and "fixo" in item.custom_id:
-                                            tem_fixo = True
-                                            break
-                                if not tem_fixo:
-                                    await atualizar_embed_meta(int(uid))
-                                    contador += 1
-                                    await asyncio.sleep(1.5)
-                            break
-                if not mensagem_encontrada:
-                    await atualizar_embed_meta(int(uid))
-                    contador += 1
-                    await asyncio.sleep(1.5)
-            except Exception as e:
-                logger.error(f"❌ Erro ao restaurar meta {uid}: {e}")
-        logger.info(f"✅ {contador} painéis de metas restaurados com botões!")
-        return contador
-    except Exception as e:
-        logger.error(f"❌ Erro ao restaurar botões das metas: {e}")
-        return 0
-
-# =========================================================
-# 11. EVENTO ON_MEMBER_JOIN
-# =========================================================
-@bot.event
-async def on_member_join(member):
-    if member.bot:
-        return
-    try:
-        cargo_em_registro = member.guild.get_role(EM_REGISTRO_ROLE_ID)
-        if cargo_em_registro:
-            await member.add_roles(cargo_em_registro)
-        canal = bot.get_channel(CANAL_BOAS_VINDAS)
-        if canal:
-            membros_total = len([m for m in member.guild.members if not m.bot])
-            embed = discord.Embed(
-                title="🎉 BEM-VINDO À VIDA RASA 442!",
-                description=f"{member.mention} acabou de chegar!",
-                color=0x2ecc71,
-                timestamp=agora()
-            )
-            embed.set_thumbnail(url=member.display_avatar.url)
-            embed.add_field(
-                name="📋 PRÓXIMO PASSO",
-                value=f"**Clique no botão 📋 Fazer Registro** no canal <#{CANAL_REGISTRO_ID}> para se cadastrar.",
-                inline=False
-            )
-            embed.add_field(
-                name="📌 INFORMAÇÕES",
-                value=f"👤 Você é o **{membros_total}º** membro!",
-                inline=False
-            )
-            embed.set_footer(text="Vida Rasa 442 • Sistema Automático")
-            await canal.send(embed=embed)
-    except Exception as e:
-        logger.error(f"❌ Erro ao processar entrada de {member.name}: {e}")
-
-# =========================================================
-# 12. EVENTO ON_MEMBER_UPDATE
-# =========================================================
-@bot.event
-async def on_member_update(before, after):
-    if after.bot:
-        return
-    tinha_resp = any(r.id == CARGO_RESP_METAS_ID for r in before.roles)
-    tem_resp = any(r.id == CARGO_RESP_METAS_ID for r in after.roles)
-    if not tinha_resp and tem_resp:
-        await atualizar_acesso_responsaveis()
-    tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
-    tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
-    if not tinha_agregado and tem_agregado:
-        await asyncio.sleep(2)
-        pool = await get_pool()
-        if pool:
-            async with pool.acquire() as conn:
-                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(after.id))
-        else:
-            meta = None
-        if not meta:
-            sala = await criar_sala_meta(after)
-            if sala:
-                cargo_resp = after.guild.get_role(CARGO_RESP_METAS_ID)
-                if cargo_resp and sala:
-                    for resp_member in after.guild.members:
-                        if cargo_resp in resp_member.roles:
-                            try:
-                                await sala.set_permissions(resp_member, view_channel=True, send_messages=True)
-                            except Exception as e:
-                                logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
-        else:
-            canal = after.guild.get_channel(meta["canal_id"])
-            if not canal:
-                sala = await criar_sala_meta(after)
-                if sala:
-                    cargo_resp = after.guild.get_role(CARGO_RESP_METAS_ID)
-                    if cargo_resp and sala:
-                        for resp_member in after.guild.members:
-                            if cargo_resp in resp_member.roles:
-                                try:
-                                    await sala.set_permissions(resp_member, view_channel=True, send_messages=True)
-                                except Exception as e:
-                                    logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
-            else:
-                await atualizar_embed_meta(after.id)
-        return
-    if str(after.id) in metas_cache:
-        await atualizar_categoria_meta(after)
-
-# =========================================================
-# 13. EVENTO ON_GUILD_CHANNEL_DELETE
-# =========================================================
-@bot.event
-async def on_guild_channel_delete(channel):
-    for uid, dados in list(metas_cache.items()):
-        if dados["canal_id"] == channel.id:
-            metas_cache.pop(uid)
-            try:
-                pool = await get_pool()
-                if pool:
-                    async with pool.acquire() as conn:
-                        await conn.execute("DELETE FROM metas WHERE user_id = $1", uid)
-            except Exception as e:
-                logger.error(f"❌ Erro ao remover meta do banco: {e}")
-            break
-
-# =========================================================
-# 14. EVENTO ON_MESSAGE
-# =========================================================
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot:
-        return
-    canal = message.channel
-    if isinstance(canal, discord.TextChannel):
-        for uid, dados in list(metas_cache.items()):
-            if dados["canal_id"] == canal.id:
-                try:
-                    await asyncio.sleep(2)
-                    await fixar_painel_meta_no_final(int(uid))
-                except Exception as e:
-                    logger.error(f"Erro ao fixar painel: {e}")
-                break
-    await on_message_lavagem(message)
-    await bot.process_commands(message)
-
-# =========================================================
-# 15. EVENTO ON_MEMBER_REMOVE
-# =========================================================
-@bot.event
-async def on_member_remove(member):
-    if member.bot:
-        return
-    await asyncio.sleep(2)
-    nome_servidor = member.display_name
-    nome_usuario = member.name
-    nome_global = member.global_name or nome_usuario
-    status_apelido = "✅ **Diferente do nome de usuário**" if nome_servidor != nome_usuario and nome_servidor != nome_global else "ℹ️ **Mesmo nome de usuário**"
-    status_dm = ""
-    dm_sucesso = False
-    try:
-        embed_msg = discord.Embed(
-            title="📤 NOTIFICAÇÃO DE SAÍDA",
-            description=(
-                f"Olá **{member.display_name}**, tudo bom?\n\n"
-                "Devido à sua saída do servidor **Vida Rasa**, "
-                "pedimos que procure algum **gerente in game** "
-                "para tomar seu **PD da facção**.\n\n"
-                "⚠️ **Caso já tenha tomado seu PD, ignore este aviso.**\n\n"
-                "——————————————————\n"
-                "_Se saiu por engano, você pode voltar a qualquer momento._"
-            ),
-            color=0xe74c3c
-        )
-        if member.display_avatar:
-            embed_msg.set_thumbnail(url=member.display_avatar.url)
-        embed_msg.set_footer(text=f"Vida Rasa • Sistema Automático • ID: {member.id}")
-        await member.send(embed=embed_msg)
-        status_dm = "✅ **MENSAGEM ENVIADA COM SUCESSO**"
-        dm_sucesso = True
-        cor_log = 0xe74c3c
-    except discord.Forbidden:
-        status_dm = "❌ **MENSAGEM NÃO ENVIADA**\nMotivo: Usuário bloqueou o bot ou tem DM fechada"
-        dm_sucesso = False
-        cor_log = 0xf1c40f
-    except discord.HTTPException as e:
-        status_dm = f"❌ **MENSAGEM NÃO ENVIADA**\nMotivo: Erro HTTP - {e}"
-        dm_sucesso = False
-        cor_log = 0xf1c40f
-    except Exception as e:
-        status_dm = f"❌ **MENSAGEM NÃO ENVIADA**\nMotivo: Erro inesperado - {str(e)[:100]}"
-        dm_sucesso = False
-        cor_log = 0xf1c40f
-    canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
-    if canal_gerencia:
-        tempo_permanencia = "Desconhecido"
-        if member.joined_at:
-            dias = (agora() - member.joined_at.replace(tzinfo=BRASIL)).days
-            tempo_permanencia = f"{dias} dia(s)" if dias > 0 else f"{(agora() - member.joined_at.replace(tzinfo=BRASIL)).seconds // 3600} hora(s)"
-        embed_log = discord.Embed(title="📤 USUÁRIO SAIU DO SERVIDOR", color=cor_log, timestamp=agora())
-        embed_log.add_field(
-            name="👤 INFORMAÇÕES DO USUÁRIO",
-            value=f"```\nMencão: {member.mention}\nID: {member.id}\nNome de usuário: {member.name}\nAlias global: {member.global_name or 'Nenhum'}\n```",
-            inline=False
-        )
-        embed_log.add_field(
-            name="🏷️ APELIDO NO SERVIDOR",
-            value=f"```\nApelido: {nome_servidor}\nStatus: {status_apelido}\n```",
-            inline=False
-        )
-        embed_log.add_field(
-            name="⏱️ TEMPO NO SERVIDOR",
-            value=(
-                f"```\nEntrou em: {member.joined_at.strftime('%d/%m/%Y %H:%M') if member.joined_at else 'Desconhecido'}\n"
-                f"Permanência: {tempo_permanencia}\nConta criada: {member.created_at.strftime('%d/%m/%Y')}\n```"
-            ),
-            inline=False
-        )
-        embed_log.add_field(name=f"{'✅' if dm_sucesso else '❌'} STATUS DA MENSAGEM", value=status_dm, inline=False)
-        if member.display_avatar:
-            embed_log.set_thumbnail(url=member.display_avatar.url)
-        embed_log.set_footer(text=f"Sistema Automático • Saída em {agora().strftime('%d/%m/%Y às %H:%M:%S')}")
-        await canal_gerencia.send(embed=embed_log)
-
-# =========================================================
 # ==================== SISTEMA DE LOGS (IGUAL À IMAGEM) ===
 # =========================================================
 
@@ -13899,6 +13345,483 @@ async def on_voice_state_update(member, before, after):
         await canal_log.send(embed=embed)
 
 # =========================================================
+# ==================== SISTEMA DE BAU =====================
+# =========================================================
+
+# =========================================================
+# 1. FUNÇÃO PARA CRIAR EMBED DE BAU
+# =========================================================
+async def criar_embed_bau(tipo, membro, itens, observacao=None):
+    """
+    Cria um embed para registro de entrada/saída do baú
+    
+    Parâmetros:
+    - tipo: "entrou" ou "saiu"
+    - membro: discord.Member ou str (nome)
+    - itens: dict com itens e quantidades ex: {"🔫 Fuzil": 2, "💊 Kit Médico": 5}
+    - observacao: str opcional
+    """
+    
+    if tipo == "entrou":
+        titulo = "📥 ENTRADA NO BAÚ"
+        cor = 0x2ecc71
+        emoji = "📥"
+        descricao = f"📦 Registro de entrada no baú"
+    else:
+        titulo = "📤 SAÍDA DO BAÚ"
+        cor = 0xe74c3c
+        emoji = "📤"
+        descricao = f"📦 Registro de saída do baú"
+    
+    if isinstance(membro, discord.Member):
+        nome_membro = membro.display_name
+        avatar_url = membro.display_avatar.url
+    else:
+        nome_membro = str(membro)
+        avatar_url = None
+    
+    embed = discord.Embed(
+        title=f"{emoji} ── {titulo} ── {emoji}",
+        description=descricao,
+        color=cor,
+        timestamp=agora()
+    )
+    
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Controle de Baú",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="👤 MEMBRO",
+        value=f"```\n{nome_membro}\n```",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📌 TIPO",
+        value=f"```\n{ 'ENTRADA' if tipo == 'entrou' else 'SAÍDA' }\n```",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    # Listar itens
+    if itens:
+        texto_itens = ""
+        for item, quantidade in itens.items():
+            texto_itens += f"🔹 {item}: **{quantidade}** unidade(s)\n"
+        
+        embed.add_field(
+            name="📦 ITENS",
+            value=f"```\n{texto_itens}\n```",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="📦 ITENS",
+            value="```\nNenhum item registrado\n```",
+            inline=False
+        )
+    
+    if observacao:
+        embed.add_field(
+            name="📝 OBSERVAÇÃO",
+            value=f"```\n{observacao}\n```",
+            inline=False
+        )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="✅ STATUS",
+        value="📦 **Registro realizado com sucesso!**",
+        inline=False
+    )
+    
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • Registrado em {agora().strftime('%d/%m/%Y %H:%M')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    return embed
+
+# =========================================================
+# 2. FUNÇÃO PARA REGISTRAR ENTRADA/SAÍDA DO BAU
+# =========================================================
+async def registrar_bau(interaction, tipo, canal_id):
+    """
+    Abre um modal para registrar itens no baú
+    """
+    if tipo == "entrou":
+        titulo_modal = "📥 Entrada no Baú"
+    else:
+        titulo_modal = "📤 Saída do Baú"
+    
+    modal = BauModal(tipo, canal_id)
+    await interaction.response.send_modal(modal)
+
+# =========================================================
+# 3. MODAL DE REGISTRO DO BAU
+# =========================================================
+class BauModal(discord.ui.Modal):
+    def __init__(self, tipo, canal_id):
+        super().__init__(title=f"{'📥' if tipo == 'entrou' else '📤'} Registrar {'Entrada' if tipo == 'entrou' else 'Saída'}")
+        self.tipo = tipo
+        self.canal_id = canal_id
+        
+        self.membro = discord.ui.TextInput(
+            label="👤 Nome do membro",
+            placeholder="Ex: 820 - Leon",
+            required=True,
+            max_length=100
+        )
+        
+        self.itens = discord.ui.TextInput(
+            label="📦 Itens (item: quantidade)",
+            placeholder="Ex: 🔫 Fuzil: 2\n💊 Kit Médico: 5\n🛡️ Colete: 1",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=500
+        )
+        
+        self.observacao = discord.ui.TextInput(
+            label="📝 Observação (opcional)",
+            placeholder="Ex: Para ação, Para estoque, etc",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=200
+        )
+        
+        self.add_item(self.membro)
+        self.add_item(self.itens)
+        self.add_item(self.observacao)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Processar itens
+            itens_dict = {}
+            linhas = self.itens.value.strip().split('\n')
+            for linha in linhas:
+                if ':' in linha:
+                    partes = linha.split(':', 1)
+                    item = partes[0].strip()
+                    try:
+                        quantidade = int(partes[1].strip())
+                    except:
+                        quantidade = partes[1].strip()
+                    itens_dict[item] = quantidade
+            
+            if not itens_dict:
+                await interaction.followup.send("❌ **Nenhum item válido encontrado!** Use o formato: `Item: Quantidade`", ephemeral=True)
+                return
+            
+            # Criar embed
+            embed = await criar_embed_bau(
+                tipo=self.tipo,
+                membro=self.membro.value,
+                itens=itens_dict,
+                observacao=self.observacao.value if self.observacao.value else None
+            )
+            
+            # Enviar para o canal correto
+            canal = interaction.guild.get_channel(self.canal_id)
+            if canal:
+                await canal.send(embed=embed)
+                await interaction.followup.send(f"✅ **Registro enviado com sucesso!**", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ **Canal não encontrado!**", ephemeral=True)
+                
+        except Exception as e:
+            logger.error(f"❌ Erro no BauModal: {e}")
+            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
+
+# =========================================================
+# 4. VIEWS COM BOTÕES PARA CADA CANAL
+# =========================================================
+
+# 4.1 Baú Membro Entrou
+class BauEntrouView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="📥 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="bau_entrou_btn", emoji="📥")
+    async def registrar_entrada(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await registrar_bau(interaction, "entrou", CANAL_BAU_MEMBRO_ENTROU_ID)
+
+# 4.2 Baú Membro Saiu
+class BauSaiuView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="📤 Registrar Saída", style=discord.ButtonStyle.danger, custom_id="bau_saiu_btn", emoji="📤")
+    async def registrar_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await registrar_bau(interaction, "saiu", CANAL_BAU_MEMBRO_SAIU_ID)
+
+# 4.3 Armas Entrou
+class ArmasEntrouView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="🔫 Registrar Armas Entrada", style=discord.ButtonStyle.success, custom_id="armas_entrou_btn", emoji="🔫")
+    async def registrar_armas_entrada(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await registrar_bau(interaction, "entrou", CANAL_ARMAS_ENTROU_ID)
+
+# 4.4 Armas Saiu
+class ArmasSaiuView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="🔫 Registrar Armas Saída", style=discord.ButtonStyle.danger, custom_id="armas_saiu_btn", emoji="🔫")
+    async def registrar_armas_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await registrar_bau(interaction, "saiu", CANAL_ARMAS_SAIU_ID)
+
+# =========================================================
+# 5. FUNÇÕES PARA ENVIAR OS PAINÉIS
+# =========================================================
+async def enviar_painel_bau_membro_entrou():
+    canal = bot.get_channel(CANAL_BAU_MEMBRO_ENTROU_ID)
+    if not canal:
+        logger.error("❌ Canal BAU MEMBRO ENTROU não encontrado!")
+        return
+    
+    embed = discord.Embed(
+        title="📥 ── ENTRADA NO BAÚ ── 📥",
+        description="🔫 VDR 442 • Controle de Estoque",
+        color=0x2ecc71,
+        timestamp=agora()
+    )
+    
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Controle de Baú",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 COMO USAR",
+        value=(
+            "```yaml\n"
+            "1️⃣ Clique em 'Registrar Entrada'\n"
+            "2️⃣ Informe o nome do membro\n"
+            "3️⃣ Liste os itens (Item: Quantidade)\n"
+            "4️⃣ Adicione uma observação (opcional)\n"
+            "\n"
+            "📌 EXEMPLO:\n"
+            "🔫 Fuzil: 2\n"
+            "💊 Kit Médico: 5\n"
+            "🛡️ Colete: 1\n"
+            "```"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Sistema de Baú",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    view = BauEntrouView()
+    await enviar_ou_atualizar_painel("painel_bau_entrou", CANAL_BAU_MEMBRO_ENTROU_ID, embed, view)
+
+async def enviar_painel_bau_membro_saiu():
+    canal = bot.get_channel(CANAL_BAU_MEMBRO_SAIU_ID)
+    if not canal:
+        logger.error("❌ Canal BAU MEMBRO SAIU não encontrado!")
+        return
+    
+    embed = discord.Embed(
+        title="📤 ── SAÍDA DO BAÚ ── 📤",
+        description="🔫 VDR 442 • Controle de Estoque",
+        color=0xe74c3c,
+        timestamp=agora()
+    )
+    
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Controle de Baú",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 COMO USAR",
+        value=(
+            "```yaml\n"
+            "1️⃣ Clique em 'Registrar Saída'\n"
+            "2️⃣ Informe o nome do membro\n"
+            "3️⃣ Liste os itens (Item: Quantidade)\n"
+            "4️⃣ Adicione uma observação (opcional)\n"
+            "\n"
+            "📌 EXEMPLO:\n"
+            "🔫 Fuzil: 2\n"
+            "💊 Kit Médico: 5\n"
+            "🛡️ Colete: 1\n"
+            "```"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Sistema de Baú",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    view = BauSaiuView()
+    await enviar_ou_atualizar_painel("painel_bau_saiu", CANAL_BAU_MEMBRO_SAIU_ID, embed, view)
+
+async def enviar_painel_armas_entrou():
+    canal = bot.get_channel(CANAL_ARMAS_ENTROU_ID)
+    if not canal:
+        logger.error("❌ Canal ARMAS ENTROU não encontrado!")
+        return
+    
+    embed = discord.Embed(
+        title="🔫 ── ARMAS - ENTRADA ── 🔫",
+        description="🔫 VDR 442 • Controle de Armas",
+        color=0x2ecc71,
+        timestamp=agora()
+    )
+    
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Controle de Armas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 COMO USAR",
+        value=(
+            "```yaml\n"
+            "1️⃣ Clique em 'Registrar Armas Entrada'\n"
+            "2️⃣ Informe o nome do membro\n"
+            "3️⃣ Liste as armas (Arma: Quantidade)\n"
+            "4️⃣ Adicione uma observação (opcional)\n"
+            "\n"
+            "📌 EXEMPLO:\n"
+            "🔫 Fuzil: 2\n"
+            "🔫 Glock: 1\n"
+            "🔫 Shotgun: 3\n"
+            "```"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Controle de Armas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    view = ArmasEntrouView()
+    await enviar_ou_atualizar_painel("painel_armas_entrou", CANAL_ARMAS_ENTROU_ID, embed, view)
+
+async def enviar_painel_armas_saiu():
+    canal = bot.get_channel(CANAL_ARMAS_SAIU_ID)
+    if not canal:
+        logger.error("❌ Canal ARMAS SAIU não encontrado!")
+        return
+    
+    embed = discord.Embed(
+        title="🔫 ── ARMAS - SAÍDA ── 🔫",
+        description="🔫 VDR 442 • Controle de Armas",
+        color=0xe74c3c,
+        timestamp=agora()
+    )
+    
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Controle de Armas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 COMO USAR",
+        value=(
+            "```yaml\n"
+            "1️⃣ Clique em 'Registrar Armas Saída'\n"
+            "2️⃣ Informe o nome do membro\n"
+            "3️⃣ Liste as armas (Arma: Quantidade)\n"
+            "4️⃣ Adicione uma observação (opcional)\n"
+            "\n"
+            "📌 EXEMPLO:\n"
+            "🔫 Fuzil: 2\n"
+            "🔫 Glock: 1\n"
+            "🔫 Shotgun: 3\n"
+            "```"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Controle de Armas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    view = ArmasSaiuView()
+    await enviar_ou_atualizar_painel("painel_armas_saiu", CANAL_ARMAS_SAIU_ID, embed, view)
+# =========================================================
 # ==================== SISTEMA DE MÚSICA ==================
 # =========================================================
 
@@ -14193,6 +14116,569 @@ async def cmd_nowplaying(ctx):
     embed.set_footer(text="🎧 Use !queue para ver a fila")
 
     await ctx.send(embed=embed)
+# =========================================================
+# ==================== PARTE 19: TASKS E EVENTOS ==========
+# =========================================================
+
+# =========================================================
+# 1. TASKS BACKGROUND
+# =========================================================
+async def iniciar_tarefas_background():
+    try:
+        if not verificar_lives.is_running():
+            verificar_lives.start()
+    except Exception as e:
+        logger.error(f"Erro loop lives: {e}")
+    try:
+        if not relatorio_semanal_polvoras.is_running():
+            relatorio_semanal_polvoras.start()
+    except Exception as e:
+        logger.error(f"Erro loop polvora: {e}")
+    try:
+        if not verificar_ausencias_expiradas.is_running():
+            verificar_ausencias_expiradas.start()
+    except Exception as e:
+        logger.error(f"Erro loop ausência: {e}")
+    try:
+        if not limpar_lavagens_pendentes.is_running():
+            limpar_lavagens_pendentes.start()
+    except Exception as e:
+        logger.error(f"Erro loop limpeza lavagens: {e}")
+    try:
+        if not verificar_avisos_meta.is_running():
+            verificar_avisos_meta.start()
+    except Exception as e:
+        logger.error(f"Erro loop avisos: {e}")
+    try:
+        if not limpar_cache_lives.is_running():
+            limpar_cache_lives.start()
+    except Exception as e:
+        logger.error(f"Erro loop cache lives: {e}")
+
+async def limpeza_cache_periodica():
+    while True:
+        try:
+            await asyncio.sleep(3600)
+            removidos = await cache.clean_expired()
+            if removidos > 0:
+                logger.info(f"🧹 Cache limpo: {removidos} entradas removidas")
+        except Exception as e:
+            logger.error(f"Erro na limpeza de cache: {e}")
+
+# =========================================================
+# 2. EDIT WORKER
+# =========================================================
+async def edit_worker():
+    while True:
+        try:
+            coro = await edit_queue.get()
+            await coro
+            await asyncio.sleep(1.2)
+        except discord.NotFound:
+            pass
+        except discord.HTTPException as e:
+            if e.status == 429:
+                await asyncio.sleep(3)
+            else:
+                logger.error(f"Erro HTTP edit_worker: {e}")
+        except Exception as e:
+            logger.error(f"Erro no edit_worker: {e}")
+        edit_queue.task_done()
+
+# =========================================================
+# 3. FUNÇÃO ENVIAR_OU_ATUALIZAR_PAINEL
+# =========================================================
+async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
+    canal = bot.get_channel(canal_id)
+    if not canal:
+        logger.error(f"❌ Canal não encontrado para painel: {nome}")
+        return
+    pool = await get_pool()
+    if not pool:
+        logger.error(f"❌ Banco de dados não disponível para painel: {nome}")
+        return
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1", nome)
+            if row:
+                try:
+                    canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
+                    msg = await safe_fetch_message(canal_salvo, int(row["mensagem_id"]))
+                    if msg:
+                        await msg.edit(embed=embed, view=view)
+                        return
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao atualizar painel {nome}: {e}")
+            msg = await safe_request(canal.send, embed=embed, view=view)
+            if msg:
+                await conn.execute(
+                    "INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ($1,$2,$3) ON CONFLICT (nome) DO UPDATE SET canal_id=$2, mensagem_id=$3",
+                    nome, str(canal_id), str(msg.id)
+                )
+    except Exception as e:
+        logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
+
+# =========================================================
+# 4. HEALTH CHECK AVANÇADO
+# =========================================================
+async def health_check_avancado():
+    while True:
+        try:
+            await asyncio.sleep(30)
+            if bot.is_closed():
+                logger.warning("⚠️ Bot desconectado! Reconectando...")
+                await bot.close()
+                await bot.start(TOKEN)
+                continue
+            pool = get_db()
+            if not pool or pool._closed:
+                logger.warning("⚠️ Pool do banco inativo! Reconectando...")
+                await conectar_db()
+                continue
+            tasks_ativas = [
+                ("verificar_lives", verificar_lives),
+                ("verificar_ausencias", verificar_ausencias_expiradas),
+                ("verificar_avisos_meta", verificar_avisos_meta),
+                ("limpar_lavagens_pendentes", limpar_lavagens_pendentes),
+                ("limpar_cache_lives", limpar_cache_lives),
+                ("relatorio_semanal_polvoras", relatorio_semanal_polvoras)
+            ]
+            for nome, task in tasks_ativas:
+                if hasattr(task, 'is_running') and not task.is_running():
+                    logger.warning(f"⚠️ Task {nome} parada! Reiniciando...")
+                    try:
+                        task.start()
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao reiniciar {nome}: {e}")
+            try:
+                import psutil
+                memoria = psutil.Process().memory_info().rss / 1024 / 1024
+                if memoria > 500:
+                    logger.warning(f"⚠️ Memória alta: {memoria:.2f} MB. Limpando cache...")
+                    await cache.clear()
+                    gc.collect()
+            except:
+                pass
+            await verificar_heartbeat_producoes()
+            if int(time_module.time()) % 300 == 0:
+                logger.info(f"📊 Stats - Metas: {len(metas_cache)}, Produções: {len(producoes_tasks)}, Cache: {cache.size()}")
+        except Exception as e:
+            logger.error(f"❌ Erro no health check: {e}")
+            await asyncio.sleep(10)
+
+# =========================================================
+# 5. SETUP STATUS
+# =========================================================
+async def setup_status():
+    async def get_stats():
+        return {
+            "membros": len([m for m in bot.get_guild(GUILD_ID).members if not m.bot]) if bot.get_guild(GUILD_ID) else 0,
+            "producoes": len([p for p in producoes_tasks.values() if hasattr(p, 'done') and not p.done()]) if producoes_tasks else 0,
+            "metas": len(metas_cache),
+            "estoque_pt": (await carregar_estoque()).get('PT', 0),
+            "estoque_sub": (await carregar_estoque()).get('SUB', 0),
+        }
+
+    @tasks.loop(minutes=3)
+    async def atualizar_status():
+        try:
+            stats = await get_stats()
+            statuses = [
+                f"🎮 {stats['membros']} membros",
+                f"🏭 {stats['producoes']} produções",
+                f"💰 {stats['metas']} metas",
+                f"🔫 PT {stats['estoque_pt']} • SUB {stats['estoque_sub']}",
+                f"🕒 {agora().strftime('%H:%M')} • VDR 442",
+            ]
+            status_text = random.choice(statuses)
+            await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=status_text))
+        except Exception as e:
+            logger.error(f"Erro ao atualizar status: {e}")
+
+    if not atualizar_status.is_running():
+        atualizar_status.start()
+
+# =========================================================
+# 6. EVENTO ON_READY
+# =========================================================
+@bot.event
+async def on_ready():
+    global http_session, fila_clipes
+    if hasattr(bot, "ja_iniciado"):
+        return
+    bot.ja_iniciado = True
+    logger.info("🔄 Iniciando configuração do bot...")
+    logger.info(f"✅ Logado como {bot.user}")
+    if not http_session:
+        http_session = aiohttp.ClientSession()
+    db_pool = await conectar_db()
+    if not db_pool:
+        logger.critical("❌ Não foi possível conectar ao banco de dados!")
+        return
+    guild = bot.get_guild(GUILD_ID)
+    if guild:
+        try:
+            await guild.chunk()
+        except Exception as e:
+            logger.error(f"Erro ao carregar membros: {e}")
+    logger.info(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+    if not hasattr(bot, "edit_worker_started"):
+        bot.loop.create_task(edit_worker())
+        bot.edit_worker_started = True
+    fila_clipes = asyncio.Queue()
+    bot.loop.create_task(worker_clipes())
+    await iniciar_tarefas_background()
+    bot.loop.create_task(limpeza_cache_periodica())
+    bot.loop.create_task(health_check_avancado())
+    await carregar_dados_iniciais()
+    await enviar_paineis_iniciais(guild)
+    await recriar_painel_grupos()
+    await recriar_mensagens_vendas()
+    await restaurar_botoes_vendas()
+    await restaurar_acoes()
+    await restaurar_botoes_metas()
+    await atualizar_acesso_responsaveis()
+    await setup_status()
+    await enviar_painel_bau_membro_entrou()
+    await enviar_painel_bau_membro_saiu()
+    await enviar_painel_armas_entrou()
+    await enviar_painel_armas_saiu()
+    await BotaoPersistente.restaurar_botoes()
+    gc.collect()
+    logger.info("=" * 50)
+    logger.info("✅ BOT ONLINE 100% ESTÁVEL - v4")
+    logger.info("=" * 50)
+
+# =========================================================
+# 7. FUNÇÃO CARREGAR_DADOS_INICIAIS
+# =========================================================
+async def carregar_dados_iniciais():
+    try:
+        rows = await carregar_metas_db()
+        for r in rows:
+            metas_cache[str(r["user_id"])] = {
+                "canal_id": int(r["canal_id"]),
+                "dinheiro": r["dinheiro"],
+                "polvora": r["polvora"],
+                "acao": r["acao"],
+                "dinheiro_acoes": r.get("dinheiro_acoes") or 0
+            }
+    except Exception as e:
+        logger.error(f"Erro ao carregar metas: {e}")
+    await restaurar_producoes()
+
+# =========================================================
+# 8. FUNÇÃO ENVIAR_PAINEIS_INICIAIS
+# =========================================================
+async def enviar_paineis_iniciais(guild):
+    try:
+        paineis = [
+            ("Registro", enviar_painel_registro),
+            ("Fabricação", enviar_painel_fabricacao),
+            ("Lives", enviar_painel_lives),
+            ("Pólvora", enviar_painel_polvoras),
+            ("Lavagem", enviar_painel_lavagem),
+            ("Vendas", enviar_painel_vendas),
+            ("Relatório Financeiro", enviar_painel_relatorio_financeiro),
+            ("Registrar Compra", enviar_painel_registrar_compra),
+            ("Solicitar Sala", enviar_painel_solicitar_sala),
+            ("Botão Ausência", enviar_painel_ausencia),
+            ("Painel Grupos", enviar_painel_grupos),
+            ("Relatório Metas", enviar_painel_relatorio_metas),
+            ("Mensagens", enviar_painel_mensagens),
+        ]
+        for i, (nome, func) in enumerate(paineis):
+            try:
+                await func()
+                if i < len(paineis) - 1:
+                    await asyncio.sleep(2)
+            except Exception as e:
+                logger.error(f"❌ Erro ao enviar painel {nome}: {e}")
+                await asyncio.sleep(3)
+        if guild:
+            try:
+                await enviar_painel_acoes(guild)
+                await asyncio.sleep(2)
+            except Exception as e:
+                logger.error(f"❌ Erro ao enviar painel de ações: {e}")
+        try:
+            await recriar_painel_grupos()
+        except Exception as e:
+            logger.error(f"❌ Erro ao forçar atualização grupos: {e}")
+    except Exception as e:
+        logger.error(f"❌ Erro geral ao enviar painéis: {e}")
+
+# =========================================================
+# 9. FUNÇÃO RESTAURAR_PRODUCOES
+# =========================================================
+async def restaurar_producoes():
+    try:
+        pool = await get_pool()
+        if not pool:
+            return
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+        for row in rows:
+            pid = row["pid"]
+            if pid not in producoes_tasks or producoes_tasks[pid].done():
+                if pid in producoes_tasks:
+                    del producoes_tasks[pid]
+                task = asyncio.create_task(acompanhar_producao(pid))
+                producoes_tasks[pid] = task
+    except Exception as e:
+        logger.error(f"❌ Erro ao restaurar produções: {e}")
+
+# =========================================================
+# 10. FUNÇÃO RESTAURAR_BOTOES_METAS
+# =========================================================
+async def restaurar_botoes_metas():
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            logger.error("❌ Guild não encontrada!")
+            return 0
+        await carregar_metas_cache()
+        contador = 0
+        for uid, dados in list(metas_cache.items()):
+            canal = guild.get_channel(dados["canal_id"])
+            if not canal:
+                continue
+            try:
+                mensagem_encontrada = False
+                async for msg in canal.history(limit=30):
+                    if msg.author == bot.user and msg.embeds:
+                        if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
+                            mensagem_encontrada = True
+                            if not msg.components:
+                                await atualizar_embed_meta(int(uid))
+                                contador += 1
+                                await asyncio.sleep(1.5)
+                            else:
+                                tem_fixo = False
+                                for component in msg.components:
+                                    for item in component.children:
+                                        if item.custom_id and "fixo" in item.custom_id:
+                                            tem_fixo = True
+                                            break
+                                if not tem_fixo:
+                                    await atualizar_embed_meta(int(uid))
+                                    contador += 1
+                                    await asyncio.sleep(1.5)
+                            break
+                if not mensagem_encontrada:
+                    await atualizar_embed_meta(int(uid))
+                    contador += 1
+                    await asyncio.sleep(1.5)
+            except Exception as e:
+                logger.error(f"❌ Erro ao restaurar meta {uid}: {e}")
+        logger.info(f"✅ {contador} painéis de metas restaurados com botões!")
+        return contador
+    except Exception as e:
+        logger.error(f"❌ Erro ao restaurar botões das metas: {e}")
+        return 0
+
+# =========================================================
+# 11. EVENTO ON_MEMBER_JOIN
+# =========================================================
+@bot.event
+async def on_member_join(member):
+    if member.bot:
+        return
+    try:
+        cargo_em_registro = member.guild.get_role(EM_REGISTRO_ROLE_ID)
+        if cargo_em_registro:
+            await member.add_roles(cargo_em_registro)
+        canal = bot.get_channel(CANAL_BOAS_VINDAS)
+        if canal:
+            membros_total = len([m for m in member.guild.members if not m.bot])
+            embed = discord.Embed(
+                title="🎉 BEM-VINDO À VIDA RASA 442!",
+                description=f"{member.mention} acabou de chegar!",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.add_field(
+                name="📋 PRÓXIMO PASSO",
+                value=f"**Clique no botão 📋 Fazer Registro** no canal <#{CANAL_REGISTRO_ID}> para se cadastrar.",
+                inline=False
+            )
+            embed.add_field(
+                name="📌 INFORMAÇÕES",
+                value=f"👤 Você é o **{membros_total}º** membro!",
+                inline=False
+            )
+            embed.set_footer(text="Vida Rasa 442 • Sistema Automático")
+            await canal.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Erro ao processar entrada de {member.name}: {e}")
+
+# =========================================================
+# 12. EVENTO ON_MEMBER_UPDATE
+# =========================================================
+@bot.event
+async def on_member_update(before, after):
+    if after.bot:
+        return
+    tinha_resp = any(r.id == CARGO_RESP_METAS_ID for r in before.roles)
+    tem_resp = any(r.id == CARGO_RESP_METAS_ID for r in after.roles)
+    if not tinha_resp and tem_resp:
+        await atualizar_acesso_responsaveis()
+    tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
+    tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
+    if not tinha_agregado and tem_agregado:
+        await asyncio.sleep(2)
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(after.id))
+        else:
+            meta = None
+        if not meta:
+            sala = await criar_sala_meta(after)
+            if sala:
+                cargo_resp = after.guild.get_role(CARGO_RESP_METAS_ID)
+                if cargo_resp and sala:
+                    for resp_member in after.guild.members:
+                        if cargo_resp in resp_member.roles:
+                            try:
+                                await sala.set_permissions(resp_member, view_channel=True, send_messages=True)
+                            except Exception as e:
+                                logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+        else:
+            canal = after.guild.get_channel(meta["canal_id"])
+            if not canal:
+                sala = await criar_sala_meta(after)
+                if sala:
+                    cargo_resp = after.guild.get_role(CARGO_RESP_METAS_ID)
+                    if cargo_resp and sala:
+                        for resp_member in after.guild.members:
+                            if cargo_resp in resp_member.roles:
+                                try:
+                                    await sala.set_permissions(resp_member, view_channel=True, send_messages=True)
+                                except Exception as e:
+                                    logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+            else:
+                await atualizar_embed_meta(after.id)
+        return
+    if str(after.id) in metas_cache:
+        await atualizar_categoria_meta(after)
+
+# =========================================================
+# 13. EVENTO ON_GUILD_CHANNEL_DELETE
+# =========================================================
+@bot.event
+async def on_guild_channel_delete(channel):
+    for uid, dados in list(metas_cache.items()):
+        if dados["canal_id"] == channel.id:
+            metas_cache.pop(uid)
+            try:
+                pool = await get_pool()
+                if pool:
+                    async with pool.acquire() as conn:
+                        await conn.execute("DELETE FROM metas WHERE user_id = $1", uid)
+            except Exception as e:
+                logger.error(f"❌ Erro ao remover meta do banco: {e}")
+            break
+
+# =========================================================
+# 14. EVENTO ON_MESSAGE
+# =========================================================
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+    canal = message.channel
+    if isinstance(canal, discord.TextChannel):
+        for uid, dados in list(metas_cache.items()):
+            if dados["canal_id"] == canal.id:
+                try:
+                    await asyncio.sleep(2)
+                    await fixar_painel_meta_no_final(int(uid))
+                except Exception as e:
+                    logger.error(f"Erro ao fixar painel: {e}")
+                break
+    await on_message_lavagem(message)
+    await bot.process_commands(message)
+
+# =========================================================
+# 15. EVENTO ON_MEMBER_REMOVE
+# =========================================================
+@bot.event
+async def on_member_remove(member):
+    if member.bot:
+        return
+    await asyncio.sleep(2)
+    nome_servidor = member.display_name
+    nome_usuario = member.name
+    nome_global = member.global_name or nome_usuario
+    status_apelido = "✅ **Diferente do nome de usuário**" if nome_servidor != nome_usuario and nome_servidor != nome_global else "ℹ️ **Mesmo nome de usuário**"
+    status_dm = ""
+    dm_sucesso = False
+    try:
+        embed_msg = discord.Embed(
+            title="📤 NOTIFICAÇÃO DE SAÍDA",
+            description=(
+                f"Olá **{member.display_name}**, tudo bom?\n\n"
+                "Devido à sua saída do servidor **Vida Rasa**, "
+                "pedimos que procure algum **gerente in game** "
+                "para tomar seu **PD da facção**.\n\n"
+                "⚠️ **Caso já tenha tomado seu PD, ignore este aviso.**\n\n"
+                "——————————————————\n"
+                "_Se saiu por engano, você pode voltar a qualquer momento._"
+            ),
+            color=0xe74c3c
+        )
+        if member.display_avatar:
+            embed_msg.set_thumbnail(url=member.display_avatar.url)
+        embed_msg.set_footer(text=f"Vida Rasa • Sistema Automático • ID: {member.id}")
+        await member.send(embed=embed_msg)
+        status_dm = "✅ **MENSAGEM ENVIADA COM SUCESSO**"
+        dm_sucesso = True
+        cor_log = 0xe74c3c
+    except discord.Forbidden:
+        status_dm = "❌ **MENSAGEM NÃO ENVIADA**\nMotivo: Usuário bloqueou o bot ou tem DM fechada"
+        dm_sucesso = False
+        cor_log = 0xf1c40f
+    except discord.HTTPException as e:
+        status_dm = f"❌ **MENSAGEM NÃO ENVIADA**\nMotivo: Erro HTTP - {e}"
+        dm_sucesso = False
+        cor_log = 0xf1c40f
+    except Exception as e:
+        status_dm = f"❌ **MENSAGEM NÃO ENVIADA**\nMotivo: Erro inesperado - {str(e)[:100]}"
+        dm_sucesso = False
+        cor_log = 0xf1c40f
+    canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
+    if canal_gerencia:
+        tempo_permanencia = "Desconhecido"
+        if member.joined_at:
+            dias = (agora() - member.joined_at.replace(tzinfo=BRASIL)).days
+            tempo_permanencia = f"{dias} dia(s)" if dias > 0 else f"{(agora() - member.joined_at.replace(tzinfo=BRASIL)).seconds // 3600} hora(s)"
+        embed_log = discord.Embed(title="📤 USUÁRIO SAIU DO SERVIDOR", color=cor_log, timestamp=agora())
+        embed_log.add_field(
+            name="👤 INFORMAÇÕES DO USUÁRIO",
+            value=f"```\nMencão: {member.mention}\nID: {member.id}\nNome de usuário: {member.name}\nAlias global: {member.global_name or 'Nenhum'}\n```",
+            inline=False
+        )
+        embed_log.add_field(
+            name="🏷️ APELIDO NO SERVIDOR",
+            value=f"```\nApelido: {nome_servidor}\nStatus: {status_apelido}\n```",
+            inline=False
+        )
+        embed_log.add_field(
+            name="⏱️ TEMPO NO SERVIDOR",
+            value=(
+                f"```\nEntrou em: {member.joined_at.strftime('%d/%m/%Y %H:%M') if member.joined_at else 'Desconhecido'}\n"
+                f"Permanência: {tempo_permanencia}\nConta criada: {member.created_at.strftime('%d/%m/%Y')}\n```"
+            ),
+            inline=False
+        )
+        embed_log.add_field(name=f"{'✅' if dm_sucesso else '❌'} STATUS DA MENSAGEM", value=status_dm, inline=False)
+        if member.display_avatar:
+            embed_log.set_thumbnail(url=member.display_avatar.url)
+        embed_log.set_footer(text=f"Sistema Automático • Saída em {agora().strftime('%d/%m/%Y às %H:%M:%S')}")
+        await canal_gerencia.send(embed=embed_log)
+
 # =========================================================
 # ==================== PARTE 20: MAIN E SHUTDOWN ==========
 # =========================================================
