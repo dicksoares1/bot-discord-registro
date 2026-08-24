@@ -211,6 +211,7 @@ intents.message_content = True
 intents.guilds = True
 intents.presences = True
 intents.reactions = True
+intents.messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================================================
