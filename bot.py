@@ -632,6 +632,67 @@ async def get_pool():
     return await conectar_db()
 
 # =========================================================
+# FUNÇÕES DE BANCO DE DADOS - BAU
+# =========================================================
+
+async def atualizar_bau_estoque(item_nome, quantidade, operacao="adicionar"):
+    """Atualiza o estoque do baú"""
+    pool = await get_pool()
+    if not pool:
+        return
+    
+    try:
+        async with pool.acquire() as conn:
+            if operacao == "adicionar":
+                await conn.execute("""
+                    INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao)
+                    VALUES ($1, $2, NOW())
+                    ON CONFLICT (item_nome)
+                    DO UPDATE SET quantidade = bau_estoque.quantidade + $2, ultima_atualizacao = NOW()
+                """, item_nome, quantidade)
+            else:
+                await conn.execute("""
+                    INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao)
+                    VALUES ($1, -$2, NOW())
+                    ON CONFLICT (item_nome)
+                    DO UPDATE SET quantidade = bau_estoque.quantidade - $2, ultima_atualizacao = NOW()
+                """, item_nome, quantidade)
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar estoque do baú: {e}")
+
+async def registrar_movimentacao_bau(tipo, item_nome, quantidade, membro, observacao=None):
+    """Registra uma movimentação no baú"""
+    pool = await get_pool()
+    if not pool:
+        return
+    
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO bau_movimentacoes (tipo, item_nome, quantidade, membro, observacao, data)
+                VALUES ($1, $2, $3, $4, $5, NOW())
+            """, tipo, item_nome, quantidade, membro, observacao)
+    except Exception as e:
+        logger.error(f"❌ Erro ao registrar movimentação: {e}")
+
+async def carregar_bau_estoque():
+    """Carrega o estoque atual do baú"""
+    pool = await get_pool()
+    if not pool:
+        return {}
+    
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT item_nome, quantidade FROM bau_estoque ORDER BY item_nome")
+            estoque = {}
+            for row in rows:
+                estoque[row["item_nome"]] = row["quantidade"]
+            return estoque
+    except Exception as e:
+        logger.error(f"❌ Erro ao carregar estoque do baú: {e}")
+        return {}
+
+# =========================================================
 # 3. INICIALIZAÇÃO DAS TABELAS
 # =========================================================
 async def inicializar_tabelas(pool):
@@ -1096,6 +1157,27 @@ async def inicializar_tabelas(pool):
                 criado_em TIMESTAMP DEFAULT NOW()
             )
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS bau_estoque (
+                id SERIAL PRIMARY KEY,
+                item_nome VARCHAR(100) UNIQUE NOT NULL,
+                quantidade INT DEFAULT 0,
+                ultima_atualizacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS bau_movimentacoes (
+                id SERIAL PRIMARY KEY,
+                tipo VARCHAR(10) NOT NULL,
+                item_nome VARCHAR(100) NOT NULL,
+                quantidade INT NOT NULL,
+                membro VARCHAR(100),
+                observacao TEXT,
+                data TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
 
 # =========================================================
 # ==================== PARTE 4: CACHE E MÉTRICAS ==========
@@ -13349,29 +13431,81 @@ async def on_voice_state_update(member, before, after):
 # =========================================================
 
 # =========================================================
-# 1. FUNÇÃO PARA CRIAR EMBED DE BAU
+# 1. FUNÇÕES DE BANCO DE DADOS - BAU
 # =========================================================
-async def criar_embed_bau(tipo, membro, itens, observacao=None):
-    """
-    Cria um embed para registro de entrada/saída do baú
+async def atualizar_bau_estoque(item_nome, quantidade, operacao="adicionar"):
+    """Atualiza o estoque do baú"""
+    pool = await get_pool()
+    if not pool:
+        return
     
-    Parâmetros:
-    - tipo: "entrou" ou "saiu"
-    - membro: discord.Member ou str (nome)
-    - itens: dict com itens e quantidades ex: {"🔫 Fuzil": 2, "💊 Kit Médico": 5}
-    - observacao: str opcional
-    """
+    try:
+        async with pool.acquire() as conn:
+            if operacao == "adicionar":
+                await conn.execute("""
+                    INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao)
+                    VALUES ($1, $2, NOW())
+                    ON CONFLICT (item_nome)
+                    DO UPDATE SET quantidade = bau_estoque.quantidade + $2, ultima_atualizacao = NOW()
+                """, item_nome, quantidade)
+            else:
+                await conn.execute("""
+                    INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao)
+                    VALUES ($1, -$2, NOW())
+                    ON CONFLICT (item_nome)
+                    DO UPDATE SET quantidade = bau_estoque.quantidade - $2, ultima_atualizacao = NOW()
+                """, item_nome, quantidade)
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar estoque do baú: {e}")
+
+async def registrar_movimentacao_bau(tipo, item_nome, quantidade, membro, observacao=None):
+    """Registra uma movimentação no baú"""
+    pool = await get_pool()
+    if not pool:
+        return
+    
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO bau_movimentacoes (tipo, item_nome, quantidade, membro, observacao, data)
+                VALUES ($1, $2, $3, $4, $5, NOW())
+            """, tipo, item_nome, quantidade, membro, observacao)
+    except Exception as e:
+        logger.error(f"❌ Erro ao registrar movimentação: {e}")
+
+async def carregar_bau_estoque():
+    """Carrega o estoque atual do baú"""
+    pool = await get_pool()
+    if not pool:
+        return {}
+    
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT item_nome, quantidade FROM bau_estoque ORDER BY item_nome")
+            estoque = {}
+            for row in rows:
+                estoque[row["item_nome"]] = row["quantidade"]
+            return estoque
+    except Exception as e:
+        logger.error(f"❌ Erro ao carregar estoque do baú: {e}")
+        return {}
+
+# =========================================================
+# 2. FUNÇÃO PARA CRIAR EMBED DO BAU
+# =========================================================
+async def criar_embed_bau_completo(tipo, membro, itens, observacao=None):
+    """Cria um embed completo para registro de baú com estoque atualizado"""
     
     if tipo == "entrou":
         titulo = "📥 ENTRADA NO BAÚ"
         cor = 0x2ecc71
         emoji = "📥"
-        descricao = f"📦 Registro de entrada no baú"
+        descricao = "📦 Registro de entrada no baú"
     else:
         titulo = "📤 SAÍDA DO BAÚ"
         cor = 0xe74c3c
         emoji = "📤"
-        descricao = f"📦 Registro de saída do baú"
+        descricao = "📦 Registro de saída do baú"
     
     if isinstance(membro, discord.Member):
         nome_membro = membro.display_name
@@ -13409,7 +13543,7 @@ async def criar_embed_bau(tipo, membro, itens, observacao=None):
     
     embed.add_field(
         name="📌 TIPO",
-        value=f"```\n{ 'ENTRADA' if tipo == 'entrou' else 'SAÍDA' }\n```",
+        value=f"```\n{'ENTRADA' if tipo == 'entrou' else 'SAÍDA'}\n```",
         inline=True
     )
     
@@ -13426,16 +13560,32 @@ async def criar_embed_bau(tipo, membro, itens, observacao=None):
             texto_itens += f"🔹 {item}: **{quantidade}** unidade(s)\n"
         
         embed.add_field(
-            name="📦 ITENS",
+            name="📦 ITENS MOVIMENTADOS",
             value=f"```\n{texto_itens}\n```",
             inline=False
         )
     else:
         embed.add_field(
-            name="📦 ITENS",
+            name="📦 ITENS MOVIMENTADOS",
             value="```\nNenhum item registrado\n```",
             inline=False
         )
+    
+    # Mostrar estoque atual do baú
+    estoque = await carregar_bau_estoque()
+    
+    if estoque:
+        texto_estoque = ""
+        for item, qtd in estoque.items():
+            if qtd > 0:
+                texto_estoque += f"🔹 {item}: **{qtd}** unidade(s)\n"
+        
+        if texto_estoque:
+            embed.add_field(
+                name="📊 ESTOQUE ATUAL DO BAÚ",
+                value=f"```\n{texto_estoque}\n```",
+                inline=False
+            )
     
     if observacao:
         embed.add_field(
@@ -13462,21 +13612,6 @@ async def criar_embed_bau(tipo, membro, itens, observacao=None):
     )
     
     return embed
-
-# =========================================================
-# 2. FUNÇÃO PARA REGISTRAR ENTRADA/SAÍDA DO BAU
-# =========================================================
-async def registrar_bau(interaction, tipo, canal_id):
-    """
-    Abre um modal para registrar itens no baú
-    """
-    if tipo == "entrou":
-        titulo_modal = "📥 Entrada no Baú"
-    else:
-        titulo_modal = "📤 Saída do Baú"
-    
-    modal = BauModal(tipo, canal_id)
-    await interaction.response.send_modal(modal)
 
 # =========================================================
 # 3. MODAL DE REGISTRO DO BAU
@@ -13535,8 +13670,23 @@ class BauModal(discord.ui.Modal):
                 await interaction.followup.send("❌ **Nenhum item válido encontrado!** Use o formato: `Item: Quantidade`", ephemeral=True)
                 return
             
+            # Atualizar estoque e registrar movimentações
+            for item, quantidade in itens_dict.items():
+                if self.tipo == "entrou":
+                    await atualizar_bau_estoque(item, quantidade, "adicionar")
+                else:
+                    await atualizar_bau_estoque(item, quantidade, "remover")
+                
+                await registrar_movimentacao_bau(
+                    tipo=self.tipo,
+                    item_nome=item,
+                    quantidade=quantidade,
+                    membro=self.membro.value,
+                    observacao=self.observacao.value if self.observacao.value else None
+                )
+            
             # Criar embed
-            embed = await criar_embed_bau(
+            embed = await criar_embed_bau_completo(
                 tipo=self.tipo,
                 membro=self.membro.value,
                 itens=itens_dict,
@@ -13556,44 +13706,43 @@ class BauModal(discord.ui.Modal):
             await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
 
 # =========================================================
-# 4. VIEWS COM BOTÕES PARA CADA CANAL
+# 4. VIEWS COM BOTÕES
 # =========================================================
-
-# 4.1 Baú Membro Entrou
 class BauEntrouView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
     @discord.ui.button(label="📥 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="bau_entrou_btn", emoji="📥")
     async def registrar_entrada(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await registrar_bau(interaction, "entrou", CANAL_BAU_MEMBRO_ENTROU_ID)
+        modal = BauModal("entrou", CANAL_BAU_MEMBRO_ENTROU_ID)
+        await interaction.response.send_modal(modal)
 
-# 4.2 Baú Membro Saiu
 class BauSaiuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
     @discord.ui.button(label="📤 Registrar Saída", style=discord.ButtonStyle.danger, custom_id="bau_saiu_btn", emoji="📤")
     async def registrar_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await registrar_bau(interaction, "saiu", CANAL_BAU_MEMBRO_SAIU_ID)
+        modal = BauModal("saiu", CANAL_BAU_MEMBRO_SAIU_ID)
+        await interaction.response.send_modal(modal)
 
-# 4.3 Armas Entrou
 class ArmasEntrouView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
     @discord.ui.button(label="🔫 Registrar Armas Entrada", style=discord.ButtonStyle.success, custom_id="armas_entrou_btn", emoji="🔫")
     async def registrar_armas_entrada(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await registrar_bau(interaction, "entrou", CANAL_ARMAS_ENTROU_ID)
+        modal = BauModal("entrou", CANAL_ARMAS_ENTROU_ID)
+        await interaction.response.send_modal(modal)
 
-# 4.4 Armas Saiu
 class ArmasSaiuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
     @discord.ui.button(label="🔫 Registrar Armas Saída", style=discord.ButtonStyle.danger, custom_id="armas_saiu_btn", emoji="🔫")
     async def registrar_armas_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await registrar_bau(interaction, "saiu", CANAL_ARMAS_SAIU_ID)
+        modal = BauModal("saiu", CANAL_ARMAS_SAIU_ID)
+        await interaction.response.send_modal(modal)
 
 # =========================================================
 # 5. FUNÇÕES PARA ENVIAR OS PAINÉIS
@@ -13640,11 +13789,19 @@ async def enviar_painel_bau_membro_entrou():
         inline=False
     )
     
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        value="",
-        inline=False
-    )
+    estoque = await carregar_bau_estoque()
+    if estoque:
+        texto_estoque = ""
+        for item, qtd in estoque.items():
+            if qtd > 0:
+                texto_estoque += f"🔹 {item}: **{qtd}** unidade(s)\n"
+        
+        if texto_estoque:
+            embed.add_field(
+                name="📊 ESTOQUE ATUAL",
+                value=f"```\n{texto_estoque}\n```",
+                inline=False
+            )
     
     embed.set_footer(
         text="🛡 Vida Rasa 442 • Sistema de Baú",
@@ -13696,11 +13853,19 @@ async def enviar_painel_bau_membro_saiu():
         inline=False
     )
     
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        value="",
-        inline=False
-    )
+    estoque = await carregar_bau_estoque()
+    if estoque:
+        texto_estoque = ""
+        for item, qtd in estoque.items():
+            if qtd > 0:
+                texto_estoque += f"🔹 {item}: **{qtd}** unidade(s)\n"
+        
+        if texto_estoque:
+            embed.add_field(
+                name="📊 ESTOQUE ATUAL",
+                value=f"```\n{texto_estoque}\n```",
+                inline=False
+            )
     
     embed.set_footer(
         text="🛡 Vida Rasa 442 • Sistema de Baú",
@@ -13752,11 +13917,19 @@ async def enviar_painel_armas_entrou():
         inline=False
     )
     
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        value="",
-        inline=False
-    )
+    estoque = await carregar_bau_estoque()
+    if estoque:
+        texto_estoque = ""
+        for item, qtd in estoque.items():
+            if qtd > 0:
+                texto_estoque += f"🔹 {item}: **{qtd}** unidade(s)\n"
+        
+        if texto_estoque:
+            embed.add_field(
+                name="📊 ESTOQUE ATUAL",
+                value=f"```\n{texto_estoque}\n```",
+                inline=False
+            )
     
     embed.set_footer(
         text="🛡 Vida Rasa 442 • Controle de Armas",
@@ -13808,11 +13981,19 @@ async def enviar_painel_armas_saiu():
         inline=False
     )
     
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        value="",
-        inline=False
-    )
+    estoque = await carregar_bau_estoque()
+    if estoque:
+        texto_estoque = ""
+        for item, qtd in estoque.items():
+            if qtd > 0:
+                texto_estoque += f"🔹 {item}: **{qtd}** unidade(s)\n"
+        
+        if texto_estoque:
+            embed.add_field(
+                name="📊 ESTOQUE ATUAL",
+                value=f"```\n{texto_estoque}\n```",
+                inline=False
+            )
     
     embed.set_footer(
         text="🛡 Vida Rasa 442 • Controle de Armas",
