@@ -1866,7 +1866,7 @@ async def carregar_metas_db():
         logger.error(f"❌ Erro ao carregar metas: {e}")
         return []
 
-async def salvar_meta_db(user_id, canal_id, dinheiro, polvora, acao):
+async def salvar_meta_db(user_id, canal_id, dinheiro, acao):
     pool = await get_pool()
     if not pool:
         return
@@ -1876,12 +1876,12 @@ async def salvar_meta_db(user_id, canal_id, dinheiro, polvora, acao):
                 acao = str(acao)
             await conn.execute(
                 """
-                INSERT INTO metas (user_id, canal_id, dinheiro, polvora, acao, dinheiro_acoes, saldo_excedente)
+                INSERT INTO metas (user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente)
                 VALUES ($1,$2,$3,$4,$5,0,0)
                 ON CONFLICT (user_id)
-                DO UPDATE SET canal_id=$2, dinheiro=$3, polvora=$4, acao=$5
+                DO UPDATE SET canal_id=$2, dinheiro=$3, acao=$5
                 """,
-                str(user_id), str(canal_id), dinheiro, polvora, acao
+                str(user_id), str(canal_id), dinheiro, acao
             )
     except Exception as e:
         logger.error(f"❌ Erro ao salvar meta: {e}")
@@ -2309,137 +2309,110 @@ async def atualizar_embed_meta(user_id):
 
         meta_total = await definir_valor_meta_por_cargo(member) if member else 300000
 
-        embed = discord.Embed(
-            title=f"💀 ── META SEMANAL ── 💀",
-            description=f"👤 {nome.upper()} • VDR 442",
-            color=Cores.META,
-            timestamp=agora()
-        )
+    embed = discord.Embed(
+        title=f"💀 ── META SEMANAL ── 💀",
+        description=f"👤 {nome.upper()} • VDR 442",
+        color=Cores.META,
+        timestamp=agora()
+    )
 
-        if member:
-            embed.set_thumbnail(url=member.display_avatar.url)
+    if member:
+        embed.set_thumbnail(url=member.display_avatar.url)
 
-        embed.set_author(
-            name="🛡 Vida Rasa 442 • Sistema de Metas",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Sistema de Metas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
 
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💰 DINHEIRO SUJO (META)",
+        value=f"```yaml\n{formatar_dinheiro(dinheiro_meta)}\n```",
+        inline=False
+    )
+
+    if is_soldado:
         embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
+            name="🎯 DINHEIRO DE AÇÕES",
+            value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)}\n```",
             inline=False
         )
 
+    if saldo_excedente > 0:
         embed.add_field(
-            name="💰 DINHEIRO SUJO (META)",
-            value=f"```yaml\n{formatar_dinheiro(dinheiro_meta)}\n```",
+            name="📦 SALDO EXCEDENTE",
+            value=f"```yaml\n{formatar_dinheiro(saldo_excedente)}\n```",
             inline=False
         )
 
-        if is_soldado:
-            embed.add_field(
-                name="🎯 DINHEIRO DE AÇÕES",
-                value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)}\n```",
-                inline=False
-            )
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
 
-        if saldo_excedente > 0:
-            embed.add_field(
-                name="📦 SALDO EXCEDENTE",
-                value=f"```yaml\n{formatar_dinheiro(saldo_excedente)}\n```",
-                inline=False
-            )
+    if is_soldado:
+        valor_progresso = dinheiro_acoes
+    else:
+        valor_progresso = dinheiro_meta
 
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
-        )
+    if meta_total > 0:
+        progresso = min(valor_progresso / meta_total, 1.0)
+    else:
+        progresso = 1.0
 
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
-        )
+    barra_progresso = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
+    porcentagem = int(progresso * 100)
 
-        if is_soldado:
-            valor_progresso = dinheiro_acoes
-        else:
-            valor_progresso = dinheiro_meta
+    if meta_total == 0:
+        status_meta = "🟢 META ISENTA (Gerente)"
+    elif progresso >= 1:
+        status_meta = "✅ META CONCLUÍDA! 🎉"
+    elif progresso >= 0.7:
+        status_meta = "🟢 Quase lá!"
+    elif progresso >= 0.4:
+        status_meta = "🟡 Vamos acelerar!"
+    elif progresso >= 0.1:
+        status_meta = "🟠 Começando..."
+    else:
+        status_meta = "🔴 Comece já!"
 
-        if meta_total > 0:
-            progresso = min(valor_progresso / meta_total, 1.0)
-        else:
-            progresso = 1.0
+    embed.add_field(
+        name=f"📊 PROGRESSO • {porcentagem}%",
+        value=(
+            f"```prolog\n{barra_progresso}\n"
+            f"{formatar_dinheiro(valor_progresso)} / {formatar_dinheiro(meta_total)}\n\n"
+            f"{status_meta}\n```"
+        ),
+        inline=False
+    )
 
-        barra_progresso = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
-        porcentagem = int(progresso * 100)
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
 
-        if meta_total == 0:
-            status_meta = "🟢 META ISENTA (Gerente)"
-            cor_status = Cores.SUCESSO
-        elif progresso >= 1:
-            status_meta = "✅ META CONCLUÍDA! 🎉"
-            cor_status = Cores.SUCESSO
-        elif progresso >= 0.7:
-            status_meta = "🟢 Quase lá!"
-            cor_status = Cores.INFO
-        elif progresso >= 0.4:
-            status_meta = "🟡 Vamos acelerar!"
-            cor_status = Cores.AVISO
-        elif progresso >= 0.1:
-            status_meta = "🟠 Começando..."
-            cor_status = Cores.AUSENCIA
-        else:
-            status_meta = "🔴 Comece já!"
-            cor_status = Cores.ERRO
+    if is_soldado:
+        texto_acao = "**🎯 Participar de Ações** - Sua meta é paga com ações realizadas\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro extra"
+    else:
+        texto_acao = "**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta"
 
-        embed.add_field(
-            name=f"📊 PROGRESSO • {porcentagem}%",
-            value=(
-                f"```prolog\n{barra_progresso}\n"
-                f"{formatar_dinheiro(valor_progresso)} / {formatar_dinheiro(meta_total)}\n\n"
-                f"{status_meta}\n```"
-            ),
-            inline=False
-        )
+    embed.add_field(
+        name="⚙️ COMO USAR",
+        value=texto_acao,
+        inline=False
+    )
 
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
-        )
-
-        if is_soldado:
-            texto_acao = "**🎯 Participar de Ações** - Sua meta é paga com ações realizadas\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro extra"
-        else:
-            texto_acao = "**💣 Vender Pólvora** - Venda pólvora para a facção\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta\n**💰 Pólvora Paga** - Gerente paga a pólvora pendente"
-
-        embed.add_field(
-            name="⚙️ COMO USAR",
-            value=texto_acao,
-            inline=False
-        )
-
-        embed.set_footer(
-            text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
-
-        async for msg in canal.history(limit=30):
-            if msg.author == bot.user:
-                try:
-                    await msg.delete()
-                    await asyncio.sleep(0.3)
-                except:
-                    pass
-
-        msg = await canal.send(embed=embed, view=MetaView(user_id))
-        await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
-        await verificar_meta_concluida(user_id, valor_progresso)
-
-    except Exception as e:
-        logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
 
 async def atualizar_categoria_meta(member):
     try:
@@ -3074,8 +3047,10 @@ class MetaView(discord.ui.View):
             if not pool:
                 await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
                 return
+
             async with pool.acquire() as conn:
                 meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+
             if not meta:
                 guild = interaction.guild
                 member = guild.get_member(int(self.user_id))
@@ -3088,7 +3063,9 @@ class MetaView(discord.ui.View):
                 else:
                     await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                     return
+
             await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
+
         except Exception as e:
             logger.error(f"❌ Erro no botão Adicionar Dinheiro: {e}")
             try:
@@ -3102,31 +3079,36 @@ class MetaView(discord.ui.View):
             is_dono = str(interaction.user.id) == str(self.user_id)
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
             is_admin = interaction.user.guild_permissions.administrator
+
             if not is_dono and not is_gerente and not is_admin:
                 await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
                 return
+
             pool = await get_pool()
             if not pool:
                 await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
                 return
+
             async with pool.acquire() as conn:
                 meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+
             if not meta:
                 await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                 return
+
             dados = {
                 "dinheiro": meta["dinheiro"] or 0,
-                "polvora": meta["polvora"] or 0,
                 "saldo_excedente": meta.get("saldo_excedente") or 0
             }
+
             await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
+
         except Exception as e:
             logger.error(f"❌ Erro no botão Editar Meta: {e}")
             try:
                 await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
                 pass
-
 # =========================================================
 # 3. MODAIS DE METAS
 # =========================================================
