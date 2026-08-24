@@ -5763,11 +5763,10 @@ async def restaurar_botoes_vendas():
     try:
         canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
         if not canal:
-            logger.error("❌ Canal de encomendas não encontrado para restaurar botões!")
+            logger.error("❌ Canal de encomendas não encontrado!")
             return
 
         contador = 0
-        ignorados = 0
 
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
@@ -5776,7 +5775,7 @@ async def restaurar_botoes_vendas():
                     embed = msg.embeds[0]
 
                     # =========================================================
-                    # ANALISAR O STATUS DO PEDIDO (PELO CAMPO "Status" LÁ EM BAIXO)
+                    # ANALISAR O STATUS (PELO CAMPO "Status")
                     # =========================================================
                     pago = False
                     entregue = False
@@ -5789,7 +5788,7 @@ async def restaurar_botoes_vendas():
                         pago = True
                         entregue = True
 
-                    # Procurar o campo "Status" (que é o que realmente mostra o progresso)
+                    # Procurar o campo "Status"
                     for field in embed.fields:
                         if field.name == "Status" or field.name == "📌 Status":
                             valor = field.value
@@ -5801,7 +5800,7 @@ async def restaurar_botoes_vendas():
                                 cancelado = True
                             break
 
-                    # Se não achou o campo "Status", procurar em todo lugar
+                    # Se não achou, procurar em todos os campos
                     if not pago and not entregue and not cancelado:
                         for field in embed.fields:
                             valor = field.value
@@ -5878,10 +5877,9 @@ async def restaurar_botoes_vendas():
 
                     await safe_request(msg.edit, view=view)
                     contador += 1
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(0.5)
 
         logger.info(f"✅ {contador} mensagens de venda restauradas com status correto!")
-        logger.info(f"⏭️ {ignorados} mensagens ignoradas")
 
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar botões de vendas: {e}")
@@ -13092,11 +13090,12 @@ async def setup_status():
     async def get_stats():
         return {
             "membros": len([m for m in bot.get_guild(GUILD_ID).members if not m.bot]) if bot.get_guild(GUILD_ID) else 0,
-            "producoes": len([p for p in producoes_tasks if not p.done()]) if producoes_tasks else 0,
+            "producoes": len([p for p in producoes_tasks.values() if hasattr(p, 'done') and not p.done()]) if producoes_tasks else 0,
             "metas": len(metas_cache),
             "estoque_pt": (await carregar_estoque()).get('PT', 0),
             "estoque_sub": (await carregar_estoque()).get('SUB', 0),
         }
+
     @tasks.loop(minutes=3)
     async def atualizar_status():
         try:
@@ -13112,6 +13111,7 @@ async def setup_status():
             await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=status_text))
         except Exception as e:
             logger.error(f"Erro ao atualizar status: {e}")
+
     if not atualizar_status.is_running():
         atualizar_status.start()
 
