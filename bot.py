@@ -13890,6 +13890,302 @@ async def on_voice_state_update(member, before, after):
         )
         embed.set_footer(text="Vida Rasa 442 • Logs")
         await canal_log.send(embed=embed)
+
+# =========================================================
+# ==================== SISTEMA DE MÚSICA ==================
+# =========================================================
+
+# =========================================================
+# 1. IMPORTAÇÕES
+# =========================================================
+import yt_dlp
+from discord import FFmpegPCMAudio
+
+# =========================================================
+# 2. VARIÁVEIS GLOBAIS
+# =========================================================
+musica_filas = {}
+musica_atual = {}
+musica_loop = {}
+musica_volume = {}
+
+# =========================================================
+# 3. FUNÇÃO PARA FORMATAR TEMPO
+# =========================================================
+def formatar_tempo_musica(segundos):
+    minutos = segundos // 60
+    segundos_restantes = segundos % 60
+    return f"{minutos:02d}:{segundos_restantes:02d}"
+
+# =========================================================
+# 4. FUNÇÃO PARA TOCAR MÚSICA
+# =========================================================
+async def tocar_musica(ctx, url):
+    if not ctx.author.voice:
+        await ctx.send("❌ **Você precisa estar em um canal de voz!**")
+        return
+
+    canal_voz = ctx.author.voice.channel
+
+    if ctx.voice_client is None:
+        await canal_voz.connect()
+    elif ctx.voice_client.channel != canal_voz:
+        await ctx.voice_client.move_to(canal_voz)
+
+    guild_id = ctx.guild.id
+
+    if guild_id not in musica_filas:
+        musica_filas[guild_id] = []
+
+    if ctx.voice_client.is_playing():
+        musica_filas[guild_id].append(url)
+        await ctx.send(f"🎵 **Música adicionada à fila!** (Posição {len(musica_filas[guild_id])})")
+        return
+
+    await tocar_proxima(ctx, url)
+
+async def tocar_proxima(ctx, url=None):
+    guild_id = ctx.guild.id
+
+    if url is None:
+        if guild_id in musica_filas and musica_filas[guild_id]:
+            url = musica_filas[guild_id].pop(0)
+        else:
+            return
+
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            url_audio = info['url']
+            titulo = info.get('title', 'Desconhecido')
+            duracao = info.get('duration', 0)
+            thumbnail = info.get('thumbnail', None)
+            canal_nome = info.get('channel', 'Desconhecido')
+
+        ffmpeg_options = {
+            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+            'options': '-vn'
+        }
+
+        ctx.voice_client.play(
+            FFmpegPCMAudio(url_audio, **ffmpeg_options),
+            after=lambda e: asyncio.run_coroutine_threadsafe(proxima_musica(ctx), bot.loop)
+        )
+
+        musica_atual[guild_id] = {
+            "titulo": titulo,
+            "url": url,
+            "duracao": duracao,
+            "thumbnail": thumbnail,
+            "canal": canal_nome
+        }
+
+        embed = discord.Embed(
+            title="🎵 TOCANDO AGORA",
+            color=0x1abc9c,
+            timestamp=agora()
+        )
+        embed.set_author(
+            name="🛡 Vida Rasa 442 • Sistema de Música",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        embed.add_field(name="🎶 Música", value=f"**[{titulo}]({url})**", inline=False)
+        embed.add_field(name="⏱️ Duração", value=formatar_tempo_musica(duracao), inline=True)
+        embed.add_field(name="📺 Canal", value=canal_nome, inline=True)
+        embed.add_field(name="👤 Pedido por", value=ctx.author.mention, inline=False)
+
+        if thumbnail:
+            embed.set_thumbnail(url=thumbnail)
+
+        if guild_id in musica_filas and musica_filas[guild_id]:
+            embed.add_field(name="📋 Fila", value=f"{len(musica_filas[guild_id])} música(s) na fila", inline=False)
+
+        embed.set_footer(text="🎧 Use !queue para ver a fila")
+
+        await ctx.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao tocar música: {e}")
+        await ctx.send(f"❌ **Erro ao tocar música:** {str(e)[:100]}")
+
+async def proxima_musica(ctx):
+    guild_id = ctx.guild.id
+    if guild_id in musica_filas and musica_filas[guild_id]:
+        url = musica_filas[guild_id].pop(0)
+        await tocar_proxima(ctx, url)
+    elif guild_id in musica_atual:
+        del musica_atual[guild_id]
+
+# =========================================================
+# 5. COMANDOS DE MÚSICA
+# =========================================================
+
+# 5.1 TOCAR MÚSICA
+@bot.command(name="play", aliases=["p"])
+async def cmd_play(ctx, *, url):
+    """Toca uma música do YouTube (ex: !play https://youtu.be/xxx)"""
+    await tocar_musica(ctx, url)
+
+# 5.2 PARAR E LIMPAR FILA
+@bot.command(name="stop")
+async def cmd_stop(ctx):
+    """Para a música e limpa a fila"""
+    if not ctx.voice_client:
+        await ctx.send("❌ **Não estou tocando nada!**")
+        return
+
+    guild_id = ctx.guild.id
+    ctx.voice_client.stop()
+    if guild_id in musica_filas:
+        musica_filas[guild_id].clear()
+    if guild_id in musica_atual:
+        del musica_atual[guild_id]
+
+    await ctx.send("⏹️ **Música parada e fila limpa!**")
+
+# 5.3 PULAR MÚSICA
+@bot.command(name="skip", aliases=["s"])
+async def cmd_skip(ctx):
+    """Pula para a próxima música"""
+    if not ctx.voice_client or not ctx.voice_client.is_playing():
+        await ctx.send("❌ **Não estou tocando nada!**")
+        return
+
+    ctx.voice_client.stop()
+    await ctx.send("⏭️ **Música pulada!**")
+
+# 5.4 VER FILA
+@bot.command(name="queue", aliases=["q"])
+async def cmd_queue(ctx):
+    """Mostra a fila de músicas"""
+    guild_id = ctx.guild.id
+
+    embed = discord.Embed(
+        title="📋 FILA DE MÚSICAS",
+        color=0x3498db,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Sistema de Música",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    if guild_id not in musica_filas or not musica_filas[guild_id]:
+        if guild_id in musica_atual:
+            musica = musica_atual[guild_id]
+            embed.add_field(
+                name="🎵 TOCANDO AGORA",
+                value=f"**[{musica['titulo']}]({musica['url']})**",
+                inline=False
+            )
+            embed.add_field(name="📋 Fila", value="📭 **Vazia**", inline=False)
+        else:
+            embed.add_field(name="📭 FILA VAZIA", value="Use `!play` para adicionar músicas!", inline=False)
+    else:
+        if guild_id in musica_atual:
+            musica = musica_atual[guild_id]
+            embed.add_field(
+                name="🎵 TOCANDO AGORA",
+                value=f"**[{musica['titulo']}]({musica['url']})**",
+                inline=False
+            )
+
+        fila_texto = ""
+        for i, url in enumerate(musica_filas[guild_id][:10], 1):
+            try:
+                with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'extract_flat': True}) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    titulo = info.get('title', url)
+                    fila_texto += f"`{i}.` {titulo[:50]}\n"
+            except:
+                fila_texto += f"`{i}.` {url[:50]}\n"
+
+        embed.add_field(name="📋 PRÓXIMAS MÚSICAS", value=fila_texto if fila_texto else "📭 Vazia", inline=False)
+
+        total = len(musica_filas[guild_id])
+        embed.set_footer(text=f"Total: {total} música(s) na fila")
+
+    await ctx.send(embed=embed)
+
+# 5.5 PAUSAR
+@bot.command(name="pause")
+async def cmd_pause(ctx):
+    """Pausa a música"""
+    if not ctx.voice_client or not ctx.voice_client.is_playing():
+        await ctx.send("❌ **Não estou tocando nada!**")
+        return
+
+    ctx.voice_client.pause()
+    await ctx.send("⏸️ **Música pausada!**")
+
+# 5.6 RETOMAR
+@bot.command(name="resume")
+async def cmd_resume(ctx):
+    """Retoma a música"""
+    if not ctx.voice_client or not ctx.voice_client.is_paused():
+        await ctx.send("❌ **Nenhuma música pausada!**")
+        return
+
+    ctx.voice_client.resume()
+    await ctx.send("▶️ **Música retomada!**")
+
+# 5.7 SAIR DO CANAL DE VOZ
+@bot.command(name="leave", aliases=["sair"])
+async def cmd_leave(ctx):
+    """Sai do canal de voz"""
+    if ctx.voice_client:
+        guild_id = ctx.guild.id
+        ctx.voice_client.stop()
+        await ctx.voice_client.disconnect()
+        if guild_id in musica_filas:
+            musica_filas[guild_id].clear()
+        if guild_id in musica_atual:
+            del musica_atual[guild_id]
+        await ctx.send("👋 **Saindo do canal de voz!**")
+    else:
+        await ctx.send("❌ **Não estou em nenhum canal de voz!**")
+
+# 5.8 MÚSICA ATUAL
+@bot.command(name="np", aliases=["nowplaying"])
+async def cmd_nowplaying(ctx):
+    """Mostra a música que está tocando agora"""
+    guild_id = ctx.guild.id
+
+    if guild_id not in musica_atual:
+        await ctx.send("❌ **Nenhuma música tocando no momento!**")
+        return
+
+    musica = musica_atual[guild_id]
+
+    embed = discord.Embed(
+        title="🎵 TOCANDO AGORA",
+        color=0x1abc9c,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Sistema de Música",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    embed.add_field(name="🎶 Música", value=f"**[{musica['titulo']}]({musica['url']})**", inline=False)
+    embed.add_field(name="⏱️ Duração", value=formatar_tempo_musica(musica['duracao']), inline=True)
+    embed.add_field(name="📺 Canal", value=musica.get('canal', 'Desconhecido'), inline=True)
+    if musica.get('thumbnail'):
+        embed.set_thumbnail(url=musica['thumbnail'])
+    embed.set_footer(text="🎧 Use !queue para ver a fila")
+
+    await ctx.send(embed=embed)
 # =========================================================
 # ==================== PARTE 20: MAIN E SHUTDOWN ==========
 # =========================================================
