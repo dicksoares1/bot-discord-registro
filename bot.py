@@ -8385,17 +8385,16 @@ async def salvar_grupo_db(grupo_id, nome_org, lider_nome, lider_telefone, braco_
     if not pool:
         logger.error("❌ Banco de dados indisponível para salvar grupo!")
         return False
-    
+
     try:
         async with pool.acquire() as conn:
             # Verificar se o grupo já existe
             existente = await conn.fetchval(
-                "SELECT grupo_id FROM grupos WHERE grupo_id = $1", 
+                "SELECT grupo_id FROM grupos WHERE grupo_id = $1",
                 grupo_id
             )
-            
+
             if existente:
-                logger.warning(f"⚠️ Grupo {grupo_id} já existe! Atualizando...")
                 await conn.execute(
                     """
                     UPDATE grupos SET
@@ -8405,18 +8404,17 @@ async def salvar_grupo_db(grupo_id, nome_org, lider_nome, lider_telefone, braco_
                         ativo = true
                     WHERE grupo_id = $1
                     """,
-                    grupo_id, 
-                    nome_org.upper(), 
-                    lider_nome.upper(), 
+                    grupo_id,
+                    nome_org.upper(),
+                    lider_nome.upper(),
                     lider_telefone.upper(),
                     braco_nome.upper() if braco_nome else None,
                     braco_telefone.upper() if braco_telefone else None,
-                    produto.upper(), 
-                    tipo_org, 
+                    produto.upper(),
+                    tipo_org,
                     observacoes.upper() if observacoes else ""
                 )
             else:
-                # Inserir novo grupo
                 await conn.execute(
                     """
                     INSERT INTO grupos (
@@ -8425,21 +8423,21 @@ async def salvar_grupo_db(grupo_id, nome_org, lider_nome, lider_telefone, braco_
                         data_criacao, ativo
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true)
                     """,
-                    grupo_id, 
-                    nome_org.upper(), 
-                    lider_nome.upper(), 
+                    grupo_id,
+                    nome_org.upper(),
+                    lider_nome.upper(),
                     lider_telefone.upper(),
                     braco_nome.upper() if braco_nome else None,
                     braco_telefone.upper() if braco_telefone else None,
-                    produto.upper(), 
-                    tipo_org, 
+                    produto.upper(),
+                    tipo_org,
                     observacoes.upper() if observacoes else "",
                     agora_db()
                 )
-            
+
             logger.info(f"✅ Grupo {nome_org} salvo com sucesso! ID: {grupo_id}")
             return True
-            
+
     except Exception as e:
         logger.error(f"❌ ERRO AO SALVAR GRUPO: {e}")
         return False
@@ -8548,7 +8546,11 @@ async def recriar_painel_grupos():
     if not canal:
         logger.error(f"❌ CANAL NÃO ENCONTRADO: {CANAL_GRUPOS_ID}")
         return False
+
     try:
+        # =========================================================
+        # DELETAR MENSAGENS ANTIGAS DO BOT
+        # =========================================================
         deletadas = 0
         async for msg in canal.history(limit=500):
             if msg.author == bot.user:
@@ -8558,9 +8560,18 @@ async def recriar_painel_grupos():
                     await asyncio.sleep(0.3)
                 except:
                     pass
+
+        logger.info(f"🗑️ {deletadas} mensagens antigas deletadas")
+
+        # =========================================================
+        # RECRIAR O PAINEL
+        # =========================================================
         await asyncio.sleep(2)
         await enviar_painel_grupos()
+
+        logger.info("✅ Painel de grupos recriado com sucesso!")
         return True
+
     except Exception as e:
         logger.error(f"❌ ERRO AO RECRIAR PAINEL: {e}")
         return False
