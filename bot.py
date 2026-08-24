@@ -13524,7 +13524,7 @@ async def carregar_bau_estoque():
 # =========================================================
 # 2. FUNÇÃO PARA CRIAR EMBED DO BAU
 # =========================================================
-async def criar_embed_bau_completo(tipo, membro, itens, observacao=None):
+async def criar_embed_bau_completo(tipo, itens, observacao=None):
     """Cria um embed completo para registro de baú com estoque atualizado"""
     
     if tipo == "entrou":
@@ -13554,7 +13554,7 @@ async def criar_embed_bau_completo(tipo, membro, itens, observacao=None):
     )
     
     # =========================================================
-    # APENAS OS PRODUTOS (SEM NOME DO MEMBRO)
+    # APENAS OS PRODUTOS
     # =========================================================
     if itens:
         texto_itens = ""
@@ -13678,11 +13678,6 @@ class BauModal(discord.ui.Modal):
         self.tipo = tipo
         self.canal_id = canal_id
         
-        # =========================================================
-        # REMOVIDO: campo "Nome do membro"
-        # Agora usa automaticamente quem clicou
-        # =========================================================
-        
         self.itens = discord.ui.TextInput(
             label="📦 Itens (item: quantidade)",
             placeholder="Ex: placas: 100\nc4: 10\nfuzil: 2",
@@ -13706,9 +13701,6 @@ class BauModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True)
         
         try:
-            # =========================================================
-            # PEGAR O NOME DO MEMBRO AUTOMATICAMENTE
-            # =========================================================
             nome_membro = interaction.user.display_name
             
             # Processar itens
@@ -13728,7 +13720,7 @@ class BauModal(discord.ui.Modal):
                 await interaction.followup.send("❌ **Nenhum item válido encontrado!** Use o formato: `Item: Quantidade`", ephemeral=True)
                 return
             
-            # Atualizar estoque e registrar movimentações
+            # Atualizar estoque
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
                     await atualizar_bau_estoque(item, quantidade, "adicionar")
@@ -13744,38 +13736,38 @@ class BauModal(discord.ui.Modal):
                 )
             
             # =========================================================
-            # CRIAR MENSAGEM DE LOG (ex: "Ruvio adicionou 100 placas.")
+            # CRIAR MENSAGEM SEPARADA (FORA DO EMBED)
             # =========================================================
-            log_mensagens = []
+            mensagens = []
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
-                    log_mensagens.append(f"**{nome_membro}** adicionou **{quantidade}** {item}.")
+                    mensagens.append(f"📥 **{nome_membro}** colocou **{quantidade}** {item} no baú.")
                 else:
-                    log_mensagens.append(f"**{nome_membro}** removeu **{quantidade}** {item}.")
+                    mensagens.append(f"📤 **{nome_membro}** removeu **{quantidade}** {item} do baú.")
             
-            texto_log = "\n".join(log_mensagens)
+            texto_mensagem = "\n".join(mensagens)
             
             # =========================================================
-            # CRIAR EMBED DO REGISTRO (COM ESTOQUE ATUALIZADO)
+            # CRIAR EMBED DO REGISTRO
             # =========================================================
             embed = await criar_embed_bau_completo(
                 tipo=self.tipo,
-                membro=nome_membro,
                 itens=itens_dict,
                 observacao=self.observacao.value if self.observacao.value else None
             )
             
+            # =========================================================
+            # ENVIAR PARA O CANAL
+            # =========================================================
             canal = interaction.guild.get_channel(self.canal_id)
             if canal:
-                # Enviar o embed do registro
+                # 1. Enviar o embed
                 await canal.send(embed=embed)
                 
-                # Enviar a mensagem de log embaixo
-                await canal.send(f"📝 {texto_log}")
+                # 2. Enviar a mensagem separada (fora do embed)
+                await canal.send(texto_mensagem)
                 
-                # =========================================================
-                # ATUALIZAR O PAINEL (ESTOQUE)
-                # =========================================================
+                # 3. Atualizar o painel
                 if self.canal_id == CANAL_BAU_MEMBRO_ENTROU_ID:
                     await enviar_painel_bau_membro_entrou()
                 elif self.canal_id == CANAL_BAU_MEMBRO_SAIU_ID:
@@ -13791,7 +13783,7 @@ class BauModal(discord.ui.Modal):
                 
         except Exception as e:
             logger.error(f"❌ Erro no BauModal: {e}")
-            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
+            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)            
 # =========================================================
 # 4. VIEWS COM BOTÕES
 # =========================================================
