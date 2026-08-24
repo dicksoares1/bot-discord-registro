@@ -8669,52 +8669,158 @@ async def enviar_painel_grupos():
 # 4. VIEWS DE GRUPOS
 # =========================================================
 class PainelGruposView(discord.ui.View):
-    def __init__(self, grupos):
+    def __init__(self, grupos, pagina_atual=0):
         super().__init__(timeout=None)
         self.grupos = grupos
+        self.pagina_atual = pagina_atual
+        self.itens_por_pagina = 25
+        self.total_paginas = (len(grupos) + self.itens_por_pagina - 1) // self.itens_por_pagina
+        
+        # Se não houver grupos, mostra mensagem
+        if not grupos:
+            embed = discord.Embed(
+                title="📭 NENHUM GRUPO",
+                description="CLIQUE EM **➕ NOVO GRUPO** PARA CADASTRAR.",
+                color=0x1a1a2e
+            )
+            # Adicionar botões mesmo assim
+            self.add_item(discord.ui.Button(label="➕ NOVO GRUPO", style=discord.ButtonStyle.success, custom_id="novo_padrao", emoji="➕"))
+            self.add_item(discord.ui.Button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="atualizar_padrao", emoji="🔄"))
+            return
+
+        # Calcular índices da página atual
+        inicio = self.pagina_atual * self.itens_por_pagina
+        fim = min(inicio + self.itens_por_pagina, len(grupos))
+        grupos_pagina = grupos[inicio:fim]
+
+        # Criar o menu suspenso com os grupos da página
+        options = []
+        for grupo in grupos_pagina:
+            nome = grupo['nome_org'][:45]
+            tipo = grupo.get('tipo_org', 'PISTA SEM PAINEL')
+            emoji = TIPOS_ORGANIZACAO.get(tipo, {}).get('emoji', '🏷️')
+            options.append(
+                discord.SelectOption(
+                    label=nome,
+                    description=f"{emoji} {grupo['lider_nome'][:20]}",
+                    value=grupo['grupo_id'],
+                    emoji="🏷️"
+                )
+            )
+
+        # Se não houver opções na página, adiciona uma opção padrão
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="Nenhum grupo nesta página",
+                    value="none",
+                    emoji="📭"
+                )
+            )
+
         import time
         self.uid = str(int(time.time()))[-6:]
-        if grupos and len(grupos) > 0:
-            options = []
-            for grupo in grupos[:25]:
-                nome = grupo['nome_org'][:45]
-                tipo = grupo.get('tipo_org', 'PISTA SEM PAINEL')
-                emoji = TIPOS_ORGANIZACAO.get(tipo, {}).get('emoji', '🏷️')
-                options.append(
-                    discord.SelectOption(
-                        label=nome,
-                        description=f"{emoji} {grupo['lider_nome'][:20]}",
-                        value=grupo['grupo_id'],
-                        emoji="🏷️"
-                    )
-                )
-            if options:
-                select = discord.ui.Select(
-                    placeholder="📋 SELECIONE UM GRUPO...",
-                    options=options,
-                    min_values=1,
-                    max_values=1,
-                    custom_id=f"select_{self.uid}"
-                )
-                select.callback = self.select_callback
-                self.add_item(select)
+        
+        # Select dos grupos
+        select = discord.ui.Select(
+            placeholder=f"📋 PÁGINA {self.pagina_atual + 1}/{self.total_paginas} - {len(grupos)} GRUPOS",
+            options=options,
+            min_values=1,
+            max_values=1,
+            custom_id=f"select_{self.uid}"
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+
+        # =========================================================
+        # BOTÕES DE NAVEGAÇÃO
+        # =========================================================
+        # Botão Anterior
+        if self.pagina_atual > 0:
+            self.add_item(discord.ui.Button(
+                label="◀️ Anterior",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"anterior_{self.uid}",
+                row=1
+            ))
+        else:
+            self.add_item(discord.ui.Button(
+                label="◀️ Anterior",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"anterior_{self.uid}",
+                disabled=True,
+                row=1
+            ))
+
+        # Indicador de página
+        self.add_item(discord.ui.Button(
+            label=f"📄 {self.pagina_atual + 1}/{self.total_paginas}",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"pagina_{self.uid}",
+            disabled=True,
+            row=1
+        ))
+
+        # Botão Próximo
+        if self.pagina_atual < self.total_paginas - 1:
+            self.add_item(discord.ui.Button(
+                label="▶️ Próxima",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"proxima_{self.uid}",
+                row=1
+            ))
+        else:
+            self.add_item(discord.ui.Button(
+                label="▶️ Próxima",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"proxima_{self.uid}",
+                disabled=True,
+                row=1
+            ))
+
+        # =========================================================
+        # BOTÕES DE AÇÃO
+        # =========================================================
+        self.add_item(discord.ui.Button(
+            label="➕ NOVO GRUPO",
+            style=discord.ButtonStyle.success,
+            custom_id="novo_padrao",
+            emoji="➕",
+            row=2
+        ))
+
+        self.add_item(discord.ui.Button(
+            label="🔄 ATUALIZAR",
+            style=discord.ButtonStyle.secondary,
+            custom_id="atualizar_padrao",
+            emoji="🔄",
+            row=2
+        ))
 
     async def select_callback(self, interaction: discord.Interaction):
         try:
             grupo_id = interaction.data["values"][0]
+            if grupo_id == "none":
+                await interaction.response.send_message("📭 Nenhum grupo selecionado.", ephemeral=True)
+                return
+
             await interaction.response.defer(ephemeral=True)
+
             dados = await carregar_grupo_db(grupo_id)
             if not dados:
                 await interaction.followup.send("❌ GRUPO NÃO ENCONTRADO!", ephemeral=True)
                 return
+
             compras = await carregar_compras_grupo_db(grupo_id)
             tipo_org = dados.get('tipo_org', 'PISTA SEM PAINEL')
             info_tipo = TIPOS_ORGANIZACAO.get(tipo_org, TIPOS_ORGANIZACAO['PISTA SEM PAINEL'])
+
             embed = discord.Embed(
                 title=f"{info_tipo['emoji']} {dados['nome_org']}",
                 color=0x3498db,
                 timestamp=agora()
             )
+
             info = f"**👤 LÍDER:** {dados['lider_nome']}\n"
             info += f"**📱 TELEFONE:** {dados['lider_telefone']}\n"
             if dados.get('braco_nome'):
@@ -8724,7 +8830,9 @@ class PainelGruposView(discord.ui.View):
             info += f"\n**🔫 PRODUTO:** {dados['produto']}\n"
             info += f"\n**📌 TIPO:** {info_tipo['nome']}\n"
             info += f"**📝 {info_tipo['descricao']}**"
+
             embed.add_field(name="📋 INFORMAÇÕES", value=info, inline=False)
+
             pt = compras.get("PT", {})
             sub = compras.get("SUB", {})
             compras_texto = ""
@@ -8736,42 +8844,155 @@ class PainelGruposView(discord.ui.View):
                 compras_texto += f"\n**📦 TOTAL:** {fmt_num(pt.get('quantidade', 0) + sub.get('quantidade', 0))} PACOTES"
             else:
                 compras_texto = "📭 NENHUMA COMPRA"
+
             embed.add_field(name="📦 COMPRAS", value=compras_texto, inline=False)
+
             if dados.get('observacoes'):
                 embed.add_field(name="📝 OBS", value=dados['observacoes'], inline=False)
+
             view = GrupoView(grupo_id, dados['nome_org'])
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
         except Exception as e:
             logger.error(f"❌ ERRO: {e}")
             await interaction.followup.send(f"❌ ERRO: {str(e)[:100]}", ephemeral=True)
 
-    @discord.ui.button(label="➕ NOVO GRUPO", style=discord.ButtonStyle.success, custom_id="novo_padrao", emoji="➕")
-    async def novo_grupo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
-        if not is_admin and not is_gerente:
-            await interaction.response.send_message("❌ APENAS ADM OU GERENTES!", ephemeral=True)
-            return
-        view = EscolherTipoView("registrar")
-        embed = discord.Embed(
-            title="📌 SELECIONE O TIPO DE ORGANIZAÇÃO",
-            description=(
-                "**CLIQUE NO BOTÃO CORRESPONDENTE AO TIPO:**\n\n"
-                "📋 **PISTA SEM PAINEL** - APENAS PT\n"
-                "📱 **PISTA COM PAINEL** - PT E SUB\n"
-                "🤵 **MAFIAS** - PT E SUB\n"
-                "🏚️ **FAVELAS** - PT E SUB\n"
-                "🔧 **MECÂNICA ILEGAL** - PT E SUB"
-            ),
-            color=0x3498db
-        )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        custom_id = interaction.data.get("custom_id", "")
 
-    @discord.ui.button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="atualizar_padrao", emoji="🔄")
-    async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        await recriar_painel_grupos()
-        await interaction.followup.send("✅ PAINEL ATUALIZADO!", ephemeral=True)
+        if custom_id == "novo_padrao":
+            is_admin = interaction.user.guild_permissions.administrator
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            if not is_admin and not is_gerente:
+                await interaction.response.send_message("❌ APENAS ADM OU GERENTES!", ephemeral=True)
+                return False
+
+            view = EscolherTipoView("registrar")
+            embed = discord.Embed(
+                title="📌 SELECIONE O TIPO DE ORGANIZAÇÃO",
+                description=(
+                    "**CLIQUE NO BOTÃO CORRESPONDENTE AO TIPO:**\n\n"
+                    "📋 **PISTA SEM PAINEL** - APENAS PT\n"
+                    "📱 **PISTA COM PAINEL** - PT E SUB\n"
+                    "🤵 **MAFIAS** - PT E SUB\n"
+                    "🏚️ **FAVELAS** - PT E SUB\n"
+                    "🔧 **MECÂNICA ILEGAL** - PT E SUB"
+                ),
+                color=0x3498db
+            )
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            return False
+
+        elif custom_id == "atualizar_padrao":
+            await interaction.response.defer(ephemeral=True)
+            await recriar_painel_grupos()
+            await interaction.followup.send("✅ PAINEL ATUALIZADO!", ephemeral=True)
+            return False
+
+        elif custom_id.startswith("anterior_"):
+            nova_pagina = self.pagina_atual - 1
+            await interaction.response.defer(ephemeral=True)
+            await self.recarregar_painel(interaction, nova_pagina)
+            return False
+
+        elif custom_id.startswith("proxima_"):
+            nova_pagina = self.pagina_atual + 1
+            await interaction.response.defer(ephemeral=True)
+            await self.recarregar_painel(interaction, nova_pagina)
+            return False
+
+        return True
+
+    async def recarregar_painel(self, interaction, nova_pagina):
+        """Recarrega o painel com a nova página"""
+        try:
+            # Buscar grupos novamente
+            grupos = await carregar_grupos_db()
+            
+            # Criar nova view com a página atualizada
+            nova_view = PainelGruposView(grupos, nova_pagina)
+            
+            # Atualizar o embed
+            total_pt = 0
+            total_sub = 0
+            for grupo in grupos:
+                try:
+                    compras = await carregar_compras_grupo_db(grupo["grupo_id"])
+                    total_pt += compras.get("PT", {}).get("quantidade", 0)
+                    total_sub += compras.get("SUB", {}).get("quantidade", 0)
+                except:
+                    pass
+
+            embed = discord.Embed(
+                title="👥 ── GERENCIAMENTO DE GRUPOS ── 👥",
+                description="📋 VDR 442 • Organizações",
+                color=0x1a1a2e,
+                timestamp=agora()
+            )
+
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            embed.add_field(
+                name="📌 TIPOS DE ORGANIZAÇÃO",
+                value=(
+                    "📋 PISTA SEM PAINEL  →  APENAS PT\n"
+                    "📱 PISTA COM PAINEL  →  PT E SUB\n"
+                    "🤵 MAFIAS            →  PT E SUB\n"
+                    "🏚️ FAVELAS           →  PT E SUB\n"
+                    "🔧 MECÂNICA ILEGAL   →  PT E SUB"
+                ),
+                inline=False
+            )
+
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            if grupos:
+                embed.add_field(
+                    name="📊 RESUMO",
+                    value=(
+                        f"👥 {len(grupos)} GRUPOS\n"
+                        f"🔫 PT:  {fmt_num(total_pt)} pacotes\n"
+                        f"🔫 SUB: {fmt_num(total_sub)} pacotes"
+                    ),
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="📭 NENHUM GRUPO",
+                    value="CLIQUE EM **➕ NOVO GRUPO** PARA CADASTRAR.",
+                    inline=False
+                )
+
+            embed.add_field(
+                name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                value="",
+                inline=False
+            )
+
+            embed.add_field(
+                name="📋 SELECIONE UM GRUPO",
+                value=f"👇 PÁGINA {nova_pagina + 1}/{nova_view.total_paginas} - {len(grupos)} GRUPOS",
+                inline=False
+            )
+
+            embed.set_footer(
+                text="🛡 Vida Rasa 442 • Sistema de Grupos",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
+            await interaction.message.edit(embed=embed, view=nova_view)
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao recarregar painel: {e}")
+            await interaction.followup.send(f"❌ Erro ao recarregar: {e}", ephemeral=True)
 
 class GrupoView(discord.ui.View):
     def __init__(self, grupo_id, nome_org):
@@ -8783,10 +9004,25 @@ class GrupoView(discord.ui.View):
         self.add_item(discord.ui.Button(label="✏️ EDITAR", style=discord.ButtonStyle.primary, custom_id=f"editar_{self.uid}", emoji="✏️"))
         self.add_item(discord.ui.Button(label="🗑️ EXCLUIR", style=discord.ButtonStyle.danger, custom_id=f"excluir_{self.uid}", emoji="🗑️"))
         self.add_item(discord.ui.Button(label="📊 COMPRAS", style=discord.ButtonStyle.success, custom_id=f"compras_{self.uid}", emoji="📦"))
+        self.add_item(discord.ui.Button(label="🚫 DESATIVAR", style=discord.ButtonStyle.danger, custom_id=f"desativar_{self.uid}", emoji="🚫", row=2))
+
+    async def desativar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ APENAS ADM OU GERENTES!", ephemeral=True)
+            return
+
+        view = ConfirmarDesativarView(self.grupo_id, self.nome_org)
+        await interaction.response.send_message(f"⚠️ **DESATIVAR GRUPO {self.nome_org}?**\nO grupo não aparecerá mais no painel.", view=view, ephemeral=True)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
-        if custom_id.startswith(f"editar_{self.uid}"):
+        if custom_id.startswith(f"desativar_{self.uid}"):
+            await self.desativar(interaction, None)
+            return False
+        elif custom_id.startswith(f"editar_{self.uid}"):
             await self.editar(interaction)
             return False
         elif custom_id.startswith(f"excluir_{self.uid}"):
@@ -8803,10 +9039,12 @@ class GrupoView(discord.ui.View):
         if not is_admin and not is_gerente:
             await interaction.response.send_message("❌ APENAS ADM OU GERENTES!", ephemeral=True)
             return
+
         dados = await carregar_grupo_db(self.grupo_id)
         if not dados:
             await interaction.response.send_message("❌ GRUPO NÃO ENCONTRADO!", ephemeral=True)
             return
+
         view = EscolherTipoView("editar", {"grupo_id": self.grupo_id, "dados": dados})
         embed = discord.Embed(
             title="📌 SELECIONE O NOVO TIPO DE ORGANIZAÇÃO",
@@ -8829,6 +9067,7 @@ class GrupoView(discord.ui.View):
         if not is_admin and not is_gerente:
             await interaction.response.send_message("❌ APENAS ADM OU GERENTES!", ephemeral=True)
             return
+
         view = ConfirmarExcluirView(self.grupo_id, self.nome_org)
         await interaction.response.send_message(f"⚠️ **EXCLUIR {self.nome_org}?**", view=view, ephemeral=True)
 
@@ -8849,7 +9088,6 @@ class GrupoView(discord.ui.View):
         else:
             embed.add_field(name="📭 NENHUMA COMPRA", value="ESTE GRUPO AINDA NÃO REALIZOU COMPRAS.", inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
-
 # =========================================================
 # 5. MODAIS DE GRUPOS
 # =========================================================
@@ -9031,6 +9269,41 @@ class ConfirmarExcluirView(discord.ui.View):
         await desativar_grupo_db(self.grupo_id)
         await recriar_painel_grupos()
         await interaction.followup.send(f"✅ **GRUPO {self.nome_org} EXCLUÍDO!**", ephemeral=True)
+
+    async def cancelar(self, interaction: discord.Interaction):
+        await interaction.response.send_message("❌ CANCELADO.", ephemeral=True)
+
+class ConfirmarDesativarView(discord.ui.View):
+    def __init__(self, grupo_id, nome_org):
+        super().__init__(timeout=60)
+        self.grupo_id = grupo_id
+        self.nome_org = nome_org
+        import time
+        self.uid = str(int(time.time()))[-6:]
+        self.add_item(discord.ui.Button(label="✅ SIM, DESATIVAR", style=discord.ButtonStyle.danger, custom_id=f"des_confirm_{self.uid}", emoji="✅"))
+        self.add_item(discord.ui.Button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id=f"des_cancel_{self.uid}", emoji="❌"))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        custom_id = interaction.data.get("custom_id", "")
+        if custom_id.startswith("des_confirm_"):
+            await self.confirmar(interaction)
+            return False
+        elif custom_id.startswith("des_cancel_"):
+            await self.cancelar(interaction)
+            return False
+        return True
+
+    async def confirmar(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE grupos SET ativo = false, data_exclusao = NOW() WHERE grupo_id = $1",
+                    self.grupo_id
+                )
+        await recriar_painel_grupos()
+        await interaction.followup.send(f"✅ **GRUPO {self.nome_org} DESATIVADO!**", ephemeral=True)
 
     async def cancelar(self, interaction: discord.Interaction):
         await interaction.response.send_message("❌ CANCELADO.", ephemeral=True)
