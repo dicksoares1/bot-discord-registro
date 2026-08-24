@@ -13531,23 +13531,13 @@ async def criar_embed_bau_completo(tipo, membro, itens, observacao=None):
         titulo = "📥 ENTRADA NO BAÚ"
         cor = 0x2ecc71
         emoji = "📥"
-        descricao = "📦 Registro de entrada no baú"
     else:
         titulo = "📤 SAÍDA DO BAÚ"
         cor = 0xe74c3c
         emoji = "📤"
-        descricao = "📦 Registro de saída do baú"
-    
-    if isinstance(membro, discord.Member):
-        nome_membro = membro.display_name
-        avatar_url = membro.display_avatar.url
-    else:
-        nome_membro = str(membro)
-        avatar_url = None
     
     embed = discord.Embed(
         title=f"{emoji} ── {titulo} ── {emoji}",
-        description=descricao,
         color=cor,
         timestamp=agora()
     )
@@ -13557,34 +13547,15 @@ async def criar_embed_bau_completo(tipo, membro, itens, observacao=None):
         icon_url=bot.user.display_avatar.url if bot.user else None
     )
     
-    if avatar_url:
-        embed.set_thumbnail(url=avatar_url)
-    
     embed.add_field(
         name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         value="",
         inline=False
     )
     
-    embed.add_field(
-        name="👤 MEMBRO",
-        value=f"```\n{nome_membro}\n```",
-        inline=True
-    )
-    
-    embed.add_field(
-        name="📌 TIPO",
-        value=f"```\n{'ENTRADA' if tipo == 'entrou' else 'SAÍDA'}\n```",
-        inline=True
-    )
-    
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        value="",
-        inline=False
-    )
-    
-    # Listar itens movimentados
+    # =========================================================
+    # APENAS OS PRODUTOS (SEM NOME DO MEMBRO)
+    # =========================================================
     if itens:
         texto_itens = ""
         for item, quantidade in itens.items():
@@ -13602,7 +13573,9 @@ async def criar_embed_bau_completo(tipo, membro, itens, observacao=None):
             inline=False
         )
     
-    # Mostrar estoque atual do baú (APENAS ITENS COM QUANTIDADE > 0)
+    # =========================================================
+    # ESTOQUE ATUAL DO BAÚ
+    # =========================================================
     estoque = await carregar_bau_estoque()
     
     if estoque:
@@ -13643,7 +13616,7 @@ async def criar_embed_bau_completo(tipo, membro, itens, observacao=None):
     )
     
     return embed
-
+    
 async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
     """Envia ou atualiza um painel, garantindo que fique sempre no final"""
     canal = bot.get_channel(canal_id)
@@ -13657,7 +13630,6 @@ async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
         return
     
     try:
-        # Primeiro, tentar encontrar o painel existente
         async with pool.acquire() as conn:
             row = await conn.fetchrow("SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1", nome)
             
@@ -13666,14 +13638,12 @@ async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
                     canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
                     msg = await safe_fetch_message(canal_salvo, int(row["mensagem_id"]))
                     if msg:
-                        # Verificar se é a última mensagem
                         ultima_msg = None
                         async for m in canal.history(limit=1):
                             ultima_msg = m
                             break
                         
                         if ultima_msg and ultima_msg.id != msg.id:
-                            # Se não for a última, deletar e enviar nova
                             await msg.delete()
                             msg = None
                     
@@ -13683,8 +13653,6 @@ async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
                 except Exception as e:
                     logger.warning(f"⚠️ Erro ao atualizar painel {nome}: {e}")
             
-            # Se não encontrou ou deu erro, enviar nova mensagem
-            # Primeiro, deletar mensagens antigas do bot no canal
             async for msg in canal.history(limit=50):
                 if msg.author == bot.user and msg.id != row.get("mensagem_id") if row else True:
                     try:
@@ -13710,16 +13678,14 @@ class BauModal(discord.ui.Modal):
         self.tipo = tipo
         self.canal_id = canal_id
         
-        self.membro = discord.ui.TextInput(
-            label="👤 Nome do membro",
-            placeholder="Ex: 820 - Leon",
-            required=True,
-            max_length=100
-        )
+        # =========================================================
+        # REMOVIDO: campo "Nome do membro"
+        # Agora usa automaticamente quem clicou
+        # =========================================================
         
         self.itens = discord.ui.TextInput(
             label="📦 Itens (item: quantidade)",
-            placeholder="Ex: Fuzil: 2\nKit Médico: 5\nColete: 1",
+            placeholder="Ex: placas: 100\nc4: 10\nfuzil: 2",
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=500
@@ -13733,7 +13699,6 @@ class BauModal(discord.ui.Modal):
             max_length=200
         )
         
-        self.add_item(self.membro)
         self.add_item(self.itens)
         self.add_item(self.observacao)
     
@@ -13741,6 +13706,12 @@ class BauModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True)
         
         try:
+            # =========================================================
+            # PEGAR O NOME DO MEMBRO AUTOMATICAMENTE
+            # =========================================================
+            nome_membro = interaction.user.display_name
+            
+            # Processar itens
             itens_dict = {}
             linhas = self.itens.value.strip().split('\n')
             for linha in linhas:
@@ -13757,6 +13728,7 @@ class BauModal(discord.ui.Modal):
                 await interaction.followup.send("❌ **Nenhum item válido encontrado!** Use o formato: `Item: Quantidade`", ephemeral=True)
                 return
             
+            # Atualizar estoque e registrar movimentações
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
                     await atualizar_bau_estoque(item, quantidade, "adicionar")
@@ -13767,20 +13739,52 @@ class BauModal(discord.ui.Modal):
                     tipo=self.tipo,
                     item_nome=item,
                     quantidade=quantidade,
-                    membro=self.membro.value,
+                    membro=nome_membro,
                     observacao=self.observacao.value if self.observacao.value else None
                 )
             
+            # =========================================================
+            # CRIAR MENSAGEM DE LOG (ex: "Ruvio adicionou 100 placas.")
+            # =========================================================
+            log_mensagens = []
+            for item, quantidade in itens_dict.items():
+                if self.tipo == "entrou":
+                    log_mensagens.append(f"**{nome_membro}** adicionou **{quantidade}** {item}.")
+                else:
+                    log_mensagens.append(f"**{nome_membro}** removeu **{quantidade}** {item}.")
+            
+            texto_log = "\n".join(log_mensagens)
+            
+            # =========================================================
+            # CRIAR EMBED DO REGISTRO (COM ESTOQUE ATUALIZADO)
+            # =========================================================
             embed = await criar_embed_bau_completo(
                 tipo=self.tipo,
-                membro=self.membro.value,
+                membro=nome_membro,
                 itens=itens_dict,
                 observacao=self.observacao.value if self.observacao.value else None
             )
             
             canal = interaction.guild.get_channel(self.canal_id)
             if canal:
+                # Enviar o embed do registro
                 await canal.send(embed=embed)
+                
+                # Enviar a mensagem de log embaixo
+                await canal.send(f"📝 {texto_log}")
+                
+                # =========================================================
+                # ATUALIZAR O PAINEL (ESTOQUE)
+                # =========================================================
+                if self.canal_id == CANAL_BAU_MEMBRO_ENTROU_ID:
+                    await enviar_painel_bau_membro_entrou()
+                elif self.canal_id == CANAL_BAU_MEMBRO_SAIU_ID:
+                    await enviar_painel_bau_membro_saiu()
+                elif self.canal_id == CANAL_ARMAS_ENTROU_ID:
+                    await enviar_painel_armas_entrou()
+                elif self.canal_id == CANAL_ARMAS_SAIU_ID:
+                    await enviar_painel_armas_saiu()
+                
                 await interaction.followup.send(f"✅ **Registro enviado com sucesso!**", ephemeral=True)
             else:
                 await interaction.followup.send("❌ **Canal não encontrado!**", ephemeral=True)
@@ -13826,7 +13830,6 @@ class ArmasSaiuView(discord.ui.View):
     async def registrar_armas_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = BauModal("saiu", CANAL_ARMAS_SAIU_ID)
         await interaction.response.send_modal(modal)
-
 # =========================================================
 # 5. FUNÇÕES PARA ENVIAR OS PAINÉIS
 # =========================================================
