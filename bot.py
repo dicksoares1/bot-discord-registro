@@ -1861,9 +1861,6 @@ async def carregar_metas_db():
         return []
     try:
         async with pool.acquire() as conn:
-            # =========================================================
-            # REMOVER polvora DA CONSULTA
-            # =========================================================
             return await conn.fetch("""
                 SELECT user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente 
                 FROM metas
@@ -1961,27 +1958,29 @@ async def fechar_meta(user_id, data_inicio, data_fim):
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
             if not meta:
                 return None
+
             dinheiro = meta["dinheiro"] or 0
             acao = meta.get("acao") or "N/A"
             dinheiro_acoes = meta.get("dinheiro_acoes") or 0
             saldo_excedente = meta.get("saldo_excedente") or 0
             data_fechamento = agora_db()
+
             await conn.execute(
                 """
                 INSERT INTO metas_historico (
                     user_id, dinheiro, acao, dinheiro_acoes,
                     data_inicio, data_fim, data_fechamento
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
                 """,
                 str(user_id),
                 min(dinheiro, 300000),
-                polvora,
                 str(acao),
                 dinheiro_acoes,
                 data_inicio,
                 data_fim,
                 data_fechamento
             )
+
             await conn.execute(
                 """
                 UPDATE metas
@@ -1990,9 +1989,9 @@ async def fechar_meta(user_id, data_inicio, data_fim):
                 """,
                 str(user_id)
             )
+
             return {
                 "dinheiro": min(dinheiro, 300000),
-                "polvora": polvora,
                 "acao": acao,
                 "dinheiro_acoes": dinheiro_acoes,
                 "excedente": saldo_excedente
@@ -2000,7 +1999,7 @@ async def fechar_meta(user_id, data_inicio, data_fim):
     except Exception as e:
         logger.error(f"❌ Erro ao fechar meta: {e}")
         return None
-
+        
 async def fechar_todas_metas(data_inicio, data_fim):
     pool = await get_pool()
     if not pool:
@@ -2012,32 +2011,35 @@ async def fechar_todas_metas(data_inicio, data_fim):
             if not metas:
                 logger.warning("📭 Nenhuma meta encontrada para fechar")
                 return None, []
+
             data_inicio_naive = data_inicio.replace(tzinfo=None) if hasattr(data_inicio, 'replace') else data_inicio
             data_fim_naive = data_fim.replace(tzinfo=None) if hasattr(data_fim, 'replace') else data_fim
             data_fechamento = agora_db()
             relatorio = []
             guild = bot.get_guild(GUILD_ID)
             salvos = 0
+
             for meta in metas:
                 user_id = meta["user_id"]
                 member = guild.get_member(int(user_id)) if guild else None
                 status = membro_deve_ter_meta(member) if member else None
                 if status is None:
                     continue
+
                 dinheiro = meta["dinheiro"] or 0
                 acao = meta["acao"] or "N/A"
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+
                 try:
                     await conn.execute(
                         """
                         INSERT INTO metas_historico (
                             user_id, dinheiro, acao, dinheiro_acoes,
                             data_inicio, data_fim, data_fechamento
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
                         """,
                         user_id,
                         min(dinheiro, 300000),
-                        polvora,
                         acao,
                         dinheiro_acoes,
                         data_inicio_naive,
@@ -2047,15 +2049,16 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     salvos += 1
                 except Exception as e:
                     logger.error(f"❌ Erro ao salvar meta de {user_id} no histórico: {e}")
+
                 relatorio.append({
                     "user_id": user_id,
                     "dinheiro": min(dinheiro, 300000),
-                    "polvora": polvora,
                     "acao": acao,
                     "dinheiro_acoes": dinheiro_acoes,
                     "total_meta": min(dinheiro, 300000),
                     "status": status
                 })
+
             membros_sem_meta = []
             if guild:
                 cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID,
@@ -2072,6 +2075,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                                 "nome": member.display_name,
                                 "menção": member.mention
                             })
+
             return relatorio, membros_sem_meta
     except Exception as e:
         logger.error(f"❌ Erro ao fechar todas as metas: {e}")
@@ -2130,7 +2134,6 @@ async def carregar_metas_cache():
             metas_cache[str(r["user_id"])] = {
                 "canal_id": int(r["canal_id"]),
                 "dinheiro": r["dinheiro"],
-                "polvora": r["polvora"],
                 "acao": r["acao"],
                 "dinheiro_acoes": r.get("dinheiro_acoes") or 0,
                 "saldo_excedente": r.get("saldo_excedente") or 0
