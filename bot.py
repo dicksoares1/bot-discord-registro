@@ -479,7 +479,14 @@ async def safe_request(func, *args, max_retries=3, **kwargs):
             return await func(*args, **kwargs)
         except discord.HTTPException as e:
             if e.status == 429:
-                retry_after = e.retry_after or 5
+                # Tentar obter o tempo de espera do cabeçalho ou usar valor padrão
+                retry_after = 5
+                if hasattr(e, 'response') and e.response:
+                    retry_after = e.response.headers.get('Retry-After', 5)
+                    try:
+                        retry_after = float(retry_after)
+                    except:
+                        retry_after = 5
                 logger.warning(f"⚠️ Rate limit! Aguardando {retry_after}s (tentativa {attempt+1}/{max_retries})")
                 await asyncio.sleep(retry_after + 1)
             else:
