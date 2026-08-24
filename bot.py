@@ -12950,8 +12950,7 @@ async def cmd_status(ctx):
 async def cmd_enviar_bau(ctx):
     """Envia os painéis do baú manualmente"""
     await ctx.send("🔄 Enviando painéis do baú...")
-    await enviar_painel_bau_membro_entrou()
-    await enviar_painel_bau_membro_saiu()
+    await enviar_painel_bau()
     await enviar_painel_armas_entrou()
     await enviar_painel_armas_saiu()
     await ctx.send("✅ Painéis do baú enviados!")
