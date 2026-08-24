@@ -158,6 +158,8 @@ CANAL_COMPRAS_REGISTRADAS_ID = 1270467793363669053
 # Sistema de Clipes
 CANAL_CLIPES_ID = 1229526645837271134
 CANAL_POSTAGEM_X = 1486353689680547900
+# Sismtema de logs
+CANAL_LOGS_GERAIS_ID = 1541438570705977564
 
 # =========================================================
 # 8. CARGOS PERMITIDOS (LISTAS)
@@ -13488,6 +13490,358 @@ async def on_member_remove(member):
             embed_log.set_thumbnail(url=member.display_avatar.url)
         embed_log.set_footer(text=f"Sistema Automático • Saída em {agora().strftime('%d/%m/%Y às %H:%M:%S')}")
         await canal_gerencia.send(embed=embed_log)
+
+# =========================================================
+# ==================== SISTEMA DE LOGS  ===================
+# =========================================================
+
+# =========================================================
+# 1. IMPORTAÇÃO DO PIL
+# =========================================================
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    import io
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    logger.warning("⚠️ PIL não instalado! Instale com: pip install Pillow")
+
+# =========================================================
+# 2. FUNÇÃO PARA CRIAR IMAGEM DE LOG
+# =========================================================
+async def criar_imagem_log(titulo, descricao, cor, autor=None, detalhes=None):
+    """Cria uma imagem de log estilizada"""
+    if not PIL_AVAILABLE:
+        return None
+
+    try:
+        largura = 800
+        altura = 400 if not detalhes else 500
+        imagem = Image.new('RGB', (largura, altura), color=(30, 30, 46))
+        draw = ImageDraw.Draw(imagem)
+
+        cores = {
+            "verde": (46, 204, 113),
+            "vermelho": (231, 76, 60),
+            "azul": (52, 152, 219),
+            "amarelo": (241, 196, 15),
+            "roxo": (155, 89, 182),
+            "laranja": (230, 126, 34)
+        }
+        cor_principal = cores.get(cor, (52, 152, 219))
+
+        try:
+            fonte_titulo = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
+            fonte_normal = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+        except:
+            fonte_titulo = ImageFont.load_default()
+            fonte_normal = ImageFont.load_default()
+
+        # Barra superior
+        draw.rectangle([(0, 0), (largura, 8)], fill=cor_principal)
+
+        # Título
+        draw.text((30, 30), titulo, fill=(255, 255, 255), font=fonte_titulo)
+
+        # Linha separadora
+        draw.line([(30, 75), (largura - 30, 75)], fill=(100, 100, 100), width=1)
+
+        # Descrição
+        draw.text((30, 95), descricao, fill=(200, 200, 200), font=fonte_normal)
+
+        # Autor
+        if autor:
+            draw.text((30, 135), f"👤 {autor}", fill=(255, 255, 255), font=fonte_normal)
+
+        # Detalhes
+        if detalhes:
+            y = 175
+            for chave, valor in detalhes.items():
+                draw.text((30, y), f"{chave}: {valor}", fill=(180, 180, 180), font=fonte_normal)
+                y += 30
+
+        # Rodapé
+        data = agora().strftime("%d/%m/%Y %H:%M")
+        draw.text((30, altura - 30), f"🛡 Vida Rasa 442 • {data}", fill=(100, 100, 100), font=fonte_normal)
+
+        buffer = io.BytesIO()
+        imagem.save(buffer, format='PNG')
+        buffer.seek(0)
+
+        return buffer
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao criar imagem de log: {e}")
+        return None
+
+# =========================================================
+# 3. EVENTOS DE LOG
+# =========================================================
+
+# 3.1 LOG - MENSAGEM DELETADA
+@bot.event
+async def on_message_delete(message):
+    if message.author.bot:
+        return
+
+    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+    if not canal_log:
+        return
+
+    imagem = await criar_imagem_log(
+        titulo="🗑️ MENSAGEM DELETADA",
+        descricao=f"Uma mensagem foi deletada no canal {message.channel.mention}",
+        cor="vermelho",
+        autor=message.author.display_name,
+        detalhes={
+            "Conteúdo": message.content[:200] if message.content else "📎 (sem texto)",
+            "Canal": f"#{message.channel.name}",
+            "ID": str(message.id)
+        }
+    )
+
+    embed = discord.Embed(
+        title="🗑️ MENSAGEM DELETADA",
+        description=f"👤 {message.author.mention}\n📝 **Conteúdo:** {message.content[:500] if message.content else '📎 (sem texto)'}",
+        color=0xe74c3c,
+        timestamp=agora()
+    )
+    embed.add_field(name="📌 Canal", value=message.channel.mention, inline=True)
+    embed.add_field(name="🆔 ID", value=message.id, inline=True)
+    embed.set_footer(text="Vida Rasa 442 • Logs")
+
+    if message.attachments:
+        embed.add_field(name="📎 Anexos", value=f"{len(message.attachments)} arquivo(s)", inline=False)
+
+    if imagem and PIL_AVAILABLE:
+        file = discord.File(imagem, filename="log.png")
+        await canal_log.send(file=file, embed=embed)
+    else:
+        await canal_log.send(embed=embed)
+
+# 3.2 LOG - MENSAGEM EDITADA
+@bot.event
+async def on_message_edit(before, after):
+    if before.author.bot:
+        return
+    if before.content == after.content:
+        return
+
+    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+    if not canal_log:
+        return
+
+    imagem = await criar_imagem_log(
+        titulo="✏️ MENSAGEM EDITADA",
+        descricao=f"Uma mensagem foi editada no canal {before.channel.mention}",
+        cor="amarelo",
+        autor=before.author.display_name,
+        detalhes={
+            "Antes": before.content[:200] if before.content else "(vazio)",
+            "Depois": after.content[:200] if after.content else "(vazio)",
+            "Canal": f"#{before.channel.name}"
+        }
+    )
+
+    embed = discord.Embed(
+        title="✏️ MENSAGEM EDITADA",
+        description=f"👤 {before.author.mention}",
+        color=0xf1c40f,
+        timestamp=agora()
+    )
+    embed.add_field(name="📝 ANTES", value=before.content[:500] if before.content else "(vazio)", inline=False)
+    embed.add_field(name="📝 DEPOIS", value=after.content[:500] if after.content else "(vazio)", inline=False)
+    embed.add_field(name="📌 Canal", value=before.channel.mention, inline=True)
+    embed.set_footer(text="Vida Rasa 442 • Logs")
+
+    if imagem and PIL_AVAILABLE:
+        file = discord.File(imagem, filename="log.png")
+        await canal_log.send(file=file, embed=embed)
+    else:
+        await canal_log.send(embed=embed)
+
+# 3.3 LOG - MEMBRO ENTROU
+@bot.event
+async def on_member_join(member):
+    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+    if not canal_log:
+        return
+
+    imagem = await criar_imagem_log(
+        titulo="📥 MEMBRO ENTROU",
+        descricao=f"{member.mention} entrou no servidor!",
+        cor="verde",
+        autor=member.display_name,
+        detalhes={
+            "ID": str(member.id),
+            "Conta criada": member.created_at.strftime("%d/%m/%Y %H:%M"),
+            "Membros": str(len([m for m in member.guild.members if not m.bot]))
+        }
+    )
+
+    embed = discord.Embed(
+        title="📥 MEMBRO ENTROU",
+        description=f"👤 {member.mention}",
+        color=0x2ecc71,
+        timestamp=agora()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="🆔 ID", value=member.id, inline=True)
+    embed.add_field(name="📅 Conta criada", value=member.created_at.strftime("%d/%m/%Y %H:%M"), inline=True)
+    embed.add_field(name="👥 Total membros", value=len([m for m in member.guild.members if not m.bot]), inline=True)
+    embed.set_footer(text="Vida Rasa 442 • Logs")
+
+    if imagem and PIL_AVAILABLE:
+        file = discord.File(imagem, filename="log.png")
+        await canal_log.send(file=file, embed=embed)
+    else:
+        await canal_log.send(embed=embed)
+
+# 3.4 LOG - MEMBRO SAIU
+@bot.event
+async def on_member_remove(member):
+    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+    if not canal_log:
+        return
+
+    tempo_servidor = 0
+    if member.joined_at:
+        tempo_servidor = (agora() - member.joined_at.replace(tzinfo=BRASIL)).days
+
+    imagem = await criar_imagem_log(
+        titulo="📤 MEMBRO SAIU",
+        descricao=f"{member.mention} saiu do servidor!",
+        cor="vermelho",
+        autor=member.display_name,
+        detalhes={
+            "ID": str(member.id),
+            "Tempo no servidor": f"{tempo_servidor} dia(s)",
+            "Cargos": str(len(member.roles) - 1)
+        }
+    )
+
+    embed = discord.Embed(
+        title="📤 MEMBRO SAIU",
+        description=f"👤 {member.mention}",
+        color=0xe74c3c,
+        timestamp=agora()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="🆔 ID", value=member.id, inline=True)
+    embed.add_field(name="⏱️ Tempo no servidor", value=f"{tempo_servidor} dia(s)", inline=True)
+    embed.add_field(name="📅 Entrou em", value=member.joined_at.strftime("%d/%m/%Y %H:%M") if member.joined_at else "Desconhecido", inline=True)
+    embed.set_footer(text="Vida Rasa 442 • Logs")
+
+    if imagem and PIL_AVAILABLE:
+        file = discord.File(imagem, filename="log.png")
+        await canal_log.send(file=file, embed=embed)
+    else:
+        await canal_log.send(embed=embed)
+
+# 3.5 LOG - CARGO ADICIONADO
+@bot.event
+async def on_member_update(before, after):
+    if before.bot:
+        return
+
+    cargos_adicionados = [r for r in after.roles if r not in before.roles]
+    cargos_removidos = [r for r in before.roles if r not in after.roles]
+
+    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+    if not canal_log:
+        return
+
+    if cargos_adicionados:
+        for cargo in cargos_adicionados:
+            imagem = await criar_imagem_log(
+                titulo="➕ CARGO ADICIONADO",
+                descricao=f"Um cargo foi adicionado a {after.mention}",
+                cor="verde",
+                autor=after.display_name,
+                detalhes={
+                    "Cargo": cargo.name,
+                    "ID do cargo": str(cargo.id)
+                }
+            )
+
+            embed = discord.Embed(
+                title="➕ CARGO ADICIONADO",
+                description=f"👤 {after.mention}\n🏷️ **Cargo:** {cargo.mention}",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.set_footer(text="Vida Rasa 442 • Logs")
+
+            if imagem and PIL_AVAILABLE:
+                file = discord.File(imagem, filename="log.png")
+                await canal_log.send(file=file, embed=embed)
+            else:
+                await canal_log.send(embed=embed)
+
+    if cargos_removidos:
+        for cargo in cargos_removidos:
+            imagem = await criar_imagem_log(
+                titulo="➖ CARGO REMOVIDO",
+                descricao=f"Um cargo foi removido de {after.mention}",
+                cor="vermelho",
+                autor=after.display_name,
+                detalhes={
+                    "Cargo": cargo.name,
+                    "ID do cargo": str(cargo.id)
+                }
+            )
+
+            embed = discord.Embed(
+                title="➖ CARGO REMOVIDO",
+                description=f"👤 {after.mention}\n🏷️ **Cargo:** {cargo.name}",
+                color=0xe74c3c,
+                timestamp=agora()
+            )
+            embed.set_footer(text="Vida Rasa 442 • Logs")
+
+            if imagem and PIL_AVAILABLE:
+                file = discord.File(imagem, filename="log.png")
+                await canal_log.send(file=file, embed=embed)
+            else:
+                await canal_log.send(embed=embed)
+
+# 3.6 LOG - CANAL CRIADO
+@bot.event
+async def on_guild_channel_create(channel):
+    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+    if not canal_log:
+        return
+
+    embed = discord.Embed(
+        title="📢 CANAL CRIADO",
+        description=f"📌 {channel.mention}\n📂 **Categoria:** {channel.category.name if channel.category else 'Nenhuma'}",
+        color=0x2ecc71,
+        timestamp=agora()
+    )
+    embed.add_field(name="🆔 ID", value=channel.id, inline=True)
+    embed.add_field(name="📌 Tipo", value=str(channel.type).capitalize(), inline=True)
+    embed.set_footer(text="Vida Rasa 442 • Logs")
+
+    await canal_log.send(embed=embed)
+
+# 3.7 LOG - CANAL DELETADO
+@bot.event
+async def on_guild_channel_delete(channel):
+    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+    if not canal_log:
+        return
+
+    embed = discord.Embed(
+        title="🗑️ CANAL DELETADO",
+        description=f"📌 #{channel.name}\n📂 **Categoria:** {channel.category.name if channel.category else 'Nenhuma'}",
+        color=0xe74c3c,
+        timestamp=agora()
+    )
+    embed.add_field(name="🆔 ID", value=channel.id, inline=True)
+    embed.add_field(name="📌 Tipo", value=str(channel.type).capitalize(), inline=True)
+    embed.set_footer(text="Vida Rasa 442 • Logs")
+
+    await canal_log.send(embed=embed)
 
 # =========================================================
 # ==================== PARTE 20: MAIN E SHUTDOWN ==========
