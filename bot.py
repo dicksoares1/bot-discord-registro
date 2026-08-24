@@ -5986,31 +5986,49 @@ async def recriar_mensagens_vendas():
             return
 
         contador = 0
-        ignoradas = 0
+        ignoradas_concluidas = 0
+        ignoradas_sem_botao = 0
 
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
                 titulo = msg.embeds[0].title if msg.embeds[0].title else ""
-
                 if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper():
                     try:
                         embed = msg.embeds[0]
 
+                        # =========================================================
                         # VERIFICAR SE A VENDA JÁ ESTÁ CONCLUÍDA
-                        # (todos os botões desabilitados)
-                        ja_concluida = False
+                        # =========================================================
+                        concluida = False
                         for field in embed.fields:
                             if field.name == "📌 Status":
-                                if "CONCLUÍDA" in field.value or "PEDIDO CANCELADO" in field.value.upper():
-                                    ja_concluida = True
+                                valor = field.value
+                                # Verificar se tem "CONCLUÍDA" ou "Pago" e "Entregue" juntos
+                                if "CONCLUÍDA" in valor.upper():
+                                    concluida = True
+                                if "💰" in valor and "✅" in valor:
+                                    concluida = True
+                                if "CANCELADO" in valor.upper():
+                                    concluida = True
                                 break
 
-                        # Se já está concluída, PULAR
-                        if ja_concluida:
-                            ignoradas += 1
+                        # =========================================================
+                        # SE JÁ ESTÁ CONCLUÍDA, NÃO FAZ NADA
+                        # =========================================================
+                        if concluida:
+                            ignoradas_concluidas += 1
                             continue
 
-                        # Verificar se tem ID no footer
+                        # =========================================================
+                        # VERIFICAR SE JÁ TEM BOTÕES ATIVOS
+                        # =========================================================
+                        if msg.components:
+                            ignoradas_sem_botao += 1
+                            continue
+
+                        # =========================================================
+                        # EXTRAIR INFORMAÇÕES
+                        # =========================================================
                         entrega_id = None
                         if embed.footer:
                             texto_footer = embed.footer.text
@@ -6029,26 +6047,28 @@ async def recriar_mensagens_vendas():
                                 except:
                                     pass
 
-                        # Criar view com botões ATIVOS (não desabilitados)
+                        # =========================================================
+                        # CRIAR VIEW COM BOTÕES ATIVOS
+                        # =========================================================
                         view = StatusView(
                             entrega_id=entrega_id,
                             total_entregas=total_entregas,
-                            disabled=False  # BOTÕES ATIVOS
+                            disabled=False
                         )
 
                         await safe_request(msg.edit, view=view)
                         contador += 1
-                        await asyncio.sleep(1.5)
+                        await asyncio.sleep(0.5)
 
                     except Exception as e:
                         logger.error(f"❌ Erro ao recriar mensagem {msg.id}: {e}")
 
         logger.info(f"✅ {contador} mensagens de venda recriadas com botões!")
-        logger.info(f"⏭️ {ignoradas} mensagens ignoradas (já concluídas)")
+        logger.info(f"⏭️ {ignoradas_concluidas} mensagens ignoradas (já concluídas)")
+        logger.info(f"⏭️ {ignoradas_sem_botao} mensagens ignoradas (já têm botões)")
 
     except Exception as e:
         logger.error(f"❌ Erro ao recriar mensagens de vendas: {e}")
-
 # =========================================================
 # 5. VIEW DE STATUS
 # =========================================================
