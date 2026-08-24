@@ -13548,11 +13548,11 @@ async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
 # 3. FUNÇÃO PARA CRIAR EMBED DO ESTOQUE
 # =========================================================
 async def criar_embed_bau_estoque():
-    """Cria o embed com o estoque atual do baú"""
+    """Cria o embed com o estoque atual do baú (apenas itens gerais)"""
     
     embed = discord.Embed(
         title="📦 ── ESTOQUE DO BAÚ ── 📦",
-        description="🔫 VDR 442 • Controle de Estoque",
+        description="🔫 VDR 442 • Controle de Estoque Geral",
         color=0x1a1a2e,
         timestamp=agora()
     )
@@ -13571,10 +13571,15 @@ async def criar_embed_bau_estoque():
     # Carregar estoque
     estoque = await carregar_bau_estoque()
     
+    # Lista de itens que SÃO armas (para EXCLUIR do baú)
+    itens_armas = ["fuzil", "glock", "shotgun", "m4", "ak47", "sniper", "pistola", "sig", "ak", "aug", "carabina", "rifle"]
+    
     if estoque:
         texto_estoque = ""
         for item, qtd in estoque.items():
-            if qtd > 0:
+            # Verificar se o item NÃO é uma arma
+            is_arma = any(arma in item.lower() for arma in itens_armas)
+            if qtd > 0 and not is_arma:
                 texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
         
         if texto_estoque:
@@ -13612,7 +13617,7 @@ async def criar_embed_bau_estoque():
             "📌 EXEMPLO:\n"
             "placas: 100\n"
             "c4: 10\n"
-            "fuzil: 2\n"
+            "kit medico: 5\n"
             "```"
         ),
         inline=False
@@ -13764,7 +13769,7 @@ async def enviar_painel_bau():
 # 2. FUNÇÃO PARA CRIAR EMBED DO ESTOQUE DE ARMAS
 # =========================================================
 async def criar_embed_armas_estoque():
-    """Cria o embed com o estoque atual de armas"""
+    """Cria o embed com o estoque atual de armas (apenas armas)"""
     
     embed = discord.Embed(
         title="🔫 ── ESTOQUE DE ARMAS ── 🔫",
@@ -13774,7 +13779,7 @@ async def criar_embed_armas_estoque():
     )
     
     embed.set_author(
-        name="🛡 Vida Rasa 442 • Controle de Armas",
+        name="🛡 Vida Rasa 442 • Arsenal",
         icon_url=bot.user.display_avatar.url if bot.user else None
     )
     
@@ -13784,12 +13789,18 @@ async def criar_embed_armas_estoque():
         inline=False
     )
     
+    # Carregar estoque
     estoque = await carregar_bau_estoque()
+    
+    # Lista de itens que SÃO armas
+    itens_armas = ["fuzil", "glock", "shotgun", "m4", "ak47", "sniper", "pistola", "sig", "ak", "aug", "carabina", "rifle"]
     
     if estoque:
         texto_estoque = ""
         for item, qtd in estoque.items():
-            if qtd > 0:
+            # Verificar se o item É uma arma
+            is_arma = any(arma in item.lower() for arma in itens_armas)
+            if qtd > 0 and is_arma:
                 texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
         
         if texto_estoque:
@@ -13834,12 +13845,11 @@ async def criar_embed_armas_estoque():
     )
     
     embed.set_footer(
-        text="🛡 Vida Rasa 442 • Controle de Armas",
+        text="🛡 Vida Rasa 442 • Arsenal",
         icon_url=bot.user.display_avatar.url if bot.user else None
     )
     
     return embed
-
 # =========================================================
 # 3. MODAL DE ARMAS
 # =========================================================
