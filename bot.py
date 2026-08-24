@@ -13466,72 +13466,66 @@ async def on_voice_state_update(member, before, after):
 # =========================================================
 
 # =========================================================
-# 1. IDs DOS CANAIS
+# 2. FUNÇÃO PARA ENVIAR/ATUALIZAR PAINEL (MANTÉM NO FINAL)
 # =========================================================
-CANAL_BAU_MEMBROS_ID = 1337358932158578719  # Canal principal (entrada/saída)
-CANAL_BAU_LOG_ID = 1337358898784632882      # Canal de log
-
-# =========================================================
-# 2. FUNÇÕES DE BANCO DE DADOS - BAU
-# =========================================================
-async def atualizar_bau_estoque(item_nome, quantidade, operacao="adicionar"):
-    """Atualiza o estoque do baú"""
+async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
+    """Envia ou atualiza um painel, garantindo que fique sempre no final"""
+    canal = bot.get_channel(canal_id)
+    if not canal:
+        logger.error(f"❌ Canal não encontrado para painel: {nome}")
+        return
+    
     pool = await get_pool()
     if not pool:
+        logger.error(f"❌ Banco de dados não disponível para painel: {nome}")
         return
     
     try:
         async with pool.acquire() as conn:
-            if operacao == "adicionar":
-                await conn.execute("""
-                    INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao)
-                    VALUES ($1, $2, NOW())
-                    ON CONFLICT (item_nome)
-                    DO UPDATE SET quantidade = bau_estoque.quantidade + EXCLUDED.quantidade, 
-                                  ultima_atualizacao = NOW()
-                """, item_nome, quantidade)
-            else:
-                await conn.execute("""
-                    INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao)
-                    VALUES ($1, $2, NOW())
-                    ON CONFLICT (item_nome)
-                    DO UPDATE SET quantidade = bau_estoque.quantidade - EXCLUDED.quantidade, 
-                                  ultima_atualizacao = NOW()
-                """, item_nome, quantidade)
+            row = await conn.fetchrow("SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1", nome)
+            
+            if row:
+                try:
+                    canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
+                    msg = await safe_fetch_message(canal_salvo, int(row["mensagem_id"]))
+                    if msg:
+                        # Verificar se é a última mensagem
+                        ultima_msg = None
+                        async for m in canal.history(limit=1):
+                            ultima_msg = m
+                            break
+                        
+                        if ultima_msg and ultima_msg.id != msg.id:
+                            # Se não for a última, deletar a antiga e enviar nova
+                            await msg.delete()
+                            msg = None
+                    
+                    if msg:
+                        await msg.edit(embed=embed, view=view)
+                        return
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao atualizar painel {nome}: {e}")
+            
+            # Deletar mensagens antigas do bot no canal (exceto a painel)
+            async for msg in canal.history(limit=50):
+                if msg.author == bot.user:
+                    if row and msg.id == row.get("mensagem_id"):
+                        continue
+                    try:
+                        await msg.delete()
+                        await asyncio.sleep(0.3)
+                    except:
+                        pass
+            
+            # Enviar nova mensagem do painel
+            msg = await safe_request(canal.send, embed=embed, view=view)
+            if msg:
+                await conn.execute(
+                    "INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ($1,$2,$3) ON CONFLICT (nome) DO UPDATE SET canal_id=$2, mensagem_id=$3",
+                    nome, str(canal_id), str(msg.id)
+                )
     except Exception as e:
-        logger.error(f"❌ Erro ao atualizar estoque do baú: {e}")
-
-async def registrar_movimentacao_bau(tipo, item_nome, quantidade, membro, observacao=None):
-    """Registra uma movimentação no baú"""
-    pool = await get_pool()
-    if not pool:
-        return
-    
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO bau_movimentacoes (tipo, item_nome, quantidade, membro, observacao, data)
-                VALUES ($1, $2, $3, $4, $5, NOW())
-            """, tipo, item_nome, quantidade, membro, observacao)
-    except Exception as e:
-        logger.error(f"❌ Erro ao registrar movimentação: {e}")
-
-async def carregar_bau_estoque():
-    """Carrega o estoque atual do baú"""
-    pool = await get_pool()
-    if not pool:
-        return {}
-    
-    try:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch("SELECT item_nome, quantidade FROM bau_estoque ORDER BY item_nome")
-            estoque = {}
-            for row in rows:
-                estoque[row["item_nome"]] = row["quantidade"]
-            return estoque
-    except Exception as e:
-        logger.error(f"❌ Erro ao carregar estoque do baú: {e}")
-        return {}
+        logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
 
 # =========================================================
 # 3. FUNÇÃO PARA CRIAR EMBED DO ESTOQUE
@@ -13615,7 +13609,7 @@ async def criar_embed_bau_estoque():
     return embed
 
 # =========================================================
-# 4. MODAL ÚNICO PARA ENTRADA E SAÍDA
+# 4. MODAL DE BAU
 # =========================================================
 class BauModal(discord.ui.Modal):
     def __init__(self, tipo):
@@ -13681,7 +13675,7 @@ class BauModal(discord.ui.Modal):
                 )
             
             # =========================================================
-            # MENSAGENS DE LOG
+            # MENSAGENS DE LOG (APENAS NO CANAL DE LOG)
             # =========================================================
             log_mensagens = []
             for item, quantidade in itens_dict.items():
@@ -13693,20 +13687,16 @@ class BauModal(discord.ui.Modal):
             texto_log = "\n".join(log_mensagens)
             
             # =========================================================
-            # ENVIAR PARA O CANAL DO BAU
+            # ATUALIZAR PAINEL NO CANAL PRINCIPAL
             # =========================================================
             canal_bau = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
             if canal_bau:
-                # Atualizar o painel (embed)
                 embed = await criar_embed_bau_estoque()
                 view = BauView()
                 await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
-                
-                # Enviar a mensagem de log no canal do baú
-                await canal_bau.send(texto_log)
             
             # =========================================================
-            # ENVIAR PARA O CANAL DE LOG
+            # ENVIAR LOG APENAS NO CANAL DE LOG
             # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
             if canal_log:
@@ -13719,7 +13709,7 @@ class BauModal(discord.ui.Modal):
             await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
 
 # =========================================================
-# 5. VIEW ÚNICA DO BAU
+# 5. VIEW DO BAU
 # =========================================================
 class BauView(discord.ui.View):
     def __init__(self):
@@ -13736,10 +13726,9 @@ class BauView(discord.ui.View):
         await interaction.response.send_modal(modal)
 
 # =========================================================
-# 6. FUNÇÃO PARA ENVIAR O PAINEL
+# 6. FUNÇÃO PARA ENVIAR PAINEL DO BAU
 # =========================================================
 async def enviar_painel_bau():
-    """Envia o painel do baú no canal principal"""
     canal = bot.get_channel(CANAL_BAU_MEMBROS_ID)
     if not canal:
         logger.error("❌ Canal BAU MEMBROS não encontrado!")
@@ -13747,68 +13736,12 @@ async def enviar_painel_bau():
     
     embed = await criar_embed_bau_estoque()
     view = BauView()
-    
     await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
-
-# =========================================================
-# 7. FUNÇÃO AUXILIAR PARA ATUALIZAR PAINEL
-# =========================================================
-async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
-    """Envia ou atualiza um painel, garantindo que fique sempre no final"""
-    canal = bot.get_channel(canal_id)
-    if not canal:
-        logger.error(f"❌ Canal não encontrado para painel: {nome}")
-        return
-    
-    pool = await get_pool()
-    if not pool:
-        logger.error(f"❌ Banco de dados não disponível para painel: {nome}")
-        return
-    
-    try:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1", nome)
-            
-            if row:
-                try:
-                    canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
-                    msg = await safe_fetch_message(canal_salvo, int(row["mensagem_id"]))
-                    if msg:
-                        ultima_msg = None
-                        async for m in canal.history(limit=1):
-                            ultima_msg = m
-                            break
-                        
-                        if ultima_msg and ultima_msg.id != msg.id:
-                            await msg.delete()
-                            msg = None
-                    
-                    if msg:
-                        await msg.edit(embed=embed, view=view)
-                        return
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao atualizar painel {nome}: {e}")
-            
-            async for msg in canal.history(limit=50):
-                if msg.author == bot.user and msg.id != row.get("mensagem_id") if row else True:
-                    try:
-                        await msg.delete()
-                        await asyncio.sleep(0.3)
-                    except:
-                        pass
-            
-            msg = await safe_request(canal.send, embed=embed, view=view)
-            if msg:
-                await conn.execute(
-                    "INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ($1,$2,$3) ON CONFLICT (nome) DO UPDATE SET canal_id=$2, mensagem_id=$3",
-                    nome, str(canal_id), str(msg.id)
-                )
-    except Exception as e:
-        logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
 
 # =========================================================
 # ==================== SISTEMA DE ARMAS UNIFICADO =========
 # =========================================================
+
 
 # =========================================================
 # 2. FUNÇÃO PARA CRIAR EMBED DO ESTOQUE DE ARMAS
@@ -13834,14 +13767,12 @@ async def criar_embed_armas_estoque():
         inline=False
     )
     
-    # Carregar estoque
     estoque = await carregar_bau_estoque()
     
     if estoque:
         texto_estoque = ""
-        armas = ["fuzil", "glock", "shotgun", "m4", "ak47", "sniper", "pistola", "sig", "ak", "aug", "carabina"]
         for item, qtd in estoque.items():
-            if qtd > 0 and any(arma in item.lower() for arma in armas):
+            if qtd > 0:
                 texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
         
         if texto_estoque:
@@ -13959,7 +13890,7 @@ class ArmasModal(discord.ui.Modal):
                 )
             
             # =========================================================
-            # MENSAGENS DE LOG
+            # MENSAGENS DE LOG (APENAS NO CANAL DE LOG)
             # =========================================================
             log_mensagens = []
             for item, quantidade in itens_dict.items():
@@ -13971,20 +13902,16 @@ class ArmasModal(discord.ui.Modal):
             texto_log = "\n".join(log_mensagens)
             
             # =========================================================
-            # ENVIAR PARA O CANAL DE ARMAS
+            # ATUALIZAR PAINEL NO CANAL PRINCIPAL
             # =========================================================
             canal_armas = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
             if canal_armas:
-                # Atualizar o painel (embed)
                 embed = await criar_embed_armas_estoque()
                 view = ArmasView()
                 await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
-                
-                # Enviar a mensagem de log no canal de armas
-                await canal_armas.send(texto_log)
             
             # =========================================================
-            # ENVIAR PARA O CANAL DE LOG DE ARMAS
+            # ENVIAR LOG APENAS NO CANAL DE LOG
             # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
             if canal_log:
@@ -13997,7 +13924,7 @@ class ArmasModal(discord.ui.Modal):
             await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
 
 # =========================================================
-# 4. VIEW ÚNICA DE ARMAS
+# 4. VIEW DE ARMAS
 # =========================================================
 class ArmasView(discord.ui.View):
     def __init__(self):
@@ -14014,10 +13941,9 @@ class ArmasView(discord.ui.View):
         await interaction.response.send_modal(modal)
 
 # =========================================================
-# 5. FUNÇÃO PARA ENVIAR O PAINEL DE ARMAS
+# 5. FUNÇÃO PARA ENVIAR PAINEL DE ARMAS
 # =========================================================
 async def enviar_painel_armas():
-    """Envia o painel de armas no canal principal"""
     canal = bot.get_channel(CANAL_ARMAS_ESTOQUE_ID)
     if not canal:
         logger.error("❌ Canal ARMAS ESTOQUE não encontrado!")
@@ -14025,7 +13951,6 @@ async def enviar_painel_armas():
     
     embed = await criar_embed_armas_estoque()
     view = ArmasView()
-    
     await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
 
 
