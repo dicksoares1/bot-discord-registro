@@ -2661,18 +2661,40 @@ async def zerar_exibicao_metas():
             logger.error("❌ Guild não encontrada para zerar exibição")
             return 0
 
+        pool = await get_pool()
+        if not pool:
+            logger.error("❌ Banco de dados indisponível para zerar exibição")
+            return 0
+
         # =========================================================
-        # RECARREGAR O CACHE DO BANCO (SEM ZERAR O BANCO)
+        # ZERAR OS VALORES NO BANCO DE DADOS
+        # =========================================================
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE metas 
+                SET dinheiro = 0, 
+                    dinheiro_acoes = 0, 
+                    saldo_excedente = 0,
+                    acao = NULL
+            """)
+            
+            logger.info("⚠️ METAS ZERADAS PARA A NOVA SEMANA!")
+
+        # =========================================================
+        # RECARREGAR O CACHE E ATUALIZAR OS EMBEDS
         # =========================================================
         await carregar_metas_cache()
         
         contador = 0
         for uid in list(metas_cache.keys()):
-            await atualizar_embed_meta(int(uid))
-            contador += 1
-            await asyncio.sleep(0.3)
+            try:
+                await atualizar_embed_meta(int(uid))
+                contador += 1
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"❌ Erro ao atualizar meta {uid}: {e}")
 
-        logger.info(f"✅ {contador} embeds de metas atualizados (exibição zerada)")
+        logger.info(f"✅ {contador} embeds de metas zerados e atualizados")
         return contador
 
     except Exception as e:
