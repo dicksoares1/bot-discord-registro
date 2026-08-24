@@ -13717,6 +13717,7 @@ class BauModal(discord.ui.Modal):
             required=True,
             max_length=500
         )
+        
         self.observacao = discord.ui.TextInput(
             label="📝 Observação (opcional)",
             placeholder="Ex: Para ação, Para estoque, etc",
@@ -13724,6 +13725,19 @@ class BauModal(discord.ui.Modal):
             required=False,
             max_length=200
         )
+        
+        # =========================================================
+        # CAMPO PARA PRINT (APENAS PARA ENTRADA)
+        # =========================================================
+        if tipo == "entrou":
+            self.print_anexo = discord.ui.TextInput(
+                label="📎 LINK DO PRINT (opcional)",
+                placeholder="Cole o link da imagem (ex: imgur.com/xxx)",
+                required=False,
+                max_length=200
+            )
+            self.add_item(self.print_anexo)
+        
         self.add_item(self.itens)
         self.add_item(self.observacao)
     
@@ -13731,6 +13745,8 @@ class BauModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True)
         try:
             nome_membro = interaction.user.display_name
+            
+            # Processar itens
             itens_dict = {}
             linhas = self.itens.value.strip().split('\n')
             for linha in linhas:
@@ -13742,9 +13758,12 @@ class BauModal(discord.ui.Modal):
                     except:
                         quantidade = partes[1].strip()
                     itens_dict[item] = quantidade
+            
             if not itens_dict:
                 await interaction.followup.send("❌ **Nenhum item válido encontrado!** Use o formato: `Item: Quantidade`", ephemeral=True)
                 return
+            
+            # Atualizar estoque
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
                     await atualizar_bau_estoque(item, quantidade, "adicionar")
@@ -13757,26 +13776,49 @@ class BauModal(discord.ui.Modal):
                     membro=nome_membro,
                     observacao=self.observacao.value if self.observacao.value else None
                 )
+            
+            # Mensagem de log
             log_mensagens = []
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
                     log_mensagens.append(f"📥 **{nome_membro}** adicionou **{quantidade}** {item}.")
                 else:
                     log_mensagens.append(f"📤 **{nome_membro}** pegou **{quantidade}** {item}.")
+            
             texto_log = "\n".join(log_mensagens)
+            
+            # =========================================================
+            # PEGAR O PRINT (SE TIVER)
+            # =========================================================
+            print_link = None
+            if self.tipo == "entrou" and hasattr(self, 'print_anexo') and self.print_anexo.value:
+                print_link = self.print_anexo.value.strip()
+            
+            # =========================================================
+            # ATUALIZAR PAINEL DO BAU
+            # =========================================================
             canal_bau = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
             if canal_bau:
                 embed = await criar_embed_bau_estoque()
                 view = BauView()
                 await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
+            
+            # =========================================================
+            # ENVIAR MENSAGEM DE LOG (COM PRINT SE TIVER)
+            # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
             if canal_log:
-                await canal_log.send(texto_log)
+                if print_link:
+                    # Enviar com o print
+                    await canal_log.send(f"{texto_log}\n📎 **Print:** {print_link}")
+                else:
+                    await canal_log.send(texto_log)
+            
             await interaction.followup.send(f"✅ **Registro enviado com sucesso!**", ephemeral=True)
+                
         except Exception as e:
             logger.error(f"❌ Erro no BauModal: {e}")
             await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
-
 # =========================================================
 # 7. MODAL DE ARMAS
 # =========================================================
@@ -13793,6 +13835,7 @@ class ArmasModal(discord.ui.Modal):
             required=True,
             max_length=500
         )
+        
         self.observacao = discord.ui.TextInput(
             label="📝 Observação (opcional)",
             placeholder="Ex: Para ação, Para estoque, etc",
@@ -13800,6 +13843,19 @@ class ArmasModal(discord.ui.Modal):
             required=False,
             max_length=200
         )
+        
+        # =========================================================
+        # CAMPO PARA PRINT (APENAS PARA ENTRADA)
+        # =========================================================
+        if tipo == "entrou":
+            self.print_anexo = discord.ui.TextInput(
+                label="📎 LINK DO PRINT (opcional)",
+                placeholder="Cole o link da imagem (ex: imgur.com/xxx)",
+                required=False,
+                max_length=200
+            )
+            self.add_item(self.print_anexo)
+        
         self.add_item(self.itens)
         self.add_item(self.observacao)
     
@@ -13807,6 +13863,8 @@ class ArmasModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True)
         try:
             nome_membro = interaction.user.display_name
+            
+            # Processar itens
             itens_dict = {}
             linhas = self.itens.value.strip().split('\n')
             for linha in linhas:
@@ -13818,9 +13876,12 @@ class ArmasModal(discord.ui.Modal):
                     except:
                         quantidade = partes[1].strip()
                     itens_dict[item] = quantidade
+            
             if not itens_dict:
                 await interaction.followup.send("❌ **Nenhuma arma válida encontrada!** Use o formato: `Arma: Quantidade`", ephemeral=True)
                 return
+            
+            # Atualizar estoque
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
                     await atualizar_bau_estoque(item, quantidade, "adicionar")
@@ -13833,22 +13894,45 @@ class ArmasModal(discord.ui.Modal):
                     membro=nome_membro,
                     observacao=self.observacao.value if self.observacao.value else None
                 )
+            
+            # Mensagem de log
             log_mensagens = []
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
                     log_mensagens.append(f"🔫 **{nome_membro}** adicionou **{quantidade}** {item}.")
                 else:
                     log_mensagens.append(f"🔫 **{nome_membro}** pegou **{quantidade}** {item}.")
+            
             texto_log = "\n".join(log_mensagens)
+            
+            # =========================================================
+            # PEGAR O PRINT (SE TIVER)
+            # =========================================================
+            print_link = None
+            if self.tipo == "entrou" and hasattr(self, 'print_anexo') and self.print_anexo.value:
+                print_link = self.print_anexo.value.strip()
+            
+            # =========================================================
+            # ATUALIZAR PAINEL DE ARMAS
+            # =========================================================
             canal_armas = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
             if canal_armas:
                 embed = await criar_embed_armas_estoque()
                 view = ArmasView()
                 await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
+            
+            # =========================================================
+            # ENVIAR MENSAGEM DE LOG (COM PRINT SE TIVER)
+            # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
             if canal_log:
-                await canal_log.send(texto_log)
+                if print_link:
+                    await canal_log.send(f"{texto_log}\n📎 **Print:** {print_link}")
+                else:
+                    await canal_log.send(texto_log)
+            
             await interaction.followup.send(f"✅ **Registro de armas enviado com sucesso!**", ephemeral=True)
+                
         except Exception as e:
             logger.error(f"❌ Erro no ArmasModal: {e}")
             await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
