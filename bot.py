@@ -13479,124 +13479,114 @@ async def on_voice_state_update(member, before, after):
         await canal_log.send(embed=embed)
 
 # =========================================================
-# ==================== SISTEMA DE BAU =====================
+# ==================== SISTEMA DE BAU E ARMAS =============
 # =========================================================
+
 # =========================================================
 # 1. FUNÇÃO PARA DETECTAR ARMAS
 # =========================================================
 def is_arma(item_nome):
     """Verifica se um item é uma arma baseado no nome"""
     item_lower = item_nome.lower()
-    
-    # Lista de palavras que indicam que é uma arma
     palavras_arma = [
-        "fuzil", "glock", "shotgun", "m4", "ak47", "ak-47", 
-        "sniper", "pistola", "sig", "ak", "aug", "carabina", 
-        "rifle", "g3", "fal", "m16", "ar15", "revolver", 
+        "fuzil", "glock", "shotgun", "m4", "ak47", "ak-47",
+        "sniper", "pistola", "sig", "ak", "aug", "carabina",
+        "rifle", "g3", "fal", "m16", "ar15", "revolver",
         "magnum", "uzi", "mp5", "p90", "escopeta", "metralhadora"
     ]
-    
     for palavra in palavras_arma:
         if palavra in item_lower:
             return True
-    
     return False
 
 # =========================================================
-# 2. FUNÇÃO PARA ENVIAR/ATUALIZAR PAINEL (MANTÉM NO FINAL)
+# 3. FUNÇÕES DE BANCO DE DADOS - BAU
 # =========================================================
-async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
-    """Envia ou atualiza um painel, garantindo que fique sempre no final"""
-    canal = bot.get_channel(canal_id)
-    if not canal:
-        logger.error(f"❌ Canal não encontrado para painel: {nome}")
-        return
-    
+async def atualizar_bau_estoque(item_nome, quantidade, operacao="adicionar"):
     pool = await get_pool()
     if not pool:
-        logger.error(f"❌ Banco de dados não disponível para painel: {nome}")
         return
-    
     try:
         async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1", nome)
-            
-            if row:
-                try:
-                    canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
-                    msg = await safe_fetch_message(canal_salvo, int(row["mensagem_id"]))
-                    if msg:
-                        # Verificar se é a última mensagem
-                        ultima_msg = None
-                        async for m in canal.history(limit=1):
-                            ultima_msg = m
-                            break
-                        
-                        if ultima_msg and ultima_msg.id != msg.id:
-                            # Se não for a última, deletar a antiga e enviar nova
-                            await msg.delete()
-                            msg = None
-                    
-                    if msg:
-                        await msg.edit(embed=embed, view=view)
-                        return
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao atualizar painel {nome}: {e}")
-            
-            # Deletar mensagens antigas do bot no canal (exceto a painel)
-            async for msg in canal.history(limit=50):
-                if msg.author == bot.user:
-                    if row and msg.id == row.get("mensagem_id"):
-                        continue
-                    try:
-                        await msg.delete()
-                        await asyncio.sleep(0.3)
-                    except:
-                        pass
-            
-            # Enviar nova mensagem do painel
-            msg = await safe_request(canal.send, embed=embed, view=view)
-            if msg:
-                await conn.execute(
-                    "INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ($1,$2,$3) ON CONFLICT (nome) DO UPDATE SET canal_id=$2, mensagem_id=$3",
-                    nome, str(canal_id), str(msg.id)
-                )
+            existente = await conn.fetchval(
+                "SELECT quantidade FROM bau_estoque WHERE item_nome = $1",
+                item_nome
+            )
+            if existente is not None:
+                if operacao == "adicionar":
+                    nova_quantidade = existente + quantidade
+                else:
+                    nova_quantidade = existente - quantidade
+                    if nova_quantidade < 0:
+                        nova_quantidade = 0
+                await conn.execute("""
+                    UPDATE bau_estoque 
+                    SET quantidade = $1, ultima_atualizacao = NOW()
+                    WHERE item_nome = $2
+                """, nova_quantidade, item_nome)
+            else:
+                if operacao == "remover":
+                    return
+                await conn.execute("""
+                    INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao)
+                    VALUES ($1, $2, NOW())
+                """, item_nome, quantidade)
     except Exception as e:
-        logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
+        logger.error(f"❌ Erro ao atualizar estoque do baú: {e}")
+
+async def registrar_movimentacao_bau(tipo, item_nome, quantidade, membro, observacao=None):
+    pool = await get_pool()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO bau_movimentacoes (tipo, item_nome, quantidade, membro, observacao, data)
+                VALUES ($1, $2, $3, $4, $5, NOW())
+            """, tipo, item_nome, quantidade, membro, observacao)
+    except Exception as e:
+        logger.error(f"❌ Erro ao registrar movimentação: {e}")
+
+async def carregar_bau_estoque():
+    pool = await get_pool()
+    if not pool:
+        return {}
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT item_nome, quantidade FROM bau_estoque ORDER BY item_nome")
+            estoque = {}
+            for row in rows:
+                estoque[row["item_nome"]] = row["quantidade"]
+            return estoque
+    except Exception as e:
+        logger.error(f"❌ Erro ao carregar estoque do baú: {e}")
+        return {}
 
 # =========================================================
-# 3. FUNÇÃO PARA CRIAR EMBED DO ESTOQUE
+# 4. FUNÇÃO PARA CRIAR EMBED DO BAU (ITENS GERAIS)
 # =========================================================
 async def criar_embed_bau_estoque():
-    """Cria o embed com o estoque atual do baú (apenas itens gerais)"""
-    
     embed = discord.Embed(
         title="📦 ── ESTOQUE DO BAÚ ── 📦",
         description="🔫 VDR 442 • Controle de Estoque Geral",
         color=0x1a1a2e,
         timestamp=agora()
     )
-    
     embed.set_author(
         name="🛡 Vida Rasa 442 • Baú de Membros",
         icon_url=bot.user.display_avatar.url if bot.user else None
     )
-    
     embed.add_field(
         name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         value="",
         inline=False
     )
-    
     estoque = await carregar_bau_estoque()
-    
     if estoque:
         texto_estoque = ""
         for item, qtd in estoque.items():
-            # Mostrar apenas itens que NÃO são armas
             if qtd > 0 and not is_arma(item):
                 texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
-        
         if texto_estoque:
             embed.add_field(
                 name="📊 ITENS NO BAÚ",
@@ -13615,13 +13605,11 @@ async def criar_embed_bau_estoque():
             value="```\n📭 Baú vazio\n```",
             inline=False
     )
-    
     embed.add_field(
         name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         value="",
         inline=False
     )
-    
     embed.add_field(
         name="📋 COMO USAR",
         value=(
@@ -13637,174 +13625,37 @@ async def criar_embed_bau_estoque():
         ),
         inline=False
     )
-    
     embed.set_footer(
         text="🛡 Vida Rasa 442 • Sistema de Baú",
         icon_url=bot.user.display_avatar.url if bot.user else None
     )
-    
     return embed
-# =========================================================
-# 4. MODAL DE BAU
-# =========================================================
-class ArmasModal(discord.ui.Modal):
-    def __init__(self, tipo):
-        self.tipo = tipo  # "entrou" ou "saiu"
-        titulo = "🔫 Registrar Armas Entrada" if tipo == "entrou" else "🔫 Registrar Armas Saída"
-        super().__init__(title=titulo)
-        
-        self.itens = discord.ui.TextInput(
-            label="🔫 Armas (arma: quantidade)",
-            placeholder="Ex: Fuzil: 2\nGlock: 1\nG3: 10",
-            style=discord.TextStyle.paragraph,
-            required=True,
-            max_length=500
-        )
-        
-        self.observacao = discord.ui.TextInput(
-            label="📝 Observação (opcional)",
-            placeholder="Ex: Para ação, Para estoque, etc",
-            style=discord.TextStyle.paragraph,
-            required=False,
-            max_length=200
-        )
-        
-        self.add_item(self.itens)
-        self.add_item(self.observacao)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        try:
-            nome_membro = interaction.user.display_name
-            
-            # Processar itens (ACEITA QUALQUER ARMA)
-            itens_dict = {}
-            linhas = self.itens.value.strip().split('\n')
-            for linha in linhas:
-                if ':' in linha:
-                    partes = linha.split(':', 1)
-                    item = partes[0].strip()
-                    try:
-                        quantidade = int(partes[1].strip())
-                    except:
-                        quantidade = partes[1].strip()
-                    itens_dict[item] = quantidade
-            
-            if not itens_dict:
-                await interaction.followup.send("❌ **Nenhuma arma válida encontrada!** Use o formato: `Arma: Quantidade`", ephemeral=True)
-                return
-            
-            # Atualizar estoque (QUALQUER ARMA)
-            for item, quantidade in itens_dict.items():
-                if self.tipo == "entrou":
-                    await atualizar_bau_estoque(item, quantidade, "adicionar")
-                else:
-                    await atualizar_bau_estoque(item, quantidade, "remover")
-                
-                await registrar_movimentacao_bau(
-                    tipo=self.tipo,
-                    item_nome=item,
-                    quantidade=quantidade,
-                    membro=nome_membro,
-                    observacao=self.observacao.value if self.observacao.value else None
-                )
-            
-            # Mensagens de log
-            log_mensagens = []
-            for item, quantidade in itens_dict.items():
-                if self.tipo == "entrou":
-                    log_mensagens.append(f"🔫 **{nome_membro}** adicionou **{quantidade}** {item}.")
-                else:
-                    log_mensagens.append(f"🔫 **{nome_membro}** pegou **{quantidade}** {item}.")
-            
-            texto_log = "\n".join(log_mensagens)
-            
-            # Atualizar painel de armas
-            canal_armas = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
-            if canal_armas:
-                embed = await criar_embed_armas_estoque()
-                view = ArmasView()
-                await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
-            
-            # Enviar log de armas
-            canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
-            if canal_log:
-                await canal_log.send(texto_log)
-            
-            await interaction.followup.send(f"✅ **Registro de armas enviado com sucesso!**", ephemeral=True)
-                
-        except Exception as e:
-            logger.error(f"❌ Erro no ArmasModal: {e}")
-            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
-# =========================================================
-# 5. VIEW DO BAU
-# =========================================================
-class BauView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    
-    @discord.ui.button(label="📥 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="bau_entrada_btn", emoji="📥")
-    async def registrar_entrada(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BauModal("entrou")
-        await interaction.response.send_modal(modal)
-    
-    @discord.ui.button(label="📤 Registrar Saída", style=discord.ButtonStyle.danger, custom_id="bau_saida_btn", emoji="📤")
-    async def registrar_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BauModal("saiu")
-        await interaction.response.send_modal(modal)
 
 # =========================================================
-# 6. FUNÇÃO PARA ENVIAR PAINEL DO BAU
-# =========================================================
-async def enviar_painel_bau():
-    canal = bot.get_channel(CANAL_BAU_MEMBROS_ID)
-    if not canal:
-        logger.error("❌ Canal BAU MEMBROS não encontrado!")
-        return
-    
-    embed = await criar_embed_bau_estoque()
-    view = BauView()
-    await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
-
-# =========================================================
-# ==================== SISTEMA DE ARMAS UNIFICADO =========
-# =========================================================
-
-
-# =========================================================
-# 2. FUNÇÃO PARA CRIAR EMBED DO ESTOQUE DE ARMAS
+# 5. FUNÇÃO PARA CRIAR EMBED DE ARMAS
 # =========================================================
 async def criar_embed_armas_estoque():
-    """Cria o embed com o estoque atual de armas (apenas armas)"""
-    
     embed = discord.Embed(
         title="🔫 ── ESTOQUE DE ARMAS ── 🔫",
         description="🔫 VDR 442 • Controle de Armas",
         color=0x1a1a2e,
         timestamp=agora()
     )
-    
     embed.set_author(
         name="🛡 Vida Rasa 442 • Arsenal",
         icon_url=bot.user.display_avatar.url if bot.user else None
     )
-    
     embed.add_field(
         name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         value="",
         inline=False
     )
-    
     estoque = await carregar_bau_estoque()
-    
     if estoque:
         texto_estoque = ""
         for item, qtd in estoque.items():
-            # Mostrar apenas itens que SÃO armas
             if qtd > 0 and is_arma(item):
                 texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
-        
         if texto_estoque:
             embed.add_field(
                 name="📊 ARMAS NO ESTOQUE",
@@ -13823,13 +13674,11 @@ async def criar_embed_armas_estoque():
             value="```\n📭 Nenhuma arma no estoque\n```",
             inline=False
     )
-    
     embed.add_field(
         name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         value="",
         inline=False
     )
-    
     embed.add_field(
         name="📋 COMO USAR",
         value=(
@@ -13846,30 +13695,28 @@ async def criar_embed_armas_estoque():
         ),
         inline=False
     )
-    
     embed.set_footer(
         text="🛡 Vida Rasa 442 • Arsenal",
         icon_url=bot.user.display_avatar.url if bot.user else None
     )
-    
     return embed
+
 # =========================================================
-# 3. MODAL DE ARMAS
+# 6. MODAL DO BAU
 # =========================================================
-class ArmasModal(discord.ui.Modal):
+class BauModal(discord.ui.Modal):
     def __init__(self, tipo):
-        self.tipo = tipo  # "entrou" ou "saiu"
-        titulo = "🔫 Registrar Armas Entrada" if tipo == "entrou" else "🔫 Registrar Armas Saída"
+        self.tipo = tipo
+        titulo = "📥 Registrar Entrada" if tipo == "entrou" else "📤 Registrar Saída"
         super().__init__(title=titulo)
         
         self.itens = discord.ui.TextInput(
-            label="🔫 Armas (arma: quantidade)",
-            placeholder="Ex: Fuzil: 2\nGlock: 1\nShotgun: 3",
+            label="📦 Itens (item: quantidade)",
+            placeholder="Ex: placas: 100\nc4: 10\nfuzil: 2",
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=500
         )
-        
         self.observacao = discord.ui.TextInput(
             label="📝 Observação (opcional)",
             placeholder="Ex: Para ação, Para estoque, etc",
@@ -13877,17 +13724,13 @@ class ArmasModal(discord.ui.Modal):
             required=False,
             max_length=200
         )
-        
         self.add_item(self.itens)
         self.add_item(self.observacao)
     
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
         try:
             nome_membro = interaction.user.display_name
-            
-            # Processar itens
             itens_dict = {}
             linhas = self.itens.value.strip().split('\n')
             for linha in linhas:
@@ -13899,18 +13742,14 @@ class ArmasModal(discord.ui.Modal):
                     except:
                         quantidade = partes[1].strip()
                     itens_dict[item] = quantidade
-            
             if not itens_dict:
-                await interaction.followup.send("❌ **Nenhuma arma válida encontrada!** Use o formato: `Arma: Quantidade`", ephemeral=True)
+                await interaction.followup.send("❌ **Nenhum item válido encontrado!** Use o formato: `Item: Quantidade`", ephemeral=True)
                 return
-            
-            # Atualizar estoque
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
                     await atualizar_bau_estoque(item, quantidade, "adicionar")
                 else:
                     await atualizar_bau_estoque(item, quantidade, "remover")
-                
                 await registrar_movimentacao_bau(
                     tipo=self.tipo,
                     item_nome=item,
@@ -13918,44 +13757,119 @@ class ArmasModal(discord.ui.Modal):
                     membro=nome_membro,
                     observacao=self.observacao.value if self.observacao.value else None
                 )
-            
-            # =========================================================
-            # MENSAGENS DE LOG (APENAS NO CANAL DE LOG)
-            # =========================================================
+            log_mensagens = []
+            for item, quantidade in itens_dict.items():
+                if self.tipo == "entrou":
+                    log_mensagens.append(f"📥 **{nome_membro}** adicionou **{quantidade}** {item}.")
+                else:
+                    log_mensagens.append(f"📤 **{nome_membro}** pegou **{quantidade}** {item}.")
+            texto_log = "\n".join(log_mensagens)
+            canal_bau = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
+            if canal_bau:
+                embed = await criar_embed_bau_estoque()
+                view = BauView()
+                await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
+            canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
+            if canal_log:
+                await canal_log.send(texto_log)
+            await interaction.followup.send(f"✅ **Registro enviado com sucesso!**", ephemeral=True)
+        except Exception as e:
+            logger.error(f"❌ Erro no BauModal: {e}")
+            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
+
+# =========================================================
+# 7. MODAL DE ARMAS
+# =========================================================
+class ArmasModal(discord.ui.Modal):
+    def __init__(self, tipo):
+        self.tipo = tipo
+        titulo = "🔫 Registrar Armas Entrada" if tipo == "entrou" else "🔫 Registrar Armas Saída"
+        super().__init__(title=titulo)
+        
+        self.itens = discord.ui.TextInput(
+            label="🔫 Armas (arma: quantidade)",
+            placeholder="Ex: Fuzil: 2\nGlock: 1\nG3: 10",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=500
+        )
+        self.observacao = discord.ui.TextInput(
+            label="📝 Observação (opcional)",
+            placeholder="Ex: Para ação, Para estoque, etc",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=200
+        )
+        self.add_item(self.itens)
+        self.add_item(self.observacao)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            nome_membro = interaction.user.display_name
+            itens_dict = {}
+            linhas = self.itens.value.strip().split('\n')
+            for linha in linhas:
+                if ':' in linha:
+                    partes = linha.split(':', 1)
+                    item = partes[0].strip()
+                    try:
+                        quantidade = int(partes[1].strip())
+                    except:
+                        quantidade = partes[1].strip()
+                    itens_dict[item] = quantidade
+            if not itens_dict:
+                await interaction.followup.send("❌ **Nenhuma arma válida encontrada!** Use o formato: `Arma: Quantidade`", ephemeral=True)
+                return
+            for item, quantidade in itens_dict.items():
+                if self.tipo == "entrou":
+                    await atualizar_bau_estoque(item, quantidade, "adicionar")
+                else:
+                    await atualizar_bau_estoque(item, quantidade, "remover")
+                await registrar_movimentacao_bau(
+                    tipo=self.tipo,
+                    item_nome=item,
+                    quantidade=quantidade,
+                    membro=nome_membro,
+                    observacao=self.observacao.value if self.observacao.value else None
+                )
             log_mensagens = []
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
                     log_mensagens.append(f"🔫 **{nome_membro}** adicionou **{quantidade}** {item}.")
                 else:
                     log_mensagens.append(f"🔫 **{nome_membro}** pegou **{quantidade}** {item}.")
-            
             texto_log = "\n".join(log_mensagens)
-            
-            # =========================================================
-            # ATUALIZAR PAINEL NO CANAL PRINCIPAL
-            # =========================================================
             canal_armas = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
             if canal_armas:
                 embed = await criar_embed_armas_estoque()
                 view = ArmasView()
                 await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
-            
-            # =========================================================
-            # ENVIAR LOG APENAS NO CANAL DE LOG
-            # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
             if canal_log:
                 await canal_log.send(texto_log)
-            
             await interaction.followup.send(f"✅ **Registro de armas enviado com sucesso!**", ephemeral=True)
-                
         except Exception as e:
             logger.error(f"❌ Erro no ArmasModal: {e}")
             await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
 
 # =========================================================
-# 4. VIEW DE ARMAS
+# 8. VIEWS
 # =========================================================
+class BauView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="📥 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="bau_entrada_btn", emoji="📥")
+    async def registrar_entrada(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = BauModal("entrou")
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="📤 Registrar Saída", style=discord.ButtonStyle.danger, custom_id="bau_saida_btn", emoji="📤")
+    async def registrar_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = BauModal("saiu")
+        await interaction.response.send_modal(modal)
+
 class ArmasView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -13971,14 +13885,72 @@ class ArmasView(discord.ui.View):
         await interaction.response.send_modal(modal)
 
 # =========================================================
-# 5. FUNÇÃO PARA ENVIAR PAINEL DE ARMAS
+# 9. FUNÇÃO AUXILIAR PARA ATUALIZAR PAINEL
 # =========================================================
+async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
+    canal = bot.get_channel(canal_id)
+    if not canal:
+        logger.error(f"❌ Canal não encontrado para painel: {nome}")
+        return
+    pool = await get_pool()
+    if not pool:
+        logger.error(f"❌ Banco de dados não disponível para painel: {nome}")
+        return
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1", nome)
+            if row:
+                try:
+                    canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
+                    msg = await safe_fetch_message(canal_salvo, int(row["mensagem_id"]))
+                    if msg:
+                        ultima_msg = None
+                        async for m in canal.history(limit=1):
+                            ultima_msg = m
+                            break
+                        if ultima_msg and ultima_msg.id != msg.id:
+                            await msg.delete()
+                            msg = None
+                    if msg:
+                        await msg.edit(embed=embed, view=view)
+                        return
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao atualizar painel {nome}: {e}")
+            async for msg in canal.history(limit=50):
+                if msg.author == bot.user:
+                    if row and msg.id == row.get("mensagem_id"):
+                        continue
+                    try:
+                        await msg.delete()
+                        await asyncio.sleep(0.3)
+                    except:
+                        pass
+            msg = await safe_request(canal.send, embed=embed, view=view)
+            if msg:
+                await conn.execute(
+                    "INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ($1,$2,$3) ON CONFLICT (nome) DO UPDATE SET canal_id=$2, mensagem_id=$3",
+                    nome, str(canal_id), str(msg.id)
+                )
+    except Exception as e:
+        logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
+
+# =========================================================
+# 10. FUNÇÕES PARA ENVIAR PAINÉIS
+# =========================================================
+async def enviar_painel_bau():
+    canal = bot.get_channel(CANAL_BAU_MEMBROS_ID)
+    if not canal:
+        logger.error("❌ Canal BAU MEMBROS não encontrado!")
+        return
+    embed = await criar_embed_bau_estoque()
+    view = BauView()
+    await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
+
 async def enviar_painel_armas():
     canal = bot.get_channel(CANAL_ARMAS_ESTOQUE_ID)
     if not canal:
         logger.error("❌ Canal ARMAS ESTOQUE não encontrado!")
         return
-    
     embed = await criar_embed_armas_estoque()
     view = ArmasView()
     await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
