@@ -163,9 +163,8 @@ CANAL_LOGS_GERAIS_ID = 1541438570705977564
 
 CANAL_BAU_MEMBROS_ID = 1337358932158578719  # Canal principal (entrada/saída)
 CANAL_BAU_LOG_ID = 1337358898784632882      # Canal de log (saída)
-CANAL_ARMAS_ENTROU_ID = 1500983878045798430
-CANAL_ARMAS_SAIU_ID = 1500983930533187734
-
+CANAL_ARMAS_ESTOQUE_ID = 1500983878045798430  # Canal principal (entrada/saída)
+CANAL_ARMAS_LOG_ID = 1500983930533187734      # Canal de log
 # =========================================================
 # 8. CARGOS PERMITIDOS (LISTAS)
 # =========================================================
@@ -12948,12 +12947,18 @@ async def cmd_status(ctx):
 @bot.command(name="enviar_bau")
 @commands.has_permissions(administrator=True)
 async def cmd_enviar_bau(ctx):
-    """Envia os painéis do baú manualmente"""
-    await ctx.send("🔄 Enviando painéis do baú...")
+    """Envia o painel do baú manualmente"""
+    await ctx.send("🔄 Enviando painel do baú...")
     await enviar_painel_bau()
-    await enviar_painel_armas_entrou()
-    await enviar_painel_armas_saiu()
-    await ctx.send("✅ Painéis do baú enviados!")
+    await ctx.send("✅ Painel do baú enviado!")
+
+@bot.command(name="enviar_armas")
+@commands.has_permissions(administrator=True)
+async def cmd_enviar_armas(ctx):
+    """Envia o painel de armas manualmente"""
+    await ctx.send("🔄 Enviando painel de armas...")
+    await enviar_painel_armas()
+    await ctx.send("✅ Painel de armas enviado!")
 
 # =========================================================
 # 21. COMANDO: !dashboard
@@ -13801,6 +13806,228 @@ async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
     except Exception as e:
         logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
 
+# =========================================================
+# ==================== SISTEMA DE ARMAS UNIFICADO =========
+# =========================================================
+
+# =========================================================
+# 2. FUNÇÃO PARA CRIAR EMBED DO ESTOQUE DE ARMAS
+# =========================================================
+async def criar_embed_armas_estoque():
+    """Cria o embed com o estoque atual de armas"""
+    
+    embed = discord.Embed(
+        title="🔫 ── ESTOQUE DE ARMAS ── 🔫",
+        description="🔫 VDR 442 • Controle de Armas",
+        color=0x1a1a2e,
+        timestamp=agora()
+    )
+    
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Controle de Armas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    # Carregar estoque
+    estoque = await carregar_bau_estoque()
+    
+    if estoque:
+        texto_estoque = ""
+        armas = ["fuzil", "glock", "shotgun", "m4", "ak47", "sniper", "pistola", "sig", "ak", "aug", "carabina"]
+        for item, qtd in estoque.items():
+            if qtd > 0 and any(arma in item.lower() for arma in armas):
+                texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
+        
+        if texto_estoque:
+            embed.add_field(
+                name="📊 ARMAS NO ESTOQUE",
+                value=f"```\n{texto_estoque}\n```",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📊 ARMAS NO ESTOQUE",
+                value="```\n📭 Nenhuma arma no estoque\n```",
+                inline=False
+            )
+    else:
+        embed.add_field(
+            name="📊 ARMAS NO ESTOQUE",
+            value="```\n📭 Nenhuma arma no estoque\n```",
+            inline=False
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 COMO USAR",
+        value=(
+            "```yaml\n"
+            "🔫 ENTRADA: Clique em 'Registrar Armas Entrada'\n"
+            "🔫 SAÍDA: Clique em 'Registrar Armas Saída'\n"
+            "\n"
+            "📌 EXEMPLO:\n"
+            "Fuzil: 2\n"
+            "Glock: 1\n"
+            "Shotgun: 3\n"
+            "```"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Controle de Armas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    return embed
+
+# =========================================================
+# 3. MODAL DE ARMAS
+# =========================================================
+class ArmasModal(discord.ui.Modal):
+    def __init__(self, tipo):
+        self.tipo = tipo  # "entrou" ou "saiu"
+        titulo = "🔫 Registrar Armas Entrada" if tipo == "entrou" else "🔫 Registrar Armas Saída"
+        super().__init__(title=titulo)
+        
+        self.itens = discord.ui.TextInput(
+            label="🔫 Armas (arma: quantidade)",
+            placeholder="Ex: Fuzil: 2\nGlock: 1\nShotgun: 3",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=500
+        )
+        
+        self.observacao = discord.ui.TextInput(
+            label="📝 Observação (opcional)",
+            placeholder="Ex: Para ação, Para estoque, etc",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=200
+        )
+        
+        self.add_item(self.itens)
+        self.add_item(self.observacao)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            nome_membro = interaction.user.display_name
+            
+            # Processar itens
+            itens_dict = {}
+            linhas = self.itens.value.strip().split('\n')
+            for linha in linhas:
+                if ':' in linha:
+                    partes = linha.split(':', 1)
+                    item = partes[0].strip()
+                    try:
+                        quantidade = int(partes[1].strip())
+                    except:
+                        quantidade = partes[1].strip()
+                    itens_dict[item] = quantidade
+            
+            if not itens_dict:
+                await interaction.followup.send("❌ **Nenhuma arma válida encontrada!** Use o formato: `Arma: Quantidade`", ephemeral=True)
+                return
+            
+            # Atualizar estoque
+            for item, quantidade in itens_dict.items():
+                if self.tipo == "entrou":
+                    await atualizar_bau_estoque(item, quantidade, "adicionar")
+                else:
+                    await atualizar_bau_estoque(item, quantidade, "remover")
+                
+                await registrar_movimentacao_bau(
+                    tipo=self.tipo,
+                    item_nome=item,
+                    quantidade=quantidade,
+                    membro=nome_membro,
+                    observacao=self.observacao.value if self.observacao.value else None
+                )
+            
+            # =========================================================
+            # MENSAGENS DE LOG
+            # =========================================================
+            log_mensagens = []
+            for item, quantidade in itens_dict.items():
+                if self.tipo == "entrou":
+                    log_mensagens.append(f"🔫 **{nome_membro}** adicionou **{quantidade}** {item}.")
+                else:
+                    log_mensagens.append(f"🔫 **{nome_membro}** pegou **{quantidade}** {item}.")
+            
+            texto_log = "\n".join(log_mensagens)
+            
+            # =========================================================
+            # ENVIAR PARA O CANAL DE ARMAS
+            # =========================================================
+            canal_armas = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
+            if canal_armas:
+                # Atualizar o painel (embed)
+                embed = await criar_embed_armas_estoque()
+                view = ArmasView()
+                await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
+                
+                # Enviar a mensagem de log no canal de armas
+                await canal_armas.send(texto_log)
+            
+            # =========================================================
+            # ENVIAR PARA O CANAL DE LOG DE ARMAS
+            # =========================================================
+            canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
+            if canal_log:
+                await canal_log.send(texto_log)
+            
+            await interaction.followup.send(f"✅ **Registro de armas enviado com sucesso!**", ephemeral=True)
+                
+        except Exception as e:
+            logger.error(f"❌ Erro no ArmasModal: {e}")
+            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
+
+# =========================================================
+# 4. VIEW ÚNICA DE ARMAS
+# =========================================================
+class ArmasView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="🔫 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="armas_entrada_btn", emoji="🔫")
+    async def registrar_entrada(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = ArmasModal("entrou")
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="🔫 Registrar Saída", style=discord.ButtonStyle.danger, custom_id="armas_saida_btn", emoji="🔫")
+    async def registrar_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = ArmasModal("saiu")
+        await interaction.response.send_modal(modal)
+
+# =========================================================
+# 5. FUNÇÃO PARA ENVIAR O PAINEL DE ARMAS
+# =========================================================
+async def enviar_painel_armas():
+    """Envia o painel de armas no canal principal"""
+    canal = bot.get_channel(CANAL_ARMAS_ESTOQUE_ID)
+    if not canal:
+        logger.error("❌ Canal ARMAS ESTOQUE não encontrado!")
+        return
+    
+    embed = await criar_embed_armas_estoque()
+    view = ArmasView()
+    
+    await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
+
 
 # =========================================================
 # ==================== SISTEMA DE MÚSICA ==================
@@ -14321,8 +14548,7 @@ async def on_ready():
     await atualizar_acesso_responsaveis()
     await setup_status()
     await enviar_painel_bau()
-    await enviar_painel_armas_entrou()
-    await enviar_painel_armas_saiu()
+    await enviar_painel_armas()
     await BotaoPersistente.restaurar_botoes()
     gc.collect()
     logger.info("=" * 50)
