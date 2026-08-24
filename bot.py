@@ -13481,6 +13481,26 @@ async def on_voice_state_update(member, before, after):
 # =========================================================
 # ==================== SISTEMA DE BAU =====================
 # =========================================================
+# =========================================================
+# 1. FUNÇÃO PARA DETECTAR ARMAS
+# =========================================================
+def is_arma(item_nome):
+    """Verifica se um item é uma arma baseado no nome"""
+    item_lower = item_nome.lower()
+    
+    # Lista de palavras que indicam que é uma arma
+    palavras_arma = [
+        "fuzil", "glock", "shotgun", "m4", "ak47", "ak-47", 
+        "sniper", "pistola", "sig", "ak", "aug", "carabina", 
+        "rifle", "g3", "fal", "m16", "ar15", "revolver", 
+        "magnum", "uzi", "mp5", "p90", "escopeta", "metralhadora"
+    ]
+    
+    for palavra in palavras_arma:
+        if palavra in item_lower:
+            return True
+    
+    return False
 
 # =========================================================
 # 2. FUNÇÃO PARA ENVIAR/ATUALIZAR PAINEL (MANTÉM NO FINAL)
@@ -13568,18 +13588,13 @@ async def criar_embed_bau_estoque():
         inline=False
     )
     
-    # Carregar estoque
     estoque = await carregar_bau_estoque()
-    
-    # Lista de itens que SÃO armas (para EXCLUIR do baú)
-    itens_armas = ["fuzil", "glock", "shotgun", "m4", "ak47", "sniper", "pistola", "sig", "ak", "aug", "carabina", "rifle"]
     
     if estoque:
         texto_estoque = ""
         for item, qtd in estoque.items():
-            # Verificar se o item NÃO é uma arma
-            is_arma = any(arma in item.lower() for arma in itens_armas)
-            if qtd > 0 and not is_arma:
+            # Mostrar apenas itens que NÃO são armas
+            if qtd > 0 and not is_arma(item):
                 texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
         
         if texto_estoque:
@@ -13629,19 +13644,18 @@ async def criar_embed_bau_estoque():
     )
     
     return embed
-
 # =========================================================
 # 4. MODAL DE BAU
 # =========================================================
-class BauModal(discord.ui.Modal):
+class ArmasModal(discord.ui.Modal):
     def __init__(self, tipo):
         self.tipo = tipo  # "entrou" ou "saiu"
-        titulo = "📥 Registrar Entrada" if tipo == "entrou" else "📤 Registrar Saída"
+        titulo = "🔫 Registrar Armas Entrada" if tipo == "entrou" else "🔫 Registrar Armas Saída"
         super().__init__(title=titulo)
         
         self.itens = discord.ui.TextInput(
-            label="📦 Itens (item: quantidade)",
-            placeholder="Ex: placas: 100\nc4: 10\nfuzil: 2",
+            label="🔫 Armas (arma: quantidade)",
+            placeholder="Ex: Fuzil: 2\nGlock: 1\nG3: 10",
             style=discord.TextStyle.paragraph,
             required=True,
             max_length=500
@@ -13664,7 +13678,7 @@ class BauModal(discord.ui.Modal):
         try:
             nome_membro = interaction.user.display_name
             
-            # Processar itens
+            # Processar itens (ACEITA QUALQUER ARMA)
             itens_dict = {}
             linhas = self.itens.value.strip().split('\n')
             for linha in linhas:
@@ -13678,10 +13692,10 @@ class BauModal(discord.ui.Modal):
                     itens_dict[item] = quantidade
             
             if not itens_dict:
-                await interaction.followup.send("❌ **Nenhum item válido encontrado!** Use o formato: `Item: Quantidade`", ephemeral=True)
+                await interaction.followup.send("❌ **Nenhuma arma válida encontrada!** Use o formato: `Arma: Quantidade`", ephemeral=True)
                 return
             
-            # Atualizar estoque
+            # Atualizar estoque (QUALQUER ARMA)
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
                     await atualizar_bau_estoque(item, quantidade, "adicionar")
@@ -13696,40 +13710,33 @@ class BauModal(discord.ui.Modal):
                     observacao=self.observacao.value if self.observacao.value else None
                 )
             
-            # =========================================================
-            # MENSAGENS DE LOG (APENAS NO CANAL DE LOG)
-            # =========================================================
+            # Mensagens de log
             log_mensagens = []
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
-                    log_mensagens.append(f"📥 **{nome_membro}** adicionou **{quantidade}** {item}.")
+                    log_mensagens.append(f"🔫 **{nome_membro}** adicionou **{quantidade}** {item}.")
                 else:
-                    log_mensagens.append(f"📤 **{nome_membro}** pegou **{quantidade}** {item}.")
+                    log_mensagens.append(f"🔫 **{nome_membro}** pegou **{quantidade}** {item}.")
             
             texto_log = "\n".join(log_mensagens)
             
-            # =========================================================
-            # ATUALIZAR PAINEL NO CANAL PRINCIPAL
-            # =========================================================
-            canal_bau = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
-            if canal_bau:
-                embed = await criar_embed_bau_estoque()
-                view = BauView()
-                await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
+            # Atualizar painel de armas
+            canal_armas = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
+            if canal_armas:
+                embed = await criar_embed_armas_estoque()
+                view = ArmasView()
+                await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
             
-            # =========================================================
-            # ENVIAR LOG APENAS NO CANAL DE LOG
-            # =========================================================
-            canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
+            # Enviar log de armas
+            canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
             if canal_log:
                 await canal_log.send(texto_log)
             
-            await interaction.followup.send(f"✅ **Registro enviado com sucesso!**", ephemeral=True)
+            await interaction.followup.send(f"✅ **Registro de armas enviado com sucesso!**", ephemeral=True)
                 
         except Exception as e:
-            logger.error(f"❌ Erro no BauModal: {e}")
+            logger.error(f"❌ Erro no ArmasModal: {e}")
             await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
-
 # =========================================================
 # 5. VIEW DO BAU
 # =========================================================
@@ -13789,18 +13796,13 @@ async def criar_embed_armas_estoque():
         inline=False
     )
     
-    # Carregar estoque
     estoque = await carregar_bau_estoque()
-    
-    # Lista de itens que SÃO armas
-    itens_armas = ["fuzil", "glock", "shotgun", "m4", "ak47", "sniper", "pistola", "sig", "ak", "aug", "carabina", "rifle"]
     
     if estoque:
         texto_estoque = ""
         for item, qtd in estoque.items():
-            # Verificar se o item É uma arma
-            is_arma = any(arma in item.lower() for arma in itens_armas)
-            if qtd > 0 and is_arma:
+            # Mostrar apenas itens que SÃO armas
+            if qtd > 0 and is_arma(item):
                 texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
         
         if texto_estoque:
@@ -13839,6 +13841,7 @@ async def criar_embed_armas_estoque():
             "Fuzil: 2\n"
             "Glock: 1\n"
             "Shotgun: 3\n"
+            "G3: 10\n"
             "```"
         ),
         inline=False
