@@ -1300,6 +1300,8 @@ CACHE_LIVES_TTL = 120
 twitch_token = None
 twitch_token_expira = 0
 lavagens_pendentes = {}
+bau_print_pendente = {}
+armas_print_pendente = {}
 
 # =========================================================
 # ==================== PARTE 5: SISTEMAS PRINCIPAIS =======
@@ -11216,6 +11218,8 @@ async def on_message_lavagem(message: discord.Message):
             except:
                 pass
 
+
+
 # =========================================================
 # 7. TASK DE LIMPAR LAVAGENS PENDENTES
 # =========================================================
@@ -13785,24 +13789,39 @@ class BauModal(discord.ui.Modal):
                 await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
             
             # =========================================================
-            # ENVIAR MENSAGEM DE LOG + PEDIR PRINT (APENAS PARA ENTRADA)
+            # PEDIR PRINT (APENAS PARA ENTRADA)
             # =========================================================
-            canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
-            if canal_log:
-                # Enviar a mensagem de log
-                await canal_log.send(texto_log)
-                
-                # Se for entrada, pedir o print
-                if self.tipo == "entrou":
-                    await canal_log.send(
-                        f"📎 **{nome_membro}**, anexe o print da entrada aqui (imagem ou arquivo)."
+            if self.tipo == "entrou":
+                canal_controle = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
+                if canal_controle:
+                    msg_pedido = await canal_controle.send(
+                        f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n"
+                        f"📝 **Itens:** {', '.join([f'{item} ({qtd})' for item, qtd in itens_dict.items()])}"
                     )
-            
-            await interaction.followup.send(f"✅ **Registro enviado com sucesso!**", ephemeral=True)
+                    
+                    # Armazenar os dados para quando o print chegar
+                    bau_print_pendente[interaction.user.id] = {
+                        "log": texto_log,
+                        "canal_id": CANAL_BAU_LOG_ID,
+                        "msg_pedido_id": msg_pedido.id
+                    }
+                    
+                    await interaction.followup.send(
+                        f"✅ **Registro enviado!**\n📎 Agora anexe o print no canal **#bau-membros** para finalizar.",
+                        ephemeral=True
+                    )
+                    return
+            else:
+                # Para saída, enviar direto no log
+                canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
+                if canal_log:
+                    await canal_log.send(texto_log)
+                await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
                 
         except Exception as e:
             logger.error(f"❌ Erro no BauModal: {e}")
             await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
+            
 # =========================================================
 # 7. MODAL DE ARMAS
 # =========================================================
@@ -13887,20 +13906,34 @@ class ArmasModal(discord.ui.Modal):
                 await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
             
             # =========================================================
-            # ENVIAR MENSAGEM DE LOG + PEDIR PRINT (APENAS PARA ENTRADA)
+            # PEDIR PRINT (APENAS PARA ENTRADA)
             # =========================================================
-            canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
-            if canal_log:
-                # Enviar a mensagem de log
-                await canal_log.send(texto_log)
-                
-                # Se for entrada, pedir o print
-                if self.tipo == "entrou":
-                    await canal_log.send(
-                        f"📎 **{nome_membro}**, anexe o print da entrada aqui (imagem ou arquivo)."
+            if self.tipo == "entrou":
+                canal_controle = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
+                if canal_controle:
+                    msg_pedido = await canal_controle.send(
+                        f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n"
+                        f"📝 **Itens:** {', '.join([f'{item} ({qtd})' for item, qtd in itens_dict.items()])}"
                     )
-            
-            await interaction.followup.send(f"✅ **Registro de armas enviado com sucesso!**", ephemeral=True)
+                    
+                    # Armazenar os dados para quando o print chegar
+                    armas_print_pendente[interaction.user.id] = {
+                        "log": texto_log,
+                        "canal_id": CANAL_ARMAS_LOG_ID,
+                        "msg_pedido_id": msg_pedido.id
+                    }
+                    
+                    await interaction.followup.send(
+                        f"✅ **Registro de armas enviado!**\n📎 Agora anexe o print no canal **#armas-estoque** para finalizar.",
+                        ephemeral=True
+                    )
+                    return
+            else:
+                # Para saída, enviar direto no log
+                canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
+                if canal_log:
+                    await canal_log.send(texto_log)
+                await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
                 
         except Exception as e:
             logger.error(f"❌ Erro no ArmasModal: {e}")
@@ -14785,6 +14818,84 @@ async def on_message(message: discord.Message):
                     logger.error(f"Erro ao fixar painel: {e}")
                 break
     await on_message_lavagem(message)
+    
+    # =========================================================
+    # SISTEMA DE PRINT DO BAU E ARMAS
+    # =========================================================
+    if not message.attachments:
+        await bot.process_commands(message)
+        return
+    
+    # Verificar se é print pendente do BAU
+    if message.author.id in bau_print_pendente:
+        dados = bau_print_pendente.pop(message.author.id)
+        attachment = message.attachments[0]
+        if attachment.filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.mp4', '.mov')):
+            arquivo = await attachment.to_file()
+            canal_log = bot.get_channel(dados["canal_id"])
+            if canal_log:
+                embed = discord.Embed(
+                    title="📎 PRINT DA ENTRADA",
+                    description=dados["log"],
+                    color=0x2ecc71,
+                    timestamp=agora()
+                )
+                embed.set_image(url=f"attachment://{arquivo.filename}")
+                embed.set_footer(
+                    text=f"🛡 Vida Rasa 442 • Print enviado por {message.author.display_name}",
+                    icon_url=bot.user.display_avatar.url if bot.user else None
+                )
+                await canal_log.send(embed=embed, file=arquivo)
+            try:
+                canal_controle = message.channel
+                msg_pedido = await canal_controle.fetch_message(dados["msg_pedido_id"])
+                if msg_pedido:
+                    await msg_pedido.delete()
+            except:
+                pass
+            try:
+                await message.delete()
+            except:
+                pass
+            await message.author.send("✅ **Print enviado com sucesso!** O registro foi finalizado.")
+        else:
+            await message.reply("❌ **Arquivo inválido!** Envie uma imagem (png, jpg, jpeg, gif) ou vídeo (mp4, mov).")
+    
+    # Verificar se é print pendente de ARMAS
+    elif message.author.id in armas_print_pendente:
+        dados = armas_print_pendente.pop(message.author.id)
+        attachment = message.attachments[0]
+        if attachment.filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.mp4', '.mov')):
+            arquivo = await attachment.to_file()
+            canal_log = bot.get_channel(dados["canal_id"])
+            if canal_log:
+                embed = discord.Embed(
+                    title="📎 PRINT DA ENTRADA DE ARMAS",
+                    description=dados["log"],
+                    color=0x2ecc71,
+                    timestamp=agora()
+                )
+                embed.set_image(url=f"attachment://{arquivo.filename}")
+                embed.set_footer(
+                    text=f"🛡 Vida Rasa 442 • Print enviado por {message.author.display_name}",
+                    icon_url=bot.user.display_avatar.url if bot.user else None
+                )
+                await canal_log.send(embed=embed, file=arquivo)
+            try:
+                canal_controle = message.channel
+                msg_pedido = await canal_controle.fetch_message(dados["msg_pedido_id"])
+                if msg_pedido:
+                    await msg_pedido.delete()
+            except:
+                pass
+            try:
+                await message.delete()
+            except:
+                pass
+            await message.author.send("✅ **Print enviado com sucesso!** O registro de armas foi finalizado.")
+        else:
+            await message.reply("❌ **Arquivo inválido!** Envie uma imagem (png, jpg, jpeg, gif) ou vídeo (mp4, mov).")
+    
     await bot.process_commands(message)
 
 # =========================================================
