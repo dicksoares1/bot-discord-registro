@@ -13726,18 +13726,6 @@ class BauModal(discord.ui.Modal):
             max_length=200
         )
         
-        # =========================================================
-        # CAMPO PARA PRINT (APENAS PARA ENTRADA)
-        # =========================================================
-        if tipo == "entrou":
-            self.print_anexo = discord.ui.TextInput(
-                label="📎 LINK DO PRINT (opcional)",
-                placeholder="Cole o link da imagem (ex: imgur.com/xxx)",
-                required=False,
-                max_length=200
-            )
-            self.add_item(self.print_anexo)
-        
         self.add_item(self.itens)
         self.add_item(self.observacao)
     
@@ -13788,13 +13776,6 @@ class BauModal(discord.ui.Modal):
             texto_log = "\n".join(log_mensagens)
             
             # =========================================================
-            # PEGAR O PRINT (SE TIVER)
-            # =========================================================
-            print_link = None
-            if self.tipo == "entrou" and hasattr(self, 'print_anexo') and self.print_anexo.value:
-                print_link = self.print_anexo.value.strip()
-            
-            # =========================================================
             # ATUALIZAR PAINEL DO BAU
             # =========================================================
             canal_bau = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
@@ -13804,15 +13785,18 @@ class BauModal(discord.ui.Modal):
                 await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
             
             # =========================================================
-            # ENVIAR MENSAGEM DE LOG (COM PRINT SE TIVER)
+            # ENVIAR MENSAGEM DE LOG + PEDIR PRINT (APENAS PARA ENTRADA)
             # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
             if canal_log:
-                if print_link:
-                    # Enviar com o print
-                    await canal_log.send(f"{texto_log}\n📎 **Print:** {print_link}")
-                else:
-                    await canal_log.send(texto_log)
+                # Enviar a mensagem de log
+                await canal_log.send(texto_log)
+                
+                # Se for entrada, pedir o print
+                if self.tipo == "entrou":
+                    await canal_log.send(
+                        f"📎 **{nome_membro}**, anexe o print da entrada aqui (imagem ou arquivo)."
+                    )
             
             await interaction.followup.send(f"✅ **Registro enviado com sucesso!**", ephemeral=True)
                 
@@ -13843,18 +13827,6 @@ class ArmasModal(discord.ui.Modal):
             required=False,
             max_length=200
         )
-        
-        # =========================================================
-        # CAMPO PARA PRINT (APENAS PARA ENTRADA)
-        # =========================================================
-        if tipo == "entrou":
-            self.print_anexo = discord.ui.TextInput(
-                label="📎 LINK DO PRINT (opcional)",
-                placeholder="Cole o link da imagem (ex: imgur.com/xxx)",
-                required=False,
-                max_length=200
-            )
-            self.add_item(self.print_anexo)
         
         self.add_item(self.itens)
         self.add_item(self.observacao)
@@ -13906,13 +13878,6 @@ class ArmasModal(discord.ui.Modal):
             texto_log = "\n".join(log_mensagens)
             
             # =========================================================
-            # PEGAR O PRINT (SE TIVER)
-            # =========================================================
-            print_link = None
-            if self.tipo == "entrou" and hasattr(self, 'print_anexo') and self.print_anexo.value:
-                print_link = self.print_anexo.value.strip()
-            
-            # =========================================================
             # ATUALIZAR PAINEL DE ARMAS
             # =========================================================
             canal_armas = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
@@ -13922,21 +13887,25 @@ class ArmasModal(discord.ui.Modal):
                 await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
             
             # =========================================================
-            # ENVIAR MENSAGEM DE LOG (COM PRINT SE TIVER)
+            # ENVIAR MENSAGEM DE LOG + PEDIR PRINT (APENAS PARA ENTRADA)
             # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
             if canal_log:
-                if print_link:
-                    await canal_log.send(f"{texto_log}\n📎 **Print:** {print_link}")
-                else:
-                    await canal_log.send(texto_log)
+                # Enviar a mensagem de log
+                await canal_log.send(texto_log)
+                
+                # Se for entrada, pedir o print
+                if self.tipo == "entrou":
+                    await canal_log.send(
+                        f"📎 **{nome_membro}**, anexe o print da entrada aqui (imagem ou arquivo)."
+                    )
             
             await interaction.followup.send(f"✅ **Registro de armas enviado com sucesso!**", ephemeral=True)
                 
         except Exception as e:
             logger.error(f"❌ Erro no ArmasModal: {e}")
             await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
-
+            
 # =========================================================
 # 8. VIEWS
 # =========================================================
