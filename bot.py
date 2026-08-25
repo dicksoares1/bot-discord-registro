@@ -157,11 +157,17 @@ CANAL_COMPRAS_REGISTRADAS_ID = 1270467793363669053
 
 # Sismtema de logs
 CANAL_LOGS_GERAIS_ID = 1541438570705977564
-
 CANAL_BAU_MEMBROS_ID = 1337358932158578719  # Canal principal (entrada/saída)
 CANAL_BAU_LOG_ID = 1337358898784632882      # Canal de log (saída)
 CANAL_ARMAS_ESTOQUE_ID = 1500983878045798430  # Canal principal (entrada/saída)
 CANAL_ARMAS_LOG_ID = 1500983930533187734      # Canal de log
+
+# Sistema de Avisos
+CANAL_AVISOS_VIDA_RASA_ID = 1229526645342339075
+CANAL_AVISOS_ACOES_ID = 1366528075621339227
+CANAL_AVISOS_VENDAS_ID = 1448560922019758241
+CANAL_AVISOS_METAS_ID = 1541794867267641404
+CANAL_CRIAR_AVISOS_ID = 1541795328972562513
 # =========================================================
 # 8. CARGOS PERMITIDOS (LISTAS)
 # =========================================================
@@ -12996,6 +13002,17 @@ async def cmd_dashboard(ctx):
     )
     await ctx.send(embed=embed)
 
+# ------------------------------------------------------------
+# COMANDO: !atualizar_avisos
+# ------------------------------------------------------------
+@bot.command(name="atualizar_avisos")
+@commands.has_permissions(administrator=True)
+async def cmd_atualizar_avisos(ctx):
+    """Atualiza o painel de avisos"""
+    await ctx.send("🔄 Atualizando painel de avisos...")
+    await enviar_painel_avisos()
+    await ctx.send("✅ Painel de avisos atualizado!")
+
 # =========================================================
 # ==================== SISTEMA DE LOGS (IGUAL À IMAGEM) ===
 # =========================================================
@@ -13394,7 +13411,322 @@ async def on_voice_state_update(member, before, after):
         )
         embed.set_footer(text="Vida Rasa 442 • Logs")
         await canal_log.send(embed=embed)
+# =========================================================
+# ==================== SEÇÃO: SISTEMA DE AVISOS ===========
+# =========================================================
 
+# ------------------------------------------------------------
+# CLASS: AvisosSelect (Menu Suspenso)
+# ------------------------------------------------------------
+class AvisosSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(
+                label="📢 Vida Rasa",
+                description="Aviso geral para toda a facção",
+                emoji="📢",
+                value="vida_rasa"
+            ),
+            discord.SelectOption(
+                label="⚔️ Ações",
+                description="Aviso sobre ações e escalações",
+                emoji="⚔️",
+                value="acoes"
+            ),
+            discord.SelectOption(
+                label="🛒 Vendas",
+                description="Aviso sobre vendas e encomendas",
+                emoji="🛒",
+                value="vendas"
+            ),
+            discord.SelectOption(
+                label="🎯 Metas",
+                description="Aviso sobre metas semanais",
+                emoji="🎯",
+                value="metas"
+            )
+        ]
+        super().__init__(
+            placeholder="📌 Selecione o canal para o aviso...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    # ------------------------------------------------------------
+    # ASYNC: callback
+    # ------------------------------------------------------------
+    async def callback(self, interaction: discord.Interaction):
+        valor = self.values[0]
+        canais = {
+            "vida_rasa": CANAL_AVISOS_VIDA_RASA_ID,
+            "acoes": CANAL_AVISOS_ACOES_ID,
+            "vendas": CANAL_AVISOS_VENDAS_ID,
+            "metas": CANAL_AVISOS_METAS_ID
+        }
+        nomes = {
+            "vida_rasa": "📢 Vida Rasa",
+            "acoes": "⚔️ Ações",
+            "vendas": "🛒 Vendas",
+            "metas": "🎯 Metas"
+        }
+        
+        canal_id = canais.get(valor)
+        nome_canal = nomes.get(valor, "Desconhecido")
+        
+        if not canal_id:
+            await interaction.response.send_message("❌ Canal inválido!", ephemeral=True)
+            return
+        
+        # Abrir modal para escrever o aviso
+        modal = AvisoModal(canal_id, nome_canal)
+        await interaction.response.send_modal(modal)
+
+
+# ------------------------------------------------------------
+# CLASS: AvisoModal (VERSÃO ANÔNIMA)
+# ------------------------------------------------------------
+class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso"):
+    def __init__(self, canal_id, nome_canal):
+        super().__init__(timeout=300)
+        self.canal_id = canal_id
+        self.nome_canal = nome_canal
+    
+    # ------------------------------------------------------------
+    # CAMPOS DO MODAL
+    # ------------------------------------------------------------
+    titulo = discord.ui.TextInput(
+        label="📌 Título do Aviso",
+        placeholder="Ex: ATENÇÃO!",
+        required=True,
+        max_length=100
+    )
+    
+    mensagem = discord.ui.TextInput(
+        label="📝 Mensagem do Aviso",
+        placeholder="Digite o conteúdo do aviso...",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=2000
+    )
+    
+    cor = discord.ui.TextInput(
+        label="🎨 Cor (opcional)",
+        placeholder="verde, vermelho, amarelo, azul, roxo, laranja",
+        required=False,
+        max_length=20
+    )
+    
+    # ------------------------------------------------------------
+    # ASYNC: on_submit
+    # ------------------------------------------------------------
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Definir cor
+            cores = {
+                "verde": 0x2ecc71,
+                "vermelho": 0xe74c3c,
+                "amarelo": 0xf1c40f,
+                "azul": 0x3498db,
+                "roxo": 0x9b59b6,
+                "laranja": 0xe67e22
+            }
+            cor_hex = cores.get(self.cor.value.lower().strip(), 0x3498db)
+            
+            # =========================================================
+            # EMBED DO AVISO (SEM NOME DO AUTOR)
+            # =========================================================
+            embed = discord.Embed(
+                title=f"📢 {self.titulo.value}",
+                description=self.mensagem.value,
+                color=cor_hex,
+                timestamp=agora()
+            )
+            
+            # =========================================================
+            # REMOVIDO: set_author com o nome do usuário
+            # =========================================================
+            
+            embed.add_field(
+                name="📌 Canal",
+                value=self.nome_canal,
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📅 Data",
+                value=agora().strftime("%d/%m/%Y %H:%M"),
+                inline=True
+            )
+            
+            # =========================================================
+            # RODAPÉ SEM NOME DO AUTOR
+            # =========================================================
+            embed.set_footer(
+                text="🛡 Vida Rasa 442 • Aviso Oficial",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+            
+            # Enviar para o canal selecionado
+            canal = interaction.guild.get_channel(self.canal_id)
+            if canal:
+                await canal.send(
+                    content="@everyone 🔔 **NOVO AVISO!**",
+                    embed=embed,
+                    allowed_mentions=discord.AllowedMentions(everyone=True)
+                )
+                
+                # =========================================================
+                # LOG NO CANAL DE CRIAÇÃO (COM NOME DO AUTOR)
+                # =========================================================
+                canal_log = interaction.guild.get_channel(CANAL_CRIAR_AVISOS_ID)
+                if canal_log:
+                    embed_log = discord.Embed(
+                        title="✅ AVISO CRIADO (ANÔNIMO)",
+                        description=f"📢 **{self.titulo.value}**",
+                        color=0x2ecc71,
+                        timestamp=agora()
+                    )
+                    # =========================================================
+                    # LOG MOSTRA QUEM ENVIOU (APENAS PARA GERÊNCIA)
+                    # =========================================================
+                    embed_log.add_field(
+                        name="👤 Enviado por (LOG)",
+                        value=interaction.user.mention,
+                        inline=True
+                    )
+                    embed_log.add_field(
+                        name="📌 Canal",
+                        value=self.nome_canal,
+                        inline=True
+                    )
+                    embed_log.add_field(
+                        name="📝 Conteúdo",
+                        value=self.mensagem.value[:500],
+                        inline=False
+                    )
+                    embed_log.set_footer(text="🛡 Vida Rasa 442 • Log de Avisos")
+                    await canal_log.send(embed=embed_log)
+                
+                await interaction.followup.send(
+                    f"✅ **Aviso anônimo enviado com sucesso para {self.nome_canal}!**",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send("❌ **Canal não encontrado!**", ephemeral=True)
+                
+        except Exception as e:
+            logger.error(f"❌ Erro ao enviar aviso: {e}")
+            await interaction.followup.send(f"❌ **Erro ao enviar aviso:** {str(e)[:100]}", ephemeral=True)
+
+
+# ------------------------------------------------------------
+# CLASS: AvisosView
+# ------------------------------------------------------------
+class AvisosView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(AvisosSelect())
+    
+    # ------------------------------------------------------------
+    # ASYNC: interaction_check
+    # ------------------------------------------------------------
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Verificar se o usuário tem permissão (Gerente ou ADM)
+        tem_permissao = (
+            interaction.user.guild_permissions.administrator or
+            any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
+        )
+        if not tem_permissao:
+            await interaction.response.send_message(
+                "❌ **Apenas Gerentes, ADM, Cargo 01 e Cargo 02 podem criar avisos!**",
+                ephemeral=True
+            )
+            return False
+        return True
+
+
+# ------------------------------------------------------------
+# ASYNC: enviar_painel_avisos
+# ------------------------------------------------------------
+async def enviar_painel_avisos():
+    """Envia o painel de criação de avisos no canal de criação"""
+    canal = bot.get_channel(CANAL_CRIAR_AVISOS_ID)
+    if not canal:
+        logger.error(f"❌ Canal de criação de avisos não encontrado! ID: {CANAL_CRIAR_AVISOS_ID}")
+        return
+    
+    embed = discord.Embed(
+        title="📢 ── SISTEMA DE AVISOS ── 📢",
+        description="🔔 Crie avisos anônimos para os canais da facção",
+        color=0x1a1a2e,
+        timestamp=agora()
+    )
+    
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Sistema de Avisos",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 COMO USAR",
+        value=(
+            "```yaml\n"
+            "1️⃣ Selecione o canal no menu suspenso\n"
+            "2️⃣ Preencha o título da mensagem\n"
+            "3️⃣ Digite o conteúdo do aviso\n"
+            "4️⃣ Escolha uma cor (opcional)\n"
+            "5️⃣ Clique em Enviar\n"
+            "\n"
+            "📌 CORES DISPONÍVEIS:\n"
+            "   verde, vermelho, amarelo,\n"
+            "   azul, roxo, laranja\n"
+            "\n"
+            "🔒 AVISO ANÔNIMO:\n"
+            "   Ninguém saberá quem enviou!\n"
+            "\n"
+            "⚠️ APENAS:\n"
+            "   • Gerentes\n"
+            "   • ADM\n"
+            "   • Cargo 01\n"
+            "   • Cargo 02\n"
+            "```"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📌 CANAIS DISPONÍVEIS",
+        value=(
+            "📢 **Vida Rasa** - Avisos gerais\n"
+            "⚔️ **Ações** - Avisos de ações\n"
+            "🛒 **Vendas** - Avisos de vendas\n"
+            "🎯 **Metas** - Avisos de metas"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Sistema de Avisos",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    view = AvisosView()
+    await enviar_ou_atualizar_painel("painel_avisos", CANAL_CRIAR_AVISOS_ID, embed, view)
 # =========================================================
 # ==================== SISTEMA DE BAU E ARMAS =============
 # =========================================================
@@ -14178,6 +14510,7 @@ async def on_ready():
     await setup_status()
     await enviar_painel_bau()
     await enviar_painel_armas()
+    await enviar_painel_avisos()
     await BotaoPersistente.restaurar_botoes()
     gc.collect()
     logger.info("=" * 50)
