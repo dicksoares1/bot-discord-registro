@@ -13415,6 +13415,91 @@ async def on_voice_state_update(member, before, after):
 # ==================== SEÇÃO: SISTEMA DE AVISOS ===========
 # =========================================================
 
+
+# ------------------------------------------------------------
+# ASYNC: criar_embed_aviso_supremo
+# ------------------------------------------------------------
+
+async def criar_embed_aviso_supremo(titulo, mensagem, cor_hex, canal_nome, tipo_aviso="📢"):
+    """Cria um embed de aviso com design supremo"""
+    
+    # Definir cores e ícones por tipo
+    tipos = {
+        "urgente": {"cor": 0xe74c3c, "emoji": "🔴", "borda": "🔥"},
+        "importante": {"cor": 0xf1c40f, "emoji": "⭐", "borda": "✨"},
+        "informativo": {"cor": 0x3498db, "emoji": "ℹ️", "borda": "📌"},
+        "sucesso": {"cor": 0x2ecc71, "emoji": "✅", "borda": "🎉"},
+        "aviso": {"cor": 0xe67e22, "emoji": "⚠️", "borda": "📢"}
+    }
+    
+    # Determinar o tipo baseado no título
+    tipo_detectado = "informativo"
+    titulo_lower = titulo.lower()
+    if any(p in titulo_lower for p in ["urgente", "importante", "atenção", "perigo"]):
+        tipo_detectado = "urgente"
+    elif any(p in titulo_lower for p in ["sucesso", "concluído", "finalizado", "parabéns"]):
+        tipo_detectado = "sucesso"
+    elif any(p in titulo_lower for p in ["aviso", "atenção", "cuidado"]):
+        tipo_detectado = "aviso"
+    elif any(p in titulo_lower for p in ["info", "informação", "comunicado"]):
+        tipo_detectado = "informativo"
+    
+    info = tipos.get(tipo_detectado, tipos["informativo"])
+    cor_final = cor_hex if cor_hex else info["cor"]
+    emoji_tipo = info["emoji"]
+    borda = info["borda"]
+    
+    # Criar o embed
+    embed = discord.Embed(
+        title=f"{emoji_tipo} {borda} {titulo.upper()} {borda} {emoji_tipo}",
+        description=f"```yaml\n{mensagem}\n```",
+        color=cor_final,
+        timestamp=agora()
+    )
+    
+    # Barra decorativa superior
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    # Informações do aviso
+    embed.add_field(
+        name="📌 DESTINO",
+        value=f"```yaml\n{canal_nome}\n```",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📅 DATA E HORA",
+        value=f"```yaml\n{agora().strftime('%d/%m/%Y %H:%M')}\n```",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📋 STATUS",
+        value=f"```yaml\n{('🔴 URGENTE' if tipo_detectado == 'urgente' else '📢 ATIVO')}\n```",
+        inline=True
+    )
+    
+    # Barra decorativa inferior
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    
+    # Rodapé com estilo
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Sistema Oficial de Avisos",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    # Thumbnail com ícone do bot
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+    
+    return embed
 # ------------------------------------------------------------
 # CLASS: AvisosSelect (Menu Suspenso)
 # ------------------------------------------------------------
@@ -13484,9 +13569,9 @@ class AvisosSelect(discord.ui.Select):
 
 
 # ------------------------------------------------------------
-# CLASS: AvisoModal (VERSÃO ANÔNIMA)
+# CLASS: AvisoModal (VERSÃO SUPREMA)
 # ------------------------------------------------------------
-class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso"):
+class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Supremo"):
     def __init__(self, canal_id, nome_canal):
         super().__init__(timeout=300)
         self.canal_id = canal_id
@@ -13497,7 +13582,7 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso"):
     # ------------------------------------------------------------
     titulo = discord.ui.TextInput(
         label="📌 Título do Aviso",
-        placeholder="Ex: ATENÇÃO!",
+        placeholder="Ex: ATENÇÃO REUNIÃO!",
         required=True,
         max_length=100
     )
@@ -13517,6 +13602,13 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso"):
         max_length=20
     )
     
+    tipo = discord.ui.TextInput(
+        label="🏷️ Tipo (opcional)",
+        placeholder="urgente, importante, aviso, sucesso, informativo",
+        required=False,
+        max_length=20
+    )
+    
     # ------------------------------------------------------------
     # ASYNC: on_submit
     # ------------------------------------------------------------
@@ -13524,7 +13616,7 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso"):
         await interaction.response.defer(ephemeral=True)
         
         try:
-            # Definir cor
+            # Definir cores
             cores = {
                 "verde": 0x2ecc71,
                 "vermelho": 0xe74c3c,
@@ -13533,54 +13625,27 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso"):
                 "roxo": 0x9b59b6,
                 "laranja": 0xe67e22
             }
-            cor_hex = cores.get(self.cor.value.lower().strip(), 0x3498db)
+            cor_hex = cores.get(self.cor.value.lower().strip(), None)
             
-            # =========================================================
-            # EMBED DO AVISO (SEM NOME DO AUTOR)
-            # =========================================================
-            embed = discord.Embed(
-                title=f"📢 {self.titulo.value}",
-                description=self.mensagem.value,
-                color=cor_hex,
-                timestamp=agora()
-            )
-            
-            # =========================================================
-            # REMOVIDO: set_author com o nome do usuário
-            # =========================================================
-            
-            embed.add_field(
-                name="📌 Canal",
-                value=self.nome_canal,
-                inline=True
-            )
-            
-            embed.add_field(
-                name="📅 Data",
-                value=agora().strftime("%d/%m/%Y %H:%M"),
-                inline=True
-            )
-            
-            # =========================================================
-            # RODAPÉ SEM NOME DO AUTOR
-            # =========================================================
-            embed.set_footer(
-                text="🛡 Vida Rasa 442 • Aviso Oficial",
-                icon_url=bot.user.display_avatar.url if bot.user else None
+            # Criar embed usando a função suprema
+            embed = await criar_embed_aviso_supremo(
+                titulo=self.titulo.value,
+                mensagem=self.mensagem.value,
+                cor_hex=cor_hex,
+                canal_nome=self.nome_canal
             )
             
             # Enviar para o canal selecionado
             canal = interaction.guild.get_channel(self.canal_id)
             if canal:
+                # Mensagem de @everyone com estilo
                 await canal.send(
-                    content="@everyone 🔔 **NOVO AVISO!**",
+                    content="🔔 @everyone **NOVO AVISO OFICIAL!**",
                     embed=embed,
                     allowed_mentions=discord.AllowedMentions(everyone=True)
                 )
                 
-                # =========================================================
-                # LOG NO CANAL DE CRIAÇÃO (COM NOME DO AUTOR)
-                # =========================================================
+                # LOG no canal de criação (com nome do autor)
                 canal_log = interaction.guild.get_channel(CANAL_CRIAR_AVISOS_ID)
                 if canal_log:
                     embed_log = discord.Embed(
@@ -13589,9 +13654,6 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso"):
                         color=0x2ecc71,
                         timestamp=agora()
                     )
-                    # =========================================================
-                    # LOG MOSTRA QUEM ENVIOU (APENAS PARA GERÊNCIA)
-                    # =========================================================
                     embed_log.add_field(
                         name="👤 Enviado por (LOG)",
                         value=interaction.user.mention,
@@ -13611,7 +13673,7 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso"):
                     await canal_log.send(embed=embed_log)
                 
                 await interaction.followup.send(
-                    f"✅ **Aviso anônimo enviado com sucesso para {self.nome_canal}!**",
+                    f"✅ **Aviso supremo enviado com sucesso para {self.nome_canal}!**",
                     ephemeral=True
                 )
             else:
@@ -13620,7 +13682,6 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso"):
         except Exception as e:
             logger.error(f"❌ Erro ao enviar aviso: {e}")
             await interaction.followup.send(f"❌ **Erro ao enviar aviso:** {str(e)[:100]}", ephemeral=True)
-
 
 # ------------------------------------------------------------
 # CLASS: AvisosView
@@ -13659,8 +13720,8 @@ async def enviar_painel_avisos():
         return
     
     embed = discord.Embed(
-        title="📢 ── SISTEMA DE AVISOS ── 📢",
-        description="🔔 Crie avisos anônimos para os canais da facção",
+        title="🌟 ── SISTEMA DE AVISOS SUPREMO ── 🌟",
+        description="🔔 Crie avisos elegantes e profissionais para a facção",
         color=0x1a1a2e,
         timestamp=agora()
     )
@@ -13681,16 +13742,21 @@ async def enviar_painel_avisos():
         value=(
             "```yaml\n"
             "1️⃣ Selecione o canal no menu suspenso\n"
-            "2️⃣ Preencha o título da mensagem\n"
-            "3️⃣ Digite o conteúdo do aviso\n"
+            "2️⃣ Preencha o título do aviso\n"
+            "3️⃣ Digite o conteúdo\n"
             "4️⃣ Escolha uma cor (opcional)\n"
-            "5️⃣ Clique em Enviar\n"
+            "5️⃣ Escolha o tipo (opcional)\n"
+            "6️⃣ Clique em Enviar\n"
             "\n"
-            "📌 CORES DISPONÍVEIS:\n"
+            "🎨 CORES:\n"
             "   verde, vermelho, amarelo,\n"
             "   azul, roxo, laranja\n"
             "\n"
-            "🔒 AVISO ANÔNIMO:\n"
+            "🏷️ TIPOS:\n"
+            "   urgente, importante,\n"
+            "   aviso, sucesso, informativo\n"
+            "\n"
+            "🔒 ANÔNIMO:\n"
             "   Ninguém saberá quem enviou!\n"
             "\n"
             "⚠️ APENAS:\n"
