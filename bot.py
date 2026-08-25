@@ -5878,10 +5878,10 @@ async def restaurar_botoes_vendas():
             logger.error("❌ Canal de encomendas não encontrado!")
             return
 
-        contador_restaurados = 0
+        contador_desabilitados = 0
         contador_concluidos = 0
         contador_cancelados = 0
-        contador_ja_ok = 0
+        contador_pendentes = 0
 
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
@@ -5903,7 +5903,7 @@ async def restaurar_botoes_vendas():
                         pago = True
                         entregue = True
 
-                    # Procurar o campo "Status" (lá em baixo)
+                    # Procurar o campo "Status"
                     for field in embed.fields:
                         if field.name == "Status" or field.name == "📌 Status":
                             valor = field.value
@@ -5915,7 +5915,6 @@ async def restaurar_botoes_vendas():
                                 cancelado = True
                             break
 
-                    # Se não achou, procurar em todos os campos
                     if not pago and not entregue and not cancelado:
                         for field in embed.fields:
                             valor = field.value
@@ -5927,51 +5926,36 @@ async def restaurar_botoes_vendas():
                                 cancelado = True
 
                     # =========================================================
-                    # SE CONCLUÍDA OU CANCELADA, PULAR (NUNCA MEXER)
+                    # DETERMINAR O STATUS
                     # =========================================================
                     if cancelado:
+                        status = "CANCELADA"
                         contador_cancelados += 1
-                        continue
-                    
-                    if concluida or (pago and entregue):
+                        disabled = True
+                        pago_ja_clicado = True
+                    elif concluida or (pago and entregue):
+                        status = "CONCLUÍDA"
                         contador_concluidos += 1
-                        continue
-
-                    # =========================================================
-                    # SÓ CHEGA AQUI SE FOR PENDENTE
-                    # =========================================================
-                    
-                    # Verificar se a view já está correta
-                    view_correta = False
-                    if msg.components:
-                        # Verificar se os botões correspondem ao status
-                        pago_ja_clicado = pago
+                        disabled = True
+                        pago_ja_clicado = True
+                    elif pago:
+                        status = "PAGO"
+                        contador_pendentes += 1
                         disabled = False
-                        
-                        # Verificar se cada botão está no estado correto
-                        for component in msg.components:
-                            for item in component.children:
-                                if item.custom_id == "status_pago_fixo":
-                                    if pago_ja_clicado and not item.disabled:
-                                        view_correta = False
-                                    elif not pago_ja_clicado and item.disabled:
-                                        view_correta = False
-                                    else:
-                                        view_correta = True
-                                elif item.custom_id == "status_entregue_fixo":
-                                    if entregue and not item.disabled:
-                                        view_correta = False
-                                    elif not entregue and item.disabled:
-                                        view_correta = False
-                                    else:
-                                        view_correta = True
-                        
-                        if view_correta:
-                            contador_ja_ok += 1
-                            continue
+                        pago_ja_clicado = True
+                    elif entregue:
+                        status = "ENTREGUE"
+                        contador_pendentes += 1
+                        disabled = False
+                        pago_ja_clicado = False
+                    else:
+                        status = "PENDENTE"
+                        contador_pendentes += 1
+                        disabled = False
+                        pago_ja_clicado = False
 
                     # =========================================================
-                    # RECRIAR VIEW APENAS PARA PENDENTES QUE PRECISAM
+                    # FORÇAR A VIEW COM O STATUS CORRETO
                     # =========================================================
                     entrega_id = None
                     if embed.footer:
@@ -5998,12 +5982,7 @@ async def restaurar_botoes_vendas():
                         except:
                             pass
 
-                    disabled = False
-                    if pago:
-                        pago_ja_clicado = True
-                    else:
-                        pago_ja_clicado = False
-
+                    # CRIAR VIEW FORÇANDO O STATUS CORRETO
                     view = StatusView(
                         entrega_id=entrega_id,
                         total_entregas=total_entregas,
@@ -6014,13 +5993,13 @@ async def restaurar_botoes_vendas():
                     )
 
                     await safe_request(msg.edit, view=view)
-                    contador_restaurados += 1
+                    contador_desabilitados += 1
                     await asyncio.sleep(0.5)
 
-        logger.info(f"✅ {contador_restaurados} vendas pendentes restauradas!")
-        logger.info(f"⏭️ {contador_concluidos} vendas concluídas (IGNORADAS)")
-        logger.info(f"⏭️ {contador_cancelados} vendas canceladas (IGNORADAS)")
-        logger.info(f"⏭️ {contador_ja_ok} vendas com view correta (IGNORADAS)")
+        logger.info(f"✅ {contador_desabilitados} mensagens de venda processadas!")
+        logger.info(f"   🔒 {contador_concluidos} CONCLUÍDAS (desabilitadas)")
+        logger.info(f"   🚫 {contador_cancelados} CANCELADAS (desabilitadas)")
+        logger.info(f"   📦 {contador_pendentes} PENDENTES (ativas)")
 
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar botões de vendas: {e}")
@@ -6032,8 +6011,8 @@ async def recriar_mensagens_vendas():
             logger.error("❌ Canal de encomendas não encontrado!")
             return
 
-        contador = 0
-        ignoradas = 0
+        contador_recriados = 0
+        contador_ignorados = 0
 
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
@@ -6060,16 +6039,20 @@ async def recriar_mensagens_vendas():
                                 cancelada = True
                             break
 
-                    # SE CONCLUÍDA OU CANCELADA, PULAR
+                    # =========================================================
+                    # SE CONCLUÍDA OU CANCELADA, PULAR (NÃO RECRIAR)
+                    # =========================================================
                     if concluida or cancelada:
-                        ignoradas += 1
+                        contador_ignorados += 1
                         continue
 
-                    # Se já tem botões, pular
+                    # =========================================================
+                    # SÓ RECRIAR SE FOR PENDENTE E NÃO TIVER BOTÕES
+                    # =========================================================
                     if msg.components:
+                        contador_ignorados += 1
                         continue
 
-                    # Recriar apenas para pendentes sem botões
                     entrega_id = None
                     if embed.footer:
                         texto_footer = embed.footer.text
@@ -6095,11 +6078,11 @@ async def recriar_mensagens_vendas():
                     )
 
                     await safe_request(msg.edit, view=view)
-                    contador += 1
+                    contador_recriados += 1
                     await asyncio.sleep(0.5)
 
-        logger.info(f"✅ {contador} mensagens de venda recriadas com botões!")
-        logger.info(f"⏭️ {ignoradas} vendas concluídas/canceladas (IGNORADAS)")
+        logger.info(f"✅ {contador_recriados} mensagens de venda recriadas!")
+        logger.info(f"⏭️ {contador_ignorados} vendas concluídas/canceladas (IGNORADAS)")
 
     except Exception as e:
         logger.error(f"❌ Erro ao recriar mensagens de vendas: {e}")
