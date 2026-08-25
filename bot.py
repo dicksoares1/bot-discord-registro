@@ -5878,7 +5878,9 @@ async def restaurar_botoes_vendas():
             logger.error("❌ Canal de encomendas não encontrado!")
             return
 
-        contador = 0
+        contador_restaurados = 0
+        contador_concluidos = 0
+        contador_cancelados = 0
 
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
@@ -5887,7 +5889,7 @@ async def restaurar_botoes_vendas():
                     embed = msg.embeds[0]
 
                     # =========================================================
-                    # ANALISAR O STATUS (PELO CAMPO "Status")
+                    # ANALISAR O STATUS
                     # =========================================================
                     pago = False
                     entregue = False
@@ -5926,26 +5928,60 @@ async def restaurar_botoes_vendas():
                     # =========================================================
                     # DETERMINAR SE OS BOTÕES DEVEM ESTAR DESABILITADOS
                     # =========================================================
-                    if cancelado or concluida:
+                    if cancelado:
+                        contador_cancelados += 1
+                        logger.info(f"🔄 Venda #{msg.id} - CANCELADA - Botões desabilitados")
                         disabled = True
                         pago_ja_clicado = True
-                        logger.info(f"🔄 Venda #{msg.id} - {'CONCLUÍDA' if concluida else 'CANCELADA'} - Botões desabilitados")
+                    elif concluida:
+                        contador_concluidos += 1
+                        logger.info(f"🔄 Venda #{msg.id} - CONCLUÍDA - Botões desabilitados")
+                        disabled = True
+                        pago_ja_clicado = True
                     elif pago and entregue:
+                        contador_concluidos += 1
+                        logger.info(f"🔄 Venda #{msg.id} - PAGA E ENTREGUE - Botões desabilitados")
                         disabled = True
                         pago_ja_clicado = True
-                        logger.info(f"🔄 Venda #{msg.id} - PAGA E ENTREGUE - Botões desabilitados")
                     elif pago:
+                        logger.info(f"🔄 Venda #{msg.id} - PAGA - Botão Pago desabilitado")
                         disabled = False
                         pago_ja_clicado = True
-                        logger.info(f"🔄 Venda #{msg.id} - PAGA - Botão Pago desabilitado")
                     elif entregue:
-                        disabled = False
-                        pago_ja_clicado = False
                         logger.info(f"🔄 Venda #{msg.id} - ENTREGUE - Botão Entregue desabilitado")
-                    else:
                         disabled = False
                         pago_ja_clicado = False
+                    else:
                         logger.info(f"🔄 Venda #{msg.id} - PENDENTE - Todos ativos")
+                        disabled = False
+                        pago_ja_clicado = False
+
+                    # =========================================================
+                    # SÓ RECRIAR A VIEW SE OS BOTÕES ESTIVEREM ATIVOS OU
+                    # SE A VIEW ATUAL NÃO CORRESPONDER AO STATUS CORRETO
+                    # =========================================================
+                    
+                    # Verificar se a view atual já está correta
+                    view_correta = True
+                    if msg.components:
+                        for component in msg.components:
+                            for item in component.children:
+                                # Se está desabilitado mas deveria estar ativo, ou vice-versa
+                                if disabled and not item.disabled:
+                                    view_correta = False
+                                    break
+                                if not disabled and item.disabled:
+                                    view_correta = False
+                                    break
+                            if not view_correta:
+                                break
+                    else:
+                        # Se não tem componentes, precisa recriar
+                        view_correta = False
+
+                    # Se a view já está correta, pular
+                    if view_correta:
+                        continue
 
                     # =========================================================
                     # EXTRAIR INFORMAÇÕES DO EMBED
@@ -5988,10 +6024,12 @@ async def restaurar_botoes_vendas():
                     )
 
                     await safe_request(msg.edit, view=view)
-                    contador += 1
+                    contador_restaurados += 1
                     await asyncio.sleep(0.5)
 
-        logger.info(f"✅ {contador} mensagens de venda restauradas com status correto!")
+        logger.info(f"✅ {contador_restaurados} mensagens de venda restauradas com status correto!")
+        logger.info(f"⏭️ {contador_concluidos} vendas concluídas (botões desabilitados)")
+        logger.info(f"⏭️ {contador_cancelados} vendas canceladas (botões desabilitados)")
 
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar botões de vendas: {e}")
