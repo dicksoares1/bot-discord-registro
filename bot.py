@@ -5881,7 +5881,7 @@ async def restaurar_botoes_vendas():
         contador_restaurados = 0
         contador_concluidos = 0
         contador_cancelados = 0
-        contador_ignorados = 0
+        contador_ja_ok = 0
 
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
@@ -5903,7 +5903,7 @@ async def restaurar_botoes_vendas():
                         pago = True
                         entregue = True
 
-                    # Procurar o campo "Status"
+                    # Procurar o campo "Status" (lá em baixo)
                     for field in embed.fields:
                         if field.name == "Status" or field.name == "📌 Status":
                             valor = field.value
@@ -5927,56 +5927,52 @@ async def restaurar_botoes_vendas():
                                 cancelado = True
 
                     # =========================================================
-                    # SE CONCLUÍDA OU CANCELADA, NÃO FAZ NADA! (NUNCA RECRIAR)
+                    # SE CONCLUÍDA OU CANCELADA, PULAR (NUNCA MEXER)
                     # =========================================================
                     if cancelado:
                         contador_cancelados += 1
-                        # Verificar se já está com botões desabilitados
-                        if msg.components:
-                            todos_desabilitados = True
-                            for component in msg.components:
-                                for item in component.children:
-                                    if not item.disabled:
-                                        todos_desabilitados = False
-                                        break
-                                if not todos_desabilitados:
-                                    break
-                            if not todos_desabilitados:
-                                # Se não estiver desabilitado, desabilitar
-                                view = StatusView(
-                                    disabled=True,
-                                    mensagem_original=msg
-                                )
-                                await safe_request(msg.edit, view=view)
-                                contador_restaurados += 1
                         continue
-
+                    
                     if concluida or (pago and entregue):
                         contador_concluidos += 1
-                        # Verificar se já está com botões desabilitados
-                        if msg.components:
-                            todos_desabilitados = True
-                            for component in msg.components:
-                                for item in component.children:
-                                    if not item.disabled:
-                                        todos_desabilitados = False
-                                        break
-                                if not todos_desabilitados:
-                                    break
-                            if not todos_desabilitados:
-                                # Se não estiver desabilitado, desabilitar
-                                view = StatusView(
-                                    disabled=True,
-                                    mensagem_original=msg
-                                )
-                                await safe_request(msg.edit, view=view)
-                                contador_restaurados += 1
                         continue
 
                     # =========================================================
-                    # SÓ CHEGA AQUI SE FOR PENDENTE (NÃO CONCLUÍDA)
+                    # SÓ CHEGA AQUI SE FOR PENDENTE
                     # =========================================================
-                    # Extrair informações
+                    
+                    # Verificar se a view já está correta
+                    view_correta = False
+                    if msg.components:
+                        # Verificar se os botões correspondem ao status
+                        pago_ja_clicado = pago
+                        disabled = False
+                        
+                        # Verificar se cada botão está no estado correto
+                        for component in msg.components:
+                            for item in component.children:
+                                if item.custom_id == "status_pago_fixo":
+                                    if pago_ja_clicado and not item.disabled:
+                                        view_correta = False
+                                    elif not pago_ja_clicado and item.disabled:
+                                        view_correta = False
+                                    else:
+                                        view_correta = True
+                                elif item.custom_id == "status_entregue_fixo":
+                                    if entregue and not item.disabled:
+                                        view_correta = False
+                                    elif not entregue and item.disabled:
+                                        view_correta = False
+                                    else:
+                                        view_correta = True
+                        
+                        if view_correta:
+                            contador_ja_ok += 1
+                            continue
+
+                    # =========================================================
+                    # RECRIAR VIEW APENAS PARA PENDENTES QUE PRECISAM
+                    # =========================================================
                     entrega_id = None
                     if embed.footer:
                         texto_footer = embed.footer.text
@@ -6002,38 +5998,12 @@ async def restaurar_botoes_vendas():
                         except:
                             pass
 
-                    # Determinar status dos botões para vendas pendentes
+                    disabled = False
                     if pago:
-                        disabled = False
                         pago_ja_clicado = True
-                    elif entregue:
-                        disabled = False
-                        pago_ja_clicado = False
                     else:
-                        disabled = False
                         pago_ja_clicado = False
 
-                    # Verificar se a view atual já está correta
-                    view_correta = True
-                    if msg.components:
-                        for component in msg.components:
-                            for item in component.children:
-                                if disabled and not item.disabled:
-                                    view_correta = False
-                                    break
-                                if not disabled and item.disabled:
-                                    view_correta = False
-                                    break
-                            if not view_correta:
-                                break
-                    else:
-                        view_correta = False
-
-                    if view_correta:
-                        contador_ignorados += 1
-                        continue
-
-                    # Recriar view apenas para vendas pendentes
                     view = StatusView(
                         entrega_id=entrega_id,
                         total_entregas=total_entregas,
@@ -6047,10 +6017,10 @@ async def restaurar_botoes_vendas():
                     contador_restaurados += 1
                     await asyncio.sleep(0.5)
 
-        logger.info(f"✅ {contador_restaurados} mensagens de venda pendentes restauradas!")
+        logger.info(f"✅ {contador_restaurados} vendas pendentes restauradas!")
         logger.info(f"⏭️ {contador_concluidos} vendas concluídas (IGNORADAS)")
         logger.info(f"⏭️ {contador_cancelados} vendas canceladas (IGNORADAS)")
-        logger.info(f"⏭️ {contador_ignorados} vendas pendentes com view correta (IGNORADAS)")
+        logger.info(f"⏭️ {contador_ja_ok} vendas com view correta (IGNORADAS)")
 
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar botões de vendas: {e}")
@@ -6063,86 +6033,73 @@ async def recriar_mensagens_vendas():
             return
 
         contador = 0
-        ignoradas_concluidas = 0
-        ignoradas_sem_botao = 0
+        ignoradas = 0
 
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
                 titulo = msg.embeds[0].title if msg.embeds[0].title else ""
-                if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper():
-                    try:
-                        embed = msg.embeds[0]
+                if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper() or "VENDA" in titulo.upper():
+                    embed = msg.embeds[0]
 
-                        # =========================================================
-                        # VERIFICAR SE A VENDA JÁ ESTÁ CONCLUÍDA
-                        # =========================================================
-                        concluida = False
-                        for field in embed.fields:
-                            if field.name == "📌 Status":
-                                valor = field.value
-                                # Verificar se tem "CONCLUÍDA" ou "Pago" e "Entregue" juntos
-                                if "CONCLUÍDA" in valor.upper():
-                                    concluida = True
-                                if "💰" in valor and "✅" in valor:
-                                    concluida = True
-                                if "CANCELADO" in valor.upper():
-                                    concluida = True
-                                break
+                    # =========================================================
+                    # VERIFICAR SE JÁ ESTÁ CONCLUÍDA
+                    # =========================================================
+                    concluida = False
+                    cancelada = False
 
-                        # =========================================================
-                        # SE JÁ ESTÁ CONCLUÍDA, NÃO FAZ NADA
-                        # =========================================================
-                        if concluida:
-                            ignoradas_concluidas += 1
-                            continue
+                    for field in embed.fields:
+                        if field.name == "📌 Status":
+                            valor = field.value
+                            if "CONCLUÍDA" in valor.upper():
+                                concluida = True
+                            if "💰" in valor and "✅" in valor:
+                                concluida = True
+                            if "CANCELADO" in valor.upper() or "CANCELADA" in valor.upper():
+                                cancelada = True
+                            if "❌" in valor:
+                                cancelada = True
+                            break
 
-                        # =========================================================
-                        # VERIFICAR SE JÁ TEM BOTÕES ATIVOS
-                        # =========================================================
-                        if msg.components:
-                            ignoradas_sem_botao += 1
-                            continue
+                    # SE CONCLUÍDA OU CANCELADA, PULAR
+                    if concluida or cancelada:
+                        ignoradas += 1
+                        continue
 
-                        # =========================================================
-                        # EXTRAIR INFORMAÇÕES
-                        # =========================================================
-                        entrega_id = None
-                        if embed.footer:
-                            texto_footer = embed.footer.text
-                            if "ID:" in texto_footer:
-                                try:
-                                    parte_id = texto_footer.split("ID:")[1].strip().split(" ")[0]
-                                    entrega_id = safe_int(parte_id)
-                                except:
-                                    pass
+                    # Se já tem botões, pular
+                    if msg.components:
+                        continue
 
-                        total_entregas = 1
-                        if embed.description:
-                            if "entregas no total" in embed.description:
-                                try:
-                                    total_entregas = safe_int(embed.description.split("tem")[1].split("entregas")[0].strip())
-                                except:
-                                    pass
+                    # Recriar apenas para pendentes sem botões
+                    entrega_id = None
+                    if embed.footer:
+                        texto_footer = embed.footer.text
+                        if "ID:" in texto_footer:
+                            try:
+                                parte_id = texto_footer.split("ID:")[1].strip().split(" ")[0]
+                                entrega_id = safe_int(parte_id)
+                            except:
+                                pass
 
-                        # =========================================================
-                        # CRIAR VIEW COM BOTÕES ATIVOS
-                        # =========================================================
-                        view = StatusView(
-                            entrega_id=entrega_id,
-                            total_entregas=total_entregas,
-                            disabled=False
-                        )
+                    total_entregas = 1
+                    if embed.description:
+                        if "entregas no total" in embed.description:
+                            try:
+                                total_entregas = safe_int(embed.description.split("tem")[1].split("entregas")[0].strip())
+                            except:
+                                pass
 
-                        await safe_request(msg.edit, view=view)
-                        contador += 1
-                        await asyncio.sleep(0.5)
+                    view = StatusView(
+                        entrega_id=entrega_id,
+                        total_entregas=total_entregas,
+                        disabled=False
+                    )
 
-                    except Exception as e:
-                        logger.error(f"❌ Erro ao recriar mensagem {msg.id}: {e}")
+                    await safe_request(msg.edit, view=view)
+                    contador += 1
+                    await asyncio.sleep(0.5)
 
         logger.info(f"✅ {contador} mensagens de venda recriadas com botões!")
-        logger.info(f"⏭️ {ignoradas_concluidas} mensagens ignoradas (já concluídas)")
-        logger.info(f"⏭️ {ignoradas_sem_botao} mensagens ignoradas (já têm botões)")
+        logger.info(f"⏭️ {ignoradas} vendas concluídas/canceladas (IGNORADAS)")
 
     except Exception as e:
         logger.error(f"❌ Erro ao recriar mensagens de vendas: {e}")
