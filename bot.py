@@ -4000,6 +4000,87 @@ class PainelAcoesView(discord.ui.View):
         view = SelecionarAcaoView(ACOES_HELICRASH, "ESCOLHA O HELICRASH", "🚁")
         await interaction.followup.send("**🚁 Selecione o Helicrash:**", view=view, ephemeral=True)
 
+    @discord.ui.button(label="♻️ Resetar Ações", style=discord.ButtonStyle.danger, custom_id="acoes_reset", emoji="♻️", row=1)
+    async def reset(self, interaction: discord.Interaction, button):
+        # VERIFICAR PERMISSÃO: Gerente, Cargo 01, Cargo 02 ou ADM
+        cargos_permitidos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
+        is_gerente = any(r.id in cargos_permitidos for r in interaction.user.roles)
+        is_admin = interaction.user.guild_permissions.administrator
+
+        if not is_gerente and not is_admin:
+            await interaction.response.send_message(
+                "❌ **Apenas Gerentes, Cargo 01, Cargo 02 e ADM podem resetar as ações!**",
+                ephemeral=True
+            )
+            return
+
+        # PEDIR CONFIRMAÇÃO
+        view = ConfirmarResetAcoesView()
+        embed = discord.Embed(
+            title="⚠️ RESETAR AÇÕES",
+            description="**ATENÇÃO!** Esta ação irá **APAGAR TODAS AS AÇÕES** da semana atual.\n\n"
+                        "📌 **O que será resetado:**\n"
+                        "• Todas as ações em andamento\n"
+                        "• Todas as ações concluídas\n"
+                        "• Todos os participantes\n"
+                        "• Todos os limites semanais\n\n"
+                        "⚠️ **Esta ação é IRREVERSÍVEL!**\n\n"
+                        "Clique em **✅ CONFIRMAR** para continuar.",
+            color=0xe74c3c,
+            timestamp=agora()
+        )
+        embed.set_footer(text="Vida Rasa 442 • Reset de Ações")
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class ConfirmarResetAcoesView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="✅ CONFIRMAR RESET", style=discord.ButtonStyle.danger, custom_id="confirmar_reset_acoes", emoji="✅")
+    async def confirmar(self, interaction: discord.Interaction, button):
+        await interaction.response.defer(ephemeral=True)
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        try:
+            async with pool.acquire() as conn:
+                # Resetar tudo
+                await conn.execute("DELETE FROM participantes_acoes")
+                await conn.execute("DELETE FROM acoes_semana")
+
+            # Atualizar o painel
+            await enviar_painel_acoes(interaction.guild)
+
+            embed = discord.Embed(
+                title="♻️ AÇÕES RESETADAS COM SUCESSO!",
+                description="✅ **Todas as ações foram removidas do sistema.**\n\n"
+                            "📌 **O que foi resetado:**\n"
+                            "• Todas as ações em andamento ❌\n"
+                            "• Todas as ações concluídas ❌\n"
+                            "• Todos os participantes ❌\n"
+                            "• Todos os limites semanais ❌\n\n"
+                            "🔄 **O painel foi atualizado automaticamente.**",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.set_footer(text=f"Reset realizado por {interaction.user.display_name}")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao resetar ações: {e}")
+            await interaction.followup.send(f"❌ **Erro ao resetar ações:** {str(e)[:100]}", ephemeral=True)
+
+    @discord.ui.button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id="cancelar_reset_acoes", emoji="❌")
+    async def cancelar(self, interaction: discord.Interaction, button):
+        await interaction.response.send_message("❌ **Reset cancelado.**", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+
 # =========================================================
 # 11.5 FUNÇÕES DE RESTAURAR AÇÕES
 # =========================================================
@@ -4068,8 +4149,10 @@ async def enviar_painel_acoes(guild):
         descricao += f"\n{total_geral_feitas}/{total_geral_meta} ações realizadas"
     embed = discord.Embed(title="📊 AÇÕES DA SEMANA", description=descricao, color=0x2ecc71, timestamp=agora())
     embed.set_footer(text=f"Atualizado em {agora().strftime('%d/%m/%Y %H:%M')}")
-    await enviar_ou_atualizar_painel("painel_acoes", CANAL_ESCALACOES_ID, embed, PainelAcoesView())
 
+    # VIEW COM BOTÃO DE RESET
+    view = PainelAcoesView()  # ← AGORA TEM O BOTÃO DE RESET
+    await enviar_ou_atualizar_painel("painel_acoes", CANAL_ESCALACOES_ID, embed, view)
 # =========================================================
 # ==================== PARTE 12: SISTEMA DE VENDAS ========
 # =========================================================
