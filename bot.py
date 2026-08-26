@@ -3599,6 +3599,9 @@ class BauModal(discord.ui.Modal):
                     ))
                     await canal_log.send(texto_log)
                 await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
+        except Exception as e:
+            logger.error(f"❌ Erro no BauModal: {e}")
+            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
             
 class ArmasModal(discord.ui.Modal):
     def __init__(self, tipo):
