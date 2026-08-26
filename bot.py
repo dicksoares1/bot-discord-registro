@@ -4243,7 +4243,7 @@ class AcaoView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao atualizar embed: {e}")
 
-class AdicionarParticipantesManualModal(discord.ui.Modal, title="📝 ADICIONAR PARTICIPANTES"):  
+class AdicionarParticipantesManualModal(discord.ui.Modal, title="📝 ADICIONAR PARTICIPANTES"):
     participantes = discord.ui.TextInput(
         label="👥 Nomes dos participantes (um por linha)",
         placeholder="Ex: Ruivo\nDreck\nLeon\nBatman",
@@ -4251,7 +4251,7 @@ class AdicionarParticipantesManualModal(discord.ui.Modal, title="📝 ADICIONAR 
         required=False,
         max_length=500
     )
-    
+
     def __init__(self, acao_id, mensagem_original, acao):
         super().__init__(timeout=300)
         self.acao_id = acao_id
@@ -4260,92 +4260,144 @@ class AdicionarParticipantesManualModal(discord.ui.Modal, title="📝 ADICIONAR 
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
+
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
-        
+
         try:
             async with pool.acquire() as conn:
                 # Atualizar status da ação para concluída
                 await conn.execute("UPDATE acoes_semana SET status='concluida' WHERE id=$1", self.acao_id)
-                
+
                 # Buscar participantes que clicaram no botão
                 participantes_botao = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
                 ids_botao = [p["user_id"] for p in participantes_botao]
-                
+
                 # Processar nomes manuais
                 nomes_manuais = []
                 if self.participantes.value and self.participantes.value.strip():
                     nomes_manuais = [nome.strip() for nome in self.participantes.value.split('\n') if nome.strip()]
-                
+
                 # =========================================================
                 # CRIAR LISTA DE PARTICIPANTES (BOTÃO + MANUAIS)
                 # =========================================================
                 lista_final = []
-                
-                # Adicionar os que clicaram no botão (com menção)
+
+                # Adicionar os que clicaram no botão (com apelido)
+                guild = interaction.guild
                 for uid in ids_botao:
                     try:
-                        user = await bot.fetch_user(int(uid))
-                        if user:
-                            lista_final.append(f"<@{uid}>")
+                        member = guild.get_member(int(uid))
+                        if member:
+                            apelido = member.display_name
+                            lista_final.append(f"👤 {apelido}")
                         else:
-                            lista_final.append(f"ID: {uid}")
+                            user = await bot.fetch_user(int(uid))
+                            if user:
+                                lista_final.append(f"👤 {user.display_name or user.name}")
+                            else:
+                                lista_final.append(f"👤 ID: {uid}")
                     except:
-                        lista_final.append(f"ID: {uid}")
-                
-                # Adicionar os nomes manuais (sem menção, só o nome)
+                        lista_final.append(f"👤 ID: {uid}")
+
+                # Adicionar os nomes manuais
                 for nome in nomes_manuais:
                     if nome:
                         lista_final.append(f"📝 {nome}")
-                
+
                 # Se não tiver ninguém
                 if not lista_final:
                     lista_final.append("Nenhum participante")
-                
+
                 lista_participantes = "\n".join(lista_final)
-                
+
                 # =========================================================
-                # CRIAR RELATÓRIO (SEM DIVISÃO DE DINHEIRO)
+                # CRIAR RELATÓRIO BONITO
                 # =========================================================
                 embed_relatorio = discord.Embed(
-                    title="🚨 RELATÓRIO DE AÇÃO",
-                    description=f"**{self.acao['tipo']}**",
-                    color=0xe74c3c
+                    title="🚨 ── RELATÓRIO DE AÇÃO ── 🚨",
+                    description=f"⚔️ **{self.acao['tipo']}**",
+                    color=Cores.ACAO,
+                    timestamp=agora()
                 )
-                embed_relatorio.add_field(name="🏦 Ação", value=self.acao["tipo"], inline=False)
-                embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
+
+                embed_relatorio.set_author(
+                    name="🛡 Vida Rasa 442 • Ações",
+                    icon_url=bot.user.display_avatar.url if bot.user else None
+                )
+
+                embed_relatorio.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
                 embed_relatorio.add_field(
-                    name="🎯 Resultado", 
-                    value="⏳ Aguardando finalização...\n\n⚠️ **O dinheiro NÃO é dividido automaticamente.**\nO responsável deve distribuir manualmente.",
+                    name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    value="",
                     inline=False
                 )
-                embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{self.acao['autor']}>")
-                
+
+                embed_relatorio.add_field(
+                    name="🏦 AÇÃO",
+                    value=f"```yaml\n{self.acao['tipo']}\n```",
+                    inline=True
+                )
+
+                embed_relatorio.add_field(
+                    name="👤 CRIADA POR",
+                    value=f"```yaml\n{interaction.user.display_name}\n```",
+                    inline=True
+                )
+
+                embed_relatorio.add_field(
+                    name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    value="",
+                    inline=False
+                )
+
+                embed_relatorio.add_field(
+                    name="👥 PARTICIPANTES",
+                    value=f"```yaml\n{lista_participantes}\n```",
+                    inline=False
+                )
+
+                embed_relatorio.add_field(
+                    name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    value="",
+                    inline=False
+                )
+
+                embed_relatorio.add_field(
+                    name="🎯 STATUS",
+                    value="```yaml\n⏳ Aguardando finalização\n```",
+                    inline=False
+                )
+
+                embed_relatorio.set_footer(
+                    text=f"🛡 Vida Rasa 442 • ID: {self.acao_id} • {agora().strftime('%d/%m/%Y %H:%M')}",
+                    icon_url=bot.user.display_avatar.url if bot.user else None
+                )
+
                 canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
                 if canal_relatorio:
                     msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
                     await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
-                    
+
                     # Deletar mensagem da escalação
                     try:
                         await self.mensagem_original.delete()
                     except:
                         pass
-                    
+
                     await interaction.followup.send(
                         f"✅ **Escalação concluída!**\n"
-                        f"👥 {len(lista_final)} participantes registrados\n"
-                        f"📌 **Lembrete:** O dinheiro deve ser distribuído MANUALMENTE.",
+                        f"👥 {len(lista_final)} participantes registrados",
                         ephemeral=True
                     )
                 else:
                     await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
-                
+
                 await enviar_painel_acoes(interaction.guild)
-                
+
         except Exception as e:
             logger.error(f"❌ Erro ao concluir ação: {e}")
             await interaction.followup.send(f"❌ Erro ao concluir ação: {str(e)[:100]}", ephemeral=True)
@@ -4390,7 +4442,7 @@ class ResultadoAcaoView(discord.ui.View):
 
 class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
     dinheiro = discord.ui.TextInput(
-        label="💰 Valor total ganho (em reais)",
+        label="💰 Valor total ganho",
         placeholder="Ex: 50000",
         required=True
     )
@@ -4409,15 +4461,15 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         except:
             await interaction.followup.send("❌ Valor inválido!", ephemeral=True)
             return
-        
+
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
-        
+
         async with pool.acquire() as conn:
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
-            
+
             # Verificar limite semanal
             limite = ACOES_COMPLEXO.get(acao["tipo"]) or ACOES_BAHAMAS.get(acao["tipo"]) or ACOES_HELICRASH.get(acao["tipo"])
             if limite and limite is not None:
@@ -4431,46 +4483,115 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
                         ephemeral=True
                     )
                     return
-            
-            # Atualizar valor (NÃO DIVIDE MAIS)
+
             await conn.execute(
                 "UPDATE acoes_semana SET valor=$1, resultado='ganhou' WHERE id=$2",
                 valor_total, self.acao_id
             )
-            
+
             # Buscar participantes para mostrar no relatório
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
-        
+
         # =========================================================
-        # NÃO DEPOSITA MAIS AUTOMATICAMENTE
+        # CRIAR LISTA DE PARTICIPANTES COM APELIDO
         # =========================================================
-        ids_participantes = [str(p["user_id"]) for p in participantes]
-        lista_participantes = "\n".join([f"<@{uid}>" for uid in ids_participantes]) if ids_participantes else "Ninguém"
-        
+        guild = interaction.guild
+        lista_participantes = []
+        for p in participantes:
+            uid = p["user_id"]
+            try:
+                member = guild.get_member(int(uid))
+                if member:
+                    apelido = member.display_name
+                    lista_participantes.append(f"👤 {apelido}")
+                else:
+                    user = await bot.fetch_user(int(uid))
+                    if user:
+                        lista_participantes.append(f"👤 {user.display_name or user.name}")
+                    else:
+                        lista_participantes.append(f"👤 ID: {uid}")
+            except:
+                lista_participantes.append(f"👤 ID: {uid}")
+
+        if not lista_participantes:
+            lista_participantes.append("Nenhum participante")
+
+        participantes_texto = "\n".join(lista_participantes)
+
+        # =========================================================
+        # EMBED BONITO DO RESULTADO
+        # =========================================================
         embed = discord.Embed(
-            title="🎉 RESULTADO DA AÇÃO - GANHOU!",
-            description=f"**{acao['tipo']}**",
-            color=0x2ecc71
-        )
-        embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
-        embed.add_field(name="💰 Total Ganho", value=formatar_dinheiro(valor_total), inline=False)
-        embed.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
-        embed.add_field(
-            name="📌 ATENÇÃO",
-            value="⚠️ **O dinheiro NÃO foi distribuído automaticamente.**\nO responsável deve dividir e depositar MANUALMENTE na meta de cada participante.",
-            inline=False
-        )
-        embed.set_footer(text=f"ID: {self.acao_id}")
-        
-        await self.mensagem_original.edit(embed=embed, view=None)
-        await enviar_painel_acoes(interaction.guild)
-        await interaction.followup.send(
-            f"✅ **Ação registrada como GANHA!**\n"
-            f"💰 Valor total: {formatar_dinheiro(valor_total)}\n"
-            f"📌 **Lembrete:** Distribua o dinheiro MANUALMENTE.",
-            ephemeral=True
+            title="🏆 ── RESULTADO DA AÇÃO ── 🏆",
+            description=f"⚔️ **{acao['tipo']}**",
+            color=Cores.SUCESSO,
+            timestamp=agora()
         )
 
+        embed.set_author(
+            name="🛡 Vida Rasa 442 • Ações",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🏦 AÇÃO",
+            value=f"```yaml\n{acao['tipo']}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💰 TOTAL GANHO",
+            value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        embed.add_field(
+            name="👥 PARTICIPANTES",
+            value=f"```yaml\n{participantes_texto}\n```",
+            inline=False
+        )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        embed.add_field(
+            name="📌 STATUS",
+            value="```yaml\n✅ AÇÃO FINALIZADA\n🎉 RESULTADO: GANHOU\n```",
+            inline=False
+        )
+
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • ID: {self.acao_id} • Finalizada por {interaction.user.display_name} • {agora().strftime('%d/%m/%Y %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        await self.mensagem_original.edit(embed=embed, view=None)
+        await enviar_painel_acoes(interaction.guild)
+
+        await interaction.followup.send(
+            f"✅ **Ação registrada como GANHA!**\n"
+            f"💰 Valor: {formatar_dinheiro(valor_total)}\n"
+            f"📌 **Valor vai para o caixa da facção.**",
+            ephemeral=True
+        )
+        
 class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
     confirmacao = discord.ui.TextInput(label="Digite CONFIRMAR para registrar a perda", required=True)
 
@@ -4483,26 +4604,121 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
         if self.confirmacao.value.strip().upper() != "CONFIRMAR":
             await interaction.response.send_message("❌ Confirmação incorreta!", ephemeral=True)
             return
+
         await interaction.response.defer(ephemeral=True)
+
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
         async with pool.acquire() as conn:
-            await conn.execute("UPDATE acoes_semana SET valor=0, resultado='perdeu' WHERE id=$1", self.acao_id)
+            await conn.execute(
+                "UPDATE acoes_semana SET valor=0, resultado='perdeu' WHERE id=$1",
+                self.acao_id
+            )
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
-        ids_participantes = [str(p["user_id"]) for p in participantes]
-        lista_participantes = "\n".join([f"<@{uid}>" for uid in ids_participantes]) if ids_participantes else "Ninguém"
-        embed = discord.Embed(title="💀 RESULTADO DA AÇÃO - PERDEU!", description="A ação foi perdida, nenhum valor foi distribuído.", color=0xe74c3c)
-        embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
-        embed.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
-        embed.add_field(name="💰 Total", value="R$ 0,00", inline=True)
-        embed.add_field(name="📝 Status", value="❌ AÇÃO PERDIDA", inline=True)
+
+        # =========================================================
+        # CRIAR LISTA DE PARTICIPANTES COM APELIDO
+        # =========================================================
+        guild = interaction.guild
+        lista_participantes = []
+        for p in participantes:
+            uid = p["user_id"]
+            try:
+                member = guild.get_member(int(uid))
+                if member:
+                    apelido = member.display_name
+                    lista_participantes.append(f"👤 {apelido}")
+                else:
+                    user = await bot.fetch_user(int(uid))
+                    if user:
+                        lista_participantes.append(f"👤 {user.display_name or user.name}")
+                    else:
+                        lista_participantes.append(f"👤 ID: {uid}")
+            except:
+                lista_participantes.append(f"👤 ID: {uid}")
+
+        if not lista_participantes:
+            lista_participantes.append("Nenhum participante")
+
+        participantes_texto = "\n".join(lista_participantes)
+
+        # =========================================================
+        # EMBED BONITO DO RESULTADO - PERDEU
+        # =========================================================
+        embed = discord.Embed(
+            title="💀 ── RESULTADO DA AÇÃO ── 💀",
+            description=f"⚔️ **{acao['tipo']}**",
+            color=Cores.ERRO,
+            timestamp=agora()
+        )
+
+        embed.set_author(
+            name="🛡 Vida Rasa 442 • Ações",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🏦 AÇÃO",
+            value=f"```yaml\n{acao['tipo']}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💰 TOTAL",
+            value=f"```yaml\nR$ 0,00\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        embed.add_field(
+            name="👥 PARTICIPANTES",
+            value=f"```yaml\n{participantes_texto}\n```",
+            inline=False
+        )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        embed.add_field(
+            name="📌 STATUS",
+            value="```yaml\n✅ AÇÃO FINALIZADA\n💀 RESULTADO: PERDEU\n```",
+            inline=False
+        )
+
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • ID: {self.acao_id} • Finalizada por {interaction.user.display_name} • {agora().strftime('%d/%m/%Y %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
         await self.mensagem_original.edit(embed=embed, view=None)
         await enviar_painel_acoes(interaction.guild)
-        await interaction.followup.send(f"✅ Ação registrada como PERDIDA!", ephemeral=True)
 
+        await interaction.followup.send(
+            f"✅ **Ação registrada como PERDIDA!**\n"
+            f"💀 Nenhum valor foi gerado.",
+            ephemeral=True
+        )
+        
 class PainelAcoesView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
