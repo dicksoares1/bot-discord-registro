@@ -4157,56 +4157,58 @@ class AcaoView(discord.ui.View):
         if not is_criador and not is_gerente:
             await interaction.response.send_message("❌ Apenas o criador ou gerentes podem concluir!", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+        
         pool = await get_pool()
         if not pool:
-            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
             return
+        
         async with pool.acquire() as conn:
             status = await conn.fetchval("SELECT status FROM acoes_semana WHERE id=$1", self.acao_id)
             if status != "aberta":
-                await interaction.followup.send("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
+                await interaction.response.send_message("❌ Esta ação já foi concluída ou cancelada!", ephemeral=True)
                 return
+            
             acao = await conn.fetchrow("SELECT tipo, autor FROM acoes_semana WHERE id=$1", self.acao_id)
-            participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+            
+            # VERIFICAR SE É HELICRASH
             is_helicrash = "Helicrash" in acao["tipo"]
-            if not participantes:
-                await interaction.followup.send("⚠️ Nenhum participante! Ação cancelada.", ephemeral=True)
-                await interaction.message.delete()
-                return
-            await conn.execute("UPDATE acoes_semana SET status='concluida' WHERE id=$1", self.acao_id)
+            
             if is_helicrash:
-                await conn.execute("UPDATE acoes_semana SET resultado='concluida', valor=0 WHERE id=$1", self.acao_id)
-        lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes])
-        if is_helicrash:
-            embed_relatorio = discord.Embed(title="🚁 RELATÓRIO DE HELICRASH", description=f"**{acao['tipo']}**\n\n✅ Evento registrado com sucesso!", color=0xe67e22)
-            embed_relatorio.add_field(name="🏦 Evento", value=acao["tipo"], inline=False)
-            embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
-            embed_relatorio.add_field(name="📅 Data", value=agora().strftime('%d/%m/%Y %H:%M'), inline=False)
-            embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
-            canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
-            if canal_relatorio:
-                await canal_relatorio.send(embed=embed_relatorio)
-                await interaction.message.delete()
-                await interaction.followup.send(f"✅ Helicrash **{acao['tipo']}** registrado!", ephemeral=True)
-            else:
-                await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
-            await enviar_painel_acoes(interaction.guild)
-            return
-        embed_relatorio = discord.Embed(title="🚨 RELATÓRIO DE AÇÃO", color=0xe74c3c)
-        embed_relatorio.add_field(name="🏦 Ação", value=acao["tipo"], inline=False)
-        embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
-        embed_relatorio.add_field(name="🎯 Resultado", value="⏳ Aguardando finalização...", inline=False)
-        embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
-        canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
-        if canal_relatorio:
-            msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
-            await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
-            await interaction.message.delete()
-            await interaction.followup.send(f"✅ Escalação concluída!", ephemeral=True)
-            await enviar_painel_acoes(interaction.guild)
-        else:
-            await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
+                # HELICRASH - Concluir direto sem modal
+                await conn.execute("UPDATE acoes_semana SET status='concluida', resultado='concluida', valor=0 WHERE id=$1", self.acao_id)
+                
+                participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+                lista_participantes = "\n".join([f"<@{p['user_id']}>" for p in participantes]) if participantes else "Ninguém"
+                
+                embed_relatorio = discord.Embed(
+                    title="🚁 RELATÓRIO DE HELICRASH",
+                    description=f"**{acao['tipo']}**\n\n✅ Evento registrado com sucesso!",
+                    color=0xe67e22
+                )
+                embed_relatorio.add_field(name="🏦 Evento", value=acao["tipo"], inline=False)
+                embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
+                embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{acao['autor']}>")
+                
+                canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+                if canal_relatorio:
+                    await canal_relatorio.send(embed=embed_relatorio)
+                    await interaction.message.delete()
+                    await interaction.followup.send(f"✅ Helicrash **{acao['tipo']}** registrado!", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
+                
+                await enviar_painel_acoes(interaction.guild)
+                return
+            
+            # =========================================================
+            # AÇÕES NORMAIS - ABRIR MODAL PARA NOMES ADICIONAIS
+            # =========================================================
+            participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+            
+            # Abrir modal para adicionar participantes manuais
+            modal = AdicionarParticipantesManualModal(self.acao_id, interaction.message, acao)
+            await interaction.response.send_modal(modal)
 
     async def atualizar_embed(self, interaction, participantes, acao):
         try:
@@ -4241,6 +4243,113 @@ class AcaoView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao atualizar embed: {e}")
 
+class AdicionarParticipantesManualModal(discord.ui.Modal, title="📝 ADICIONAR PARTICIPANTES"):  
+    participantes = discord.ui.TextInput(
+        label="👥 Nomes dos participantes (um por linha)",
+        placeholder="Ex: Ruivo\nDreck\nLeon\nBatman",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=500
+    )
+    
+    def __init__(self, acao_id, mensagem_original, acao):
+        super().__init__(timeout=300)
+        self.acao_id = acao_id
+        self.mensagem_original = mensagem_original
+        self.acao = acao
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+        
+        try:
+            async with pool.acquire() as conn:
+                # Atualizar status da ação para concluída
+                await conn.execute("UPDATE acoes_semana SET status='concluida' WHERE id=$1", self.acao_id)
+                
+                # Buscar participantes que clicaram no botão
+                participantes_botao = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+                ids_botao = [p["user_id"] for p in participantes_botao]
+                
+                # Processar nomes manuais
+                nomes_manuais = []
+                if self.participantes.value and self.participantes.value.strip():
+                    nomes_manuais = [nome.strip() for nome in self.participantes.value.split('\n') if nome.strip()]
+                
+                # =========================================================
+                # CRIAR LISTA DE PARTICIPANTES (BOTÃO + MANUAIS)
+                # =========================================================
+                lista_final = []
+                
+                # Adicionar os que clicaram no botão (com menção)
+                for uid in ids_botao:
+                    try:
+                        user = await bot.fetch_user(int(uid))
+                        if user:
+                            lista_final.append(f"<@{uid}>")
+                        else:
+                            lista_final.append(f"ID: {uid}")
+                    except:
+                        lista_final.append(f"ID: {uid}")
+                
+                # Adicionar os nomes manuais (sem menção, só o nome)
+                for nome in nomes_manuais:
+                    if nome:
+                        lista_final.append(f"📝 {nome}")
+                
+                # Se não tiver ninguém
+                if not lista_final:
+                    lista_final.append("Nenhum participante")
+                
+                lista_participantes = "\n".join(lista_final)
+                
+                # =========================================================
+                # CRIAR RELATÓRIO (SEM DIVISÃO DE DINHEIRO)
+                # =========================================================
+                embed_relatorio = discord.Embed(
+                    title="🚨 RELATÓRIO DE AÇÃO",
+                    description=f"**{self.acao['tipo']}**",
+                    color=0xe74c3c
+                )
+                embed_relatorio.add_field(name="🏦 Ação", value=self.acao["tipo"], inline=False)
+                embed_relatorio.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
+                embed_relatorio.add_field(
+                    name="🎯 Resultado", 
+                    value="⏳ Aguardando finalização...\n\n⚠️ **O dinheiro NÃO é dividido automaticamente.**\nO responsável deve distribuir manualmente.",
+                    inline=False
+                )
+                embed_relatorio.set_footer(text=f"ID: {self.acao_id} • Criada por: <@{self.acao['autor']}>")
+                
+                canal_relatorio = interaction.guild.get_channel(CANAL_RELATORIO_ACOES_ID)
+                if canal_relatorio:
+                    msg = await canal_relatorio.send(embed=embed_relatorio, view=None)
+                    await msg.edit(view=ResultadoAcaoView(self.acao_id, msg))
+                    
+                    # Deletar mensagem da escalação
+                    try:
+                        await self.mensagem_original.delete()
+                    except:
+                        pass
+                    
+                    await interaction.followup.send(
+                        f"✅ **Escalação concluída!**\n"
+                        f"👥 {len(lista_final)} participantes registrados\n"
+                        f"📌 **Lembrete:** O dinheiro deve ser distribuído MANUALMENTE.",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send("❌ Canal de relatório não encontrado!", ephemeral=True)
+                
+                await enviar_painel_acoes(interaction.guild)
+                
+        except Exception as e:
+            logger.error(f"❌ Erro ao concluir ação: {e}")
+            await interaction.followup.send(f"❌ Erro ao concluir ação: {str(e)[:100]}", ephemeral=True)
+
 class ResultadoAcaoView(discord.ui.View):
     def __init__(self, acao_id, mensagem_original):
         super().__init__(timeout=None)
@@ -4260,6 +4369,8 @@ class ResultadoAcaoView(discord.ui.View):
         if not is_autor and not is_gerente:
             await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
             return
+        
+        # ABRIR MODAL SÓ COM O VALOR (SEM DIVIDIR)
         await interaction.response.send_modal(ResultadoGanhouModal(self.acao_id, self.mensagem_original))
 
     @discord.ui.button(label="💀 Perdeu", style=discord.ButtonStyle.danger, custom_id="resultado_perdeu")
@@ -4278,7 +4389,11 @@ class ResultadoAcaoView(discord.ui.View):
         await interaction.response.send_modal(ResultadoPerdeuModal(self.acao_id, self.mensagem_original))
 
 class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
-    dinheiro = discord.ui.TextInput(label="Valor total ganho (em reais)", placeholder="Ex: 50000", required=True)
+    dinheiro = discord.ui.TextInput(
+        label="💰 Valor total ganho (em reais)",
+        placeholder="Ex: 50000",
+        required=True
+    )
 
     def __init__(self, acao_id, mensagem_original):
         super().__init__()
@@ -4294,46 +4409,67 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         except:
             await interaction.followup.send("❌ Valor inválido!", ephemeral=True)
             return
+        
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+        
         async with pool.acquire() as conn:
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
+            
+            # Verificar limite semanal
             limite = ACOES_COMPLEXO.get(acao["tipo"]) or ACOES_BAHAMAS.get(acao["tipo"]) or ACOES_HELICRASH.get(acao["tipo"])
             if limite and limite is not None:
-                qtd_feita = await conn.fetchval("SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND resultado='ganhou' AND id != $2", acao["tipo"], self.acao_id)
+                qtd_feita = await conn.fetchval(
+                    "SELECT COUNT(*) FROM acoes_semana WHERE tipo=$1 AND resultado='ganhou' AND id != $2",
+                    acao["tipo"], self.acao_id
+                )
                 if qtd_feita >= limite:
-                    await interaction.followup.send(f"❌ Ação **{acao['tipo']}** já atingiu o limite semanal de **{limite}** vitória(s)!", ephemeral=True)
+                    await interaction.followup.send(
+                        f"❌ Ação **{acao['tipo']}** já atingiu o limite semanal de **{limite}** vitória(s)!",
+                        ephemeral=True
+                    )
                     return
-            await conn.execute("UPDATE acoes_semana SET valor=$1, resultado='ganhou' WHERE id=$2", valor_total, self.acao_id)
+            
+            # Atualizar valor (NÃO DIVIDE MAIS)
+            await conn.execute(
+                "UPDATE acoes_semana SET valor=$1, resultado='ganhou' WHERE id=$2",
+                valor_total, self.acao_id
+            )
+            
+            # Buscar participantes para mostrar no relatório
             participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+        
+        # =========================================================
+        # NÃO DEPOSITA MAIS AUTOMATICAMENTE
+        # =========================================================
         ids_participantes = [str(p["user_id"]) for p in participantes]
-        qtd = len(ids_participantes)
-        if qtd == 0:
-            await interaction.followup.send("⚠️ Nenhum participante!", ephemeral=True)
-            return
-        valor_por_pessoa = valor_total // qtd
-        resto = valor_total % qtd
-        depositos_ok = 0
-        for uid in ids_participantes:
-            sucesso = await depositar_na_meta(int(uid), valor_por_pessoa, f"Ação: {acao['tipo']}")
-            if sucesso:
-                depositos_ok += 1
-        if resto > 0 and ids_participantes:
-            await depositar_na_meta(int(ids_participantes[0]), resto, f"Ação: {acao['tipo']} (Restante)")
-        lista_participantes = "\n".join([f"<@{uid}>" for uid in ids_participantes])
-        embed = discord.Embed(title="🎉 RESULTADO DA AÇÃO - GANHOU!", color=0x2ecc71)
+        lista_participantes = "\n".join([f"<@{uid}>" for uid in ids_participantes]) if ids_participantes else "Ninguém"
+        
+        embed = discord.Embed(
+            title="🎉 RESULTADO DA AÇÃO - GANHOU!",
+            description=f"**{acao['tipo']}**",
+            color=0x2ecc71
+        )
         embed.add_field(name="🎯 Ação", value=acao["tipo"], inline=False)
         embed.add_field(name="💰 Total Ganho", value=formatar_dinheiro(valor_total), inline=False)
         embed.add_field(name="👥 Participantes", value=lista_participantes, inline=False)
-        embed.add_field(name="💸 Valor por pessoa", value=formatar_dinheiro(valor_por_pessoa), inline=True)
-        embed.add_field(name="✅ Depósitos", value=f"{depositos_ok}/{qtd} realizados", inline=True)
-        if resto > 0:
-            embed.add_field(name="📦 Restante", value=formatar_dinheiro(resto), inline=True)
+        embed.add_field(
+            name="📌 ATENÇÃO",
+            value="⚠️ **O dinheiro NÃO foi distribuído automaticamente.**\nO responsável deve dividir e depositar MANUALMENTE na meta de cada participante.",
+            inline=False
+        )
+        embed.set_footer(text=f"ID: {self.acao_id}")
+        
         await self.mensagem_original.edit(embed=embed, view=None)
         await enviar_painel_acoes(interaction.guild)
-        await interaction.followup.send(f"✅ {depositos_ok} depósitos realizados!", ephemeral=True)
+        await interaction.followup.send(
+            f"✅ **Ação registrada como GANHA!**\n"
+            f"💰 Valor total: {formatar_dinheiro(valor_total)}\n"
+            f"📌 **Lembrete:** Distribua o dinheiro MANUALMENTE.",
+            ephemeral=True
+        )
 
 class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
     confirmacao = discord.ui.TextInput(label="Digite CONFIRMAR para registrar a perda", required=True)
