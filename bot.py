@@ -3061,6 +3061,7 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail, plataforma=None)
         elif thumb:
             embed.set_thumbnail(url=thumb)
         embed.set_footer(text=f"Live detectada • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+        
         # =========================================================
         # VDRZINHO - Live iniciada
         # =========================================================
@@ -3077,6 +3078,10 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail, plataforma=None)
             allowed_mentions=discord.AllowedMentions(everyone=True)
         )
         return True
+        
+    except Exception as e:
+        logger.error(f"❌ ERRO ao divulgar live: {e}")
+        return False
 
 # =========================================================
 # 9.4 MODAIS DE LIVES
