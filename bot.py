@@ -3666,6 +3666,13 @@ class ArmasModal(discord.ui.Modal):
             else:
                 canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
                 if canal_log:
+                    # =========================================================
+                    # VDRZINHO - Baú atualizado (Armas)
+                    # =========================================================
+                    await canal_log.send(embed=vdrzinho.embed_resposta(
+                        tipo="bau_atualizado",
+                        interaction=interaction
+                    ))
                     await canal_log.send(texto_log)
                 await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
         except Exception as e:
