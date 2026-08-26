@@ -3588,17 +3588,17 @@ class BauModal(discord.ui.Modal):
                     )
                     return
             else:
-            canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
-            if canal_log:
-                # =========================================================
-                # VDRZINHO - Baú atualizado
-                # =========================================================
-                await canal_log.send(embed=vdrzinho.embed_resposta(
-                    tipo="bau_atualizado",
-                    interaction=interaction
-                ))
-                await canal_log.send(texto_log)
-            await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
+                canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
+                if canal_log:
+                    # =========================================================
+                    # VDRZINHO - Baú atualizado
+                    # =========================================================
+                    await canal_log.send(embed=vdrzinho.embed_resposta(
+                        tipo="bau_atualizado",
+                        interaction=interaction
+                    ))
+                    await canal_log.send(texto_log)
+                await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
             
 class ArmasModal(discord.ui.Modal):
     def __init__(self, tipo):
