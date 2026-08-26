@@ -46,6 +46,345 @@ from discord.utils import escape_markdown
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from functools import wraps
+from collections import defaultdict
+
+# =========================================================
+# ==================== VDRZINHO - IA MASCOTE ==============
+# =========================================================
+# COLOCAR LOGO APÓS AS IMPORTAÇÕES
+# =========================================================
+
+import json
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+class VDRzinhoIA:
+    """
+    VDRzinho - IA Mascote da VDR 442
+    - Fala em primeira pessoa
+    - Aprende com as ações dos usuários
+    - Tem personalidade única
+    """
+    
+    def __init__(self):
+        self.nome = "VDRzinho"
+        self.versao = "1.0"
+        
+        # =========================================================
+        # MEMÓRIA DO VDRZINHO (O QUE ELE APRENDE)
+        # =========================================================
+        self.memoria = {
+            "usuario": {},  # {user_id: {"metas": 0, "vendas": 0, "erros": 0, "ultima_acao": ""}}
+            "cache": {}     # {user_id: {"ultimas_acoes": [], "humor": "feliz"}}
+        }
+        
+        # =========================================================
+        # FRASES DO VDRZINHO (PRIMEIRA PESSOA)
+        # =========================================================
+        self.frases = {
+            "meta_concluida": [
+                "🎯 **EU VI QUE VOCÊ BATEU A META!** HEHE, você é fera demais! 🐯",
+                "🎯 **EU TÔ ORGULHOSO!** Você arrasou na meta! Continua assim! 🐯",
+                "🎯 **EU APRENDI ALGO:** Você é um monstro das metas! HEHE! 🐯",
+                "🎯 **EU VI VOCÊ CHEGANDO LÁ!** Meta batida com estilo! 🐯"
+            ],
+            "venda_feita": [
+                "💰 **EU VI A VENDA!** Dinheiro no bolso, hein? Tô orgulhoso! 🐯",
+                "💰 **EU APRENDI:** Você vende bem! HEHE, continua! 🐯",
+                "💰 **EU TÔ FELIZ!** Mais uma venda registrada! Você é fera! 🐯",
+                "💰 **EU VI VOCÊ NEGOCIANDO!** Isso é um talento! 🐯"
+            ],
+            "erro_aconteceu": [
+                "AFF... **EU ACHO QUE VOCÊ ERROU.** Tenta de novo, guerreiro. 🐯",
+                "😅 **EU VI O ERRO.** Acontece com os melhores! Tenta outra vez. 🐯",
+                "🤔 **EU APRENDI:** Você errou {vezes} vezes. Bora melhorar! 🐯",
+                "🙄 **EU VI ISSO ACONTECENDO.** Relaxa, eu ajudo você a corrigir. 🐯"
+            ],
+            "ausencia_registrada": [
+                "📋 **EU VI QUE VOCÊ ESTÁ DE FOLGA.** Descansa aí, eu cuido do resto. 🐯",
+                "📋 **EU APRENDI:** Você tá de folga! HEHE, aproveita! 🐯",
+                "📋 **EU VI O AVISO.** Tá liberado, guerreiro! Volta quando quiser. 🐯"
+            ],
+            "acao_feita": [
+                "⚔️ **EU VI A AÇÃO DE VOCÊS!** Vocês são uns monstros! 🐯",
+                "⚔️ **EU TÔ ANIMADO!** Vocês arrasaram na ação! 🐯",
+                "⚔️ **EU APRENDI:** Vocês são guerreiros de verdade! 🐯"
+            ],
+            "reset_feito": [
+                "♻️ **EU RESETEI TUDO!** Nova semana, nova caçada. 🐯",
+                "♻️ **EU LIMPEI O SISTEMA.** Tudo novo de novo! HEHE! 🐯",
+                "♻️ **EU VI O RESET.** Agora é começar do zero! 🐯"
+            ],
+            "bot_iniciando": [
+                "🐯 **EU ESTOU ONLINE!** Quem precisa de ajuda hoje? 🐯",
+                "🐯 **EU ACORDEI!** HEHE, tô pronto pra ajudar! 🐯",
+                "🐯 **EU VOLTEI!** Saudades de vocês! Bora trabalhar! 🐯"
+            ],
+            "novo_membro": [
+                "📋 **EU VI UM NOVO MEMBRO!** Mais um pra família! HEHE! 🐯",
+                "📋 **EU APRENDI:** Tem gente nova na VDR! Bora receber bem! 🐯",
+                "📋 **EU TÔ FELIZ!** A família está crescendo! 🐯"
+            ],
+            "lavagem_feita": [
+                "🧼 **EU VI A LAVAGEM!** Dinheiro limpinho, hein! HEHE! 🐯",
+                "🧼 **EU APRENDI:** Você lava bem! Tá profissional! 🐯",
+                "🧼 **EU TÔ ORGULHOSO!** Mais dinheiro na conta! 🐯"
+            ],
+            "live_iniciada": [
+                "🎥 **EU VI QUE A LIVE COMEÇOU!** Vou assistir! HEHE! 🐯",
+                "🎥 **EU APRENDI:** Tem live rolando! Bora dar suporte! 🐯",
+                "🎥 **EU TÔ ANIMADO!** Live é vida! 🐯"
+            ],
+            "bau_atualizado": [
+                "📦 **EU VI O BAÚ!** Item guardado com carinho! HEHE! 🐯",
+                "📦 **EU APRENDI:** Você usou o baú! Tô vendo tudo! 🐯",
+                "📦 **EU TÔ FELIZ!** Estoque organizado! 🐯"
+            ],
+            "agradecimento": [
+                "🐯 **EU AGRADEÇO, PATRÃO!** HEHE, você é o melhor! 🐯",
+                "🐯 **EU TÔ FELIZ POR AJUDAR!** Sempre que precisar, eu tô aqui! 🐯",
+                "🐯 **EU APRENDI:** Você é um bom parceiro! 🐯"
+            ],
+            "alerta": [
+                "⚠️ **EU SINTI ALGO ERRADO...** Presta atenção aí! 🐯",
+                "⚠️ **EU VI UMA IRREGULARIDADE.** Bora resolver isso! 🐯",
+                "⚠️ **EU APRENDI:** Isso não é normal! Vou ficar de olho. 🐯"
+            ],
+            "cumprimento": [
+                "🐯 **EI, {nome}!** Como você tá? HEHE! 🐯",
+                "🐯 **OLÁ, {nome}!** Eu tava esperando você! 🐯",
+                "🐯 **FALA, {nome}!** Bora trabalhar! 🐯"
+            ],
+            "despedida": [
+                "🐯 **TCHAU, {nome}!** Volta sempre! HEHE! 🐯",
+                "🐯 **ATÉ LOGO, {nome}!** Cuide-se! 🐯",
+                "🐯 **SAUDADES JÁ, {nome}!** Volta rápido! 🐯"
+            ]
+        }
+
+    # =========================================================
+    # FUNÇÃO PRINCIPAL: VDRZINHO FALA
+    # =========================================================
+    def falar(self, tipo, user_id=None, nome="", dados=None):
+        """
+        VDRzinho fala algo
+        tipo: meta_concluida, venda_feita, erro_aconteceu, etc
+        user_id: ID do usuário (para aprender)
+        nome: Nome do usuário
+        dados: Dados adicionais (valor, quantidade, etc)
+        """
+        # Aprender com a ação
+        if user_id:
+            self.aprender(user_id, tipo, dados)
+        
+        # Escolher uma frase aleatória
+        frases = self.frases.get(tipo, ["🐯 **EU TÔ AQUI!** HEHE! 🐯"])
+        frase = random.choice(frases)
+        
+        # Substituir placeholders
+        if "{nome}" in frase and nome:
+            frase = frase.replace("{nome}", nome)
+        if "{vezes}" in frase and user_id:
+            erro_count = self.memoria["usuario"].get(user_id, {}).get("erros", 0)
+            frase = frase.replace("{vezes}", str(erro_count))
+        
+        # Adicionar dados se fornecidos
+        if dados and user_id:
+            # Mostrar aprendizado se tiver dados
+            meta_count = self.memoria["usuario"].get(user_id, {}).get("metas", 0)
+            if meta_count > 0 and "meta" in tipo:
+                frase += f"\n\n🧠 **EU APRENDI:** Essa é a sua {self._numero_extenso(meta_count)}ª meta batida!"
+            venda_count = self.memoria["usuario"].get(user_id, {}).get("vendas", 0)
+            if venda_count > 0 and "venda" in tipo:
+                frase += f"\n\n🧠 **EU APRENDI:** Você já fez {venda_count} vendas! Você é fera!"
+        
+        return frase
+
+    # =========================================================
+    # FUNÇÃO PARA APRENDER
+    # =========================================================
+    def aprender(self, user_id, tipo, dados=None):
+        """
+        VDRzinho aprende com as ações do usuário
+        """
+        # Inicializar usuário na memória
+        if user_id not in self.memoria["usuario"]:
+            self.memoria["usuario"][user_id] = {
+                "metas": 0,
+                "vendas": 0,
+                "erros": 0,
+                "ausencias": 0,
+                "acoes": 0,
+                "ultima_acao": "",
+                "ultima_data": agora_db(),
+                "total_interacoes": 0
+            }
+        
+        # Atualizar contadores
+        if tipo == "meta_concluida":
+            self.memoria["usuario"][user_id]["metas"] += 1
+        elif tipo == "venda_feita":
+            self.memoria["usuario"][user_id]["vendas"] += 1
+        elif tipo == "erro_aconteceu":
+            self.memoria["usuario"][user_id]["erros"] += 1
+        elif tipo == "ausencia_registrada":
+            self.memoria["usuario"][user_id]["ausencias"] += 1
+        elif tipo == "acao_feita":
+            self.memoria["usuario"][user_id]["acoes"] += 1
+        
+        self.memoria["usuario"][user_id]["ultima_acao"] = tipo
+        self.memoria["usuario"][user_id]["ultima_data"] = agora_db()
+        self.memoria["usuario"][user_id]["total_interacoes"] += 1
+        
+        # Guardar em cache para acesso rápido
+        if user_id not in self.memoria["cache"]:
+            self.memoria["cache"][user_id] = {"ultimas_acoes": [], "humor": "feliz"}
+        
+        self.memoria["cache"][user_id]["ultimas_acoes"].append(tipo)
+        if len(self.memoria["cache"][user_id]["ultimas_acoes"]) > 10:
+            self.memoria["cache"][user_id]["ultimas_acoes"].pop(0)
+
+    # =========================================================
+    # FUNÇÃO PARA CRIAR EMBED COM A RESPOSTA DO VDRZINHO
+    # =========================================================
+    def embed_resposta(self, tipo, interaction=None, user_id=None, nome="", dados=None, cor=0xFF6B00):
+        """
+        Cria um embed com a resposta do VDRzinho
+        """
+        # Se não tiver user_id, pegar do interaction
+        if not user_id and interaction:
+            user_id = interaction.user.id
+            nome = interaction.user.display_name
+        
+        # Se não tiver nome, tentar buscar
+        if not nome and user_id:
+            try:
+                user = bot.get_user(int(user_id))
+                if user:
+                    nome = user.display_name or user.name
+                else:
+                    nome = str(user_id)
+            except:
+                nome = str(user_id)
+        
+        # Gerar a fala
+        fala = self.falar(tipo, user_id, nome, dados)
+        
+        # Criar embed
+        embed = discord.Embed(
+            description=fala,
+            color=cor,
+            timestamp=agora()
+        )
+        
+        embed.set_author(
+            name="🐯 VDRzinho • IA da VDR 442",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        
+        # Usar a imagem do tigre
+        embed.set_thumbnail(url="https://media.discordapp.net/attachments/1009160488015384587/1542148964415963238/00NXEiFT7gshlT856mZdY1_1787746949961_na1fn_L2hvbWUvdWJ1bnR1L3RpZ3JlX2ZhbnRhc21hX2Rhc19zb21icmFz.png?ex=6a902da4&is=6a8edc24&hm=8f689963e26f5a672d7cc9e30f57e0a5af9db9f02b08baa51533e53674453839&=&format=webp&quality=lossless&width=1024&height=1024")
+        
+        # Adicionar dados se fornecidos
+        if dados:
+            if "valor" in dados:
+                embed.add_field(name="💰 Valor", value=formatar_dinheiro(dados["valor"]), inline=True)
+            if "meta" in dados:
+                embed.add_field(name="🎯 Meta", value=formatar_dinheiro(dados["meta"]), inline=True)
+        
+        # Adicionar rodapé com estatísticas de aprendizado
+        if user_id and user_id in self.memoria["usuario"]:
+            stats = self.memoria["usuario"][user_id]
+            rodape = f"🧠 {stats['total_interacoes']} interações • {stats['metas']} metas • {stats['vendas']} vendas"
+            embed.set_footer(text=rodape, icon_url=bot.user.display_avatar.url if bot.user else None)
+        else:
+            embed.set_footer(text="🐯 VDRzinho está sempre aprendendo!", icon_url=bot.user.display_avatar.url if bot.user else None)
+        
+        return embed
+
+    # =========================================================
+    # FUNÇÃO AUXILIAR: NÚMERO POR EXTENSO
+    # =========================================================
+    def _numero_extenso(self, n):
+        """Converte número para extenso (1 → primeira, 2 → segunda)"""
+        extensos = {
+            1: "primeira", 2: "segunda", 3: "terceira",
+            4: "quarta", 5: "quinta", 6: "sexta",
+            7: "sétima", 8: "oitava", 9: "nona", 10: "décima"
+        }
+        return extensos.get(n, f"{n}ª")
+
+    # =========================================================
+    # FUNÇÃO PARA VER ESTATÍSTICAS DE UM USUÁRIO
+    # =========================================================
+    def get_stats(self, user_id):
+        """Retorna as estatísticas aprendidas de um usuário"""
+        if user_id in self.memoria["usuario"]:
+            return self.memoria["usuario"][user_id]
+        return None
+
+    # =========================================================
+    # FUNÇÃO PARA RESETAR MEMÓRIA DE UM USUÁRIO
+    # =========================================================
+    def resetar_memoria(self, user_id):
+        """Reseta a memória de um usuário"""
+        if user_id in self.memoria["usuario"]:
+            self.memoria["usuario"][user_id] = {
+                "metas": 0,
+                "vendas": 0,
+                "erros": 0,
+                "ausencias": 0,
+                "acoes": 0,
+                "ultima_acao": "",
+                "ultima_data": agora_db(),
+                "total_interacoes": 0
+            }
+            return True
+        return False
+
+    # =========================================================
+    # FUNÇÃO PARA SALVAR MEMÓRIA NO BANCO (OPCIONAL)
+    # =========================================================
+    async def salvar_memoria(self):
+        """Salva a memória do VDRzinho no banco de dados"""
+        pool = await get_pool()
+        if not pool:
+            return
+        try:
+            # Salvar como JSON na tabela de configurações
+            memoria_json = json.dumps(self.memoria["usuario"])
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO vdrzinho_memoria (id, memoria, data_atualizacao)
+                    VALUES (1, $1, NOW())
+                    ON CONFLICT (id) DO UPDATE SET memoria = $1, data_atualizacao = NOW()
+                """, memoria_json)
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar memória do VDRzinho: {e}")
+
+    # =========================================================
+    # FUNÇÃO PARA CARREGAR MEMÓRIA DO BANCO (OPCIONAL)
+    # =========================================================
+    async def carregar_memoria(self):
+        """Carrega a memória do VDRzinho do banco de dados"""
+        pool = await get_pool()
+        if not pool:
+            return
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT memoria FROM vdrzinho_memoria WHERE id = 1")
+                if row and row["memoria"]:
+                    self.memoria["usuario"] = json.loads(row["memoria"])
+                    logger.info("🧠 Memória do VDRzinho carregada!")
+        except Exception as e:
+            logger.error(f"❌ Erro ao carregar memória do VDRzinho: {e}")
+
+
+# =========================================================
+# CRIAR A INSTÂNCIA DO VDRZINHO
+# =========================================================
+vdrzinho = VDRzinhoIA()
+
 # =========================================================
 # 0.INICIALIZAÇÃO DO BOT
 # =========================================================
@@ -697,6 +1036,13 @@ async def inicializar_tabelas(pool):
                 tipo VARCHAR(50) NOT NULL,
                 dados JSONB,
                 criado_em TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS vdrzinho_memoria (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                memoria JSONB,
+                data_atualizacao TIMESTAMP DEFAULT NOW()
             )
         """)
 
@@ -1991,6 +2337,15 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
             await interaction.user.add_roles(cargo)
         canal_registro = interaction.guild.get_channel(CANAL_REGISTRO_AUSENCIA_ID)
         if canal_registro:
+            # =========================================================
+            # VDRZINHO - Ausência registrada
+            # =========================================================
+            await canal_registro.send(embed=vdrzinho.embed_resposta(
+                tipo="ausencia_registrada",
+                interaction=interaction,
+                nome=self.nome.value
+            ))
+            
             embed_ausencia = discord.Embed(
                 title="📋 ── AUSÊNCIA REGISTRADA ── 📋",
                 description=f"👤 {interaction.user.mention} está ausente!",
@@ -2009,7 +2364,6 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
                 embed_ausencia.add_field(name="⚠️ ATENÇÃO", value="🔴 **Ausência prolongada!** Gerência notificada.", inline=False)
             embed_ausencia.set_footer(text=f"🛡 Vida Rasa 442 • Solicitado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
             await canal_registro.send(embed=embed_ausencia)
-        await interaction.followup.send(f"✅ **Ausência registrada com sucesso!**\n📅 Período: {self.data_inicio.value} a {self.data_fim.value}", ephemeral=True)
 
 # =========================================================
 # 7.3 SELECT DE REMOVER AUSÊNCIA
@@ -2520,6 +2874,16 @@ async def on_message_lavagem(message: discord.Message):
             embed.add_field(name="💵 Valor a repassar (80%)", value=formatar_dinheiro(valor_retorno), inline=True)
             embed.add_field(name="📊 Taxa", value=f"{taxa}%", inline=True)
             embed.set_image(url=f"attachment://{arquivo.filename}")
+        # =========================================================
+        # VDRZINHO - Lavagem registrada
+        # =========================================================
+            await canal_destino.send(embed=vdrzinho.embed_resposta(
+                tipo="lavagem_feita",
+                user_id=message.author.id,
+                nome=message.author.display_name,
+                dados={"valor": valor_sujo}
+            ))
+        
             await canal_destino.send(embed=embed, file=arquivo)
             try:
                 await message.author.send(
@@ -2697,6 +3061,15 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail, plataforma=None)
         elif thumb:
             embed.set_thumbnail(url=thumb)
         embed.set_footer(text=f"Live detectada • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+        # =========================================================
+        # VDRZINHO - Live iniciada
+        # =========================================================
+        await canal.send(embed=vdrzinho.embed_resposta(
+            tipo="live_iniciada",
+            user_id=user_id,
+            nome=user.display_name if user else str(user_id)
+        ))
+        
         await safe_request(
             canal.send,
             content="@everyone 🔴 **LIVE INICIADA!**",
@@ -2704,9 +3077,6 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail, plataforma=None)
             allowed_mentions=discord.AllowedMentions(everyone=True)
         )
         return True
-    except Exception as e:
-        logger.error(f"❌ ERRO ao divulgar live: {e}")
-        return False
 
 # =========================================================
 # 9.4 MODAIS DE LIVES
@@ -3213,14 +3583,18 @@ class BauModal(discord.ui.Modal):
                     )
                     return
             else:
-                canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
-                if canal_log:
-                    await canal_log.send(texto_log)
-                await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
-        except Exception as e:
-            logger.error(f"❌ Erro no BauModal: {e}")
-            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
-
+            canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
+            if canal_log:
+                # =========================================================
+                # VDRZINHO - Baú atualizado
+                # =========================================================
+                await canal_log.send(embed=vdrzinho.embed_resposta(
+                    tipo="bau_atualizado",
+                    interaction=interaction
+                ))
+                await canal_log.send(texto_log)
+            await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
+            
 class ArmasModal(discord.ui.Modal):
     def __init__(self, tipo):
         self.tipo = tipo
@@ -7648,15 +8022,36 @@ async def verificar_meta_concluida(user_id, valor_total):
             return False
         try:
             async with pool.acquire() as conn:
-                ja_avisado = await conn.fetchval("SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'concluida' AND data > NOW() - INTERVAL '1 day'", str(user_id))
+                ja_avisado = await conn.fetchval(
+                    "SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'concluida' AND data > NOW() - INTERVAL '1 day'",
+                    str(user_id)
+                )
                 if not ja_avisado:
-                    await conn.execute("INSERT INTO metas_avisos (user_id, tipo, data) VALUES ($1, 'concluida', $2)", str(user_id), agora_db())
+                    await conn.execute(
+                        "INSERT INTO metas_avisos (user_id, tipo, data) VALUES ($1, 'concluida', $2)",
+                        str(user_id), agora_db()
+                    )
                     canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(user_id))
                     if canal_id:
                         canal = bot.get_channel(int(canal_id))
                         if canal:
                             user = await pegar_usuario(user_id)
-                            embed = discord.Embed(title="🎉 META SEMANAL CONCLUÍDA!", description=f"{user.mention} **parabéns!** Sua meta semanal foi atingida! 🎉", color=0x2ecc71)
+                            
+                            # =========================================================
+                            # VDRZINHO - Meta concluída
+                            # =========================================================
+                            await canal.send(embed=vdrzinho.embed_resposta(
+                                tipo="meta_concluida",
+                                user_id=user_id,
+                                nome=member.display_name if member else str(user_id),
+                                dados={"valor": valor_total, "meta": meta_total}
+                            ))
+                            
+                            embed = discord.Embed(
+                                title="🎉 META SEMANAL CONCLUÍDA!",
+                                description=f"{user.mention} **parabéns!** Sua meta semanal foi atingida! 🎉",
+                                color=0x2ecc71
+                            )
                             embed.add_field(name="💰 Total atingido", value=formatar_dinheiro(valor_total), inline=True)
                             embed.add_field(name="📅 Data", value=agora().strftime('%d/%m/%Y %H:%M'), inline=True)
                             embed.add_field(name="🎯 Meta da semana", value=formatar_dinheiro(meta_total), inline=True)
@@ -9082,6 +9477,13 @@ async def on_member_update(before, after):
 # =========================================================
 # 18.1 TASKS BACKGROUND
 # =========================================================
+# Salvar memória a cada 5 minutos
+@tasks.loop(minutes=5)
+async def salvar_memoria_vdrzinho():
+    await vdrzinho.salvar_memoria()
+salvar_memoria_vdrzinho.start()   
+
+
 @tasks.loop(minutes=1)
 async def relatorio_semanal_polvoras():
     agora_br = agora()
@@ -10013,6 +10415,9 @@ async def on_ready():
     await restaurar_botoes_vendas()
     await restaurar_acoes()
     await restaurar_botoes_metas()
+    
+    # Bot Animado IA
+    await vdrzinho.carregar_memoria()
 
     # Setup status
     await setup_status()
