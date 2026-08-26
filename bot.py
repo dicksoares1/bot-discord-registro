@@ -8844,13 +8844,6 @@ async def on_member_remove(member):
         embed.set_footer(text="Vida Rasa 442 • Logs de Saída")
         await canal_saida.send(embed=embed)
     
-    # Mantém o aviso no canal gerência também (opcional)
-    canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
-    if canal_gerencia:
-        try:
-            await member.send(f"Olá {member.display_name}, você saiu do servidor Vida Rasa. Caso precise, entre em contato com a gerência.")
-        except:
-            pass:
     if member.bot:
         return
     try:
