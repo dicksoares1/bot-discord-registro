@@ -7489,12 +7489,16 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
         except:
             await interaction.response.send_message("❌ Valor inválido!", ephemeral=True)
             return
+
         pool = await get_pool()
         if not pool:
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
+        # Verificar se a meta existe
         async with pool.acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+
         if not meta:
             guild = interaction.guild
             member = guild.get_member(int(self.user_id))
@@ -7507,10 +7511,12 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
             else:
                 await interaction.response.send_message("❌ **Meta não encontrada!**\n\n💡 Clique em '➕ Criar Minha Sala' no canal de solicitar sala.", ephemeral=True)
                 return
+
         sucesso = await adicionar_dinheiro_meta(self.user_id, valor)
         if not sucesso:
             await interaction.response.send_message("❌ Erro ao adicionar dinheiro!", ephemeral=True)
             return
+
         await carregar_metas_cache()
         await atualizar_embed_meta(self.user_id)
         await interaction.response.send_message(f"✅ **{formatar_dinheiro(valor)} adicionado à meta!**", ephemeral=True)
