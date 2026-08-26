@@ -9496,8 +9496,6 @@ async def on_member_update(before, after):
 @tasks.loop(minutes=5)
 async def salvar_memoria_vdrzinho():
     await vdrzinho.salvar_memoria()
-salvar_memoria_vdrzinho.start()   
-
 
 @tasks.loop(minutes=1)
 async def relatorio_semanal_polvoras():
@@ -9600,6 +9598,8 @@ async def iniciar_tarefas_background():
             limpar_cache_lives.start()
     except Exception as e:
         logger.error(f"Erro loop cache lives: {e}")
+        if not salvar_memoria_vdrzinho.is_running():
+            salvar_memoria_vdrzinho.start()
 
 async def limpeza_cache_periodica():
     while True:
