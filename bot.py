@@ -4643,29 +4643,66 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        # PAGO foi clicado → desabilita botão PAGO e ENTREGUE
-        # TRANSFERÊNCIA continua ativo
+        pago_foi_clicado = any(l.startswith("💰") for l in linhas)
+        entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
+        finalizado = pago_foi_clicado and entregue_foi_clicado
+
+        if finalizado:
+            embed.color = 0x2ecc71
+            embed.title = "🎉 VENDA CONCLUÍDA"
+
+            for i, field in enumerate(embed.fields):
+                if field.name == "📌 STATUS DO PEDIDO":
+                    embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="✅ Pago e Entregue", inline=False)
+                    break
+
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+            embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**", inline=False)
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
+
+            await interaction.message.edit(embed=embed, view=StatusView(
+                disabled=True,
+                entrega_id=self.entrega_id,
+                total_entregas=self.total_entregas,
+                entrega_atual=self.entrega_atual,
+                pago_ja_clicado=True,
+                mensagem_original=interaction.message,
+                transferencia_confirmada=False,
+                valor_total=self.valor_total,
+                pt=self.pt,
+                sub=self.sub,
+                pedido_numero=self.pedido_numero
+            ))
+
+            await interaction.followup.send("✅ **Venda concluída com sucesso!**", ephemeral=True)
+
+            if self.entrega_atual < self.total_entregas:
+                await self.criar_proxima_entrega(interaction, embed, self.pedido_numero)
+
+            await enviar_painel_vendas()
+            await enviar_painel_fabricacao()
+            return
+
         nova_view = StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
-            pago_ja_clicado=True,  # ← PAGO desabilitado
+            pago_ja_clicado=True,
             mensagem_original=interaction.message,
-            transferencia_confirmada=False,  # ← TRANSFERÊNCIA ainda ativo
+            transferencia_confirmada=False,
             valor_total=self.valor_total,
             pt=self.pt,
             sub=self.sub,
             pedido_numero=self.pedido_numero
         )
 
-        # Desabilitar ENTREGUE também
         for child in nova_view.children:
             if child.custom_id == "status_entregue_fixo":
                 child.disabled = True
 
         await interaction.message.edit(embed=embed, view=nova_view)
-        await interaction.followup.send("✅ **Pagamento registrado!** Agora confirme a transferência.", ephemeral=True)
+        await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
 
     # =========================================================
     # ENTREGUE
@@ -4686,7 +4723,6 @@ class StatusView(discord.ui.View):
             await interaction.followup.send("⚠️ **Esta entrega já foi entregue!**", ephemeral=True)
             return
 
-        # Verificar estoque
         pacotes_pt = 0
         pacotes_sub = 0
         for field in embed.fields:
@@ -4746,15 +4782,82 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        # ENTREGUE foi clicado → desabilita ENTREGUE
-        # PAGO continua ativo (só desabilita quando clicar em PAGO)
-        # TRANSFERÊNCIA continua ativo
+        pago_foi_clicado = any(l.startswith("💰") for l in linhas)
+        entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
+        finalizado = pago_foi_clicado and entregue_foi_clicado
+
+        if finalizado:
+            embed.color = 0x2ecc71
+            embed.title = "🎉 VENDA CONCLUÍDA"
+
+            for i, field in enumerate(embed.fields):
+                if field.name == "📌 STATUS DO PEDIDO":
+                    embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="✅ Pago e Entregue", inline=False)
+                    break
+
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+            embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**\n📊 **Estoque atualizado**", inline=False)
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
+
+            await interaction.message.edit(embed=embed, view=StatusView(
+                disabled=True,
+                entrega_id=self.entrega_id,
+                total_entregas=self.total_entregas,
+                entrega_atual=self.entrega_atual,
+                pago_ja_clicado=True,
+                mensagem_original=interaction.message,
+                transferencia_confirmada=False,
+                valor_total=self.valor_total,
+                pt=self.pt,
+                sub=self.sub,
+                pedido_numero=self.pedido_numero
+            ))
+
+            await interaction.followup.send("✅ **Venda concluída com sucesso!**", ephemeral=True)
+
+            if self.entrega_atual < self.total_entregas:
+                await self.criar_proxima_entrega(interaction, embed, pedido_numero)
+
+            if pacotes_pt > 0 or pacotes_sub > 0:
+                canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+                if canal_bau:
+                    try:
+                        entregador_apelido_bau = await pegar_apelido(interaction.user.id, interaction.guild)
+                        org_retirada = "VDR"
+                        if self.entrega_id:
+                            try:
+                                pool = await get_pool()
+                                if pool:
+                                    async with pool.acquire() as conn:
+                                        row = await conn.fetchrow("SELECT organizacao FROM entregas_parceladas WHERE id = $1", self.entrega_id)
+                                        if row:
+                                            org_retirada = row["organizacao"]
+                            except:
+                                pass
+                        itens = ""
+                        if pacotes_pt > 0 and pacotes_sub > 0:
+                            itens = f"PT: {pacotes_pt} pacotes / SUB: {pacotes_sub} pacotes"
+                        elif pacotes_pt > 0:
+                            itens = f"PT: {pacotes_pt} pacotes"
+                        elif pacotes_sub > 0:
+                            itens = f"SUB: {pacotes_sub} pacotes"
+                        else:
+                            itens = "Nenhum item retirado"
+                        texto_bau = f"📦 ── SAÍDA DO BAÚ ── 📦\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n👤 RETIRADO POR: {entregador_apelido_bau}\n🏷️ PARA A ENTREGA DA ORG: {org_retirada}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📦 ITENS RETIRADOS: {itens}"
+                        await canal_bau.send(f"```\n{texto_bau}\n```")
+                    except Exception as e:
+                        logger.error(f"Erro envio baú: {e}")
+
+            await enviar_painel_vendas()
+            await enviar_painel_fabricacao()
+            return
+
         nova_view = StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
-            pago_ja_clicado=self.pago_ja_clicado,  # Mantém estado do PAGO
+            pago_ja_clicado=self.pago_ja_clicado,
             mensagem_original=interaction.message,
             transferencia_confirmada=False,
             valor_total=self.valor_total,
@@ -4763,44 +4866,12 @@ class StatusView(discord.ui.View):
             pedido_numero=self.pedido_numero
         )
 
-        # Desabilitar ENTREGUE
         for child in nova_view.children:
             if child.custom_id == "status_entregue_fixo":
                 child.disabled = True
 
         await interaction.message.edit(embed=embed, view=nova_view)
-        await interaction.followup.send("✅ **Entrega registrada!** Agora registre o pagamento.", ephemeral=True)
-
-        # Log no baú
-        if pacotes_pt > 0 or pacotes_sub > 0:
-            canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
-            if canal_bau:
-                try:
-                    entregador_apelido_bau = await pegar_apelido(interaction.user.id, interaction.guild)
-                    org_retirada = "VDR"
-                    if self.entrega_id:
-                        try:
-                            pool = await get_pool()
-                            if pool:
-                                async with pool.acquire() as conn:
-                                    row = await conn.fetchrow("SELECT organizacao FROM entregas_parceladas WHERE id = $1", self.entrega_id)
-                                    if row:
-                                        org_retirada = row["organizacao"]
-                        except:
-                            pass
-                    itens = ""
-                    if pacotes_pt > 0 and pacotes_sub > 0:
-                        itens = f"PT: {pacotes_pt} pacotes / SUB: {pacotes_sub} pacotes"
-                    elif pacotes_pt > 0:
-                        itens = f"PT: {pacotes_pt} pacotes"
-                    elif pacotes_sub > 0:
-                        itens = f"SUB: {pacotes_sub} pacotes"
-                    else:
-                        itens = "Nenhum item retirado"
-                    texto_bau = f"📦 ── SAÍDA DO BAÚ ── 📦\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n👤 RETIRADO POR: {entregador_apelido_bau}\n🏷️ PARA A ENTREGA DA ORG: {org_retirada}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📦 ITENS RETIRADOS: {itens}"
-                    await canal_bau.send(f"```\n{texto_bau}\n```")
-                except Exception as e:
-                    logger.error(f"Erro envio baú: {e}")
+        await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
@@ -9716,6 +9787,73 @@ async def cmd_dashboard(ctx):
     embed.add_field(name="📌 INFORMAÇÕES DO SISTEMA", value=f"```yaml\nVersão: 7.0\nPython: 3.12.0\nDiscord.py: {discord.__version__}\n```", inline=False)
     embed.set_footer(text=f"🛡 Vida Rasa 442 • Dashboard • {agora().strftime('%d/%m/%Y %H:%M:%S')}", icon_url=bot.user.display_avatar.url if bot.user else None)
     await ctx.send(embed=embed)
+
+# =========================================================
+# 19.22 COMANDO DESATIVAR VENDAS CONCLUIDAS
+# =========================================================
+@bot.command(name="desativar_vendas_concluidas")
+@commands.has_permissions(administrator=True)
+async def cmd_desativar_vendas_concluidas(ctx):
+    """Desativa todos os botões de vendas já concluídas"""
+    await ctx.send("🔄 Desativando botões de vendas concluídas...")
+    
+    canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
+    if not canal:
+        await ctx.send("❌ Canal de encomendas não encontrado!")
+        return
+    
+    contador = 0
+    async for msg in canal.history(limit=500):
+        if msg.author == bot.user and msg.embeds:
+            embed = msg.embeds[0]
+            titulo = embed.title or ""
+            
+            # Verificar se é uma venda
+            if "ENTREGA" not in titulo and "ENCOMENDA" not in titulo and "VENDA" not in titulo:
+                continue
+            
+            # Verificar se está concluída
+            concluida = False
+            for field in embed.fields:
+                if field.name == "📌 STATUS DO PEDIDO":
+                    if "Pago e Entregue" in field.value or "TRANSFERÊNCIA CONFIRMADA" in field.value:
+                        concluida = True
+                    break
+            
+            if not concluida:
+                # Verificar pelos campos de conclusão
+                for field in embed.fields:
+                    if "VENDA FINALIZADA COM SUCESSO" in field.name or "PAGO E ENTREGUE" in field.value.upper():
+                        concluida = True
+                        break
+            
+            if concluida:
+                # Desabilitar os botões
+                try:
+                    # Extrair dados para criar view desabilitada
+                    entrega_id = None
+                    if embed.footer and "ID:" in embed.footer.text:
+                        try:
+                            entrega_id = safe_int(embed.footer.text.split("ID:")[1].strip().split(" ")[0])
+                        except:
+                            pass
+                    
+                    view = StatusView(
+                        disabled=True,
+                        entrega_id=entrega_id,
+                        total_entregas=1,
+                        entrega_atual=1,
+                        pago_ja_clicado=True,
+                        mensagem_original=msg,
+                        transferencia_confirmada=True
+                    )
+                    await msg.edit(view=view)
+                    contador += 1
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.error(f"Erro ao desativar {msg.id}: {e}")
+    
+    await ctx.send(f"✅ **{contador} vendas concluídas desativadas!**")
 
 # =========================================================
 # ==================== PARTE 20: MAIN =====================
