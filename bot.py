@@ -875,6 +875,17 @@ async def inicializar_tabelas(pool):
                 user_id VARCHAR(30)
             )
         """)
+        # =========================================================
+        # PARTICIPANTES MANUAIS DAS AÇÕES
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS acoes_participantes_manuais (
+                id SERIAL PRIMARY KEY,
+                acao_id INTEGER,
+                nome TEXT,
+                data_criacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
 
         # =========================================================
         # GRUPOS
@@ -4279,6 +4290,15 @@ class AdicionarParticipantesManualModal(discord.ui.Modal, title="📝 ADICIONAR 
                 nomes_manuais = []
                 if self.participantes.value and self.participantes.value.strip():
                     nomes_manuais = [nome.strip() for nome in self.participantes.value.split('\n') if nome.strip()]
+                    
+                    # =========================================================
+                    # SALVAR NOMES MANUAIS NO BANCO
+                    # =========================================================
+                    for nome in nomes_manuais:
+                        await conn.execute(
+                            "INSERT INTO acoes_participantes_manuais (acao_id, nome) VALUES ($1, $2)",
+                            self.acao_id, nome
+                        )
 
                 # =========================================================
                 # CRIAR LISTA DE PARTICIPANTES (BOTÃO + MANUAIS)
@@ -4489,15 +4509,20 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
                 valor_total, self.acao_id
             )
 
-            # Buscar participantes para mostrar no relatório
-            participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+            # =========================================================
+            # BUSCAR PARTICIPANTES (BOTÃO + MANUAIS)
+            # =========================================================
+            participantes_botao = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+            participantes_manuais = await conn.fetch("SELECT nome FROM acoes_participantes_manuais WHERE acao_id=$1", self.acao_id)
 
         # =========================================================
         # CRIAR LISTA DE PARTICIPANTES COM APELIDO
         # =========================================================
         guild = interaction.guild
         lista_participantes = []
-        for p in participantes:
+
+        # Adicionar os que clicaram no botão (com apelido)
+        for p in participantes_botao:
             uid = p["user_id"]
             try:
                 member = guild.get_member(int(uid))
@@ -4512,6 +4537,12 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
                         lista_participantes.append(f"👤 ID: {uid}")
             except:
                 lista_participantes.append(f"👤 ID: {uid}")
+
+        # Adicionar os nomes manuais
+        for p in participantes_manuais:
+            nome = p["nome"]
+            if nome:
+                lista_participantes.append(f"📝 {nome}")
 
         if not lista_participantes:
             lista_participantes.append("Nenhum participante")
@@ -4617,7 +4648,12 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
                 "UPDATE acoes_semana SET valor=0, resultado='perdeu' WHERE id=$1",
                 self.acao_id
             )
-            participantes = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+            
+            # =========================================================
+            # BUSCAR PARTICIPANTES (BOTÃO + MANUAIS)
+            # =========================================================
+            participantes_botao = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
+            participantes_manuais = await conn.fetch("SELECT nome FROM acoes_participantes_manuais WHERE acao_id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
 
         # =========================================================
@@ -4625,7 +4661,9 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
         # =========================================================
         guild = interaction.guild
         lista_participantes = []
-        for p in participantes:
+
+        # Adicionar os que clicaram no botão (com apelido)
+        for p in participantes_botao:
             uid = p["user_id"]
             try:
                 member = guild.get_member(int(uid))
@@ -4640,6 +4678,12 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
                         lista_participantes.append(f"👤 ID: {uid}")
             except:
                 lista_participantes.append(f"👤 ID: {uid}")
+
+        # Adicionar os nomes manuais
+        for p in participantes_manuais:
+            nome = p["nome"]
+            if nome:
+                lista_participantes.append(f"📝 {nome}")
 
         if not lista_participantes:
             lista_participantes.append("Nenhum participante")
