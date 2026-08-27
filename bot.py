@@ -3815,18 +3815,18 @@ REGRAS_ACOES = {
     "Lan House - (Bahamas)": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
     "Lan House - Jersey": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
     "Lan House - Brooklyn": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
-    "Lan House - Manhattan": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True}
+    "Lan House - Manhattan": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
     "Museu (Bahamas)": {
-    "regras": [
-        "👥 **Máximo de Bandidos:** 10.",
-        "👮 **Máximo de Policiais:** 15.",
-        "🔫 **Armamento:** Obrigatório RIFLE.",
-        "⚔️ **Negociação:** Inexistente, ação de confronto direto com a polícia.",
-        "🚫 **Refém:** Proibido reféns, o roubo é uma ação de confronto direto com a polícia.",
-        "📌 **Obs:** Máximo de 5 bandidos no segundo andar."
-    ],
-    "is_bahamas": True
-},
+        "regras": [
+            "👥 **Máximo de Bandidos:** 10.",
+            "👮 **Máximo de Policiais:** 15.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto com a polícia.",
+            "🚫 **Refém:** Proibido reféns, o roubo é uma ação de confronto direto com a polícia.",
+            "📌 **Obs:** Máximo de 5 bandidos no segundo andar."
+        ],
+        "is_bahamas": True
+    }
 }
 
 # =========================================================
