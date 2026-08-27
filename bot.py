@@ -3763,7 +3763,7 @@ CATEGORIAS_ACOES = {
     "Banco de Paleto": {"limite": 1, "emoji": "🏦", "acoes": ["Banco de Paleto"]},
     "Nióbio": {"limite": 1, "emoji": "⚗️", "acoes": ["Nióbio"]},
     "Lojas e Carros Fortes": {"limite": None, "emoji": "🏪", "acoes": ["Loja de Armas (Ammunation)", "Loja de Bebidas", "Loja de Departamento", "Mergulhador", "Grapeseed", "Companhia de Gás", "Life Invader", "Aeroporto de Sucata", "Carro Forte - Açougue", "Carro Forte - Faculdade", "Carro Forte - Grove Street"]},
-    "Bahamas": {"limite": None, "emoji": "🏝️", "acoes": ["Banco Bahamas", "Burgueshot (Bahamas)", "Refinaria (Bahamas)", "Lan House - (Bahamas)", "Lan House - Jersey", "Lan House - Brooklyn", "Lan House - Manhattan"]},
+    "Bahamas": {"limite": None, "emoji": "🏝️", "acoes": ["Banco Bahamas", "Burgueshot (Bahamas)", "Refinaria (Bahamas)", "Lan House - (Bahamas)", "Lan House - Jersey", "Lan House - Brooklyn", "Lan House - Manhattan", "Museu (Bahamas)"]},
     "Helicrash": {"limite": None, "emoji": "🚁", "acoes": ["🚁 Helicrash (13h)", "🚁 Helicrash (15h)", "🚁 Helicrash (22h)", "🚁 Helicrash (02h)"]}
 }
 
@@ -3816,6 +3816,17 @@ REGRAS_ACOES = {
     "Lan House - Jersey": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
     "Lan House - Brooklyn": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
     "Lan House - Manhattan": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True}
+    "Museu (Bahamas)": {
+    "regras": [
+        "👥 **Máximo de Bandidos:** 10.",
+        "👮 **Máximo de Policiais:** 15.",
+        "🔫 **Armamento:** Obrigatório RIFLE.",
+        "⚔️ **Negociação:** Inexistente, ação de confronto direto com a polícia.",
+        "🚫 **Refém:** Proibido reféns, o roubo é uma ação de confronto direto com a polícia.",
+        "📌 **Obs:** Máximo de 5 bandidos no segundo andar."
+    ],
+    "is_bahamas": True
+},
 }
 
 # =========================================================
