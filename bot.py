@@ -5565,8 +5565,8 @@ class StatusView(discord.ui.View):
         self.entrega_id = entrega_id
         self.total_entregas = total_entregas
         self.entrega_atual = entrega_atual
-        self.entrega_ja_entregue = entregue_ja_clicado  # ← ESTADO DO ENTREGUE
-        self.pago_ja_clicado = pago_ja_clicado  # ← ESTADO DO PAGO
+        self.entrega_ja_entregue = entregue_ja_clicado
+        self.pago_ja_clicado = pago_ja_clicado
         self.mensagem_original = mensagem_original
         self.entrega_criada = False
         self.transferencia_confirmada = transferencia_confirmada
@@ -5576,25 +5576,25 @@ class StatusView(discord.ui.View):
         self.pedido_numero = pedido_numero
 
         # =========================================================
-        # BOTÃO PAGO - DESABILITADO SE JÁ FOI CLICADO
+        # BOTÃO PAGO
         # =========================================================
         self.add_item(discord.ui.Button(
             label="💰 Pago",
             style=discord.ButtonStyle.primary,
             custom_id="status_pago_fixo",
             emoji="💰",
-            disabled=self.pago_ja_clicado or disabled or self.transferencia_confirmada
+            disabled=self.pago_ja_clicado or self.transferencia_confirmada
         ))
 
         # =========================================================
-        # BOTÃO ENTREGUE - DESABILITADO SE JÁ FOI CLICADO
+        # BOTÃO ENTREGUE
         # =========================================================
         self.add_item(discord.ui.Button(
             label="✅ Entregue",
             style=discord.ButtonStyle.success,
             custom_id="status_entregue_fixo",
             emoji="✅",
-            disabled=self.entrega_ja_entregue or disabled or self.transferencia_confirmada
+            disabled=self.entrega_ja_entregue or self.transferencia_confirmada
         ))
 
         # =========================================================
@@ -5605,7 +5605,7 @@ class StatusView(discord.ui.View):
             style=discord.ButtonStyle.primary,
             custom_id="editar_venda_fixo",
             emoji="✏️",
-            disabled=disabled or self.transferencia_confirmada
+            disabled=self.transferencia_confirmada
         ))
 
         # =========================================================
@@ -5616,11 +5616,11 @@ class StatusView(discord.ui.View):
             style=discord.ButtonStyle.danger,
             custom_id="status_cancelado_fixo",
             emoji="❌",
-            disabled=disabled or self.transferencia_confirmada
+            disabled=self.transferencia_confirmada
         ))
 
         # =========================================================
-        # BOTÃO TRANSFERÊNCIA - SÓ DESABILITA SE JÁ FOI CLICADO
+        # BOTÃO TRANSFERÊNCIA - SÓ DESABILITA QUANDO CLICADO
         # =========================================================
         self.add_item(discord.ui.Button(
             label="📤 Confirmar Transferência",
@@ -5631,9 +5631,8 @@ class StatusView(discord.ui.View):
             row=1
         ))
 
-        if disabled or self.transferencia_confirmada:
-            for item in self.children:
-                item.disabled = True
+        # OBS: O disabled global NÃO desabilita a transferência
+        # A transferência só é desabilitada por transferencia_confirmada
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
@@ -5781,14 +5780,17 @@ class StatusView(discord.ui.View):
             embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
 
+            # =========================================================
+            # VIEW - TRANSFERÊNCIA CONTINUA ATIVO (transferencia_confirmada=False)
+            # =========================================================
             await interaction.message.edit(embed=embed, view=StatusView(
-                disabled=True,
+                disabled=False,
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
                 entrega_atual=self.entrega_atual,
                 pago_ja_clicado=True,
                 mensagem_original=interaction.message,
-                transferencia_confirmada=False,
+                transferencia_confirmada=False,  # ← TRANSFERÊNCIA ATIVO
                 valor_total=self.valor_total,
                 pt=self.pt,
                 sub=self.sub,
@@ -5805,6 +5807,9 @@ class StatusView(discord.ui.View):
             await enviar_painel_fabricacao()
             return
 
+        # =========================================================
+        # NÃO FINALIZADO - VIEW COM TRANSFERÊNCIA ATIVO
+        # =========================================================
         await interaction.message.edit(embed=embed, view=StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
@@ -5812,12 +5817,12 @@ class StatusView(discord.ui.View):
             entrega_atual=self.entrega_atual,
             pago_ja_clicado=True,  # ← PAGO DESABILITADO
             mensagem_original=interaction.message,
-            transferencia_confirmada=False,
+            transferencia_confirmada=False,  # ← TRANSFERÊNCIA ATIVO
             valor_total=self.valor_total,
             pt=self.pt,
             sub=self.sub,
             pedido_numero=self.pedido_numero,
-            entregue_ja_clicado=self.entrega_ja_entregue  # ← MANTÉM ESTADO DO ENTREGUE
+            entregue_ja_clicado=self.entrega_ja_entregue
         ))
 
         await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
@@ -5883,10 +5888,15 @@ class StatusView(discord.ui.View):
         titulo = embed.title
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
 
+        # =========================================================
+        # REMOVER DO ESTOQUE
+        # =========================================================
         if pacotes_pt > 0:
             await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
+            logger.info(f"🔫 Removido {pacotes_pt} pacotes PT do estoque (Pedido #{pedido_numero})")
         if pacotes_sub > 0:
             await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
+            logger.info(f"🔫 Removido {pacotes_sub} pacotes SUB do estoque (Pedido #{pedido_numero})")
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         entregador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
@@ -5948,7 +5958,7 @@ class StatusView(discord.ui.View):
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
 
             await interaction.message.edit(embed=embed, view=StatusView(
-                disabled=True,
+                disabled=False,
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
                 entrega_atual=self.entrega_atual,
@@ -5967,6 +5977,9 @@ class StatusView(discord.ui.View):
             if self.entrega_atual < self.total_entregas:
                 await self.criar_proxima_entrega(interaction, embed, pedido_numero)
 
+            # =========================================================
+            # FORÇAR ATUALIZAÇÃO DOS PAINÉIS
+            # =========================================================
             await enviar_painel_vendas()
             await enviar_painel_fabricacao()
             return
@@ -5976,18 +5989,21 @@ class StatusView(discord.ui.View):
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
-            pago_ja_clicado=self.pago_ja_clicado,  # ← MANTÉM ESTADO DO PAGO
+            pago_ja_clicado=self.pago_ja_clicado,
             mensagem_original=interaction.message,
             transferencia_confirmada=False,
             valor_total=self.valor_total,
             pt=self.pt,
             sub=self.sub,
             pedido_numero=self.pedido_numero,
-            entregue_ja_clicado=True  # ← ENTREGUE DESABILITADO
+            entregue_ja_clicado=True
         ))
 
         await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
+        # =========================================================
+        # FORÇAR ATUALIZAÇÃO DOS PAINÉIS
+        # =========================================================
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
@@ -6071,14 +6087,17 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
+        # =========================================================
+        # CANCELADO - TRANSFERÊNCIA DESABILITADO
+        # =========================================================
         await interaction.message.edit(embed=embed, view=StatusView(
-            disabled=True,
+            disabled=False,
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
             pago_ja_clicado=True,
             mensagem_original=interaction.message,
-            transferencia_confirmada=True,
+            transferencia_confirmada=True,  # ← TRANSFERÊNCIA DESABILITADO
             valor_total=self.valor_total,
             pt=self.pt,
             sub=self.sub,
@@ -6441,6 +6460,7 @@ class CalculadoraView(discord.ui.View):
         await interaction.response.send_modal(VendaModal())
 
     @discord.ui.button(label="🔄 Atualizar Estoque", style=discord.ButtonStyle.secondary, custom_id="calc_atualizar_estoque", emoji="🔄")
+    
     async def atualizar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_vendas()
@@ -6712,9 +6732,15 @@ async def atualizar_estoque(tipo, quantidade, operacao="adicionar"):
     try:
         async with pool.acquire() as conn:
             if operacao == "adicionar":
-                await conn.execute("UPDATE estoque_municoes SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE tipo = $2", quantidade, tipo)
+                await conn.execute(
+                    "UPDATE estoque_municoes SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE tipo = $2",
+                    quantidade, tipo
+                )
             else:
-                await conn.execute("UPDATE estoque_municoes SET quantidade = quantidade - $1, ultima_atualizacao = NOW() WHERE tipo = $2 AND quantidade >= $1", quantidade, tipo)
+                await conn.execute(
+                    "UPDATE estoque_municoes SET quantidade = quantidade - $1, ultima_atualizacao = NOW() WHERE tipo = $2 AND quantidade >= $1",
+                    quantidade, tipo
+                )
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar estoque: {e}")
 
