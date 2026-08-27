@@ -48,6 +48,11 @@ from zoneinfo import ZoneInfo
 from functools import wraps
 from collections import defaultdict
 
+
+# =========================================================
+# IMAGEM DO VDRZINHO (TIGRE)
+# =========================================================
+TIGRE_IMAGE_URL = "https://media.discordapp.net/attachments/1009160488015384587/1542148964415963238/00NXEiFT7gshlT856mZdY1_1787746949961_na1fn_L2hvbWUvdWJ1bnR1L3RpZ3JlX2ZhbnRhc21hX2Rhc19zb21icmFz.png?ex=6a902da4&is=6a8edc24&hm=8f689963e26f5a672d7cc9e30f57e0a5af9db9f02b08baa51533e53674453839&=&format=webp&quality=lossless&width=1024&height=1024"
 # =========================================================
 # ==================== VDRZINHO - IA MASCOTE ==============
 # =========================================================
@@ -64,101 +69,102 @@ class VDRzinhoIA:
     - Fala em primeira pessoa
     - Aprende com as ações dos usuários
     - Tem personalidade única
+    - Fala de forma natural e engraçada
     """
     
     def __init__(self):
         self.nome = "VDRzinho"
-        self.versao = "1.0"
+        self.versao = "2.0"
         
         # =========================================================
-        # MEMÓRIA DO VDRZINHO (O QUE ELE APRENDE)
+        # MEMÓRIA DO VDRZINHO
         # =========================================================
         self.memoria = {
-            "usuario": {},  # {user_id: {"metas": 0, "vendas": 0, "erros": 0, "ultima_acao": ""}}
-            "cache": {}     # {user_id: {"ultimas_acoes": [], "humor": "feliz"}}
+            "usuario": {},
+            "cache": {}
         }
         
         # =========================================================
-        # FRASES DO VDRZINHO (PRIMEIRA PESSOA)
+        # FRASES DO VDRZINHO (COM PERSONALIDADE)
         # =========================================================
         self.frases = {
             "meta_concluida": [
-                "🎯 **EU VI QUE VOCÊ BATEU A META!** HEHE, você é fera demais! 🐯",
-                "🎯 **EU TÔ ORGULHOSO!** Você arrasou na meta! Continua assim! 🐯",
-                "🎯 **EU APRENDI ALGO:** Você é um monstro das metas! HEHE! 🐯",
-                "🎯 **EU VI VOCÊ CHEGANDO LÁ!** Meta batida com estilo! 🐯"
+                "🎯 **UHUUL!** {nome} bateu a meta! HEHE, tá voando baixo! 🐯",
+                "🎯 **CARALHO, {nome}!** Meta batida com estilo! Tô orgulhoso! 🐯",
+                "🎯 **OLHA SÓ!** {nome} é fera demais! Mais uma meta no bolso! 🐯",
+                "🎯 **{nome}** acabou de destruir a meta! HEHE, continuar assim! 🐯"
             ],
             "venda_feita": [
-                "💰 **EU VI A VENDA!** Dinheiro no bolso, hein? Tô orgulhoso! 🐯",
-                "💰 **EU APRENDI:** Você vende bem! HEHE, continua! 🐯",
-                "💰 **EU TÔ FELIZ!** Mais uma venda registrada! Você é fera! 🐯",
-                "💰 **EU VI VOCÊ NEGOCIANDO!** Isso é um talento! 🐯"
+                "💰 **OLHA O DINHEIRO!** {nome} fez uma venda! HEHE, tá rico! 🐯",
+                "💰 **CARAMBA, {nome}!** Mais uma venda! O tigre tá feliz! 🐯",
+                "💰 **{nome}** é um monstro das vendas! HEHE, continua! 🐯",
+                "💰 **VENDAS!** {nome} arrasou! Dinheiro entrando! 🐯"
             ],
             "erro_aconteceu": [
-                "AFF... **EU ACHO QUE VOCÊ ERROU.** Tenta de novo, guerreiro. 🐯",
-                "😅 **EU VI O ERRO.** Acontece com os melhores! Tenta outra vez. 🐯",
-                "🤔 **EU APRENDI:** Você errou {vezes} vezes. Bora melhorar! 🐯",
-                "🙄 **EU VI ISSO ACONTECENDO.** Relaxa, eu ajudo você a corrigir. 🐯"
+                "AFF... {nome}, isso não foi legal. Tenta de novo, guerreiro! 🐯",
+                "😅 **{nome}**, acho que você errou. Acontece com os melhores! 🐯",
+                "🤔 **{nome}**, bora com calma! Tenta mais uma vez. 🐯"
             ],
             "ausencia_registrada": [
-                "📋 **EU VI QUE VOCÊ ESTÁ DE FOLGA.** Descansa aí, eu cuido do resto. 🐯",
-                "📋 **EU APRENDI:** Você tá de folga! HEHE, aproveita! 🐯",
-                "📋 **EU VI O AVISO.** Tá liberado, guerreiro! Volta quando quiser. 🐯"
+                "📋 **{nome}** tá de folga! HEHE, descansa aí, guerreiro! 🐯",
+                "📋 **{nome}** pediu ausência! Vou segurar as pontas aqui! 🐯",
+                "📋 **OLHA!** {nome} vai dar um tempo. Volta logo! 🐯"
             ],
             "acao_feita": [
-                "⚔️ **EU VI A AÇÃO DE VOCÊS!** Vocês são uns monstros! 🐯",
-                "⚔️ **EU TÔ ANIMADO!** Vocês arrasaram na ação! 🐯",
-                "⚔️ **EU APRENDI:** Vocês são guerreiros de verdade! 🐯"
+                "⚔️ **AÇÃO NA VEIA!** {nome} participou! Vocês são uns loucos! 🐯",
+                "⚔️ **{nome}** na ação! HEHE, bora pra cima! 🐯",
+                "⚔️ **CARALHO!** {nome} tá na ação! Isso é guerra! 🐯"
             ],
             "reset_feito": [
-                "♻️ **EU RESETEI TUDO!** Nova semana, nova caçada. 🐯",
-                "♻️ **EU LIMPEI O SISTEMA.** Tudo novo de novo! HEHE! 🐯",
-                "♻️ **EU VI O RESET.** Agora é começar do zero! 🐯"
+                "♻️ **RESETEI TUDO!** Nova semana, nova caçada! HEHE! 🐯",
+                "♻️ **TUDO LIMPO!** {nome} mandou resetar! Bora começar de novo! 🐯"
             ],
             "bot_iniciando": [
-                "🐯 **EU ESTOU ONLINE!** Quem precisa de ajuda hoje? 🐯",
-                "🐯 **EU ACORDEI!** HEHE, tô pronto pra ajudar! 🐯",
-                "🐯 **EU VOLTEI!** Saudades de vocês! Bora trabalhar! 🐯"
+                "🐯 **VDRZINHO ONLINE!** Quem precisa de ajuda hoje? HEHE! 🐯",
+                "🐯 **ACORDEI!** HEHE, tô pronto pra caçar! 🐯",
+                "🐯 **VOLTEI!** Saudades de vocês! Bora trabalhar! 🐯"
             ],
             "novo_membro": [
-                "📋 **EU VI UM NOVO MEMBRO!** Mais um pra família! HEHE! 🐯",
-                "📋 **EU APRENDI:** Tem gente nova na VDR! Bora receber bem! 🐯",
-                "📋 **EU TÔ FELIZ!** A família está crescendo! 🐯"
+                "📋 **OLHA SÓ!** {nome} entrou na família! HEHE, bem-vindo! 🐯",
+                "📋 **{nome}** é novo por aqui! HEHE, bora se divertir! 🐯"
             ],
             "lavagem_feita": [
-                "🧼 **EU VI A LAVAGEM!** Dinheiro limpinho, hein! HEHE! 🐯",
-                "🧼 **EU APRENDI:** Você lava bem! Tá profissional! 🐯",
-                "🧼 **EU TÔ ORGULHOSO!** Mais dinheiro na conta! 🐯"
+                "🧼 **LAVAGEM FEITA!** {nome} lavou uma grana! HEHE, tá limpinho! 🐯",
+                "🧼 **OLHA SÓ!** {nome} lavou dinheiro! O tigre aprova! 🐯"
             ],
             "live_iniciada": [
-                "🎥 **EU VI QUE A LIVE COMEÇOU!** Vou assistir! HEHE! 🐯",
-                "🎥 **EU APRENDI:** Tem live rolando! Bora dar suporte! 🐯",
-                "🎥 **EU TÔ ANIMADO!** Live é vida! 🐯"
+                "🎥 **LIVE COMEÇANDO!** {nome} tá ao vivo! Bora dar moral! 🐯",
+                "🎥 **{nome}** ligou a live! HEHE, vou assistir! 🐯"
             ],
-            "bau_atualizado": [
-                "📦 **EU VI O BAÚ!** Item guardado com carinho! HEHE! 🐯",
-                "📦 **EU APRENDI:** Você usou o baú! Tô vendo tudo! 🐯",
-                "📦 **EU TÔ FELIZ!** Estoque organizado! 🐯"
+            "bau_entrada": [
+                "📦 **OLHA SÓ!** {nome} colocou **{qtd} {item}** no baú! HEHE, tá organizando! 🐯",
+                "📦 **{nome}** guardou **{qtd} {item}**! O baú tá ficando cheio! 🐯",
+                "📦 **CARAMBA!** {nome} colocou **{qtd} {item}**! HEHE, que bonito! 🐯",
+                "📦 **{nome}** é organizado! Guardou **{qtd} {item}** no baú! 🐯"
+            ],
+            "bau_saida": [
+                "📤 **{nome}** pegou **{qtd} {item}** do baú! HEHE, precisa pra ação! 🐯",
+                "📤 **OLHA SÓ!** {nome} tirou **{qtd} {item}**! Tá se preparando! 🐯",
+                "📤 **{nome}** pegou **{qtd} {item}**! HEHE, bora pra guerra! 🐯",
+                "📤 **CARAMBA!** {nome} retirou **{qtd} {item}** do baú! 🐯"
+            ],
+            "arma_entrada": [
+                "🔫 **{nome}** guardou **{qtd} {item}** no arsenal! HEHE, tá armado! 🐯",
+                "🔫 **OLHA SÓ!** {nome} colocou **{qtd} {item}**! O arsenal tá forte! 🐯",
+                "🔫 **{nome}** adicionou **{qtd} {item}**! HEHE, guerra é logo ali! 🐯"
+            ],
+            "arma_saida": [
+                "🔫 **{nome}** pegou **{qtd} {item}** do arsenal! HEHE, vai pra ação! 🐯",
+                "🔫 **OLHA SÓ!** {nome} tirou **{qtd} {item}**! Tá preparado! 🐯",
+                "🔫 **{nome}** retirou **{qtd} {item}**! HEHE, bora pro abate! 🐯"
             ],
             "agradecimento": [
-                "🐯 **EU AGRADEÇO, PATRÃO!** HEHE, você é o melhor! 🐯",
-                "🐯 **EU TÔ FELIZ POR AJUDAR!** Sempre que precisar, eu tô aqui! 🐯",
-                "🐯 **EU APRENDI:** Você é um bom parceiro! 🐯"
+                "🐯 **DE NADA, {nome}!** HEHE, tô aqui pra ajudar! 🐯",
+                "🐯 **{nome}**, você é o melhor! HEHE, foi um prazer! 🐯"
             ],
             "alerta": [
-                "⚠️ **EU SINTI ALGO ERRADO...** Presta atenção aí! 🐯",
-                "⚠️ **EU VI UMA IRREGULARIDADE.** Bora resolver isso! 🐯",
-                "⚠️ **EU APRENDI:** Isso não é normal! Vou ficar de olho. 🐯"
-            ],
-            "cumprimento": [
-                "🐯 **EI, {nome}!** Como você tá? HEHE! 🐯",
-                "🐯 **OLÁ, {nome}!** Eu tava esperando você! 🐯",
-                "🐯 **FALA, {nome}!** Bora trabalhar! 🐯"
-            ],
-            "despedida": [
-                "🐯 **TCHAU, {nome}!** Volta sempre! HEHE! 🐯",
-                "🐯 **ATÉ LOGO, {nome}!** Cuide-se! 🐯",
-                "🐯 **SAUDADES JÁ, {nome}!** Volta rápido! 🐯"
+                "⚠️ **{nome}**, presta atenção! Isso não parece certo! 🐯",
+                "⚠️ **OLHA SÓ!** {nome}, tem algo errado aí! 🐯"
             ]
         }
 
@@ -166,37 +172,21 @@ class VDRzinhoIA:
     # FUNÇÃO PRINCIPAL: VDRZINHO FALA
     # =========================================================
     def falar(self, tipo, user_id=None, nome="", dados=None):
-        """
-        VDRzinho fala algo
-        tipo: meta_concluida, venda_feita, erro_aconteceu, etc
-        user_id: ID do usuário (para aprender)
-        nome: Nome do usuário
-        dados: Dados adicionais (valor, quantidade, etc)
-        """
-        # Aprender com a ação
         if user_id:
             self.aprender(user_id, tipo, dados)
         
-        # Escolher uma frase aleatória
-        frases = self.frases.get(tipo, ["🐯 **EU TÔ AQUI!** HEHE! 🐯"])
+        frases = self.frases.get(tipo, ["🐯 **VDRZINHO AQUI!** HEHE! 🐯"])
         frase = random.choice(frases)
         
         # Substituir placeholders
         if "{nome}" in frase and nome:
             frase = frase.replace("{nome}", nome)
-        if "{vezes}" in frase and user_id:
-            erro_count = self.memoria["usuario"].get(user_id, {}).get("erros", 0)
-            frase = frase.replace("{vezes}", str(erro_count))
         
-        # Adicionar dados se fornecidos
-        if dados and user_id:
-            # Mostrar aprendizado se tiver dados
-            meta_count = self.memoria["usuario"].get(user_id, {}).get("metas", 0)
-            if meta_count > 0 and "meta" in tipo:
-                frase += f"\n\n🧠 **EU APRENDI:** Essa é a sua {self._numero_extenso(meta_count)}ª meta batida!"
-            venda_count = self.memoria["usuario"].get(user_id, {}).get("vendas", 0)
-            if venda_count > 0 and "venda" in tipo:
-                frase += f"\n\n🧠 **EU APRENDI:** Você já fez {venda_count} vendas! Você é fera!"
+        if dados:
+            if "{qtd}" in frase and "qtd" in dados:
+                frase = frase.replace("{qtd}", str(dados["qtd"]))
+            if "{item}" in frase and "item" in dados:
+                frase = frase.replace("{item}", dados["item"])
         
         return frase
 
@@ -204,23 +194,13 @@ class VDRzinhoIA:
     # FUNÇÃO PARA APRENDER
     # =========================================================
     def aprender(self, user_id, tipo, dados=None):
-        """
-        VDRzinho aprende com as ações do usuário
-        """
-        # Inicializar usuário na memória
         if user_id not in self.memoria["usuario"]:
             self.memoria["usuario"][user_id] = {
-                "metas": 0,
-                "vendas": 0,
-                "erros": 0,
-                "ausencias": 0,
-                "acoes": 0,
-                "ultima_acao": "",
-                "ultima_data": agora_db(),
+                "metas": 0, "vendas": 0, "erros": 0, "ausencias": 0,
+                "acoes": 0, "ultima_acao": "", "ultima_data": agora_db(),
                 "total_interacoes": 0
             }
         
-        # Atualizar contadores
         if tipo == "meta_concluida":
             self.memoria["usuario"][user_id]["metas"] += 1
         elif tipo == "venda_feita":
@@ -236,27 +216,20 @@ class VDRzinhoIA:
         self.memoria["usuario"][user_id]["ultima_data"] = agora_db()
         self.memoria["usuario"][user_id]["total_interacoes"] += 1
         
-        # Guardar em cache para acesso rápido
         if user_id not in self.memoria["cache"]:
             self.memoria["cache"][user_id] = {"ultimas_acoes": [], "humor": "feliz"}
-        
         self.memoria["cache"][user_id]["ultimas_acoes"].append(tipo)
         if len(self.memoria["cache"][user_id]["ultimas_acoes"]) > 10:
             self.memoria["cache"][user_id]["ultimas_acoes"].pop(0)
 
     # =========================================================
-    # FUNÇÃO PARA CRIAR EMBED COM A RESPOSTA DO VDRZINHO
+    # FUNÇÃO PARA CRIAR EMBED COM A RESPOSTA
     # =========================================================
     def embed_resposta(self, tipo, interaction=None, user_id=None, nome="", dados=None, cor=0xFF6B00):
-        """
-        Cria um embed com a resposta do VDRzinho
-        """
-        # Se não tiver user_id, pegar do interaction
         if not user_id and interaction:
             user_id = interaction.user.id
             nome = interaction.user.display_name
         
-        # Se não tiver nome, tentar buscar
         if not nome and user_id:
             try:
                 user = bot.get_user(int(user_id))
@@ -267,10 +240,8 @@ class VDRzinhoIA:
             except:
                 nome = str(user_id)
         
-        # Gerar a fala
         fala = self.falar(tipo, user_id, nome, dados)
         
-        # Criar embed
         embed = discord.Embed(
             description=fala,
             color=cor,
@@ -282,17 +253,8 @@ class VDRzinhoIA:
             icon_url=bot.user.display_avatar.url if bot.user else None
         )
         
-        # Usar a imagem do tigre
-        embed.set_thumbnail(url="https://media.discordapp.net/attachments/1009160488015384587/1542148964415963238/00NXEiFT7gshlT856mZdY1_1787746949961_na1fn_L2hvbWUvdWJ1bnR1L3RpZ3JlX2ZhbnRhc21hX2Rhc19zb21icmFz.png?ex=6a902da4&is=6a8edc24&hm=8f689963e26f5a672d7cc9e30f57e0a5af9db9f02b08baa51533e53674453839&=&format=webp&quality=lossless&width=1024&height=1024")
+        embed.set_thumbnail(url=TIGRE_IMAGE_URL)
         
-        # Adicionar dados se fornecidos
-        if dados:
-            if "valor" in dados:
-                embed.add_field(name="💰 Valor", value=formatar_dinheiro(dados["valor"]), inline=True)
-            if "meta" in dados:
-                embed.add_field(name="🎯 Meta", value=formatar_dinheiro(dados["meta"]), inline=True)
-        
-        # Adicionar rodapé com estatísticas de aprendizado
         if user_id and user_id in self.memoria["usuario"]:
             stats = self.memoria["usuario"][user_id]
             rodape = f"🧠 {stats['total_interacoes']} interações • {stats['metas']} metas • {stats['vendas']} vendas"
@@ -303,55 +265,45 @@ class VDRzinhoIA:
         return embed
 
     # =========================================================
-    # FUNÇÃO AUXILIAR: NÚMERO POR EXTENSO
+    # FUNÇÃO ESPECIAL PARA BAU (COM DETALHES)
     # =========================================================
-    def _numero_extenso(self, n):
-        """Converte número para extenso (1 → primeira, 2 → segunda)"""
-        extensos = {
-            1: "primeira", 2: "segunda", 3: "terceira",
-            4: "quarta", 5: "quinta", 6: "sexta",
-            7: "sétima", 8: "oitava", 9: "nona", 10: "décima"
-        }
-        return extensos.get(n, f"{n}ª")
-
-    # =========================================================
-    # FUNÇÃO PARA VER ESTATÍSTICAS DE UM USUÁRIO
-    # =========================================================
+    def embed_bau(self, tipo, nome, item, quantidade, interaction=None):
+        """Cria resposta específica para o baú"""
+        dados = {"qtd": quantidade, "item": item}
+        tipo_embed = "bau_entrada" if tipo == "entrou" else "bau_saida"
+        
+        # Se for arma, usa o tipo específico
+        if is_arma(item):
+            tipo_embed = "arma_entrada" if tipo == "entrou" else "arma_saida"
+        
+        return self.embed_resposta(
+            tipo=tipo_embed,
+            interaction=interaction,
+            nome=nome,
+            dados=dados,
+            cor=0xFF6B00
+        )
+    
     def get_stats(self, user_id):
-        """Retorna as estatísticas aprendidas de um usuário"""
         if user_id in self.memoria["usuario"]:
             return self.memoria["usuario"][user_id]
         return None
 
-    # =========================================================
-    # FUNÇÃO PARA RESETAR MEMÓRIA DE UM USUÁRIO
-    # =========================================================
     def resetar_memoria(self, user_id):
-        """Reseta a memória de um usuário"""
         if user_id in self.memoria["usuario"]:
             self.memoria["usuario"][user_id] = {
-                "metas": 0,
-                "vendas": 0,
-                "erros": 0,
-                "ausencias": 0,
-                "acoes": 0,
-                "ultima_acao": "",
-                "ultima_data": agora_db(),
+                "metas": 0, "vendas": 0, "erros": 0, "ausencias": 0,
+                "acoes": 0, "ultima_acao": "", "ultima_data": agora_db(),
                 "total_interacoes": 0
             }
             return True
         return False
 
-    # =========================================================
-    # FUNÇÃO PARA SALVAR MEMÓRIA NO BANCO (OPCIONAL)
-    # =========================================================
     async def salvar_memoria(self):
-        """Salva a memória do VDRzinho no banco de dados"""
         pool = await get_pool()
         if not pool:
             return
         try:
-            # Salvar como JSON na tabela de configurações
             memoria_json = json.dumps(self.memoria["usuario"])
             async with pool.acquire() as conn:
                 await conn.execute("""
@@ -362,11 +314,7 @@ class VDRzinhoIA:
         except Exception as e:
             logger.error(f"❌ Erro ao salvar memória do VDRzinho: {e}")
 
-    # =========================================================
-    # FUNÇÃO PARA CARREGAR MEMÓRIA DO BANCO (OPCIONAL)
-    # =========================================================
     async def carregar_memoria(self):
-        """Carrega a memória do VDRzinho do banco de dados"""
         pool = await get_pool()
         if not pool:
             return
@@ -378,7 +326,6 @@ class VDRzinhoIA:
                     logger.info("🧠 Memória do VDRzinho carregada!")
         except Exception as e:
             logger.error(f"❌ Erro ao carregar memória do VDRzinho: {e}")
-
 
 # =========================================================
 # CRIAR A INSTÂNCIA DO VDRZINHO
@@ -3602,12 +3549,17 @@ class BauModal(discord.ui.Modal):
                 canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
                 if canal_log:
                     # =========================================================
-                    # VDRZINHO - Baú atualizado
+                    # VDRZINHO - BAU COM DETALHES (PEGA O PRIMEIRO ITEM)
                     # =========================================================
-                    await canal_log.send(embed=vdrzinho.embed_resposta(
-                        tipo="bau_atualizado",
-                        interaction=interaction
-                    ))
+                    primeiro_item = list(itens_dict.items())[0] if itens_dict else None
+                    if primeiro_item:
+                        item_nome, qtd = primeiro_item
+                        if self.tipo == "entrou":
+                            embed_vdr = vdrzinho.embed_bau("entrou", nome_membro, item_nome, qtd, interaction)
+                        else:
+                            embed_vdr = vdrzinho.embed_bau("saiu", nome_membro, item_nome, qtd, interaction)
+                        await canal_log.send(embed=embed_vdr)
+                    
                     await canal_log.send(texto_log)
                 await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
         except Exception as e:
@@ -3681,12 +3633,17 @@ class ArmasModal(discord.ui.Modal):
                 canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
                 if canal_log:
                     # =========================================================
-                    # VDRZINHO - Baú atualizado (Armas)
+                    # VDRZINHO - ARMAS COM DETALHES
                     # =========================================================
-                    await canal_log.send(embed=vdrzinho.embed_resposta(
-                        tipo="bau_atualizado",
-                        interaction=interaction
-                    ))
+                    primeiro_item = list(itens_dict.items())[0] if itens_dict else None
+                    if primeiro_item:
+                        item_nome, qtd = primeiro_item
+                        if self.tipo == "entrou":
+                            embed_vdr = vdrzinho.embed_bau("entrou", nome_membro, item_nome, qtd, interaction)
+                        else:
+                            embed_vdr = vdrzinho.embed_bau("saiu", nome_membro, item_nome, qtd, interaction)
+                        await canal_log.send(embed=embed_vdr)
+                    
                     await canal_log.send(texto_log)
                 await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
         except Exception as e:
@@ -5588,17 +5545,21 @@ class StatusView(discord.ui.View):
         self.sub = sub
         self.pedido_numero = pedido_numero
 
-        # Botão PAGO - fica ativo se NÃO foi clicado e NÃO está desabilitado
+        # =========================================================
+        # BOTÃO PAGO - desabilita se já foi clicado ou se transferência confirmada
+        # =========================================================
         self.add_item(discord.ui.Button(
             label="💰 Pago",
             style=discord.ButtonStyle.primary,
             custom_id="status_pago_fixo",
             emoji="💰",
-            disabled=self.pago_ja_clicado or disabled or transferencia_confirmada
+            disabled=self.pago_ja_clicado or disabled or self.transferencia_confirmada
         ))
 
-        # Botão ENTREGUE - desabilita se já foi entregue ou se a venda está finalizada
-        entregue_disabled = self.entrega_ja_entregue or disabled or transferencia_confirmada
+        # =========================================================
+        # BOTÃO ENTREGUE - desabilita se transferência confirmada (nunca desabilita por PAGO)
+        # =========================================================
+        entregue_disabled = disabled or self.transferencia_confirmada
         self.add_item(discord.ui.Button(
             label="✅ Entregue",
             style=discord.ButtonStyle.success,
@@ -5607,33 +5568,42 @@ class StatusView(discord.ui.View):
             disabled=entregue_disabled
         ))
 
+        # =========================================================
+        # BOTÃO EDITAR
+        # =========================================================
         self.add_item(discord.ui.Button(
             label="✏️ Editar Venda",
             style=discord.ButtonStyle.primary,
             custom_id="editar_venda_fixo",
             emoji="✏️",
-            disabled=disabled or transferencia_confirmada
+            disabled=disabled or self.transferencia_confirmada
         ))
 
+        # =========================================================
+        # BOTÃO CANCELAR
+        # =========================================================
         self.add_item(discord.ui.Button(
             label="❌ Pedido cancelado",
             style=discord.ButtonStyle.danger,
             custom_id="status_cancelado_fixo",
             emoji="❌",
-            disabled=disabled or transferencia_confirmada
+            disabled=disabled or self.transferencia_confirmada
         ))
 
-        # Botão TRANSFERÊNCIA - fica ativo mesmo depois de PAGO, só desabilita após clicar
+        # =========================================================
+        # BOTÃO TRANSFERÊNCIA - SÓ DESABILITA SE JÁ FOI CONFIRMADA
+        # =========================================================
         self.add_item(discord.ui.Button(
             label="📤 Confirmar Transferência",
             style=discord.ButtonStyle.success,
             custom_id="confirmar_transferencia_fixo",
             emoji="📤",
-            disabled=disabled or transferencia_confirmada,
+            disabled=disabled or self.transferencia_confirmada,  # ← SÓ DESABILITA NA TRANSFERÊNCIA
             row=1
         ))
 
-        if disabled or transferencia_confirmada:
+        # Se a venda já foi finalizada ou transferência confirmada, desabilita tudo
+        if disabled or self.transferencia_confirmada:
             for item in self.children:
                 item.disabled = True
 
@@ -5722,7 +5692,6 @@ class StatusView(discord.ui.View):
             return False
 
         return True
-
     # =========================================================
     # GET STATUS
     # =========================================================
