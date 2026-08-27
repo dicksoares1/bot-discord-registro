@@ -5366,7 +5366,9 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
             embed = self.mensagem_original.embeds[0]
             embed.color = 0x2ecc71
 
-            # Atualizar status com o nome da pessoa
+            # =========================================================
+            # ATUALIZAR STATUS DO PEDIDO
+            # =========================================================
             for i, field in enumerate(embed.fields):
                 if field.name == "📌 STATUS DO PEDIDO":
                     embed.set_field_at(
@@ -5377,13 +5379,23 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                     )
                     break
 
-            # Atualizar título
+            # =========================================================
+            # ATUALIZAR TÍTULO
+            # =========================================================
             if "ENTREGA" in embed.title:
                 embed.title = f"✅ {embed.title} - TRANSFERÊNCIA CONFIRMADA"
             else:
                 embed.title = f"✅ {embed.title} - TRANSFERÊNCIA CONFIRMADA"
 
-            # Desabilitar TODOS os botões
+            # =========================================================
+            # REMOVER O "yaml" DO STATUS
+            # =========================================================
+            # O problema do yaml é que o campo de status está com formatação errada
+            # Vamos garantir que o status seja um texto normal
+
+            # =========================================================
+            # VIEW DESABILITADA (TUDO DESABILITADO)
+            # =========================================================
             view = StatusView(
                 disabled=True,
                 entrega_id=self.entrega_id,
@@ -5391,12 +5403,19 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                 entrega_atual=1,
                 pago_ja_clicado=True,
                 mensagem_original=self.mensagem_original,
-                transferencia_confirmada=True
+                transferencia_confirmada=True,
+                valor_total=self.valor_total,
+                pt=self.pt,
+                sub=self.sub,
+                pedido_numero=self.pedido_numero,
+                entregue_ja_clicado=True
             )
 
             await self.mensagem_original.edit(embed=embed, view=view)
 
-            # Enviar para o canal de logs
+            # =========================================================
+            # LOG NO CANAL DE LOGS
+            # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_LOGS_GERAIS_ID)
             if canal_log:
                 embed_log = discord.Embed(
@@ -5541,13 +5560,13 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
 # 12.5 VIEW DE STATUS (COM BOTÃO DE TRANSFERÊNCIA)
 # =========================================================
 class StatusView(discord.ui.View):
-    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False, valor_total: int = 0, pt: int = 0, sub: int = 0, pedido_numero: int = 0):
+    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False, valor_total: int = 0, pt: int = 0, sub: int = 0, pedido_numero: int = 0, entregue_ja_clicado: bool = False):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
         self.total_entregas = total_entregas
         self.entrega_atual = entrega_atual
-        self.entrega_ja_entregue = False
-        self.pago_ja_clicado = pago_ja_clicado
+        self.entrega_ja_entregue = entregue_ja_clicado  # ← ESTADO DO ENTREGUE
+        self.pago_ja_clicado = pago_ja_clicado  # ← ESTADO DO PAGO
         self.mensagem_original = mensagem_original
         self.entrega_criada = False
         self.transferencia_confirmada = transferencia_confirmada
@@ -5556,27 +5575,31 @@ class StatusView(discord.ui.View):
         self.sub = sub
         self.pedido_numero = pedido_numero
 
-        # Botão PAGO
-        pago_disabled = self.pago_ja_clicado or disabled or self.transferencia_confirmada
+        # =========================================================
+        # BOTÃO PAGO - DESABILITADO SE JÁ FOI CLICADO
+        # =========================================================
         self.add_item(discord.ui.Button(
             label="💰 Pago",
             style=discord.ButtonStyle.primary,
             custom_id="status_pago_fixo",
             emoji="💰",
-            disabled=pago_disabled
+            disabled=self.pago_ja_clicado or disabled or self.transferencia_confirmada
         ))
 
-        # Botão ENTREGUE
-        entregue_disabled = disabled or self.transferencia_confirmada
+        # =========================================================
+        # BOTÃO ENTREGUE - DESABILITADO SE JÁ FOI CLICADO
+        # =========================================================
         self.add_item(discord.ui.Button(
             label="✅ Entregue",
             style=discord.ButtonStyle.success,
             custom_id="status_entregue_fixo",
             emoji="✅",
-            disabled=entregue_disabled
+            disabled=self.entrega_ja_entregue or disabled or self.transferencia_confirmada
         ))
 
-        # Botão EDITAR
+        # =========================================================
+        # BOTÃO EDITAR
+        # =========================================================
         self.add_item(discord.ui.Button(
             label="✏️ Editar Venda",
             style=discord.ButtonStyle.primary,
@@ -5585,7 +5608,9 @@ class StatusView(discord.ui.View):
             disabled=disabled or self.transferencia_confirmada
         ))
 
-        # Botão CANCELAR
+        # =========================================================
+        # BOTÃO CANCELAR
+        # =========================================================
         self.add_item(discord.ui.Button(
             label="❌ Pedido cancelado",
             style=discord.ButtonStyle.danger,
@@ -5594,7 +5619,9 @@ class StatusView(discord.ui.View):
             disabled=disabled or self.transferencia_confirmada
         ))
 
-        # Botão TRANSFERÊNCIA - SÓ DESABILITA SE JÁ FOI CLICADO
+        # =========================================================
+        # BOTÃO TRANSFERÊNCIA - SÓ DESABILITA SE JÁ FOI CLICADO
+        # =========================================================
         self.add_item(discord.ui.Button(
             label="📤 Confirmar Transferência",
             style=discord.ButtonStyle.success,
@@ -5604,18 +5631,13 @@ class StatusView(discord.ui.View):
             row=1
         ))
 
-        # Se a venda já foi finalizada OU transferência confirmada, desabilita tudo
         if disabled or self.transferencia_confirmada:
             for item in self.children:
                 item.disabled = True
 
-    # =========================================================
-    # INTERACTION CHECK
-    # =========================================================
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
 
-        # TRANSFERÊNCIA
         if custom_id == "confirmar_transferencia_fixo":
             if self.transferencia_confirmada:
                 await interaction.response.send_message("⚠️ Esta transferência já foi confirmada!", ephemeral=True)
@@ -5629,10 +5651,7 @@ class StatusView(discord.ui.View):
                     pool = await get_pool()
                     if pool:
                         async with pool.acquire() as conn:
-                            row = await conn.fetchrow(
-                                "SELECT valor FROM vendas WHERE pedido_numero = $1",
-                                self.pedido_numero
-                            )
+                            row = await conn.fetchrow("SELECT valor FROM vendas WHERE pedido_numero = $1", self.pedido_numero)
                             if row:
                                 self.valor_total = row["valor"]
                 except:
@@ -5654,7 +5673,6 @@ class StatusView(discord.ui.View):
             await interaction.response.send_modal(modal)
             return False
 
-        # PAGO
         elif custom_id == "status_pago_fixo":
             if self.pago_ja_clicado:
                 await interaction.response.send_message("⚠️ Este pedido já foi marcado como pago!", ephemeral=True)
@@ -5663,7 +5681,6 @@ class StatusView(discord.ui.View):
             await self.pago(interaction, None)
             return False
 
-        # ENTREGUE
         elif custom_id == "status_entregue_fixo":
             if self.entrega_ja_entregue:
                 await interaction.response.send_message("⚠️ Esta entrega já foi marcada como entregue!", ephemeral=True)
@@ -5672,12 +5689,10 @@ class StatusView(discord.ui.View):
             await self.entregue(interaction, None)
             return False
 
-        # EDITAR VENDA
         elif custom_id == "editar_venda_fixo":
             await self.editar_venda(interaction, None)
             return False
 
-        # CANCELAR
         elif custom_id == "status_cancelado_fixo":
             await interaction.response.defer()
             await self.cancelado(interaction, None)
@@ -5685,18 +5700,12 @@ class StatusView(discord.ui.View):
 
         return True
 
-    # =========================================================
-    # GET STATUS
-    # =========================================================
     def get_status(self, embed):
         for i, field in enumerate(embed.fields):
             if field.name == "📌 Status" or field.name == "📌 STATUS DO PEDIDO":
                 return i, field.value.split("\n")
         return None, ["📦 A entregar"]
 
-    # =========================================================
-    # SET STATUS
-    # =========================================================
     def set_status(self, embed, idx, linhas):
         if not linhas:
             linhas = ["📦 A entregar"]
@@ -5734,9 +5743,6 @@ class StatusView(discord.ui.View):
     def entrega_ja_foi_entregue(self, linhas):
         return any(l.startswith("✅") for l in linhas)
 
-    # =========================================================
-    # PAGO
-    # =========================================================
     async def pago(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
@@ -5776,7 +5782,7 @@ class StatusView(discord.ui.View):
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
 
             await interaction.message.edit(embed=embed, view=StatusView(
-                disabled=False,
+                disabled=True,
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
                 entrega_atual=self.entrega_atual,
@@ -5786,7 +5792,8 @@ class StatusView(discord.ui.View):
                 valor_total=self.valor_total,
                 pt=self.pt,
                 sub=self.sub,
-                pedido_numero=self.pedido_numero
+                pedido_numero=self.pedido_numero,
+                entregue_ja_clicado=True
             ))
 
             await interaction.followup.send("✅ **Venda concluída com sucesso!**", ephemeral=True)
@@ -5798,30 +5805,23 @@ class StatusView(discord.ui.View):
             await enviar_painel_fabricacao()
             return
 
-        nova_view = StatusView(
+        await interaction.message.edit(embed=embed, view=StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
-            pago_ja_clicado=True,
+            pago_ja_clicado=True,  # ← PAGO DESABILITADO
             mensagem_original=interaction.message,
             transferencia_confirmada=False,
             valor_total=self.valor_total,
             pt=self.pt,
             sub=self.sub,
-            pedido_numero=self.pedido_numero
-        )
+            pedido_numero=self.pedido_numero,
+            entregue_ja_clicado=self.entrega_ja_entregue  # ← MANTÉM ESTADO DO ENTREGUE
+        ))
 
-        for child in nova_view.children:
-            if child.custom_id == "status_entregue_fixo":
-                child.disabled = True
-
-        await interaction.message.edit(embed=embed, view=nova_view)
         await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
 
-    # =========================================================
-    # ENTREGUE
-    # =========================================================
     async def entregue(self, interaction: discord.Interaction, button):
         if self.entrega_ja_entregue:
             await interaction.followup.send("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
@@ -5898,7 +5898,7 @@ class StatusView(discord.ui.View):
         embed = self.set_status(embed, idx, linhas)
 
         # =========================================================
-        # ENVIA PARA O BAÚ DE PRODUÇÃO (SEMPRE QUE ENTREGUE FOR CLICADO)
+        # ENVIA PARA O BAÚ DE PRODUÇÃO
         # =========================================================
         if pacotes_pt > 0 or pacotes_sub > 0:
             canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
@@ -5948,17 +5948,18 @@ class StatusView(discord.ui.View):
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
 
             await interaction.message.edit(embed=embed, view=StatusView(
-                disabled=False,
+                disabled=True,
                 entrega_id=self.entrega_id,
                 total_entregas=self.total_entregas,
                 entrega_atual=self.entrega_atual,
-                pago_ja_clicado=self.pago_ja_clicado,
+                pago_ja_clicado=True,
                 mensagem_original=interaction.message,
                 transferencia_confirmada=False,
                 valor_total=self.valor_total,
                 pt=self.pt,
                 sub=self.sub,
-                pedido_numero=self.pedido_numero
+                pedido_numero=self.pedido_numero,
+                entregue_ja_clicado=True
             ))
 
             await interaction.followup.send("✅ **Venda concluída com sucesso!**", ephemeral=True)
@@ -5970,33 +5971,26 @@ class StatusView(discord.ui.View):
             await enviar_painel_fabricacao()
             return
 
-        nova_view = StatusView(
+        await interaction.message.edit(embed=embed, view=StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
-            pago_ja_clicado=self.pago_ja_clicado,
+            pago_ja_clicado=self.pago_ja_clicado,  # ← MANTÉM ESTADO DO PAGO
             mensagem_original=interaction.message,
             transferencia_confirmada=False,
             valor_total=self.valor_total,
             pt=self.pt,
             sub=self.sub,
-            pedido_numero=self.pedido_numero
-        )
+            pedido_numero=self.pedido_numero,
+            entregue_ja_clicado=True  # ← ENTREGUE DESABILITADO
+        ))
 
-        for child in nova_view.children:
-            if child.custom_id == "status_entregue_fixo":
-                child.disabled = True
-
-        await interaction.message.edit(embed=embed, view=nova_view)
         await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
-    # =========================================================
-    # EDITAR VENDA
-    # =========================================================
     async def editar_venda(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         dados = self.extrair_dados_venda(embed)
@@ -6007,9 +6001,6 @@ class StatusView(discord.ui.View):
         modal.observacao.default = dados["observacoes"]
         await interaction.response.send_modal(modal)
 
-    # =========================================================
-    # CANCELAR
-    # =========================================================
     async def cancelado(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
@@ -6038,18 +6029,18 @@ class StatusView(discord.ui.View):
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
 
         status_anterior = ""
-        if self.entrega_ja_foi_entregue(linhas) or self.pedido_pago(linhas):
+        if self.entrega_ja_entregue or self.pedido_pago(linhas):
             if pacotes_pt > 0:
                 await atualizar_estoque("PT", pacotes_pt, "adicionar")
                 logger.info(f"🔄 Estoque PT reabastecido: +{pacotes_pt} pacotes (Pedido #{pedido_numero})")
             if pacotes_sub > 0:
                 await atualizar_estoque("SUB", pacotes_sub, "adicionar")
                 logger.info(f"🔄 Estoque SUB reabastecido: +{pacotes_sub} pacotes (Pedido #{pedido_numero})")
-            if self.entrega_ja_foi_entregue(linhas) and self.pedido_pago(linhas):
+            if self.entrega_ja_entregue and self.pedido_pago(linhas):
                 status_anterior = "Pago e Entregue"
             elif self.pedido_pago(linhas):
                 status_anterior = "Pago"
-            elif self.entrega_ja_foi_entregue(linhas):
+            elif self.entrega_ja_entregue:
                 status_anterior = "Entregue"
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
@@ -6085,13 +6076,14 @@ class StatusView(discord.ui.View):
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
-            pago_ja_clicado=self.pago_ja_clicado,
+            pago_ja_clicado=True,
             mensagem_original=interaction.message,
             transferencia_confirmada=True,
             valor_total=self.valor_total,
             pt=self.pt,
             sub=self.sub,
-            pedido_numero=self.pedido_numero
+            pedido_numero=self.pedido_numero,
+            entregue_ja_clicado=True
         ))
 
         if self.entrega_id:
@@ -6100,9 +6092,6 @@ class StatusView(discord.ui.View):
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
-    # =========================================================
-    # EXTRAIR DADOS DA VENDA
-    # =========================================================
     def extrair_dados_venda(self, embed):
         dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "", "observacoes": ""}
         for field in embed.fields:
@@ -6124,9 +6113,6 @@ class StatusView(discord.ui.View):
                 dados["observacoes"] = field.value.strip()
         return dados
 
-    # =========================================================
-    # CRIAR PRÓXIMA ENTREGA
-    # =========================================================
     async def criar_proxima_entrega(self, interaction: discord.Interaction, embed_anterior, pedido_original):
         try:
             if not self.entrega_id:
