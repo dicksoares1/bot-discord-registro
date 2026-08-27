@@ -5351,7 +5351,7 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
         self.mensagem_original = mensagem_original
         self.entrega_id = entrega_id
         self.pedido_numero = pedido_numero
-        self.valor = valor
+        self.valor_total = valor  # ← CORRIGIDO: agora é self.valor_total
         self.pt = pt
         self.sub = sub
 
@@ -5374,7 +5374,7 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                     embed.set_field_at(
                         i,
                         name="📌 STATUS DO PEDIDO",
-                        value=f"✅ **TRANSFERÊNCIA CONFIRMADA**\n📤 **Transferido para:** {transferido_para}\n👤 **Confirmado por:** {interaction.user.display_name}\n💰 **Valor:** {formatar_dinheiro(self.valor)}\n📅 **Data:** {agora().strftime('%d/%m/%Y %H:%M')}",
+                        value=f"✅ **TRANSFERÊNCIA CONFIRMADA**\n📤 **Transferido para:** {transferido_para}\n👤 **Confirmado por:** {interaction.user.display_name}\n💰 **Valor:** {formatar_dinheiro(self.valor_total)}\n📅 **Data:** {agora().strftime('%d/%m/%Y %H:%M')}",
                         inline=False
                     )
                     break
@@ -5386,12 +5386,6 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                 embed.title = f"✅ {embed.title} - TRANSFERÊNCIA CONFIRMADA"
             else:
                 embed.title = f"✅ {embed.title} - TRANSFERÊNCIA CONFIRMADA"
-
-            # =========================================================
-            # REMOVER O "yaml" DO STATUS
-            # =========================================================
-            # O problema do yaml é que o campo de status está com formatação errada
-            # Vamos garantir que o status seja um texto normal
 
             # =========================================================
             # VIEW DESABILITADA (TUDO DESABILITADO)
@@ -5426,7 +5420,7 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                 )
                 embed_log.add_field(name="👤 Confirmado por", value=interaction.user.mention, inline=True)
                 embed_log.add_field(name="📤 Transferido para", value=transferido_para, inline=True)
-                embed_log.add_field(name="💰 Valor", value=formatar_dinheiro(self.valor), inline=True)
+                embed_log.add_field(name="💰 Valor", value=formatar_dinheiro(self.valor_total), inline=True)
                 embed_log.add_field(name="🔫 PT", value=f"{fmt_num(self.pt)} munições", inline=True)
                 embed_log.add_field(name="🔫 SUB", value=f"{fmt_num(self.sub)} munições", inline=True)
                 embed_log.set_footer(text=f"Transferência confirmada em {agora().strftime('%d/%m/%Y %H:%M')}")
@@ -5436,7 +5430,7 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                 f"✅ **Transferência confirmada com sucesso!**\n"
                 f"📤 Transferido para: **{transferido_para}**\n"
                 f"👤 Confirmado por: **{interaction.user.display_name}**\n"
-                f"💰 Valor: {formatar_dinheiro(self.valor)}\n"
+                f"💰 Valor: {formatar_dinheiro(self.valor_total)}\n"
                 f"📦 Pedido #{self.pedido_numero:04d}",
                 ephemeral=True
             )
@@ -5444,7 +5438,7 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
         except Exception as e:
             logger.error(f"❌ Erro ao confirmar transferência: {e}")
             await interaction.followup.send(f"❌ **Erro ao confirmar transferência:** {str(e)[:100]}", ephemeral=True)
-
+            
 # =========================================================
 # 12.4 FUNÇÃO DE CRIAR EMBED DE ENTREGA (COM BOTÃO DE TRANSFERÊNCIA)
 # =========================================================
