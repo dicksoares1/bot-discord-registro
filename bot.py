@@ -5351,7 +5351,7 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
         self.mensagem_original = mensagem_original
         self.entrega_id = entrega_id
         self.pedido_numero = pedido_numero
-        self.valor_total = valor  # ← CORRIGIDO: agora é self.valor_total
+        self.valor_total = valor
         self.pt = pt
         self.sub = sub
 
@@ -5386,6 +5386,31 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                 embed.title = f"✅ {embed.title} - TRANSFERÊNCIA CONFIRMADA"
             else:
                 embed.title = f"✅ {embed.title} - TRANSFERÊNCIA CONFIRMADA"
+
+            # =========================================================
+            # REMOVER CAMPOS ANTIGOS DE "VENDA FINALIZADA" E ADICIONAR TRANSFERÊNCIA
+            # =========================================================
+            indices_remover = []
+            for i, field in enumerate(embed.fields):
+                if field.name == "✅ VENDA FINALIZADA COM SUCESSO":
+                    indices_remover.append(i)
+                if field.name == "━━━━━━━━━━━━━━━━━━━━━━━━━━":
+                    indices_remover.append(i)
+
+            # Remover de trás para frente
+            for i in sorted(indices_remover, reverse=True):
+                embed.remove_field(i)
+
+            # =========================================================
+            # ADICIONAR CAMPOS DA TRANSFERÊNCIA
+            # =========================================================
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+            embed.add_field(
+                name="💰 TRANSFERÊNCIA REALIZADA",
+                value=f"✅ **Pagamento enviado para:** {transferido_para}\n👤 **Confirmado por:** {interaction.user.display_name}\n💵 **Valor:** {formatar_dinheiro(self.valor_total)}",
+                inline=False
+            )
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
 
             # =========================================================
             # VIEW DESABILITADA (TUDO DESABILITADO)
@@ -5771,9 +5796,12 @@ class StatusView(discord.ui.View):
                     break
 
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**", inline=False)
+            embed.add_field(
+                name="💰 TRANSFERÊNCIA REALIZADA",
+                value=f"✅ **Pagamento enviado para:** {transferido_para}\n👤 **Confirmado por:** {interaction.user.display_name}\n💵 **Valor:** {formatar_dinheiro(self.valor_total)}",
+                inline=False
+            )
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
-
             # =========================================================
             # VIEW - TRANSFERÊNCIA CONTINUA ATIVO (transferencia_confirmada=False)
             # =========================================================
