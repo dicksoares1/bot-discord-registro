@@ -1003,6 +1003,29 @@ async def inicializar_tabelas(pool):
                 data_atualizacao TIMESTAMP DEFAULT NOW()
             )
         """)
+        
+        # =========================================================
+        # SISTEMA XLSPY - SUSPEITOS E VERIFICAÇÕES
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS suspeitos (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                motivo TEXT,
+                adicionado_por VARCHAR(30),
+                data_adicao TIMESTAMP DEFAULT NOW(),
+                ativo BOOLEAN DEFAULT true
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS verificacoes (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                verificador VARCHAR(30),
+                resultado VARCHAR(20),
+                data_verificacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
 
     logger.info("✅ Todas as tabelas criadas/verificadas com sucesso!")
 
@@ -11618,6 +11641,447 @@ async def cmd_desativar_vendas_concluidas(ctx):
                     logger.error(f"Erro ao desativar {msg.id}: {e}")
     
     await ctx.send(f"✅ **{contador} vendas concluídas desativadas!**")
+
+# =========================================================
+# ==================== SISTEMA XLSPY ======================
+# =========================================================
+# FUNCIONALIDADES:
+# - Monitoramento automático de entrada
+# - Comando !verificar @user
+# - Comando !add_suspeito @user motivo
+# - Comando !remove_suspeito @user
+# - Comando !suspeitos
+# - Comando !logs_verificacao
+# - Botões de ação (Banir, Expulsar, Ignorar)
+# =========================================================
+
+# =========================================================
+# 1. FUNÇÕES DE BANCO DE DADOS
+# =========================================================
+
+async def adicionar_suspeito_db(user_id, motivo, adicionado_por):
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO suspeitos (user_id, motivo, adicionado_por) VALUES ($1, $2, $3)",
+                str(user_id), motivo, str(adicionado_por)
+            )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao adicionar suspeito: {e}")
+        return False
+
+async def remover_suspeito_db(user_id):
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE suspeitos SET ativo = false WHERE user_id = $1 AND ativo = true",
+                str(user_id)
+            )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao remover suspeito: {e}")
+        return False
+
+async def verificar_suspeito_db(user_id):
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM suspeitos WHERE user_id = $1 AND ativo = true",
+                str(user_id)
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao verificar suspeito: {e}")
+        return None
+
+async def listar_suspeitos_db():
+    pool = await get_pool()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT * FROM suspeitos WHERE ativo = true ORDER BY data_adicao DESC"
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao listar suspeitos: {e}")
+        return []
+
+async def registrar_verificacao_db(user_id, verificador, resultado):
+    pool = await get_pool()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO verificacoes (user_id, verificador, resultado) VALUES ($1, $2, $3)",
+                str(user_id), str(verificador), resultado
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao registrar verificação: {e}")
+
+# =========================================================
+# 2. VIEW - AÇÕES PARA SUSPEITOS
+# =========================================================
+
+class AcaoSuspeitoView(discord.ui.View):
+    def __init__(self, user_id, mensagem_original):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.mensagem_original = mensagem_original
+
+    @discord.ui.button(label="🔨 Banir", style=discord.ButtonStyle.danger, emoji="🔨")
+    async def banir(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Apenas administradores podem banir!", ephemeral=True)
+            return
+        
+        member = interaction.guild.get_member(int(self.user_id))
+        if not member:
+            await interaction.response.send_message("❌ Usuário não encontrado!", ephemeral=True)
+            return
+        
+        try:
+            await member.ban(reason="Usuário na lista de suspeitos")
+            await interaction.response.send_message(f"✅ {member.mention} foi banido!", ephemeral=True)
+            await remover_suspeito_db(self.user_id)
+            if self.mensagem_original:
+                embed = self.mensagem_original.embeds[0]
+                embed.color = 0x2ecc71
+                embed.add_field(
+                    name="🔨 AÇÃO REALIZADA",
+                    value=f"✅ **Usuário banido por {interaction.user.mention}**",
+                    inline=False
+                )
+                await self.mensagem_original.edit(embed=embed, view=None)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Erro ao banir: {e}", ephemeral=True)
+
+    @discord.ui.button(label="🚫 Expulsar", style=discord.ButtonStyle.danger, emoji="🚫")
+    async def expulsar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Apenas administradores podem expulsar!", ephemeral=True)
+            return
+        
+        member = interaction.guild.get_member(int(self.user_id))
+        if not member:
+            await interaction.response.send_message("❌ Usuário não encontrado!", ephemeral=True)
+            return
+        
+        try:
+            await member.kick(reason="Usuário na lista de suspeitos")
+            await interaction.response.send_message(f"✅ {member.mention} foi expulso!", ephemeral=True)
+            await remover_suspeito_db(self.user_id)
+            if self.mensagem_original:
+                embed = self.mensagem_original.embeds[0]
+                embed.color = 0x2ecc71
+                embed.add_field(
+                    name="🚫 AÇÃO REALIZADA",
+                    value=f"✅ **Usuário expulso por {interaction.user.mention}**",
+                    inline=False
+                )
+                await self.mensagem_original.edit(embed=embed, view=None)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Erro ao expulsar: {e}", ephemeral=True)
+
+    @discord.ui.button(label="⏭️ Ignorar", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    async def ignorar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Apenas administradores podem ignorar!", ephemeral=True)
+            return
+        
+        await interaction.response.send_message(f"✅ Usuário ignorado.", ephemeral=True)
+        
+        if self.mensagem_original:
+            embed = self.mensagem_original.embeds[0]
+            embed.add_field(
+                name="⏭️ AÇÃO REALIZADA",
+                value=f"✅ **Usuário ignorado por {interaction.user.mention}** (permanece na lista)",
+                inline=False
+            )
+            await self.mensagem_original.edit(embed=embed, view=None)
+
+# =========================================================
+# 3. COMANDOS
+# =========================================================
+
+@bot.command(name="verificar")
+async def cmd_verificar(ctx, member: discord.Member = None):
+    """Verifica se um usuário está na lista de suspeitos"""
+    if not member:
+        member = ctx.author
+    
+    if member.id != ctx.author.id:
+        if not ctx.author.guild_permissions.administrator:
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in ctx.author.roles)
+            if not is_gerente:
+                await ctx.send("❌ Apenas administradores ou gerentes podem verificar outros usuários!")
+                return
+    
+    await ctx.send(f"🔍 Verificando {member.mention}...")
+    
+    suspeito = await verificar_suspeito_db(member.id)
+    
+    embed = discord.Embed(
+        title="🕵️ VERIFICAÇÃO DE SEGURANÇA",
+        description=f"👤 {member.mention}",
+        color=0x2ecc71,
+        timestamp=agora()
+    )
+    
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    if suspeito:
+        embed.color = 0xe74c3c
+        embed.add_field(
+            name="❌ STATUS: SUSPEITO",
+            value=(
+                f"⚠️ **Este usuário está na lista de suspeitos!**\n\n"
+                f"📋 **Motivo:** {suspeito['motivo']}\n"
+                f"👤 **Adicionado por:** <@{suspeito['adicionado_por']}>\n"
+                f"📅 **Data:** {suspeito['data_adicao'].strftime('%d/%m/%Y %H:%M')}"
+            ),
+            inline=False
+        )
+        
+        if ctx.author.guild_permissions.administrator:
+            view = AcaoSuspeitoView(member.id, ctx.message)
+            embed.add_field(
+                name="🛡️ AÇÕES DISPONÍVEIS",
+                value="Clique nos botões abaixo para tomar uma ação:",
+                inline=False
+            )
+            await ctx.send(embed=embed, view=view)
+        else:
+            await ctx.send(embed=embed)
+    else:
+        embed.add_field(
+            name="✅ STATUS: VERIFICADO",
+            value="✅ **Usuário verificado - Sem restrições**",
+            inline=False
+        )
+        await ctx.send(embed=embed)
+    
+    resultado = "suspeito" if suspeito else "limpo"
+    await registrar_verificacao_db(member.id, ctx.author.id, resultado)
+
+@bot.command(name="add_suspeito")
+@commands.has_permissions(administrator=True)
+async def cmd_add_suspeito(ctx, member: discord.Member, *, motivo="Suspeito de atividades ilegais"):
+    """Adiciona um usuário à lista de suspeitos (APENAS ADM)"""
+    
+    suspeito = await verificar_suspeito_db(member.id)
+    if suspeito:
+        await ctx.send(f"⚠️ {member.mention} já está na lista de suspeitos!")
+        return
+    
+    sucesso = await adicionar_suspeito_db(member.id, motivo, ctx.author.id)
+    
+    if sucesso:
+        embed = discord.Embed(
+            title="⚠️ USUÁRIO ADICIONADO À LISTA DE SUSPEITOS",
+            description=f"👤 {member.mention}",
+            color=0xe74c3c,
+            timestamp=agora()
+        )
+        embed.add_field(name="📋 Motivo", value=motivo, inline=False)
+        embed.add_field(name="👤 Adicionado por", value=ctx.author.mention, inline=False)
+        embed.set_footer(text="🛡 Sistema de Segurança VDR")
+        await ctx.send(embed=embed)
+        
+        canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+        if canal_log:
+            await canal_log.send(embed=embed)
+    else:
+        await ctx.send("❌ Erro ao adicionar suspeito!")
+
+@bot.command(name="remove_suspeito")
+@commands.has_permissions(administrator=True)
+async def cmd_remove_suspeito(ctx, member: discord.Member):
+    """Remove um usuário da lista de suspeitos (APENAS ADM)"""
+    
+    suspeito = await verificar_suspeito_db(member.id)
+    if not suspeito:
+        await ctx.send(f"⚠️ {member.mention} não está na lista de suspeitos!")
+        return
+    
+    sucesso = await remover_suspeito_db(member.id)
+    
+    if sucesso:
+        embed = discord.Embed(
+            title="✅ USUÁRIO REMOVIDO DA LISTA DE SUSPEITOS",
+            description=f"👤 {member.mention}",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.add_field(name="👤 Removido por", value=ctx.author.mention, inline=False)
+        embed.set_footer(text="🛡 Sistema de Segurança VDR")
+        await ctx.send(embed=embed)
+        
+        canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+        if canal_log:
+            await canal_log.send(embed=embed)
+    else:
+        await ctx.send("❌ Erro ao remover suspeito!")
+
+@bot.command(name="suspeitos")
+@commands.has_permissions(administrator=True)
+async def cmd_listar_suspeitos(ctx):
+    """Lista todos os suspeitos (APENAS ADM)"""
+    
+    suspeitos = await listar_suspeitos_db()
+    
+    if not suspeitos:
+        await ctx.send("📭 Nenhum suspeito registrado.")
+        return
+    
+    embed = discord.Embed(
+        title="🚨 LISTA DE SUSPEITOS",
+        description=f"Total: {len(suspeitos)}",
+        color=0xe74c3c,
+        timestamp=agora()
+    )
+    
+    for i, s in enumerate(suspeitos[:20]):
+        embed.add_field(
+            name=f"{i+1}. <@{s['user_id']}>",
+            value=f"📋 {s['motivo']}\n👤 Adicionado por: <@{s['adicionado_por']}>\n📅 {s['data_adicao'].strftime('%d/%m/%Y %H:%M')}",
+            inline=False
+        )
+    
+    if len(suspeitos) > 20:
+        embed.set_footer(text=f"Mostrando 20 de {len(suspeitos)} suspeitos")
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="logs_verificacao")
+@commands.has_permissions(administrator=True)
+async def cmd_logs_verificacao(ctx, limite: int = 20):
+    """Mostra o histórico de verificações (APENAS ADM)"""
+    
+    pool = await get_pool()
+    if not pool:
+        await ctx.send("❌ Banco de dados indisponível!")
+        return
+    
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM verificacoes ORDER BY data_verificacao DESC LIMIT $1",
+            limite
+        )
+    
+    if not rows:
+        await ctx.send("📭 Nenhuma verificação registrada.")
+        return
+    
+    embed = discord.Embed(
+        title="📋 HISTÓRICO DE VERIFICAÇÕES",
+        description=f"Últimas {len(rows)} verificações",
+        color=0x3498db,
+        timestamp=agora()
+    )
+    
+    for row in rows:
+        status = "🟢 LIMPO" if row['resultado'] == "limpo" else "🔴 SUSPEITO"
+        embed.add_field(
+            name=f"👤 <@{row['user_id']}>",
+            value=f"📊 {status}\n👤 Verificado por: <@{row['verificador']}>\n📅 {row['data_verificacao'].strftime('%d/%m/%Y %H:%M')}",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+# =========================================================
+# 4. EVENTO ON_MEMBER_JOIN MODIFICADO
+# =========================================================
+
+# NOTA: Se você já tem um on_member_join, substitua ou mescle com este
+# Se não tiver, apenas cole este bloco
+
+@bot.event
+async def on_member_join(member):
+    if member.bot:
+        return
+    
+    # =========================================================
+    # SISTEMA XLSPY - VERIFICAÇÃO AUTOMÁTICA
+    # =========================================================
+    suspeito = await verificar_suspeito_db(member.id)
+    
+    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+    
+    if suspeito:
+        embed = discord.Embed(
+            title="🚨 ALERTA: SUSPEITO ENTROU!",
+            description=f"👤 {member.mention}",
+            color=0xe74c3c,
+            timestamp=agora()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(
+            name="⚠️ STATUS",
+            value="🔴 **Este usuário está na lista de suspeitos!**",
+            inline=False
+        )
+        embed.add_field(
+            name="📋 Motivo",
+            value=suspeito['motivo'],
+            inline=False
+        )
+        embed.add_field(
+            name="👤 Adicionado por",
+            value=f"<@{suspeito['adicionado_por']}>",
+            inline=True
+        )
+        embed.add_field(
+            name="📅 Data",
+            value=suspeito['data_adicao'].strftime('%d/%m/%Y %H:%M'),
+            inline=True
+        )
+        embed.set_footer(text="🛡 Sistema de Segurança VDR")
+        
+        if canal_log:
+            await canal_log.send(embed=embed, view=AcaoSuspeitoView(member.id, None))
+    else:
+        embed = discord.Embed(
+            title="🔍 NOVO MEMBRO - VERIFICADO",
+            description=f"👤 {member.mention} entrou no servidor",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(
+            name="✅ STATUS",
+            value="✅ **Usuário verificado - Sem restrições**",
+            inline=False
+        )
+        embed.set_footer(text="🛡 Sistema de Segurança VDR")
+        
+        if canal_log:
+            await canal_log.send(embed=embed)
+    
+    # =========================================================
+    # SISTEMA DE REGISTRO ORIGINAL
+    # =========================================================
+    try:
+        cargo_em_registro = member.guild.get_role(EM_REGISTRO_ROLE_ID)
+        if cargo_em_registro:
+            await member.add_roles(cargo_em_registro)
+    except Exception as e:
+        logger.error(f"❌ Erro ao adicionar cargo de registro: {e}")
+
+# =========================================================
+# FIM DO SISTEMA XLSPY
+# =========================================================
 
 # =========================================================
 # ==================== PARTE 20: MAIN =====================
