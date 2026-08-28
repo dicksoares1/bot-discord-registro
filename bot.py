@@ -11815,38 +11815,107 @@ class AcaoSuspeitoView(discord.ui.View):
 # =========================================================
 
 @bot.command(name="verificar")
-async def cmd_verificar(ctx, member: discord.Member = None):
-    """Verifica se um usuário está na lista de suspeitos"""
+async def cmd_verificar(ctx, *, alvo: str = None):
+    """Verifica um usuário (por @menção, nome ou ID)"""
     
-    # Se não mencionou ninguém, verifica a si mesmo
-    if not member:
+    member = None
+    user = None
+    user_id = None
+    
+    # =========================================================
+    # 1. SE NÃO PASSOU NADA → VERIFICA A SI MESMO
+    # =========================================================
+    if not alvo:
         member = ctx.author
+        user = ctx.author
+        user_id = ctx.author.id
     
-    # Se mencionou alguém, verifica permissão
-    if member.id != ctx.author.id:
+    # =========================================================
+    # 2. SE PASSOU UM ID (APENAS NÚMEROS)
+    # =========================================================
+    elif alvo.isdigit():
+        user_id = int(alvo)
+        try:
+            user = await bot.fetch_user(user_id)
+        except:
+            await ctx.send(f"❌ Usuário com ID `{alvo}` não encontrado!")
+            return
+        # Verificar se está no servidor
+        member = ctx.guild.get_member(user_id)
+    
+    # =========================================================
+    # 3. SE PASSOU UMA MENÇÃO (@alguem)
+    # =========================================================
+    else:
+        # Tentar converter para membro (se estiver no servidor)
+        try:
+            member = await commands.MemberConverter().convert(ctx, alvo)
+            user = member
+            user_id = member.id
+        except:
+            # Se não for membro, tentar buscar pelo nome
+            try:
+                # Tentar buscar pelo nome no servidor
+                for m in ctx.guild.members:
+                    if alvo.lower() in m.name.lower() or alvo.lower() in m.display_name.lower():
+                        member = m
+                        user = m
+                        user_id = m.id
+                        break
+            except:
+                pass
+            
+            # Se ainda não encontrou, tentar fetch_user pelo nome (não funciona)
+            if not user:
+                await ctx.send(f"❌ Usuário `{alvo}` não encontrado! Use o ID ou @menção.")
+                return
+    
+    # =========================================================
+    # 4. SE ENCONTROU POR ID MAS NÃO ESTÁ NO SERVIDOR
+    # =========================================================
+    if user and not member:
+        # Usuário existe no Discord mas não está no servidor
+        pass
+    
+    if not user:
+        await ctx.send(f"❌ Usuário não encontrado!")
+        return
+    
+    # =========================================================
+    # 5. VERIFICAR PERMISSÃO (se for verificar outro usuário)
+    # =========================================================
+    if str(user_id) != str(ctx.author.id):
         if not ctx.author.guild_permissions.administrator:
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in ctx.author.roles)
             if not is_gerente:
                 await ctx.send("❌ Apenas administradores ou gerentes podem verificar outros usuários!")
                 return
     
-    # Verificar se o membro existe no servidor
-    if not ctx.guild.get_member(member.id):
-        await ctx.send("❌ Usuário não encontrado neste servidor!")
-        return
+    # =========================================================
+    # 6. FAZER A VERIFICAÇÃO
+    # =========================================================
+    await ctx.send(f"🔍 Verificando {user.mention if member else f'**{user.display_name}** (ID: {user_id})'}...")
     
-    await ctx.send(f"🔍 Verificando {member.mention}...")
+    suspeito = await verificar_suspeito_db(user_id)
     
-    suspeito = await verificar_suspeito_db(member.id)
+    # Nome para exibir
+    nome_exibicao = member.display_name if member else user.display_name
     
     embed = discord.Embed(
         title="🕵️ VERIFICAÇÃO DE SEGURANÇA",
-        description=f"👤 {member.mention}",
+        description=f"👤 {nome_exibicao}",
         color=0x2ecc71,
         timestamp=agora()
     )
     
-    embed.set_thumbnail(url=member.display_avatar.url)
+    if member:
+        embed.set_thumbnail(url=member.display_avatar.url)
+    else:
+        embed.set_thumbnail(url=user.display_avatar.url)
+    
+    # Status no servidor
+    status_servidor = "🟢 **Está no servidor**" if member else "🔴 **Não está no servidor**"
+    embed.add_field(name="📌 STATUS NO SERVIDOR", value=status_servidor, inline=False)
     
     if suspeito:
         embed.color = 0xe74c3c
@@ -11861,8 +11930,8 @@ async def cmd_verificar(ctx, member: discord.Member = None):
             inline=False
         )
         
-        if ctx.author.guild_permissions.administrator:
-            view = AcaoSuspeitoView(member.id, ctx.message)
+        if ctx.author.guild_permissions.administrator and member:
+            view = AcaoSuspeitoView(user_id, ctx.message)
             embed.add_field(
                 name="🛡️ AÇÕES DISPONÍVEIS",
                 value="Clique nos botões abaixo para tomar uma ação:",
@@ -11879,8 +11948,9 @@ async def cmd_verificar(ctx, member: discord.Member = None):
         )
         await ctx.send(embed=embed)
     
+    # Registrar verificação
     resultado = "suspeito" if suspeito else "limpo"
-    await registrar_verificacao_db(member.id, ctx.author.id, resultado)
+    await registrar_verificacao_db(user_id, ctx.author.id, resultado)
 
 @bot.command(name="add_suspeito")
 @commands.has_permissions(administrator=True)
