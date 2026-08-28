@@ -11817,15 +11817,23 @@ class AcaoSuspeitoView(discord.ui.View):
 @bot.command(name="verificar")
 async def cmd_verificar(ctx, member: discord.Member = None):
     """Verifica se um usuário está na lista de suspeitos"""
+    
+    # Se não mencionou ninguém, verifica a si mesmo
     if not member:
         member = ctx.author
     
+    # Se mencionou alguém, verifica permissão
     if member.id != ctx.author.id:
         if not ctx.author.guild_permissions.administrator:
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in ctx.author.roles)
             if not is_gerente:
                 await ctx.send("❌ Apenas administradores ou gerentes podem verificar outros usuários!")
                 return
+    
+    # Verificar se o membro existe no servidor
+    if not ctx.guild.get_member(member.id):
+        await ctx.send("❌ Usuário não encontrado neste servidor!")
+        return
     
     await ctx.send(f"🔍 Verificando {member.mention}...")
     
