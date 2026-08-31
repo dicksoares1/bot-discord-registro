@@ -6915,17 +6915,68 @@ class CalculadoraView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calc_registrar_venda")
+    @discord.ui.button(label="📝 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calc_registrar_venda", emoji="📝")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VendaModal())
 
-    @discord.ui.button(label="🔄 Atualizar Estoque", style=discord.ButtonStyle.secondary, custom_id="calc_atualizar_estoque", emoji="🔄")
-    
+    @discord.ui.button(label="🔄 Atualizar Estoque", style=discord.ButtonStyle.secondary, custom_id="calc_atualizar_estoque", emoji="🔄", row=1)
     async def atualizar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_vendas()
         await interaction.followup.send("✅ Estoque atualizado!", ephemeral=True)
 
+    @discord.ui.button(label="📊 Relatório de Vendas", style=discord.ButtonStyle.success, custom_id="calc_relatorio_vendas", emoji="📊", row=1)
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        data_hoje = agora().strftime("%d/%m/%Y")
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+        
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT user_id, SUM(valor) as total, COUNT(*) as quantidade FROM vendas WHERE data = $1 GROUP BY user_id ORDER BY total DESC",
+                data_hoje
+            )
+            total_geral = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE data = $1",
+                data_hoje
+            )
+        
+        if not rows:
+            await interaction.followup.send(f"📭 Nenhuma venda registrada hoje.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="📊 RELATÓRIO DE VENDAS - HOJE",
+            description=f"📅 **Data:** {data_hoje}",
+            color=Cores.VENDA,
+            timestamp=agora()
+        )
+        embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Vendas")
+        
+        texto = ""
+        for i, row in enumerate(rows, 1):
+            user = await pegar_usuario(int(row["user_id"]))
+            nome = user.display_name if user else row["user_id"]
+            texto += f"**{i}.** {nome}\n"
+            texto += f"   💰 Vendas: **{formatar_dinheiro(row['total'])}**\n"
+            texto += f"   📦 Pedidos: **{row['quantidade']}**\n\n"
+        
+        embed.add_field(name="👥 VENDEDORES", value=texto, inline=False)
+        embed.add_field(name="💰 TOTAL GERAL", value=formatar_dinheiro(total_geral), inline=True)
+        embed.add_field(name="📦 TOTAL DE PEDIDOS", value=sum(r["quantidade"] for r in rows), inline=True)
+        embed.set_footer(text="Relatório gerado pelo sistema VDR")
+        
+        await interaction.followup.send(embed=embed, ephemeral=False)
+
+    @discord.ui.button(label="📅 Relatório por Data", style=discord.ButtonStyle.secondary, custom_id="calc_relatorio_vendas_data", emoji="📅", row=2)
+    async def relatorio_data(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = RelatorioVendasModal()
+        await interaction.response.send_modal(modal)
 # =========================================================
 # 12.8 FUNÇÕES DE RESTAURAR VENDAS
 # =========================================================
@@ -7969,9 +8020,145 @@ class PolvoraView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Registrar Compra de Pólvora", style=discord.ButtonStyle.primary, custom_id="polvora_btn")
+    @discord.ui.button(label="📝 Registrar Compra de Pólvora", style=discord.ButtonStyle.primary, custom_id="polvora_btn", emoji="📝")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(PolvoraModal())
+
+    @discord.ui.button(label="💣 Relatório de Pólvora (Hoje)", style=discord.ButtonStyle.success, custom_id="polvora_relatorio_hoje", emoji="💣", row=1)
+    async def relatorio_hoje(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        data_hoje = agora().strftime("%d/%m/%Y")
+        data_inicio = agora().replace(hour=0, minute=0, second=0, microsecond=0)
+        data_fim = agora().replace(hour=23, minute=59, second=59, microsecond=0)
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+        
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT user_id, SUM(quantidade) as total_quantidade, SUM(valor) as total_valor, COUNT(*) as quantidade
+                FROM polvoras 
+                WHERE data::date BETWEEN $1::date AND $2::date
+                GROUP BY user_id 
+                ORDER BY total_quantidade DESC""",
+                data_inicio, data_fim
+            )
+            total_quantidade = await conn.fetchval(
+                "SELECT COALESCE(SUM(quantidade), 0) FROM polvoras WHERE data::date BETWEEN $1::date AND $2::date",
+                data_inicio, data_fim
+            )
+            total_valor = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor), 0) FROM polvoras WHERE data::date BETWEEN $1::date AND $2::date",
+                data_inicio, data_fim
+            )
+        
+        if not rows:
+            await interaction.followup.send(f"📭 Nenhuma compra de pólvora registrada hoje.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="💣 RELATÓRIO DE PÓLVORA - HOJE",
+            description=f"📅 **Data:** {data_hoje}",
+            color=Cores.PRODUCAO,
+            timestamp=agora()
+        )
+        embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Pólvora")
+        
+        texto = ""
+        for i, row in enumerate(rows, 1):
+            user = await pegar_usuario(int(row["user_id"]))
+            nome = user.display_name if user else row["user_id"]
+            texto += f"**{i}.** {nome}\n"
+            texto += f"   💣 Quantidade: **{fmt_num(row['total_quantidade'])}** unidades\n"
+            texto += f"   💰 Valor: **{formatar_dinheiro(row['total_valor'])}**\n"
+            texto += f"   📦 Compras: **{row['quantidade']}**\n\n"
+        
+        embed.add_field(name="👥 COMPRADORES", value=texto, inline=False)
+        embed.add_field(name="💣 TOTAL DE PÓLVORA", value=f"{fmt_num(total_quantidade)} unidades", inline=True)
+        embed.add_field(name="💰 TOTAL GASTO", value=formatar_dinheiro(total_valor), inline=True)
+        embed.add_field(name="📦 TOTAL DE COMPRAS", value=sum(r["quantidade"] for r in rows), inline=True)
+        embed.set_footer(text="Relatório gerado pelo sistema VDR")
+        
+        await interaction.followup.send(embed=embed, ephemeral=False)
+
+    @discord.ui.button(label="📅 Relatório por Data", style=discord.ButtonStyle.secondary, custom_id="polvora_relatorio_data", emoji="📅", row=1)
+    async def relatorio_data(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = RelatorioPolvoraModal()
+        await interaction.response.send_modal(modal)
+
+class RelatorioPolvoraModal(discord.ui.Modal, title="📅 RELATÓRIO DE PÓLVORA"):
+    data = discord.ui.TextInput(
+        label="📅 Data (DD/MM/AAAA)",
+        placeholder="Ex: 31/08/2026",
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        data = self.data.value.strip()
+        
+        try:
+            data_dt = datetime.strptime(data, "%d/%m/%Y")
+            data_inicio = data_dt.replace(hour=0, minute=0, second=0)
+            data_fim = data_dt.replace(hour=23, minute=59, second=59)
+        except:
+            await interaction.followup.send("❌ Formato inválido! Use DD/MM/AAAA", ephemeral=True)
+            return
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+        
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT user_id, SUM(quantidade) as total_quantidade, SUM(valor) as total_valor, COUNT(*) as quantidade
+                FROM polvoras 
+                WHERE data::date BETWEEN $1::date AND $2::date
+                GROUP BY user_id 
+                ORDER BY total_quantidade DESC""",
+                data_inicio, data_fim
+            )
+            total_quantidade = await conn.fetchval(
+                "SELECT COALESCE(SUM(quantidade), 0) FROM polvoras WHERE data::date BETWEEN $1::date AND $2::date",
+                data_inicio, data_fim
+            )
+            total_valor = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor), 0) FROM polvoras WHERE data::date BETWEEN $1::date AND $2::date",
+                data_inicio, data_fim
+            )
+        
+        if not rows:
+            await interaction.followup.send(f"📭 Nenhuma compra de pólvora registrada em **{data}**", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="💣 RELATÓRIO DE PÓLVORA",
+            description=f"📅 **Data:** {data}",
+            color=Cores.PRODUCAO,
+            timestamp=agora()
+        )
+        embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Pólvora")
+        
+        texto = ""
+        for i, row in enumerate(rows, 1):
+            user = await pegar_usuario(int(row["user_id"]))
+            nome = user.display_name if user else row["user_id"]
+            texto += f"**{i}.** {nome}\n"
+            texto += f"   💣 Quantidade: **{fmt_num(row['total_quantidade'])}** unidades\n"
+            texto += f"   💰 Valor: **{formatar_dinheiro(row['total_valor'])}**\n"
+            texto += f"   📦 Compras: **{row['quantidade']}**\n\n"
+        
+        embed.add_field(name="👥 COMPRADORES", value=texto, inline=False)
+        embed.add_field(name="💣 TOTAL DE PÓLVORA", value=f"{fmt_num(total_quantidade)} unidades", inline=True)
+        embed.add_field(name="💰 TOTAL GASTO", value=formatar_dinheiro(total_valor), inline=True)
+        embed.add_field(name="📦 TOTAL DE COMPRAS", value=sum(r["quantidade"] for r in rows), inline=True)
+        embed.set_footer(text="Relatório gerado pelo sistema VDR")
+        
+        await interaction.followup.send(embed=embed, ephemeral=False)
 
 # =========================================================
 # 13.3 FUNÇÕES DE ACOMPANHAR PRODUÇÃO
