@@ -6925,6 +6925,11 @@ class CalculadoraView(discord.ui.View):
         await enviar_painel_vendas()
         await interaction.followup.send("✅ Estoque atualizado!", ephemeral=True)
 
+    @discord.ui.button(label="📅 Vendas por Período", style=discord.ButtonStyle.secondary, custom_id="calc_relatorio_vendas_periodo", emoji="📅", row=2)
+    async def relatorio_periodo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = RelatorioVendasPeriodoModal()
+        await interaction.response.send_modal(modal)
+
     @discord.ui.button(label="📊 Relatório de Vendas", style=discord.ButtonStyle.success, custom_id="calc_relatorio_vendas", emoji="📊", row=1)
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -6977,6 +6982,81 @@ class CalculadoraView(discord.ui.View):
     async def relatorio_data(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = RelatorioVendasModal()
         await interaction.response.send_modal(modal)
+
+class RelatorioVendasPeriodoModal(discord.ui.Modal, title="📅 RELATÓRIO DE VENDAS (PERÍODO)"):
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data INÍCIO (DD/MM/AAAA)",
+        placeholder="Ex: 01/08/2026",
+        required=True
+    )
+    data_fim = discord.ui.TextInput(
+        label="📅 Data FIM (DD/MM/AAAA)",
+        placeholder="Ex: 31/08/2026",
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        data_inicio_str = self.data_inicio.value.strip()
+        data_fim_str = self.data_fim.value.strip()
+        
+        try:
+            data_inicio = datetime.strptime(data_inicio_str, "%d/%m/%Y")
+            data_fim = datetime.strptime(data_fim_str, "%d/%m/%Y")
+        except:
+            await interaction.followup.send("❌ Formato inválido! Use DD/MM/AAAA", ephemeral=True)
+            return
+        
+        if data_fim < data_inicio:
+            await interaction.followup.send("❌ Data FIM deve ser depois da data INÍCIO!", ephemeral=True)
+            return
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+        
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT user_id, SUM(valor) as total, COUNT(*) as quantidade
+                FROM vendas 
+                WHERE TO_DATE(data, 'DD/MM/YYYY') BETWEEN $1::date AND $2::date
+                GROUP BY user_id 
+                ORDER BY total DESC""",
+                data_inicio, data_fim
+            )
+            total_geral = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE TO_DATE(data, 'DD/MM/YYYY') BETWEEN $1::date AND $2::date",
+                data_inicio, data_fim
+            )
+        
+        if not rows:
+            await interaction.followup.send(f"📭 Nenhuma venda no período **{data_inicio_str}** a **{data_fim_str}**", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="📊 RELATÓRIO DE VENDAS (PERÍODO)",
+            description=f"📅 **Período:** {data_inicio_str} a {data_fim_str}",
+            color=Cores.VENDA,
+            timestamp=agora()
+        )
+        embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Vendas")
+        
+        texto = ""
+        for i, row in enumerate(rows, 1):
+            user = await pegar_usuario(int(row["user_id"]))
+            nome = user.display_name if user else row["user_id"]
+            texto += f"**{i}.** {nome}\n"
+            texto += f"   💰 Vendas: **{formatar_dinheiro(row['total'])}**\n"
+            texto += f"   📦 Pedidos: **{row['quantidade']}**\n\n"
+        
+        embed.add_field(name="👥 VENDEDORES", value=texto, inline=False)
+        embed.add_field(name="💰 TOTAL GERAL", value=formatar_dinheiro(total_geral), inline=True)
+        embed.add_field(name="📦 TOTAL DE PEDIDOS", value=sum(r["quantidade"] for r in rows), inline=True)
+        embed.set_footer(text="Relatório gerado pelo sistema VDR")
+        
+        await interaction.followup.send(embed=embed, ephemeral=False)
 # =========================================================
 # 12.8 FUNÇÕES DE RESTAURAR VENDAS
 # =========================================================
@@ -8090,22 +8170,32 @@ class PolvoraView(discord.ui.View):
         await interaction.response.send_modal(modal)
 
 class RelatorioPolvoraModal(discord.ui.Modal, title="📅 RELATÓRIO DE PÓLVORA"):
-    data = discord.ui.TextInput(
-        label="📅 Data (DD/MM/AAAA)",
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data INÍCIO (DD/MM/AAAA)",
+        placeholder="Ex: 01/08/2026",
+        required=True
+    )
+    data_fim = discord.ui.TextInput(
+        label="📅 Data FIM (DD/MM/AAAA)",
         placeholder="Ex: 31/08/2026",
         required=True
     )
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        data = self.data.value.strip()
+        
+        data_inicio_str = self.data_inicio.value.strip()
+        data_fim_str = self.data_fim.value.strip()
         
         try:
-            data_dt = datetime.strptime(data, "%d/%m/%Y")
-            data_inicio = data_dt.replace(hour=0, minute=0, second=0)
-            data_fim = data_dt.replace(hour=23, minute=59, second=59)
+            data_inicio = datetime.strptime(data_inicio_str, "%d/%m/%Y").replace(hour=0, minute=0, second=0)
+            data_fim = datetime.strptime(data_fim_str, "%d/%m/%Y").replace(hour=23, minute=59, second=59)
         except:
             await interaction.followup.send("❌ Formato inválido! Use DD/MM/AAAA", ephemeral=True)
+            return
+        
+        if data_fim < data_inicio:
+            await interaction.followup.send("❌ Data FIM deve ser depois da data INÍCIO!", ephemeral=True)
             return
         
         pool = await get_pool()
@@ -8132,12 +8222,12 @@ class RelatorioPolvoraModal(discord.ui.Modal, title="📅 RELATÓRIO DE PÓLVORA
             )
         
         if not rows:
-            await interaction.followup.send(f"📭 Nenhuma compra de pólvora registrada em **{data}**", ephemeral=True)
+            await interaction.followup.send(f"📭 Nenhuma compra de pólvora no período **{data_inicio_str}** a **{data_fim_str}**", ephemeral=True)
             return
         
         embed = discord.Embed(
             title="💣 RELATÓRIO DE PÓLVORA",
-            description=f"📅 **Data:** {data}",
+            description=f"📅 **Período:** {data_inicio_str} a {data_fim_str}",
             color=Cores.PRODUCAO,
             timestamp=agora()
         )
