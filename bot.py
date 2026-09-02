@@ -6773,9 +6773,11 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         grupo = await buscar_grupo_por_organizacao(org_nome)
         if grupo:
             if pacotes_pt_total > 0:
-                await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt_total, pacotes_pt_total * 50 * 50)
+                valor_pt = pacotes_pt_total * 50 * 50  # pacotes × 50 munições × R$ 50
+                await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt_total, valor_pt)
             if pacotes_sub_total > 0:
-                await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub_total, pacotes_sub_total * 50 * 90)
+                valor_sub = pacotes_sub_total * 50 * 90  # pacotes × 50 munições × R$ 90
+                await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub_total, valor_sub)
             await recriar_painel_grupos()
 
         if num_entregas > 1:
