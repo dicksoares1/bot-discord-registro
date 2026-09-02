@@ -10142,6 +10142,7 @@ class PainelGruposView(discord.ui.View):
         if not grupos:
             self.add_item(discord.ui.Button(label="➕ NOVO GRUPO", style=discord.ButtonStyle.success, custom_id="novo_padrao", emoji="➕"))
             self.add_item(discord.ui.Button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="atualizar_padrao", emoji="🔄"))
+            self.add_item(discord.ui.Button(label="📋 RELATÓRIO", style=discord.ButtonStyle.success, custom_id="relatorio_grupos_btn", emoji="📋", row=2))
             return
         inicio = self.pagina_atual * self.itens_por_pagina
         fim = min(inicio + self.itens_por_pagina, len(grupos))
@@ -10251,7 +10252,37 @@ class PainelGruposView(discord.ui.View):
             await interaction.response.defer(ephemeral=True)
             await self.recarregar_painel(interaction, nova_pagina)
             return False
+
+        elif custom_id == "relatorio_grupos_btn":
+            await interaction.response.defer(ephemeral=True)
+            grupos = await carregar_grupos_db()
+            if not grupos:
+                await interaction.followup.send("📭 Nenhum grupo ativo cadastrado.", ephemeral=True)
+                return
+            
+            relatorio = "📋 **RELATÓRIO DE GRUPOS ATIVOS**\n"
+            relatorio += "=" * 70 + "\n\n"
+            
+            for i, grupo in enumerate(grupos, 1):
+                nome = grupo['nome_org']
+                lider = grupo['lider_nome']
+                data_criacao = grupo['data_criacao'].strftime('%d/%m/%Y %H:%M') if grupo['data_criacao'] else 'N/A'
+                
+                relatorio += f"{i}. Nome do grupo: {nome} | Líder: {lider} | Data da criação: {data_criacao}\n"
+            
+            relatorio += f"\n📊 **TOTAL DE GRUPOS:** {len(grupos)}"
+            
+            if len(relatorio) > 1900:
+                await interaction.followup.send(
+                    content="📋 Relatório de Grupos",
+                    file=discord.File(io.BytesIO(relatorio.encode('utf-8')), filename="relatorio_grupos.txt"),
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(f"```\n{relatorio}\n```", ephemeral=True)
+            return False
         return True
+   
 
     async def recarregar_painel(self, interaction, nova_pagina):
         try:
