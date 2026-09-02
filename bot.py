@@ -10171,6 +10171,7 @@ class PainelGruposView(discord.ui.View):
             self.add_item(discord.ui.Button(label="▶️ Próxima", style=discord.ButtonStyle.secondary, custom_id=f"proxima_{self.uid}", disabled=True, row=1))
         self.add_item(discord.ui.Button(label="➕ NOVO GRUPO", style=discord.ButtonStyle.success, custom_id="novo_padrao", emoji="➕", row=2))
         self.add_item(discord.ui.Button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="atualizar_padrao", emoji="🔄", row=2))
+        self.add_item(discord.ui.Button(label="📋 RELATÓRIO", style=discord.ButtonStyle.success, custom_id="relatorio_grupos_btn", emoji="📋", row=2))
 
     async def select_callback(self, interaction: discord.Interaction):
         try:
