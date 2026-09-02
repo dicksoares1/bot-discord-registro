@@ -8761,80 +8761,141 @@ async def definir_valor_meta_por_cargo(member: discord.Member):
     return 300000
 
 async def criar_sala_meta(member: discord.Member):
+    """Cria uma sala de meta para um membro"""
     guild = member.guild
     pool = await get_pool()
     if not pool:
+        logger.error("❌ Banco de dados indisponível em criar_sala_meta")
         return None
+    
     try:
         async with pool.acquire() as conn:
+            # =========================================================
+            # VERIFICAR SE JÁ TEM META NO BANCO
+            # =========================================================
             meta_existente = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(member.id))
-        if meta_existente:
-            canal_id = int(meta_existente["canal_id"])
-            canal_existe = guild.get_channel(canal_id)
-            if canal_existe:
-                metas_cache[str(member.id)] = {"canal_id": canal_id, "dinheiro": meta_existente["dinheiro"], "acao": meta_existente["acao"], "dinheiro_acoes": meta_existente.get("dinheiro_acoes") or 0, "saldo_excedente": meta_existente.get("saldo_excedente") or 0}
-                await atualizar_embed_meta(member.id)
-                cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
-                if cargo_resp:
-                    for resp_member in guild.members:
-                        if cargo_resp in resp_member.roles:
-                            try:
-                                perms = canal_existe.permissions_for(resp_member)
-                                if not perms.view_channel:
-                                    await canal_existe.set_permissions(resp_member, view_channel=True, send_messages=True)
-                            except Exception as e:
-                                logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
-                return canal_existe
-            else:
-                await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
-                if str(member.id) in metas_cache:
-                    del metas_cache[str(member.id)]
-        for canal in guild.text_channels:
-            if member.display_name.lower() in canal.name.lower() and "📁" in canal.name:
-                await salvar_meta_db(member.id, canal.id, 0, 0)
-                metas_cache[str(member.id)] = {"canal_id": canal.id, "dinheiro": 0, "acao": None, "dinheiro_acoes": 0, "saldo_excedente": 0}
-                await atualizar_embed_meta(member.id)
-                cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
-                if cargo_resp:
-                    for resp_member in guild.members:
-                        if cargo_resp in resp_member.roles:
-                            try:
-                                perms = canal.permissions_for(resp_member)
-                                if not perms.view_channel:
-                                    await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
-                            except Exception as e:
-                                logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
-                return canal
-        categoria_id = obter_categoria_meta(member)
-        if not categoria_id:
-            return None
-        categoria = guild.get_channel(categoria_id)
-        if not categoria:
-            return None
-        nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
-        overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False), member: discord.PermissionOverwrite(view_channel=True, send_messages=True)}
-        gerente = guild.get_role(CARGO_GERENTE_ID)
-        if gerente:
-            overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
-        gerente_geral = guild.get_role(CARGO_GERENTE_GERAL_ID)
-        if gerente_geral:
-            overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
-        canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
-        await salvar_meta_db(member.id, canal.id, 0, 0)
-        metas_cache[str(member.id)] = {"canal_id": canal.id, "dinheiro": 0, "acao": None, "dinheiro_acoes": 0, "saldo_excedente": 0}
-        await asyncio.sleep(1)
-        await atualizar_embed_meta(member.id)
-        cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
-        if cargo_resp:
-            for resp_member in guild.members:
-                if cargo_resp in resp_member.roles:
-                    try:
-                        await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
-                    except Exception as e:
-                        logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
-        return canal
+            
+            if meta_existente:
+                canal_id = int(meta_existente["canal_id"])
+                canal_existe = guild.get_channel(canal_id)
+                
+                if canal_existe:
+                    # Sala existe, apenas atualizar cache e retornar
+                    metas_cache[str(member.id)] = {
+                        "canal_id": canal_id,
+                        "dinheiro": meta_existente["dinheiro"] or 0,
+                        "acao": meta_existente["acao"],
+                        "dinheiro_acoes": meta_existente.get("dinheiro_acoes") or 0,
+                        "saldo_excedente": meta_existente.get("saldo_excedente") or 0
+                    }
+                    await atualizar_embed_meta(member.id)
+                    
+                    # Dar acesso aos responsáveis
+                    cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+                    if cargo_resp:
+                        for resp_member in guild.members:
+                            if cargo_resp in resp_member.roles:
+                                try:
+                                    perms = canal_existe.permissions_for(resp_member)
+                                    if not perms.view_channel:
+                                        await canal_existe.set_permissions(resp_member, view_channel=True, send_messages=True)
+                                except Exception as e:
+                                    logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+                    return canal_existe
+                else:
+                    # Canal não existe mais, deletar do banco
+                    await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
+                    if str(member.id) in metas_cache:
+                        del metas_cache[str(member.id)]
+            
+            # =========================================================
+            # PROCURAR CANAL EXISTENTE PELO NOME
+            # =========================================================
+            nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
+            for canal in guild.text_channels:
+                if canal.name.lower() == nome_canal.lower():
+                    # Encontrou um canal com o mesmo nome
+                    await salvar_meta_db(member.id, canal.id, 0, 0)
+                    metas_cache[str(member.id)] = {
+                        "canal_id": canal.id,
+                        "dinheiro": 0,
+                        "acao": None,
+                        "dinheiro_acoes": 0,
+                        "saldo_excedente": 0
+                    }
+                    await atualizar_embed_meta(member.id)
+                    
+                    cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+                    if cargo_resp:
+                        for resp_member in guild.members:
+                            if cargo_resp in resp_member.roles:
+                                try:
+                                    perms = canal.permissions_for(resp_member)
+                                    if not perms.view_channel:
+                                        await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
+                                except Exception as e:
+                                    logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+                    return canal
+            
+            # =========================================================
+            # CRIAR NOVA SALA
+            # =========================================================
+            categoria_id = obter_categoria_meta(member)
+            if not categoria_id:
+                logger.error(f"❌ Categoria não encontrada para {member.display_name}")
+                return None
+            
+            categoria = guild.get_channel(categoria_id)
+            if not categoria:
+                logger.error(f"❌ Categoria {categoria_id} não encontrada")
+                return None
+            
+            # Criar overwrites
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                member: discord.PermissionOverwrite(view_channel=True, send_messages=True)
+            }
+            
+            gerente = guild.get_role(CARGO_GERENTE_ID)
+            if gerente:
+                overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
+            
+            gerente_geral = guild.get_role(CARGO_GERENTE_GERAL_ID)
+            if gerente_geral:
+                overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
+            
+            # Criar o canal
+            nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
+            canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
+            
+            # Salvar no banco
+            await salvar_meta_db(member.id, canal.id, 0, 0)
+            metas_cache[str(member.id)] = {
+                "canal_id": canal.id,
+                "dinheiro": 0,
+                "acao": None,
+                "dinheiro_acoes": 0,
+                "saldo_excedente": 0
+            }
+            
+            await asyncio.sleep(1)
+            await atualizar_embed_meta(member.id)
+            
+            # Dar acesso aos responsáveis
+            cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+            if cargo_resp:
+                for resp_member in guild.members:
+                    if cargo_resp in resp_member.roles:
+                        try:
+                            await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+            
+            logger.info(f"✅ Sala criada para {member.display_name}: {canal.name}")
+            return canal
+            
     except Exception as e:
-        logger.error(f"❌ Erro ao criar sala meta: {e}")
+        logger.error(f"❌ Erro ao criar sala meta para {member.display_name}: {e}")
         return None
 
 async def atualizar_embed_meta(user_id):
