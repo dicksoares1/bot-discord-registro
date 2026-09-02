@@ -1527,45 +1527,50 @@ class TipoRegistroSelect(discord.ui.Select):
         self.telefone = telefone
         self.indicado = indicado
         options = [
-            discord.SelectOption(label="Agregado", description="Se tornar membro da facção", emoji="🕴️"),
-            discord.SelectOption(label="Amigo", description="Apenas para resenha ou reunião", emoji="🤝")
+            discord.SelectOption(label="Agregado", description="Se tornar membro da facção", emoji="🕴️")
         ]
-        super().__init__(placeholder="Escolha o tipo de acesso", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="Confirme seu registro", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         guild = interaction.guild
         membro = interaction.user
         agregado = guild.get_role(AGREGADO_ROLE_ID)
-        amigos = guild.get_role(1309121290241704046)
         convidado = guild.get_role(CONVIDADO_ROLE_ID)
         em_registro = guild.get_role(EM_REGISTRO_ROLE_ID)
-        escolha = self.values[0]
+        
         if em_registro:
             try:
                 await membro.remove_roles(em_registro)
             except Exception as e:
                 logger.error(f"❌ Erro ao remover cargo 'Em Registro': {e}")
-        if escolha == "Agregado":
-            if agregado:
-                try:
-                    await membro.add_roles(agregado)
-                except Exception as e:
-                    logger.error(f"❌ Erro ao adicionar cargo 'Agregado': {e}")
-        elif escolha == "Amigo":
-            if amigos:
-                try:
-                    await membro.add_roles(amigos)
-                except Exception as e:
-                    logger.error(f"❌ Erro ao adicionar cargo 'Amigos': {e}")
+        
+        # Adicionar cargo de Agregado
+        if agregado:
+            try:
+                await membro.add_roles(agregado)
+            except Exception as e:
+                logger.error(f"❌ Erro ao adicionar cargo 'Agregado': {e}")
+        
         if convidado:
             try:
                 await membro.remove_roles(convidado)
             except:
                 pass
+        
+        # Salvar no histórico
         await salvar_registro_historico(
             membro.id, membro.name, self.passaporte, self.nome,
-            self.vulgo, self.telefone, self.indicado, escolha
+            self.vulgo, self.telefone, self.indicado, "Agregado"
         )
+        
+        # =========================================================
+        # CRIAR SALA DE META AUTOMATICAMENTE
+        # =========================================================
+        await criar_sala_meta(membro)
+        
+        # =========================================================
+        # ENVIAR CONFIRMAÇÃO
+        # =========================================================
         canal_log = interaction.guild.get_channel(CANAL_LOG_REGISTRO_ID)
         if canal_log:
             embed = discord.Embed(
@@ -1581,26 +1586,28 @@ class TipoRegistroSelect(discord.ui.Select):
                 f"**🏷️ Vulgo:** {self.vulgo or '❌ Não informado'}\n"
                 f"**📱 Telefone:** {self.telefone}\n"
                 f"**👤 Indicado por:** {self.indicado or '❌ Não informado'}\n"
-                f"**🎯 Tipo:** {escolha}"
+                f"**🎯 Tipo:** Agregado"
             )
             embed.add_field(name="📋 INFORMAÇÕES DO MEMBRO", value=informacoes, inline=False)
-            embed.add_field(name="📌 STATUS", value=f"✅ **Registro concluído**\n🔹 Cargo atribuído: **{escolha}**\n🆔 ID: `{membro.id}`", inline=False)
-            embed.add_field(name="🎯 CARGO ATRIBUÍDO", value=f"{'🕴️' if escolha == 'Agregado' else '🤝'} **{escolha}**", inline=False)
+            embed.add_field(name="📌 STATUS", value=f"✅ **Registro concluído**\n🔹 Cargo atribuído: **Agregado**\n🆔 ID: `{membro.id}`", inline=False)
+            embed.add_field(name="🎯 CARGO ATRIBUÍDO", value="🕴️ **Agregado**", inline=False)
             embed.set_footer(text=f"Registro realizado com sucesso • Sistema Automático")
             try:
                 await canal_log.send(embed=embed)
                 await interaction.response.send_message(
                     f"✅ **Registro concluído com sucesso!**\n\n"
-                    f"📋 Você foi registrado como: **{escolha}**\n"
+                    f"📋 Você foi registrado como: **Agregado**\n"
                     f"👤 Nome: {self.nome}\n"
+                    f"📁 Sua sala de meta foi criada automaticamente!\n"
                     f"📨 Seu registro foi enviado para o histórico!",
                     ephemeral=True
                 )
             except:
                 await interaction.response.send_message(
                     f"✅ **Registro concluído com sucesso!**\n\n"
-                    f"📋 Você foi registrado como: **{escolha}**\n"
+                    f"📋 Você foi registrado como: **Agregado**\n"
                     f"👤 Nome: {self.nome}\n"
+                    f"📁 Sua sala de meta foi criada automaticamente!\n"
                     f"⚠️ **Mas houve um erro ao enviar para o histórico!**",
                     ephemeral=True
                 )
@@ -8549,12 +8556,22 @@ async def verificar_heartbeat_producoes():
 # 13.5 FUNÇÃO DE RESTAURAR PRODUÇÕES
 # =========================================================
 async def restaurar_producoes():
+    """Restaura produções ativas após reinicialização do bot"""
     try:
         pool = await get_pool()
         if not pool:
+            logger.error("❌ Banco de dados indisponível para restaurar produções")
             return
+        
         async with pool.acquire() as conn:
             rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+        
+        if not rows:
+            logger.info("📭 Nenhuma produção ativa para restaurar")
+            return
+        
+        logger.info(f"🔄 Restaurando {len(rows)} produções...")
+        
         for row in rows:
             pid = row["pid"]
             if pid not in producoes_tasks or producoes_tasks[pid].done():
@@ -8562,6 +8579,10 @@ async def restaurar_producoes():
                     del producoes_tasks[pid]
                 task = asyncio.create_task(acompanhar_producao(pid))
                 producoes_tasks[pid] = task
+                logger.info(f"✅ Produção {pid} restaurada")
+        
+        logger.info(f"✅ {len(rows)} produções restauradas com sucesso!")
+        
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar produções: {e}")
 
@@ -9121,34 +9142,77 @@ class SolicitarSalaView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="➕ Criar Minha Sala", style=discord.ButtonStyle.success, custom_id="criar_sala_manual")
+    @discord.ui.button(label="➕ Criar Sala para Membro", style=discord.ButtonStyle.success, custom_id="criar_sala_gerencia")
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # =========================================================
+        # VERIFICAR PERMISSÃO
+        # =========================================================
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ **Apenas Gerentes, Cargo 01, Cargo 02 e ADM podem criar salas para outros membros!**",
+                ephemeral=True
+            )
+            return
+        
+        # =========================================================
+        # ABRIR MODAL PARA ESCOLHER O MEMBRO
+        # =========================================================
+        modal = CriarSalaParaMembroModal()
+        await interaction.response.send_modal(modal)
+
+
+class CriarSalaParaMembroModal(discord.ui.Modal, title="📂 Criar Sala para Membro"):
+    membro_id = discord.ui.TextInput(
+        label="🆔 ID do Membro",
+        placeholder="Digite o ID do membro (ex: 123456789)",
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
+        try:
+            user_id = int(self.membro_id.value.strip())
+        except:
+            await interaction.followup.send("❌ ID inválido! Digite apenas números.", ephemeral=True)
+            return
+        
+        guild = interaction.guild
+        member = guild.get_member(user_id)
+        
+        if not member:
+            await interaction.followup.send(f"❌ Membro com ID `{user_id}` não encontrado no servidor!", ephemeral=True)
+            return
+        
+        # Verificar se o membro já tem sala
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+        
         async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(interaction.user.id))
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
+        
         if meta:
-            canal = interaction.guild.get_channel(meta["canal_id"])
+            canal = guild.get_channel(meta["canal_id"])
             if canal:
-                await interaction.followup.send(f"✅ Você já possui uma sala! {canal.mention}", ephemeral=True)
-                await atualizar_embed_meta(interaction.user.id)
+                await interaction.followup.send(f"✅ {member.mention} já possui uma sala! {canal.mention}", ephemeral=True)
                 return
-            else:
-                await conn.execute("DELETE FROM metas WHERE user_id = $1", str(interaction.user.id))
-                if str(interaction.user.id) in metas_cache:
-                    del metas_cache[str(interaction.user.id)]
-        for canal in interaction.guild.text_channels:
-            if interaction.user.display_name.lower() in canal.name.lower() and "📁" in canal.name:
-                await salvar_meta_db(interaction.user.id, canal.id, 0, 0)
-                metas_cache[str(interaction.user.id)] = {"canal_id": canal.id, "dinheiro": 0, "acao": None, "dinheiro_acoes": 0}
-                await atualizar_embed_meta(interaction.user.id)
-                await interaction.followup.send(f"✅ Sala encontrada e meta criada! {canal.mention}", ephemeral=True)
-                return
-        await criar_sala_meta(interaction.user)
-        await interaction.followup.send("✅ Sua sala foi criada com sucesso!", ephemeral=True)
+        
+        # Criar a sala
+        sala = await criar_sala_meta(member)
+        
+        if sala:
+            await interaction.followup.send(
+                f"✅ **Sala criada com sucesso para {member.mention}!**\n"
+                f"📁 {sala.mention}",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(f"❌ Erro ao criar sala para {member.mention}!", ephemeral=True)
 
 # =========================================================
 # 14.3 FUNÇÕES DE ENVIAR PAINÉIS DE METAS
@@ -10942,12 +11006,29 @@ async def on_message_edit(before, after):
 async def on_member_join(member):
     if member.bot:
         return
-    try:
-        cargo_em_registro = member.guild.get_role(EM_REGISTRO_ROLE_ID)
-        if cargo_em_registro:
-            await member.add_roles(cargo_em_registro)
-    except Exception as e:
-        logger.error(f"❌ Erro ao adicionar cargo de registro: {e}")
+    
+    # =========================================================
+    # CANAL DE ENTRADA
+    # =========================================================
+    canal_entrada = bot.get_channel(1229526645111656562)
+    
+    if canal_entrada:
+        embed = discord.Embed(
+            title="📥 MEMBRO ENTROU",
+            description=f"👤 **{member.display_name}** ({member.name}) entrou no servidor!",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="🆔 ID", value=member.id, inline=True)
+        embed.add_field(name="📅 Conta criada", value=member.created_at.strftime("%d/%m/%Y %H:%M"), inline=True)
+        embed.set_footer(text="🛡 Vida Rasa 442 • Logs de Entrada")
+        await canal_entrada.send(embed=embed)
+    
+    # =========================================================
+    # SISTEMA XLSPY - VERIFICAÇÃO AUTOMÁTICA
+    # =========================================================
+    await verificar_seguranca_entrada(member)
 
 @bot.event
 async def on_member_remove(member):
@@ -10955,9 +11036,9 @@ async def on_member_remove(member):
         return
     
     # =========================================================
-    # CANAL DE SAÍDA (CORRETO)
+    # CANAL DE SAÍDA
     # =========================================================
-    canal_saida = bot.get_channel(1229526645111656563)  # ← CANAL CORRETO
+    canal_saida = bot.get_channel(1229526645111656563)
     
     if canal_saida:
         embed = discord.Embed(
@@ -10969,9 +11050,10 @@ async def on_member_remove(member):
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.add_field(name="🆔 ID", value=member.id, inline=True)
         embed.add_field(name="📅 Entrou em", value=member.joined_at.strftime("%d/%m/%Y %H:%M") if member.joined_at else "Desconhecido", inline=True)
-        embed.set_footer(text="Vida Rasa 442 • Logs de Saída")
+        embed.set_footer(text="🛡 Vida Rasa 442 • Logs de Saída")
         await canal_saida.send(embed=embed)
-    
+
+
     if member.bot:
         return
     try:
@@ -12086,6 +12168,129 @@ class AcaoSuspeitoView(discord.ui.View):
                 inline=False
             )
             await self.mensagem_original.edit(embed=embed, view=None)
+
+# =========================================================
+# FUNÇÃO DE VERIFICAÇÃO DE SEGURANÇA
+# =========================================================
+
+async def verificar_seguranca_entrada(member):
+    """Verifica automaticamente um membro que entrou no servidor"""
+    
+    canal_verificacao = bot.get_channel(1544676962570608721)
+    if not canal_verificacao:
+        return
+    
+    # Verificar se está na lista de suspeitos
+    suspeito = await verificar_suspeito_db(member.id)
+    
+    # Análise de risco da conta
+    score = 0
+    motivos = []
+    
+    # 1. Idade da conta
+    idade = (agora() - member.created_at).days
+    if idade < 7:
+        score += 3
+        motivos.append("🔴 Conta criada há menos de 7 dias")
+    elif idade < 30:
+        score += 2
+        motivos.append("🟠 Conta criada há menos de 30 dias")
+    elif idade < 90:
+        score += 1
+        motivos.append("🟡 Conta criada há menos de 90 dias")
+    else:
+        motivos.append("🟢 Conta com mais de 90 dias")
+    
+    # 2. Avatar padrão
+    if not member.avatar:
+        score += 2
+        motivos.append("🔴 Sem foto de perfil")
+    
+    # 3. Badges (Hypesquad, Nitro, etc)
+    if not member.public_flags.value:
+        score += 1
+        motivos.append("🟡 Sem badges")
+    
+    # 4. Nome com números suspeitos
+    import re
+    if re.search(r'\d{4,}', member.name):
+        score += 1
+        motivos.append("🟡 Nome contém números suspeitos")
+    
+    # Definir nível de risco
+    if suspeito:
+        nivel = "🚨 **ALTA PRIORIDADE - NA LISTA DE SUSPEITOS**"
+        cor = 0xe74c3c
+        risco = "CRÍTICO"
+    elif score >= 7:
+        nivel = "🔴 **ALTO RISCO - PROVÁVEL ALT**"
+        cor = 0xe74c3c
+        risco = "ALTO"
+    elif score >= 4:
+        nivel = "🟠 **RISCO MÉDIO - SUSPEITO**"
+        cor = 0xf39c12
+        risco = "MÉDIO"
+    elif score >= 2:
+        nivel = "🟡 **RISCO BAIXO - ATENÇÃO**"
+        cor = 0xf1c40f
+        risco = "BAIXO"
+    else:
+        nivel = "🟢 **CONFIÁVEL**"
+        cor = 0x2ecc71
+        risco = "NENHUM"
+    
+    embed = discord.Embed(
+        title="🕵️ VERIFICAÇÃO DE SEGURANÇA",
+        description=f"👤 {member.mention}",
+        color=cor,
+        timestamp=agora()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    embed.add_field(
+        name="📊 STATUS",
+        value=nivel,
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 ANÁLISE DA CONTA",
+        value="\n".join(motivos),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📊 SCORE DE RISCO",
+        value=f"**{score}** pontos",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🎯 RISCO",
+        value=risco,
+        inline=True
+    )
+    
+    if suspeito:
+        embed.add_field(
+            name="⚠️ MOTIVO DA LISTA",
+            value=f"{suspeito['motivo']}\n👤 Adicionado por: <@{suspeito['adicionado_por']}>",
+            inline=False
+        )
+    
+    embed.add_field(
+        name="📅 DATA DA VERIFICAÇÃO",
+        value=agora().strftime("%d/%m/%Y %H:%M"),
+        inline=False
+    )
+    
+    embed.set_footer(text="🛡 Sistema de Segurança VDR")
+    
+    await canal_verificacao.send(embed=embed)
+    
+    # Registrar verificação
+    resultado = "suspeito" if suspeito else "limpo"
+    await registrar_verificacao_db(member.id, bot.user.id, resultado)
 
 # =========================================================
 # 3. COMANDOS
