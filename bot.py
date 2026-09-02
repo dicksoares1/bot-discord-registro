@@ -6773,9 +6773,9 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         grupo = await buscar_grupo_por_organizacao(org_nome)
         if grupo:
             if pacotes_pt_total > 0:
-                await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt_total, pacotes_pt_total * 50)
+                await registrar_compra_grupo_db(grupo["grupo_id"], "PT", pacotes_pt_total, pacotes_pt_total * 50 * 50)
             if pacotes_sub_total > 0:
-                await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub_total, pacotes_sub_total * 90)
+                await registrar_compra_grupo_db(grupo["grupo_id"], "SUB", pacotes_sub_total, pacotes_sub_total * 50 * 90)
             await recriar_painel_grupos()
 
         if num_entregas > 1:
@@ -10260,19 +10260,33 @@ class PainelGruposView(discord.ui.View):
             if not grupos:
                 await interaction.followup.send("📭 Nenhum grupo ativo cadastrado.", ephemeral=True)
                 return
-            
+
+            # Definir larguras fixas para cada coluna
+            LARGURA_NOME = 30
+            LARGURA_LIDER = 25
+            LARGURA_DATA = 20
+
+            # Cabeçalho
             relatorio = "📋 **RELATÓRIO DE GRUPOS ATIVOS**\n"
-            relatorio += "=" * 70 + "\n\n"
-            
+            relatorio += "═" * 85 + "\n\n"
+            relatorio += f"{'┌'}{'─' * LARGURA_NOME}{'┬'}{'─' * LARGURA_LIDER}{'┬'}{'─' * LARGURA_DATA}{'┐'}\n"
+            relatorio += f"│ {'GRUPO':<{LARGURA_NOME-1}}│ {'LÍDER':<{LARGURA_LIDER-1}}│ {'DATA DA CRIAÇÃO':<{LARGURA_DATA-1}}│\n"
+            relatorio += f"{'├'}{'─' * LARGURA_NOME}{'┼'}{'─' * LARGURA_LIDER}{'┼'}{'─' * LARGURA_DATA}{'┤'}\n"
+
+            # Listar grupos
             for i, grupo in enumerate(grupos, 1):
-                nome = grupo['nome_org']
-                lider = grupo['lider_nome']
+                nome = grupo['nome_org'][:LARGURA_NOME-3]
+                lider = grupo['lider_nome'][:LARGURA_LIDER-3]
                 data_criacao = grupo['data_criacao'].strftime('%d/%m/%Y %H:%M') if grupo['data_criacao'] else 'N/A'
-                
-                relatorio += f"{i}. Nome do grupo: {nome} | Líder: {lider} | Data da criação: {data_criacao}\n"
-            
-            relatorio += f"\n📊 **TOTAL DE GRUPOS:** {len(grupos)}"
-            
+                data_criacao = data_criacao[:LARGURA_DATA-3]
+
+                relatorio += f"│ {i:>2}. {nome:<{LARGURA_NOME-5}}│ {lider:<{LARGURA_LIDER-1}}│ {data_criacao:<{LARGURA_DATA-1}}│\n"
+
+            # Rodapé
+            relatorio += f"{'└'}{'─' * LARGURA_NOME}{'┴'}{'─' * LARGURA_LIDER}{'┴'}{'─' * LARGURA_DATA}{'┘'}\n\n"
+            relatorio += f"📊 **TOTAL DE GRUPOS:** {len(grupos)}"
+
+            # Enviar
             if len(relatorio) > 1900:
                 await interaction.followup.send(
                     content="📋 Relatório de Grupos",
@@ -10280,7 +10294,7 @@ class PainelGruposView(discord.ui.View):
                     ephemeral=True
                 )
             else:
-                await interaction.followup.send(f"```\n{relatorio}\n```", ephemeral=True)
+                await interaction.followup.send(f"```prolog\n{relatorio}\n```", ephemeral=True)
             return False
         return True
    
