@@ -12992,27 +12992,120 @@ async def on_message_edit(before, after):
             try:
                 embed_original = after.embeds[0]
 
+                # Criar embed com estilo futurístico
                 novo_embed = discord.Embed(
-                    title=embed_original.title,
-                    description=embed_original.description,
-                    color=embed_original.color,
+                    title="🛡️ **SISTEMA DE SEGURANÇA VDR**",
+                    description=f"```diff\n+ ALERTA DE SEGURANÇA DETECTADO\n```",
+                    color=0x00ff88,  # Verde neon futurístico
                     timestamp=agora()
                 )
 
+                # Definir thumbnail (ícone futurístico)
+                novo_embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+                # =========================================================
+                # USUÁRIO VERIFICADO (extraído do XISpy)
+                # =========================================================
+                # Extrair o nome e ID da descrição original
+                import re
+                desc_original = embed_original.description or ""
+                usuario_match = re.search(r'\*\*(.+?)\*\*', desc_original)
+                id_match = re.search(r'\((\d+)\)', desc_original)
+                servidores_match = re.search(r'(\d+)\s+servidor', desc_original)
+
+                usuario = usuario_match.group(1) if usuario_match else "Desconhecido"
+                user_id = id_match.group(1) if id_match else "N/A"
+                qtd_servidores = servidores_match.group(1) if servidores_match else "0"
+
+                # =========================================================
+                # CAMPOS DO EMBED
+                # =========================================================
+
+                # 1. USUÁRIO ALVO
+                novo_embed.add_field(
+                    name="👤 **USUÁRIO ALVO**",
+                    value=f"```yaml\nUsuário: {usuario}\nID: {user_id}\nServidores suspeitos: {qtd_servidores}\n```",
+                    inline=False
+                )
+
+                # 2. CONTA CRIADA EM (buscar do embed original)
+                conta_field = None
                 for field in embed_original.fields:
+                    if "Conta Criada" in field.name:
+                        conta_field = field
+                        break
+                if conta_field:
                     novo_embed.add_field(
-                        name=field.name,
-                        value=field.value,
-                        inline=field.inline
+                        name="📅 **DATA DE CRIAÇÃO**",
+                        value=f"```yaml\n{conta_field.value}\n```",
+                        inline=False
                     )
 
-                if embed_original.thumbnail:
-                    novo_embed.set_thumbnail(url=embed_original.thumbnail.url)
+                # 3. DETECÇÕES (buscar do embed original)
+                detectado_field = None
+                for field in embed_original.fields:
+                    if "detectado" in field.name.lower() or "detecção" in field.name.lower():
+                        detectado_field = field
+                        break
+                if detectado_field:
+                    novo_embed.add_field(
+                        name="🚨 **HISTÓRICO DE DETECÇÕES**",
+                        value=f"```yaml\n{detectado_field.value}\n```",
+                        inline=False
+                    )
 
+                # 4. ÚLTIMA DETECÇÃO (buscar do embed original)
+                ultima_field = None
+                for field in embed_original.fields:
+                    if "Última" in field.name or "ultima" in field.name.lower():
+                        ultima_field = field
+                        break
+                if ultima_field:
+                    novo_embed.add_field(
+                        name="⏰ **ÚLTIMA DETECÇÃO**",
+                        value=f"```yaml\n{ultima_field.value}\n```",
+                        inline=False
+                    )
+
+                # 5. SERVIDORES SUSPEITOS (buscar do embed original)
+                servidores_field = None
+                for field in embed_original.fields:
+                    if "Servidores Suspeitos" in field.name:
+                        servidores_field = field
+                        break
+                if servidores_field:
+                    # Formatar servidores em lista
+                    servidores_lista = servidores_field.value.replace(" | ", "\n• ")
+                    novo_embed.add_field(
+                        name="🔒 **SERVIDORES SUSPEITOS**",
+                        value=f"```prolog\n• {servidores_lista}\n```",
+                        inline=False
+                    )
+
+                # 6. DETECÇÕES ANTERIORES (buscar do embed original)
+                anteriores_field = None
+                for field in embed_original.fields:
+                    if "Detecções Anteriores" in field.name:
+                        anteriores_field = field
+                        break
+                if anteriores_field:
+                    anteriores_lista = anteriores_field.value.replace(" | ", "\n• ")
+                    novo_embed.add_field(
+                        name="📋 **DETECÇÕES ANTERIORES**",
+                        value=f"```prolog\n• {anteriores_lista}\n```",
+                        inline=False
+                    )
+
+                # =========================================================
+                # RODAPÉ (SEM CUPOM, COM ESTILO FUTURÍSTICO)
+                # =========================================================
                 novo_embed.set_footer(
-                    text=f"⚠️ Essa é uma mensagem automática do sistema - {agora().strftime('%d/%m/%Y %H:%M')}",
+                    text=f"🛡️ VDR Security • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
                     icon_url=bot.user.display_avatar.url if bot.user else None
                 )
+
+                # Borda lateral futurística (usando cor)
+                novo_embed.color = 0x00ff88
 
                 # Apagar a mensagem original (versão editada)
                 await after.delete()
