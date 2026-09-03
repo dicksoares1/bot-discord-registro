@@ -12308,59 +12308,34 @@ async def verificar_seguranca_entrada(member):
     
     # Análise de risco da conta
     score = 0
-    motivos = []
     
     # 1. Idade da conta
     idade = (agora() - member.created_at).days
-    if idade < 7:
-        score += 3
-        motivos.append("🔴 Conta criada há menos de 7 dias")
-    elif idade < 30:
-        score += 2
-        motivos.append("🟠 Conta criada há menos de 30 dias")
-    elif idade < 90:
-        score += 1
-        motivos.append("🟡 Conta criada há menos de 90 dias")
-    else:
-        motivos.append(f"🟢 Conta criada há {idade} dias")
     
     # 2. Avatar padrão
     if not member.avatar:
         score += 2
-        motivos.append("🔴 Sem foto de perfil")
     
     # 3. Badges
     if not member.public_flags.value:
         score += 1
-        motivos.append("🟡 Sem badges")
     
     # 4. Nome com números suspeitos
     import re
     if re.search(r'\d{4,}', member.name):
         score += 1
-        motivos.append("🟡 Nome contém números suspeitos")
     
     # Definir nível de risco
     if suspeito:
-        nivel = "🚨 **ALTA PRIORIDADE - NA LISTA DE SUSPEITOS**"
         cor = 0xe74c3c
-        risco = "CRÍTICO"
     elif score >= 7:
-        nivel = "🔴 **ALTO RISCO - PROVÁVEL ALT**"
         cor = 0xe74c3c
-        risco = "ALTO"
     elif score >= 4:
-        nivel = "🟠 **RISCO MÉDIO - SUSPEITO**"
         cor = 0xf39c12
-        risco = "MÉDIO"
     elif score >= 2:
-        nivel = "🟡 **RISCO BAIXO - ATENÇÃO**"
         cor = 0xf1c40f
-        risco = "BAIXO"
     else:
-        nivel = "🟢 **CONFIÁVEL**"
         cor = 0x2ecc71
-        risco = "NENHUM"
     
     user_id = member.id
     
@@ -12370,13 +12345,11 @@ async def verificar_seguranca_entrada(member):
     servidores_suspeitos = []
     
     # Lista de servidores suspeitos conhecidos (IDs)
-    # ADICIONE OS IDs DOS SERVIDORES QUE VOCÊ QUER MONITORAR
     SERVIDORES_SUSPEITOS_IDS = [
+        # ADICIONE OS IDs DOS SERVIDORES QUE VOCÊ QUER MONITORAR
         # Exemplo: 123456789012345678,  # Randolas
-        # Adicione mais IDs aqui
     ]
     
-    # Verificar se o bot está nesses servidores e se o usuário também está
     for servidor_id in SERVIDORES_SUSPEITOS_IDS:
         try:
             guild = bot.get_guild(servidor_id)
@@ -12387,7 +12360,6 @@ async def verificar_seguranca_entrada(member):
         except:
             pass
     
-    # Também podemos verificar servidores onde o bot está e que têm nome suspeito
     for guild in bot.guilds:
         nome = guild.name.lower()
         if any(palavra in nome for palavra in ["randolas", "hack", "cheat", "xlspy", "xiter", "alt"]):
@@ -12396,24 +12368,38 @@ async def verificar_seguranca_entrada(member):
                 servidores_suspeitos.append(guild.name)
     
     # =========================================================
-    # EMBED NOVO FORMATO XLSPY
+    # EMBED ESTILO XISPY (SEM CUPOM)
     # =========================================================
     embed = discord.Embed(
-        title="🕵️ Usuário Suspeito | XLSPY" if suspeito else "🕵️ Verificação | XLSPY",
-        description=f"**{member.display_name}** ({member.name}) • `{user_id}`",
+        title="🕵️ Usuário Suspeito | XISpy" if suspeito else "🕵️ Verificação | XISpy",
         color=cor,
         timestamp=agora()
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     
-    # Conta Criada
-    embed.add_field(
-        name="📅 Conta Criada Em",
-        value=f"{member.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} anos**" if idade > 365 else f"{member.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} dias**",
-        inline=False
-    )
+    # Descrição
+    if servidores_suspeitos:
+        descricao = f"O usuário **{member.display_name}** ({member.name}) • `{user_id}` está em **{len(servidores_suspeitos)}** servidor(es) suspeito(s)."
+    else:
+        descricao = f"O usuário **{member.display_name}** ({member.name}) • `{user_id}`"
+    embed.description = descricao
     
-    # Status - Já foi detectado?
+    # Conta Criada
+    anos = idade // 365
+    if anos > 0:
+        embed.add_field(
+            name="📅 Conta Criada Em",
+            value=f"{member.created_at.strftime('%d de %B de %Y %H:%M')} • **há {anos} anos**",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="📅 Conta Criada Em",
+            value=f"{member.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} dias**",
+            inline=False
+        )
+    
+    # Já foi detectado?
     if suspeito:
         embed.add_field(
             name="🚨 JÁ FOI DETECTADO PELO SISTEMA?",
@@ -12427,8 +12413,8 @@ async def verificar_seguranca_entrada(member):
                 inline=False
             )
         embed.add_field(
-            name="⚠️ MOTIVO DA LISTA",
-            value=f"{suspeito['motivo']}\n👤 Adicionado por: <@{suspeito['adicionado_por']}>",
+            name="⚠️ MOTIVO",
+            value=f"{suspeito['motivo']}",
             inline=False
         )
     else:
@@ -12453,10 +12439,12 @@ async def verificar_seguranca_entrada(member):
     
     # Servidores Suspeitos
     if servidores_suspeitos:
-        servidores_texto = "\n".join([f"🔒 {nome}" for nome in servidores_suspeitos])
+        servidores_texto = ""
+        for nome in servidores_suspeitos:
+            servidores_texto += f"### {nome}\n"
         embed.add_field(
             name="🔒 SERVIDORES SUSPEITOS",
-            value=f"O usuário está em **{len(servidores_suspeitos)}** servidor(es) suspeito(s):\n\n{servidores_texto}",
+            value=servidores_texto,
             inline=False
         )
     else:
@@ -12470,10 +12458,11 @@ async def verificar_seguranca_entrada(member):
     if deteccoes > 0:
         embed.add_field(
             name="📋 DETECÇÕES ANTERIORES",
-            value=f"```yaml\n{deteccoes} detecções registradas\n```",
+            value=f"### {servidores_suspeitos[0] if servidores_suspeitos else 'N/A'}",
             inline=False
         )
     
+    # Rodapé (SEM CUPOM)
     embed.set_footer(
         text=f"⚠️ Essa é uma mensagem automática do sistema - {agora().strftime('%d/%m/%Y %H:%M')}",
         icon_url=bot.user.display_avatar.url if bot.user else None
@@ -12579,10 +12568,9 @@ async def cmd_verificar(ctx, *, alvo: str = None):
     servidores_suspeitos = []
     
     # Lista de servidores suspeitos conhecidos (IDs)
-    # ADICIONE OS IDs DOS SERVIDORES QUE VOCÊ QUER MONITORAR
     SERVIDORES_SUSPEITOS_IDS = [
+        # ADICIONE OS IDs DOS SERVIDORES QUE VOCÊ QUER MONITORAR
         # Exemplo: 123456789012345678,  # Randolas
-        # Adicione mais IDs aqui
     ]
     
     # Verificar se o bot está nesses servidores e se o usuário também está
@@ -12596,7 +12584,7 @@ async def cmd_verificar(ctx, *, alvo: str = None):
         except:
             pass
     
-    # Também podemos verificar servidores onde o bot está e que têm nome suspeito
+    # Também verificar servidores com nomes suspeitos
     for guild in bot.guilds:
         nome = guild.name.lower()
         if any(palavra in nome for palavra in ["randolas", "hack", "cheat", "xlspy", "xiter", "alt"]):
@@ -12605,26 +12593,40 @@ async def cmd_verificar(ctx, *, alvo: str = None):
                 servidores_suspeitos.append(guild.name)
     
     # =========================================================
-    # EMBED NOVO FORMATO XLSPY
+    # EMBED ESTILO XISPY (SEM CUPOM)
     # =========================================================
     cor = 0xe74c3c if suspeito else 0x2ecc71
     
     embed = discord.Embed(
-        title="🕵️ Usuário Suspeito | XLSPY" if suspeito else "🕵️ Verificação | XLSPY",
-        description=f"**{nome_exibicao}** ({user.name}) • `{user_id}`",
+        title="🕵️ Usuário Suspeito | XISpy" if suspeito else "🕵️ Verificação | XISpy",
         color=cor,
         timestamp=agora()
     )
     embed.set_thumbnail(url=user.display_avatar.url)
     
-    # Conta Criada
-    embed.add_field(
-        name="📅 Conta Criada Em",
-        value=f"{user.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} anos**" if idade > 365 else f"{user.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} dias**",
-        inline=False
-    )
+    # Descrição: "O usuário @user#tag (ID) está em X servidor(es) suspeito(s)"
+    if servidores_suspeitos:
+        descricao = f"O usuário **{user.name}** ({user.display_name}) • `{user_id}` está em **{len(servidores_suspeitos)}** servidor(es) suspeito(s)."
+    else:
+        descricao = f"O usuário **{user.name}** ({user.display_name}) • `{user_id}`"
+    embed.description = descricao
     
-    # Status - Já foi detectado?
+    # Conta Criada
+    anos = idade // 365
+    if anos > 0:
+        embed.add_field(
+            name="📅 Conta Criada Em",
+            value=f"{user.created_at.strftime('%d de %B de %Y %H:%M')} • **há {anos} anos**",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="📅 Conta Criada Em",
+            value=f"{user.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} dias**",
+            inline=False
+        )
+    
+    # Já foi detectado?
     if suspeito:
         embed.add_field(
             name="🚨 JÁ FOI DETECTADO PELO SISTEMA?",
@@ -12638,8 +12640,8 @@ async def cmd_verificar(ctx, *, alvo: str = None):
                 inline=False
             )
         embed.add_field(
-            name="⚠️ MOTIVO DA LISTA",
-            value=f"{suspeito['motivo']}\n👤 Adicionado por: <@{suspeito['adicionado_por']}>",
+            name="⚠️ MOTIVO",
+            value=f"{suspeito['motivo']}",
             inline=False
         )
     else:
@@ -12662,12 +12664,14 @@ async def cmd_verificar(ctx, *, alvo: str = None):
                 inline=False
             )
     
-    # Servidores Suspeitos
+    # Servidores Suspeitos (mostrar cada um)
     if servidores_suspeitos:
-        servidores_texto = "\n".join([f"🔒 {nome}" for nome in servidores_suspeitos])
+        servidores_texto = ""
+        for nome in servidores_suspeitos:
+            servidores_texto += f"### {nome}\n"
         embed.add_field(
             name="🔒 SERVIDORES SUSPEITOS",
-            value=f"O usuário está em **{len(servidores_suspeitos)}** servidor(es) suspeito(s):\n\n{servidores_texto}",
+            value=servidores_texto,
             inline=False
         )
     else:
@@ -12677,14 +12681,15 @@ async def cmd_verificar(ctx, *, alvo: str = None):
             inline=False
         )
     
-    # Detecções Anteriores
+    # Detecções Anteriores (se tiver)
     if deteccoes > 0:
         embed.add_field(
             name="📋 DETECÇÕES ANTERIORES",
-            value=f"```yaml\n{deteccoes} detecções registradas\n```",
+            value=f"### {servidores_suspeitos[0] if servidores_suspeitos else 'N/A'}",
             inline=False
         )
     
+    # Rodapé estilo XISpy (SEM CUPOM)
     embed.set_footer(
         text=f"⚠️ Essa é uma mensagem automática do sistema - {agora().strftime('%d/%m/%Y %H:%M')}",
         icon_url=bot.user.display_avatar.url if bot.user else None
