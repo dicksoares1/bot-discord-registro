@@ -12184,15 +12184,15 @@ async def listar_suspeitos_db():
         logger.error(f"❌ Erro ao listar suspeitos: {e}")
         return []
 
-async def registrar_verificacao_db(user_id, verificador, resultado):
+async def registrar_verificacao_db(user_id, verificador, resultado, servidor=None):
     pool = await get_pool()
     if not pool:
         return
     try:
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO verificacoes (user_id, verificador, resultado) VALUES ($1, $2, $3)",
-                str(user_id), str(verificador), resultado
+                "INSERT INTO verificacoes (user_id, verificador, resultado, servidor) VALUES ($1, $2, $3, $4)",
+                str(user_id), str(verificador), resultado, servidor
             )
     except Exception as e:
         logger.error(f"❌ Erro ao registrar verificação: {e}")
@@ -12281,7 +12281,6 @@ class AcaoSuspeitoView(discord.ui.View):
 # =========================================================
 # FUNÇÃO DE VERIFICAÇÃO DE SEGURANÇA
 # =========================================================
-
 async def verificar_seguranca_entrada(member):
     """Verifica automaticamente um membro que entrou no servidor"""
     
@@ -12291,6 +12290,21 @@ async def verificar_seguranca_entrada(member):
     
     # Verificar se está na lista de suspeitos
     suspeito = await verificar_suspeito_db(member.id)
+    
+    # Contar quantas vezes foi detectado
+    pool = await get_pool()
+    deteccoes = 0
+    ultima_deteccao = None
+    rows = []
+    if pool:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM verificacoes WHERE user_id = $1 ORDER BY data_verificacao DESC",
+                str(member.id)
+            )
+            deteccoes = len(rows)
+            if rows:
+                ultima_deteccao = rows[0]["data_verificacao"]
     
     # Análise de risco da conta
     score = 0
@@ -12308,14 +12322,14 @@ async def verificar_seguranca_entrada(member):
         score += 1
         motivos.append("🟡 Conta criada há menos de 90 dias")
     else:
-        motivos.append("🟢 Conta com mais de 90 dias")
+        motivos.append(f"🟢 Conta criada há {idade} dias")
     
     # 2. Avatar padrão
     if not member.avatar:
         score += 2
         motivos.append("🔴 Sem foto de perfil")
     
-    # 3. Badges (Hypesquad, Nitro, etc)
+    # 3. Badges
     if not member.public_flags.value:
         score += 1
         motivos.append("🟡 Sem badges")
@@ -12348,52 +12362,122 @@ async def verificar_seguranca_entrada(member):
         cor = 0x2ecc71
         risco = "NENHUM"
     
+    user_id = member.id
+    
+    # =========================================================
+    # SERVIDORES SUSPEITOS
+    # =========================================================
+    servidores_suspeitos = []
+    
+    # Lista de servidores suspeitos conhecidos (IDs)
+    # ADICIONE OS IDs DOS SERVIDORES QUE VOCÊ QUER MONITORAR
+    SERVIDORES_SUSPEITOS_IDS = [
+        # Exemplo: 123456789012345678,  # Randolas
+        # Adicione mais IDs aqui
+    ]
+    
+    # Verificar se o bot está nesses servidores e se o usuário também está
+    for servidor_id in SERVIDORES_SUSPEITOS_IDS:
+        try:
+            guild = bot.get_guild(servidor_id)
+            if guild:
+                member_check = guild.get_member(int(user_id))
+                if member_check:
+                    servidores_suspeitos.append(guild.name)
+        except:
+            pass
+    
+    # Também podemos verificar servidores onde o bot está e que têm nome suspeito
+    for guild in bot.guilds:
+        nome = guild.name.lower()
+        if any(palavra in nome for palavra in ["randolas", "hack", "cheat", "xlspy", "xiter", "alt"]):
+            member_check = guild.get_member(int(user_id))
+            if member_check and guild.name not in servidores_suspeitos:
+                servidores_suspeitos.append(guild.name)
+    
+    # =========================================================
+    # EMBED NOVO FORMATO XLSPY
+    # =========================================================
     embed = discord.Embed(
-        title="🕵️ VERIFICAÇÃO DE SEGURANÇA",
-        description=f"👤 {member.mention}",
+        title="🕵️ Usuário Suspeito | XLSPY" if suspeito else "🕵️ Verificação | XLSPY",
+        description=f"**{member.display_name}** ({member.name}) • `{user_id}`",
         color=cor,
         timestamp=agora()
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     
+    # Conta Criada
     embed.add_field(
-        name="📊 STATUS",
-        value=nivel,
+        name="📅 Conta Criada Em",
+        value=f"{member.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} anos**" if idade > 365 else f"{member.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} dias**",
         inline=False
     )
     
-    embed.add_field(
-        name="📋 ANÁLISE DA CONTA",
-        value="\n".join(motivos),
-        inline=False
-    )
-    
-    embed.add_field(
-        name="📊 SCORE DE RISCO",
-        value=f"**{score}** pontos",
-        inline=True
-    )
-    
-    embed.add_field(
-        name="🎯 RISCO",
-        value=risco,
-        inline=True
-    )
-    
+    # Status - Já foi detectado?
     if suspeito:
+        embed.add_field(
+            name="🚨 JÁ FOI DETECTADO PELO SISTEMA?",
+            value=f"✅ **O usuário já foi detectado como suspeito {deteccoes} vez(es).**",
+            inline=False
+        )
+        if ultima_deteccao:
+            embed.add_field(
+                name="📌 ÚLTIMA DETECÇÃO",
+                value=f"{ultima_deteccao.strftime('%d de %B de %Y %H:%M')}",
+                inline=False
+            )
         embed.add_field(
             name="⚠️ MOTIVO DA LISTA",
             value=f"{suspeito['motivo']}\n👤 Adicionado por: <@{suspeito['adicionado_por']}>",
             inline=False
         )
+    else:
+        if deteccoes > 0:
+            embed.add_field(
+                name="📌 JÁ FOI DETECTADO PELO SISTEMA?",
+                value=f"⚠️ O usuário já foi detectado {deteccoes} vez(es), mas NÃO está na lista de suspeitos.",
+                inline=False
+            )
+            if ultima_deteccao:
+                embed.add_field(
+                    name="📌 ÚLTIMA DETECÇÃO",
+                    value=f"{ultima_deteccao.strftime('%d de %B de %Y %H:%M')}",
+                    inline=False
+                )
+        else:
+            embed.add_field(
+                name="📌 JÁ FOI DETECTADO PELO SISTEMA?",
+                value="❌ Nenhuma detecção registrada.",
+                inline=False
+            )
     
-    embed.add_field(
-        name="📅 DATA DA VERIFICAÇÃO",
-        value=agora().strftime("%d/%m/%Y %H:%M"),
-        inline=False
+    # Servidores Suspeitos
+    if servidores_suspeitos:
+        servidores_texto = "\n".join([f"🔒 {nome}" for nome in servidores_suspeitos])
+        embed.add_field(
+            name="🔒 SERVIDORES SUSPEITOS",
+            value=f"O usuário está em **{len(servidores_suspeitos)}** servidor(es) suspeito(s):\n\n{servidores_texto}",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="🔒 SERVIDORES SUSPEITOS",
+            value="✅ Nenhum servidor suspeito conhecido encontrado.",
+            inline=False
+        )
+    
+    # Detecções Anteriores
+    if deteccoes > 0:
+        embed.add_field(
+            name="📋 DETECÇÕES ANTERIORES",
+            value=f"```yaml\n{deteccoes} detecções registradas\n```",
+            inline=False
+        )
+    
+    embed.set_footer(
+        text=f"⚠️ Essa é uma mensagem automática do sistema - {agora().strftime('%d/%m/%Y %H:%M')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
     )
-    
-    embed.set_footer(text="🛡 Sistema de Segurança VDR")
     
     await canal_verificacao.send(embed=embed)
     
@@ -12404,7 +12488,6 @@ async def verificar_seguranca_entrada(member):
 # =========================================================
 # 3. COMANDOS
 # =========================================================
-
 @bot.command(name="verificar")
 async def cmd_verificar(ctx, *, alvo: str = None):
     """Verifica um usuário (por @menção, nome ou ID)"""
@@ -12431,22 +12514,18 @@ async def cmd_verificar(ctx, *, alvo: str = None):
         except:
             await ctx.send(f"❌ Usuário com ID `{alvo}` não encontrado!")
             return
-        # Verificar se está no servidor
         member = ctx.guild.get_member(user_id)
     
     # =========================================================
     # 3. SE PASSOU UMA MENÇÃO (@alguem)
     # =========================================================
     else:
-        # Tentar converter para membro (se estiver no servidor)
         try:
             member = await commands.MemberConverter().convert(ctx, alvo)
             user = member
             user_id = member.id
         except:
-            # Se não for membro, tentar buscar pelo nome
             try:
-                # Tentar buscar pelo nome no servidor
                 for m in ctx.guild.members:
                     if alvo.lower() in m.name.lower() or alvo.lower() in m.display_name.lower():
                         member = m
@@ -12455,25 +12534,16 @@ async def cmd_verificar(ctx, *, alvo: str = None):
                         break
             except:
                 pass
-            
-            # Se ainda não encontrou, tentar fetch_user pelo nome (não funciona)
             if not user:
                 await ctx.send(f"❌ Usuário `{alvo}` não encontrado! Use o ID ou @menção.")
                 return
-    
-    # =========================================================
-    # 4. SE ENCONTROU POR ID MAS NÃO ESTÁ NO SERVIDOR
-    # =========================================================
-    if user and not member:
-        # Usuário existe no Discord mas não está no servidor
-        pass
     
     if not user:
         await ctx.send(f"❌ Usuário não encontrado!")
         return
     
     # =========================================================
-    # 5. VERIFICAR PERMISSÃO (se for verificar outro usuário)
+    # 4. VERIFICAR PERMISSÃO
     # =========================================================
     if str(user_id) != str(ctx.author.id):
         if not ctx.author.guild_permissions.administrator:
@@ -12482,193 +12552,150 @@ async def cmd_verificar(ctx, *, alvo: str = None):
                 await ctx.send("❌ Apenas administradores ou gerentes podem verificar outros usuários!")
                 return
     
-    # =========================================================
-    # 6. FAZER A VERIFICAÇÃO
-    # =========================================================
     await ctx.send(f"🔍 Verificando {user.mention if member else f'**{user.display_name}** (ID: {user_id})'}...")
     
     suspeito = await verificar_suspeito_db(user_id)
     
-    # Nome para exibir
+    pool = await get_pool()
+    deteccoes = 0
+    ultima_deteccao = None
+    rows = []
+    if pool:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM verificacoes WHERE user_id = $1 ORDER BY data_verificacao DESC",
+                str(user_id)
+            )
+            deteccoes = len(rows)
+            if rows:
+                ultima_deteccao = rows[0]["data_verificacao"]
+    
     nome_exibicao = member.display_name if member else user.display_name
+    idade = (agora() - user.created_at).days
+    
+    # =========================================================
+    # SERVIDORES SUSPEITOS
+    # =========================================================
+    servidores_suspeitos = []
+    
+    # Lista de servidores suspeitos conhecidos (IDs)
+    # ADICIONE OS IDs DOS SERVIDORES QUE VOCÊ QUER MONITORAR
+    SERVIDORES_SUSPEITOS_IDS = [
+        # Exemplo: 123456789012345678,  # Randolas
+        # Adicione mais IDs aqui
+    ]
+    
+    # Verificar se o bot está nesses servidores e se o usuário também está
+    for servidor_id in SERVIDORES_SUSPEITOS_IDS:
+        try:
+            guild = bot.get_guild(servidor_id)
+            if guild:
+                member_check = guild.get_member(int(user_id))
+                if member_check:
+                    servidores_suspeitos.append(guild.name)
+        except:
+            pass
+    
+    # Também podemos verificar servidores onde o bot está e que têm nome suspeito
+    for guild in bot.guilds:
+        nome = guild.name.lower()
+        if any(palavra in nome for palavra in ["randolas", "hack", "cheat", "xlspy", "xiter", "alt"]):
+            member_check = guild.get_member(int(user_id))
+            if member_check and guild.name not in servidores_suspeitos:
+                servidores_suspeitos.append(guild.name)
+    
+    # =========================================================
+    # EMBED NOVO FORMATO XLSPY
+    # =========================================================
+    cor = 0xe74c3c if suspeito else 0x2ecc71
     
     embed = discord.Embed(
-        title="🕵️ VERIFICAÇÃO DE SEGURANÇA",
-        description=f"👤 {nome_exibicao}",
-        color=0x2ecc71,
+        title="🕵️ Usuário Suspeito | XLSPY" if suspeito else "🕵️ Verificação | XLSPY",
+        description=f"**{nome_exibicao}** ({user.name}) • `{user_id}`",
+        color=cor,
         timestamp=agora()
     )
+    embed.set_thumbnail(url=user.display_avatar.url)
     
-    if member:
-        embed.set_thumbnail(url=member.display_avatar.url)
-    else:
-        embed.set_thumbnail(url=user.display_avatar.url)
+    # Conta Criada
+    embed.add_field(
+        name="📅 Conta Criada Em",
+        value=f"{user.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} anos**" if idade > 365 else f"{user.created_at.strftime('%d de %B de %Y %H:%M')} • **há {idade} dias**",
+        inline=False
+    )
     
-    # Status no servidor
-    status_servidor = "🟢 **Está no servidor**" if member else "🔴 **Não está no servidor**"
-    embed.add_field(name="📌 STATUS NO SERVIDOR", value=status_servidor, inline=False)
-    
+    # Status - Já foi detectado?
     if suspeito:
-        embed.color = 0xe74c3c
         embed.add_field(
-            name="❌ STATUS: SUSPEITO",
-            value=(
-                f"⚠️ **Este usuário está na lista de suspeitos!**\n\n"
-                f"📋 **Motivo:** {suspeito['motivo']}\n"
-                f"👤 **Adicionado por:** <@{suspeito['adicionado_por']}>\n"
-                f"📅 **Data:** {suspeito['data_adicao'].strftime('%d/%m/%Y %H:%M')}"
-            ),
+            name="🚨 JÁ FOI DETECTADO PELO SISTEMA?",
+            value=f"✅ **O usuário já foi detectado como suspeito {deteccoes} vez(es).**",
             inline=False
         )
-        
-        if ctx.author.guild_permissions.administrator and member:
-            view = AcaoSuspeitoView(user_id, ctx.message)
+        if ultima_deteccao:
             embed.add_field(
-                name="🛡️ AÇÕES DISPONÍVEIS",
-                value="Clique nos botões abaixo para tomar uma ação:",
+                name="📌 ÚLTIMA DETECÇÃO",
+                value=f"{ultima_deteccao.strftime('%d de %B de %Y %H:%M')}",
                 inline=False
             )
-            await ctx.send(embed=embed, view=view)
-        else:
-            await ctx.send(embed=embed)
-    else:
         embed.add_field(
-            name="✅ STATUS: VERIFICADO",
-            value="✅ **Usuário verificado - Sem restrições**",
+            name="⚠️ MOTIVO DA LISTA",
+            value=f"{suspeito['motivo']}\n👤 Adicionado por: <@{suspeito['adicionado_por']}>",
             inline=False
         )
-        await ctx.send(embed=embed)
+    else:
+        if deteccoes > 0:
+            embed.add_field(
+                name="📌 JÁ FOI DETECTADO PELO SISTEMA?",
+                value=f"⚠️ O usuário já foi detectado {deteccoes} vez(es), mas NÃO está na lista de suspeitos.",
+                inline=False
+            )
+            if ultima_deteccao:
+                embed.add_field(
+                    name="📌 ÚLTIMA DETECÇÃO",
+                    value=f"{ultima_deteccao.strftime('%d de %B de %Y %H:%M')}",
+                    inline=False
+                )
+        else:
+            embed.add_field(
+                name="📌 JÁ FOI DETECTADO PELO SISTEMA?",
+                value="❌ Nenhuma detecção registrada.",
+                inline=False
+            )
+    
+    # Servidores Suspeitos
+    if servidores_suspeitos:
+        servidores_texto = "\n".join([f"🔒 {nome}" for nome in servidores_suspeitos])
+        embed.add_field(
+            name="🔒 SERVIDORES SUSPEITOS",
+            value=f"O usuário está em **{len(servidores_suspeitos)}** servidor(es) suspeito(s):\n\n{servidores_texto}",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="🔒 SERVIDORES SUSPEITOS",
+            value="✅ Nenhum servidor suspeito conhecido encontrado.",
+            inline=False
+        )
+    
+    # Detecções Anteriores
+    if deteccoes > 0:
+        embed.add_field(
+            name="📋 DETECÇÕES ANTERIORES",
+            value=f"```yaml\n{deteccoes} detecções registradas\n```",
+            inline=False
+        )
+    
+    embed.set_footer(
+        text=f"⚠️ Essa é uma mensagem automática do sistema - {agora().strftime('%d/%m/%Y %H:%M')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    await ctx.send(embed=embed)
     
     # Registrar verificação
     resultado = "suspeito" if suspeito else "limpo"
     await registrar_verificacao_db(user_id, ctx.author.id, resultado)
-
-@bot.command(name="add_suspeito")
-@commands.has_permissions(administrator=True)
-async def cmd_add_suspeito(ctx, member: discord.Member, *, motivo="Suspeito de atividades ilegais"):
-    """Adiciona um usuário à lista de suspeitos (APENAS ADM)"""
     
-    suspeito = await verificar_suspeito_db(member.id)
-    if suspeito:
-        await ctx.send(f"⚠️ {member.mention} já está na lista de suspeitos!")
-        return
-    
-    sucesso = await adicionar_suspeito_db(member.id, motivo, ctx.author.id)
-    
-    if sucesso:
-        embed = discord.Embed(
-            title="⚠️ USUÁRIO ADICIONADO À LISTA DE SUSPEITOS",
-            description=f"👤 {member.mention}",
-            color=0xe74c3c,
-            timestamp=agora()
-        )
-        embed.add_field(name="📋 Motivo", value=motivo, inline=False)
-        embed.add_field(name="👤 Adicionado por", value=ctx.author.mention, inline=False)
-        embed.set_footer(text="🛡 Sistema de Segurança VDR")
-        await ctx.send(embed=embed)
-        
-        canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
-        if canal_log:
-            await canal_log.send(embed=embed)
-    else:
-        await ctx.send("❌ Erro ao adicionar suspeito!")
-
-@bot.command(name="remove_suspeito")
-@commands.has_permissions(administrator=True)
-async def cmd_remove_suspeito(ctx, member: discord.Member):
-    """Remove um usuário da lista de suspeitos (APENAS ADM)"""
-    
-    suspeito = await verificar_suspeito_db(member.id)
-    if not suspeito:
-        await ctx.send(f"⚠️ {member.mention} não está na lista de suspeitos!")
-        return
-    
-    sucesso = await remover_suspeito_db(member.id)
-    
-    if sucesso:
-        embed = discord.Embed(
-            title="✅ USUÁRIO REMOVIDO DA LISTA DE SUSPEITOS",
-            description=f"👤 {member.mention}",
-            color=0x2ecc71,
-            timestamp=agora()
-        )
-        embed.add_field(name="👤 Removido por", value=ctx.author.mention, inline=False)
-        embed.set_footer(text="🛡 Sistema de Segurança VDR")
-        await ctx.send(embed=embed)
-        
-        canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
-        if canal_log:
-            await canal_log.send(embed=embed)
-    else:
-        await ctx.send("❌ Erro ao remover suspeito!")
-
-@bot.command(name="suspeitos")
-@commands.has_permissions(administrator=True)
-async def cmd_listar_suspeitos(ctx):
-    """Lista todos os suspeitos (APENAS ADM)"""
-    
-    suspeitos = await listar_suspeitos_db()
-    
-    if not suspeitos:
-        await ctx.send("📭 Nenhum suspeito registrado.")
-        return
-    
-    embed = discord.Embed(
-        title="🚨 LISTA DE SUSPEITOS",
-        description=f"Total: {len(suspeitos)}",
-        color=0xe74c3c,
-        timestamp=agora()
-    )
-    
-    for i, s in enumerate(suspeitos[:20]):
-        embed.add_field(
-            name=f"{i+1}. <@{s['user_id']}>",
-            value=f"📋 {s['motivo']}\n👤 Adicionado por: <@{s['adicionado_por']}>\n📅 {s['data_adicao'].strftime('%d/%m/%Y %H:%M')}",
-            inline=False
-        )
-    
-    if len(suspeitos) > 20:
-        embed.set_footer(text=f"Mostrando 20 de {len(suspeitos)} suspeitos")
-    
-    await ctx.send(embed=embed)
-
-@bot.command(name="logs_verificacao")
-@commands.has_permissions(administrator=True)
-async def cmd_logs_verificacao(ctx, limite: int = 20):
-    """Mostra o histórico de verificações (APENAS ADM)"""
-    
-    pool = await get_pool()
-    if not pool:
-        await ctx.send("❌ Banco de dados indisponível!")
-        return
-    
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM verificacoes ORDER BY data_verificacao DESC LIMIT $1",
-            limite
-        )
-    
-    if not rows:
-        await ctx.send("📭 Nenhuma verificação registrada.")
-        return
-    
-    embed = discord.Embed(
-        title="📋 HISTÓRICO DE VERIFICAÇÕES",
-        description=f"Últimas {len(rows)} verificações",
-        color=0x3498db,
-        timestamp=agora()
-    )
-    
-    for row in rows:
-        status = "🟢 LIMPO" if row['resultado'] == "limpo" else "🔴 SUSPEITO"
-        embed.add_field(
-            name=f"👤 <@{row['user_id']}>",
-            value=f"📊 {status}\n👤 Verificado por: <@{row['verificador']}>\n📅 {row['data_verificacao'].strftime('%d/%m/%Y %H:%M')}",
-            inline=False
-        )
-    
-    await ctx.send(embed=embed)
-
 # =========================================================
 # 4. EVENTO ON_MEMBER_JOIN MODIFICADO
 # =========================================================
