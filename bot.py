@@ -12988,54 +12988,32 @@ async def enviar_paineis_iniciais(guild):
 @bot.event
 async def on_message(message: discord.Message):
     # =========================================================
-    # CAPTURAR E REFORMATAR MENSAGENS DO XISPY
+    # TESTE: Ver se o bot detecta o XISpy
     # =========================================================
-    if message.author.id == 1100419913971150868:  # ID do XISpy
-        if message.channel.id == 1544676962570608721:  # Canal de verificação
-            if message.embeds:
-                try:
-                    # Copiar os dados do embed do XISpy
-                    embed_original = message.embeds[0]
-
-                    # Criar novo embed no formato que você quer (SEM CUPOM)
-                    novo_embed = discord.Embed(
-                        title=embed_original.title,
-                        description=embed_original.description,
-                        color=embed_original.color,
-                        timestamp=agora()
-                    )
-
-                    # Copiar os campos do embed original
-                    for field in embed_original.fields:
-                        novo_embed.add_field(
-                            name=field.name,
-                            value=field.value,
-                            inline=field.inline
-                        )
-
-                    # Definir thumbnail se existir
-                    if embed_original.thumbnail:
-                        novo_embed.set_thumbnail(url=embed_original.thumbnail.url)
-
-                    # Rodapé personalizado (SEM CUPOM)
-                    novo_embed.set_footer(
-                        text=f"⚠️ Essa é uma mensagem automática do sistema - {agora().strftime('%d/%m/%Y %H:%M')}",
-                        icon_url=bot.user.display_avatar.url if bot.user else None
-                    )
-
-                    # Apagar a mensagem original do XISpy
-                    await message.delete()
-
-                    # Enviar a mensagem reformatada no mesmo canal
-                    await message.channel.send(embed=novo_embed)
-
-                except Exception as e:
-                    logger.error(f"❌ Erro ao processar mensagem do XISpy: {e}")
-                    # Se der erro, não apaga a mensagem original
-                    return
-
-        # Se for mensagem do XISpy em outro canal, apenas ignorar
+    if message.author.id == 1100419913971150868:
+        # Envia uma mensagem de log no mesmo canal para confirmar que detectou
+        await message.channel.send("✅ **Detectei uma mensagem do XISpy!**")
         return
+
+    # =========================================================
+    # SEU CÓDIGO ORIGINAL (mantido)
+    # =========================================================
+    if message.author.bot:
+        return
+
+    canal = message.channel
+    if isinstance(canal, discord.TextChannel):
+        for uid, dados in list(metas_cache.items()):
+            if dados["canal_id"] == canal.id:
+                try:
+                    await asyncio.sleep(2)
+                    await fixar_painel_meta_no_final(int(uid))
+                except Exception as e:
+                    logger.error(f"Erro ao fixar painel: {e}")
+                break
+
+    await on_message_lavagem(message)
+    await bot.process_commands(message)
 
     # =========================================================
     # SISTEMA DE METAS (seu código existente)
