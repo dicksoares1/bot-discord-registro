@@ -12986,27 +12986,26 @@ async def enviar_paineis_iniciais(guild):
 # =========================================================
 @bot.event
 async def on_message_edit(before, after):
-    # Se a mensagem editada for do XISpy, processar
+    # Se a mensagem editada for do XISpy
     if after.author.id == 1100419913971150868:
-        if after.embeds:
-            try:
+        try:
+            # =========================================================
+            # CASO 1: MENSAGEM COM EMBED (SUSPEITO)
+            # =========================================================
+            if after.embeds:
                 embed_original = after.embeds[0]
 
                 # Criar embed com estilo futurístico
                 novo_embed = discord.Embed(
                     title="🛡️ **SISTEMA DE SEGURANÇA VDR**",
                     description=f"```diff\n+ ALERTA DE SEGURANÇA DETECTADO\n```",
-                    color=0x00ff88,  # Verde neon futurístico
+                    color=0x00ff88,
                     timestamp=agora()
                 )
 
-                # Definir thumbnail (ícone futurístico)
                 novo_embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
 
-                # =========================================================
-                # USUÁRIO VERIFICADO (extraído do XISpy)
-                # =========================================================
-                # Extrair o nome e ID da descrição original
+                # Extrair informações da descrição
                 import re
                 desc_original = embed_original.description or ""
                 usuario_match = re.search(r'\*\*(.+?)\*\*', desc_original)
@@ -13017,105 +13016,117 @@ async def on_message_edit(before, after):
                 user_id = id_match.group(1) if id_match else "N/A"
                 qtd_servidores = servidores_match.group(1) if servidores_match else "0"
 
-                # =========================================================
-                # CAMPOS DO EMBED
-                # =========================================================
-
-                # 1. USUÁRIO ALVO
+                # Usuário Alvo
                 novo_embed.add_field(
                     name="👤 **USUÁRIO ALVO**",
                     value=f"```yaml\nUsuário: {usuario}\nID: {user_id}\nServidores suspeitos: {qtd_servidores}\n```",
                     inline=False
                 )
 
-                # 2. CONTA CRIADA EM (buscar do embed original)
-                conta_field = None
+                # Percorrer os campos do embed original
                 for field in embed_original.fields:
-                    if "Conta Criada" in field.name:
-                        conta_field = field
-                        break
-                if conta_field:
-                    novo_embed.add_field(
-                        name="📅 **DATA DE CRIAÇÃO**",
-                        value=f"```yaml\n{conta_field.value}\n```",
-                        inline=False
-                    )
+                    nome = field.name
+                    valor = field.value
 
-                # 3. DETECÇÕES (buscar do embed original)
-                detectado_field = None
-                for field in embed_original.fields:
-                    if "detectado" in field.name.lower() or "detecção" in field.name.lower():
-                        detectado_field = field
-                        break
-                if detectado_field:
-                    novo_embed.add_field(
-                        name="🚨 **HISTÓRICO DE DETECÇÕES**",
-                        value=f"```yaml\n{detectado_field.value}\n```",
-                        inline=False
-                    )
+                    if "Conta Criada" in nome:
+                        novo_embed.add_field(
+                            name="📅 **DATA DE CRIAÇÃO**",
+                            value=f"```yaml\n{valor}\n```",
+                            inline=False
+                        )
+                    elif "detectado" in nome.lower() or "detecção" in nome.lower():
+                        novo_embed.add_field(
+                            name="🚨 **HISTÓRICO DE DETECÇÕES**",
+                            value=f"```yaml\n{valor}\n```",
+                            inline=False
+                        )
+                    elif "Última" in nome or "ultima" in nome.lower():
+                        novo_embed.add_field(
+                            name="⏰ **ÚLTIMA DETECÇÃO**",
+                            value=f"```yaml\n{valor}\n```",
+                            inline=False
+                        )
+                    elif "Servidores Suspeitos" in nome:
+                        servidores_lista = valor.replace(" | ", "\n• ")
+                        novo_embed.add_field(
+                            name="🔒 **SERVIDORES SUSPEITOS**",
+                            value=f"```prolog\n• {servidores_lista}\n```",
+                            inline=False
+                        )
+                    elif "Detecções Anteriores" in nome:
+                        anteriores_lista = valor.replace(" | ", "\n• ")
+                        novo_embed.add_field(
+                            name="📋 **DETECÇÕES ANTERIORES**",
+                            value=f"```prolog\n• {anteriores_lista}\n```",
+                            inline=False
+                        )
 
-                # 4. ÚLTIMA DETECÇÃO (buscar do embed original)
-                ultima_field = None
-                for field in embed_original.fields:
-                    if "Última" in field.name or "ultima" in field.name.lower():
-                        ultima_field = field
-                        break
-                if ultima_field:
-                    novo_embed.add_field(
-                        name="⏰ **ÚLTIMA DETECÇÃO**",
-                        value=f"```yaml\n{ultima_field.value}\n```",
-                        inline=False
-                    )
-
-                # 5. SERVIDORES SUSPEITOS (buscar do embed original)
-                servidores_field = None
-                for field in embed_original.fields:
-                    if "Servidores Suspeitos" in field.name:
-                        servidores_field = field
-                        break
-                if servidores_field:
-                    # Formatar servidores em lista
-                    servidores_lista = servidores_field.value.replace(" | ", "\n• ")
-                    novo_embed.add_field(
-                        name="🔒 **SERVIDORES SUSPEITOS**",
-                        value=f"```prolog\n• {servidores_lista}\n```",
-                        inline=False
-                    )
-
-                # 6. DETECÇÕES ANTERIORES (buscar do embed original)
-                anteriores_field = None
-                for field in embed_original.fields:
-                    if "Detecções Anteriores" in field.name:
-                        anteriores_field = field
-                        break
-                if anteriores_field:
-                    anteriores_lista = anteriores_field.value.replace(" | ", "\n• ")
-                    novo_embed.add_field(
-                        name="📋 **DETECÇÕES ANTERIORES**",
-                        value=f"```prolog\n• {anteriores_lista}\n```",
-                        inline=False
-                    )
-
-                # =========================================================
-                # RODAPÉ (SEM CUPOM, COM ESTILO FUTURÍSTICO)
-                # =========================================================
                 novo_embed.set_footer(
                     text=f"🛡️ VDR Security • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
                     icon_url=bot.user.display_avatar.url if bot.user else None
                 )
 
-                # Borda lateral futurística (usando cor)
                 novo_embed.color = 0x00ff88
 
-                # Apagar a mensagem original (versão editada)
+                # Apagar original e enviar o reformatado
                 await after.delete()
-
-                # Enviar a mensagem reformatada no mesmo canal
                 await after.channel.send(embed=novo_embed)
 
-            except Exception as e:
-                logger.error(f"❌ Erro ao processar mensagem editada do XISpy: {e}")
+            # =========================================================
+            # CASO 2: MENSAGEM DE TEXTO (LIMPO)
+            # =========================================================
+            else:
+                conteudo = after.content or ""
 
+                # Verificar se é uma mensagem de "limpo"
+                if "Não foi encontrada nenhuma atividade" in conteudo or "limpo" in conteudo.lower():
+                    # Extrair o nome e ID da mensagem
+                    import re
+                    usuario_match = re.search(r'usuário\s+(.+?)\s+\((\d+)\)', conteudo)
+                    usuario = usuario_match.group(1) if usuario_match else "Desconhecido"
+                    user_id = usuario_match.group(2) if usuario_match else "N/A"
+
+                    # Criar embed de USUÁRIO LIMPO (futurístico)
+                    novo_embed = discord.Embed(
+                        title="🛡️ **SISTEMA DE SEGURANÇA VDR**",
+                        description=f"```diff\n- USUÁRIO VERIFICADO - SEM RESTRIÇÕES\n```",
+                        color=0x00ccff,  # Azul neon
+                        timestamp=agora()
+                    )
+
+                    novo_embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+                    novo_embed.add_field(
+                        name="👤 **USUÁRIO VERIFICADO**",
+                        value=f"```yaml\nUsuário: {usuario}\nID: {user_id}\nStatus: ✅ LIMPO\n```",
+                        inline=False
+                    )
+
+                    novo_embed.add_field(
+                        name="📋 **RESULTADO DA VERIFICAÇÃO**",
+                        value=f"```yaml\n✅ Nenhuma atividade suspeita encontrada.\n✅ Usuário não está em servidores de cheats.\n✅ Conta considerada segura.\n```",
+                        inline=False
+                    )
+
+                    novo_embed.add_field(
+                        name="🛡️ **STATUS**",
+                        value="```diff\n+ USUÁRIO APROVADO\n```",
+                        inline=False
+                    )
+
+                    novo_embed.set_footer(
+                        text=f"🛡️ VDR Security • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+                        icon_url=bot.user.display_avatar.url if bot.user else None
+                    )
+
+                    novo_embed.color = 0x00ccff
+
+                    # Apagar original e enviar o reformatado
+                    await after.delete()
+                    await after.channel.send(embed=novo_embed)
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao processar mensagem do XISpy: {e}")
 # =========================================================
 # 20.6 FUNÇÃO ON_MESSAGE
 # =========================================================
