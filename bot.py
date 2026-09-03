@@ -12982,21 +12982,16 @@ async def enviar_paineis_iniciais(guild):
     except Exception as e:
         logger.error(f"❌ Erro geral ao enviar painéis: {e}")
 
-# =========================================================
-# 20.6 FUNÇÃO ON_MESSAGE
+
 # =========================================================
 @bot.event
-async def on_message(message: discord.Message):
-    # =========================================================
-    # CAPTURAR E REFORMATAR MENSAGENS DO XISPY
-    # =========================================================
-    if message.author.id == 1100419913971150868:  # ID do XISpy
-        if message.embeds:
+async def on_message_edit(before, after):
+    # Se a mensagem editada for do XISpy, processar
+    if after.author.id == 1100419913971150868:
+        if after.embeds:
             try:
-                # Copiar os dados do embed do XISpy
-                embed_original = message.embeds[0]
+                embed_original = after.embeds[0]
 
-                # Criar novo embed no formato que você quer (SEM CUPOM)
                 novo_embed = discord.Embed(
                     title=embed_original.title,
                     description=embed_original.description,
@@ -13004,7 +12999,6 @@ async def on_message(message: discord.Message):
                     timestamp=agora()
                 )
 
-                # Copiar os campos do embed original
                 for field in embed_original.fields:
                     novo_embed.add_field(
                         name=field.name,
@@ -13012,56 +13006,33 @@ async def on_message(message: discord.Message):
                         inline=field.inline
                     )
 
-                # Definir thumbnail se existir
                 if embed_original.thumbnail:
                     novo_embed.set_thumbnail(url=embed_original.thumbnail.url)
 
-                # Rodapé personalizado (SEM CUPOM)
                 novo_embed.set_footer(
                     text=f"⚠️ Essa é uma mensagem automática do sistema - {agora().strftime('%d/%m/%Y %H:%M')}",
                     icon_url=bot.user.display_avatar.url if bot.user else None
                 )
 
-                # Apagar a mensagem original do XISpy
-                await message.delete()
+                # Apagar a mensagem original (versão editada)
+                await after.delete()
 
                 # Enviar a mensagem reformatada no mesmo canal
-                await message.channel.send(embed=novo_embed)
+                await after.channel.send(embed=novo_embed)
 
             except Exception as e:
-                logger.error(f"❌ Erro ao processar mensagem do XISpy: {e}")
-                # Se der erro, não apaga a mensagem original
-                return
+                logger.error(f"❌ Erro ao processar mensagem editada do XISpy: {e}")
 
-        # Se for mensagem do XISpy, não processar comandos
-        return
-
+# =========================================================
+# 20.6 FUNÇÃO ON_MESSAGE
+# =========================================================
+@bot.event
+async def on_message(message: discord.Message):
     # =========================================================
-    # SISTEMA DE METAS (seu código existente)
+    # IGNORAR MENSAGENS DO XISpy (ele edita depois)
     # =========================================================
-    if message.author.bot:
-        return
-
-    canal = message.channel
-    if isinstance(canal, discord.TextChannel):
-        for uid, dados in list(metas_cache.items()):
-            if dados["canal_id"] == canal.id:
-                try:
-                    await asyncio.sleep(2)
-                    await fixar_painel_meta_no_final(int(uid))
-                except Exception as e:
-                    logger.error(f"Erro ao fixar painel: {e}")
-                break
-
-    # =========================================================
-    # SISTEMA DE LAVAGEM (seu código existente)
-    # =========================================================
-    await on_message_lavagem(message)
-
-    # =========================================================
-    # PROCESSAR COMANDOS
-    # =========================================================
-    await bot.process_commands(message)
+    if message.author.id == 1100419913971150868:
+        return  # Não faz nada, espera a edição
 
     # =========================================================
     # SISTEMA DE METAS (seu código existente)
@@ -13089,34 +13060,6 @@ async def on_message(message: discord.Message):
     # PROCESSAR COMANDOS
     # =========================================================
     await bot.process_commands(message)
-
-    # =========================================================
-    # SISTEMA DE METAS (seu código existente)
-    # =========================================================
-    if message.author.bot:
-        return
-
-    canal = message.channel
-    if isinstance(canal, discord.TextChannel):
-        for uid, dados in list(metas_cache.items()):
-            if dados["canal_id"] == canal.id:
-                try:
-                    await asyncio.sleep(2)
-                    await fixar_painel_meta_no_final(int(uid))
-                except Exception as e:
-                    logger.error(f"Erro ao fixar painel: {e}")
-                break
-
-    # =========================================================
-    # SISTEMA DE LAVAGEM (seu código existente)
-    # =========================================================
-    await on_message_lavagem(message)
-
-    # =========================================================
-    # PROCESSAR COMANDOS
-    # =========================================================
-    await bot.process_commands(message)
-
 # =========================================================
 # 20.7 EVENTOS DE MEMBRO
 # =========================================================
