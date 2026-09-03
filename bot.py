@@ -13064,6 +13064,33 @@ async def on_message(message: discord.Message):
     # =========================================================
     await bot.process_commands(message)
 
+    # =========================================================
+    # SISTEMA DE METAS (seu código existente)
+    # =========================================================
+    if message.author.bot:
+        return
+
+    canal = message.channel
+    if isinstance(canal, discord.TextChannel):
+        for uid, dados in list(metas_cache.items()):
+            if dados["canal_id"] == canal.id:
+                try:
+                    await asyncio.sleep(2)
+                    await fixar_painel_meta_no_final(int(uid))
+                except Exception as e:
+                    logger.error(f"Erro ao fixar painel: {e}")
+                break
+
+    # =========================================================
+    # SISTEMA DE LAVAGEM (seu código existente)
+    # =========================================================
+    await on_message_lavagem(message)
+
+    # =========================================================
+    # PROCESSAR COMANDOS
+    # =========================================================
+    await bot.process_commands(message)
+
 # =========================================================
 # 20.7 EVENTOS DE MEMBRO
 # =========================================================
