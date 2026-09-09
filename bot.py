@@ -8784,7 +8784,13 @@ async def definir_valor_meta_por_id(user_id):
     if not member:
         return 300000
 
-    # Primeiro verificar se tem valor personalizado
+    # Verificar se o membro é isento (prioridade máxima)
+    roles = [r.id for r in member.roles]
+    cargos_isentos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID, CARGO_GERENTE_MECANICA_ID]
+    if any(r in roles for r in cargos_isentos):
+        return 0
+
+    # Se não for isento, verificar se tem valor personalizado
     pool = await get_pool()
     if pool:
         async with pool.acquire() as conn:
