@@ -611,7 +611,8 @@ async def inicializar_tabelas(pool):
                 dinheiro BIGINT DEFAULT 0,
                 acao TEXT,
                 dinheiro_acoes BIGINT DEFAULT 0,
-                saldo_excedente BIGINT DEFAULT 0
+                saldo_excedente BIGINT DEFAULT 0,
+                valor_meta_personalizado BIGINT DEFAULT NULL
             )
         """)
         await conn.execute("""
