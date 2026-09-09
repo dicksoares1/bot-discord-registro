@@ -9025,7 +9025,7 @@ async def atualizar_embed_meta(user_id):
         barra_progresso = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
         porcentagem = int(progresso * 100)
         if meta_total == 0:
-            status_meta = "🟢 META ISENTA (Gerente)"
+            status_meta = "🟢 META ISENTA"
         elif progresso >= 1:
             status_meta = "✅ META CONCLUÍDA! 🎉"
         elif progresso >= 0.7:
