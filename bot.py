@@ -1233,7 +1233,10 @@ def obter_categoria_meta(member):
     if not member:
         return None
     roles = [r.id for r in member.roles]
-    if CARGO_GERENTE_ID in roles:
+    # =========================================================
+    # GERENTES (incluindo Gerência Mecânica) → Categoria Gerência
+    # =========================================================
+    if CARGO_GERENTE_ID in roles or CARGO_GERENTE_GERAL_ID in roles or CARGO_01_ID in roles or CARGO_02_ID in roles or CARGO_GERENTE_MECANICA_ID in roles:
         return CATEGORIA_META_GERENTE_ID
     if any(r in roles for r in [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]):
         return CATEGORIA_META_RESPONSAVEIS_ID
