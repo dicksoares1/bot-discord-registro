@@ -396,6 +396,7 @@ CARGO_AUSENTE_ID = 1337420032212336823
 CONVIDADO_ROLE_ID = 1337382961456353342
 EM_REGISTRO_ROLE_ID = 1337382961456353342
 AGREGADO_ROLE_ID = 1422847202937536532
+CARGO_MECANICO_ID = 1448526080645398641
 
 CARGOS_PERMITIDOS_REMOVER = [
     CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID,
@@ -8675,7 +8676,7 @@ async def carregar_metas_db():
         return []
     try:
         async with pool.acquire() as conn:
-            return await conn.fetch("SELECT user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente FROM metas")
+            return await conn.fetch("SELECT user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente, valor_meta_personalizado FROM metas")
     except Exception as e:
         logger.error(f"❌ Erro ao carregar metas: {e}")
         return []
@@ -8688,9 +8689,25 @@ async def salvar_meta_db(user_id, canal_id, dinheiro, acao):
         async with pool.acquire() as conn:
             if acao is not None:
                 acao = str(acao)
-            await conn.execute("INSERT INTO metas (user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente) VALUES ($1,$2,$3,$4,0,0) ON CONFLICT (user_id) DO UPDATE SET canal_id=$2, dinheiro=$3, acao=$4", str(user_id), str(canal_id), dinheiro, acao)
+            await conn.execute("INSERT INTO metas (user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente, valor_meta_personalizado) VALUES ($1,$2,$3,$4,0,0,NULL) ON CONFLICT (user_id) DO UPDATE SET canal_id=$2, dinheiro=$3, acao=$4", str(user_id), str(canal_id), dinheiro, acao)
     except Exception as e:
         logger.error(f"❌ Erro ao salvar meta: {e}")
+
+async def atualizar_valor_meta_personalizado(user_id, novo_valor):
+    """Atualiza o valor da meta personalizada para um usuário"""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE metas SET valor_meta_personalizado = $1 WHERE user_id = $2",
+                novo_valor, str(user_id)
+            )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar valor personalizado da meta: {e}")
+        return False
 
 async def adicionar_dinheiro_meta(user_id, valor):
     pool = get_db()
@@ -8703,12 +8720,13 @@ async def adicionar_dinheiro_meta(user_id, valor):
                 return False
             dinheiro_atual = meta["dinheiro"] or 0
             saldo_excedente = meta["saldo_excedente"] or 0
-            falta_para_meta = max(0, META_LIMITE - dinheiro_atual)
+            meta_limite = await definir_valor_meta_por_id(user_id)
+            falta_para_meta = max(0, meta_limite - dinheiro_atual)
             if valor <= falta_para_meta:
                 novo_dinheiro = dinheiro_atual + valor
                 await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_dinheiro, str(user_id))
             else:
-                novo_dinheiro = META_LIMITE
+                novo_dinheiro = meta_limite
                 novo_excedente = saldo_excedente + (valor - falta_para_meta)
                 await conn.execute("UPDATE metas SET dinheiro = $1, saldo_excedente = $2 WHERE user_id = $3", novo_dinheiro, novo_excedente, str(user_id))
             return True
@@ -8728,16 +8746,17 @@ async def depositar_na_meta(user_id, valor, motivo):
             dinheiro_atual = meta["dinheiro"] or 0
             dinheiro_acoes = meta["dinheiro_acoes"] or 0
             saldo_excedente = meta["saldo_excedente"] or 0
+            meta_limite = await definir_valor_meta_por_id(user_id)
             if "Ação" in motivo:
                 novo_acoes = dinheiro_acoes + valor
                 await conn.execute("UPDATE metas SET dinheiro_acoes = $1 WHERE user_id = $2", novo_acoes, str(user_id))
             else:
-                falta_para_meta = max(0, META_LIMITE - dinheiro_atual)
+                falta_para_meta = max(0, meta_limite - dinheiro_atual)
                 if valor <= falta_para_meta:
                     novo_dinheiro = dinheiro_atual + valor
                     await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_dinheiro, str(user_id))
                 else:
-                    novo_dinheiro = META_LIMITE
+                    novo_dinheiro = meta_limite
                     novo_excedente = saldo_excedente + (valor - falta_para_meta)
                     await conn.execute("UPDATE metas SET dinheiro = $1, saldo_excedente = $2 WHERE user_id = $3", novo_dinheiro, novo_excedente, str(user_id))
                 canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", str(user_id))
@@ -8750,16 +8769,50 @@ async def depositar_na_meta(user_id, valor, motivo):
         logger.error(f"❌ Erro ao depositar na meta: {e}")
         return False
 
+async def definir_valor_meta_por_id(user_id):
+    """Define o valor da meta baseado no cargo do membro ou valor personalizado"""
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return 300000
+
+    member = guild.get_member(int(user_id))
+    if not member:
+        return 300000
+
+    # Primeiro verificar se tem valor personalizado
+    pool = await get_pool()
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT valor_meta_personalizado FROM metas WHERE user_id = $1", str(user_id))
+            if row and row["valor_meta_personalizado"] is not None:
+                return row["valor_meta_personalizado"]
+
+    # Se não tiver personalizado, usar baseado no cargo
+    return await definir_valor_meta_por_cargo(member)
+
 async def definir_valor_meta_por_cargo(member: discord.Member):
     roles = [r.id for r in member.roles]
+
+    # =========================================================
+    # CARGO MECÂNICO - META 150
+    # =========================================================
+    if CARGO_MECANICO_ID in roles:
+        return 150000
+
+    # Isentos (não pagam meta)
     cargos_isentos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
     if any(r in roles for r in cargos_isentos):
         return 0
+
+    # Responsáveis
     cargos_responsaveis = [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]
     if any(r in roles for r in cargos_responsaveis):
         return 100000
+
+    # Soldados e Membros
     if CARGO_SOLDADO_ID in roles:
         return 300000
+
     return 300000
 
 async def criar_sala_meta(member: discord.Member):
@@ -8769,30 +8822,26 @@ async def criar_sala_meta(member: discord.Member):
     if not pool:
         logger.error("❌ Banco de dados indisponível em criar_sala_meta")
         return None
-    
+
     try:
         async with pool.acquire() as conn:
-            # =========================================================
-            # VERIFICAR SE JÁ TEM META NO BANCO
-            # =========================================================
             meta_existente = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(member.id))
-            
+
             if meta_existente:
                 canal_id = int(meta_existente["canal_id"])
                 canal_existe = guild.get_channel(canal_id)
-                
+
                 if canal_existe:
-                    # Sala existe, apenas atualizar cache e retornar
                     metas_cache[str(member.id)] = {
                         "canal_id": canal_id,
                         "dinheiro": meta_existente["dinheiro"] or 0,
                         "acao": meta_existente["acao"],
                         "dinheiro_acoes": meta_existente.get("dinheiro_acoes") or 0,
-                        "saldo_excedente": meta_existente.get("saldo_excedente") or 0
+                        "saldo_excedente": meta_existente.get("saldo_excedente") or 0,
+                        "valor_meta_personalizado": meta_existente.get("valor_meta_personalizado")
                     }
                     await atualizar_embed_meta(member.id)
-                    
-                    # Dar acesso aos responsáveis
+
                     cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
                     if cargo_resp:
                         for resp_member in guild.members:
@@ -8805,28 +8854,24 @@ async def criar_sala_meta(member: discord.Member):
                                     logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
                     return canal_existe
                 else:
-                    # Canal não existe mais, deletar do banco
                     await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
                     if str(member.id) in metas_cache:
                         del metas_cache[str(member.id)]
-            
-            # =========================================================
-            # PROCURAR CANAL EXISTENTE PELO NOME
-            # =========================================================
+
             nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
             for canal in guild.text_channels:
                 if canal.name.lower() == nome_canal.lower():
-                    # Encontrou um canal com o mesmo nome
                     await salvar_meta_db(member.id, canal.id, 0, 0)
                     metas_cache[str(member.id)] = {
                         "canal_id": canal.id,
                         "dinheiro": 0,
                         "acao": None,
                         "dinheiro_acoes": 0,
-                        "saldo_excedente": 0
+                        "saldo_excedente": 0,
+                        "valor_meta_personalizado": None
                     }
                     await atualizar_embed_meta(member.id)
-                    
+
                     cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
                     if cargo_resp:
                         for resp_member in guild.members:
@@ -8838,52 +8883,46 @@ async def criar_sala_meta(member: discord.Member):
                                 except Exception as e:
                                     logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
                     return canal
-            
-            # =========================================================
-            # CRIAR NOVA SALA
-            # =========================================================
+
             categoria_id = obter_categoria_meta(member)
             if not categoria_id:
                 logger.error(f"❌ Categoria não encontrada para {member.display_name}")
                 return None
-            
+
             categoria = guild.get_channel(categoria_id)
             if not categoria:
                 logger.error(f"❌ Categoria {categoria_id} não encontrada")
                 return None
-            
-            # Criar overwrites
+
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 member: discord.PermissionOverwrite(view_channel=True, send_messages=True)
             }
-            
+
             gerente = guild.get_role(CARGO_GERENTE_ID)
             if gerente:
                 overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
-            
+
             gerente_geral = guild.get_role(CARGO_GERENTE_GERAL_ID)
             if gerente_geral:
                 overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
-            
-            # Criar o canal
+
             nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
             canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
-            
-            # Salvar no banco
+
             await salvar_meta_db(member.id, canal.id, 0, 0)
             metas_cache[str(member.id)] = {
                 "canal_id": canal.id,
                 "dinheiro": 0,
                 "acao": None,
                 "dinheiro_acoes": 0,
-                "saldo_excedente": 0
+                "saldo_excedente": 0,
+                "valor_meta_personalizado": None
             }
-            
+
             await asyncio.sleep(1)
             await atualizar_embed_meta(member.id)
-            
-            # Dar acesso aos responsáveis
+
             cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
             if cargo_resp:
                 for resp_member in guild.members:
@@ -8892,10 +8931,10 @@ async def criar_sala_meta(member: discord.Member):
                             await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
                         except Exception as e:
                             logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
-            
+
             logger.info(f"✅ Sala criada para {member.display_name}: {canal.name}")
             return canal
-            
+
     except Exception as e:
         logger.error(f"❌ Erro ao criar sala meta para {member.display_name}: {e}")
         return None
@@ -8931,7 +8970,14 @@ async def atualizar_embed_meta(user_id):
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
             if not meta:
                 return
-            metas_cache[str(user_id)] = {"canal_id": canal.id, "dinheiro": 0, "acao": None, "dinheiro_acoes": 0, "saldo_excedente": 0}
+            metas_cache[str(user_id)] = {
+                "canal_id": canal.id,
+                "dinheiro": 0,
+                "acao": None,
+                "dinheiro_acoes": 0,
+                "saldo_excedente": 0,
+                "valor_meta_personalizado": None
+            }
         guild = bot.get_guild(GUILD_ID)
         member = guild.get_member(int(user_id))
         if member:
@@ -8944,7 +8990,8 @@ async def atualizar_embed_meta(user_id):
         dinheiro_acoes = meta.get("dinheiro_acoes") or 0
         saldo_excedente = meta.get("saldo_excedente") or 0
         acao = meta.get("acao") or "Nenhuma"
-        meta_total = await definir_valor_meta_por_cargo(member) if member else 300000
+        meta_total = await definir_valor_meta_por_id(user_id)
+
         embed = discord.Embed(title=f"💀 ── META SEMANAL ── 💀", description=f"👤 {nome.upper()} • VDR 442", color=Cores.META, timestamp=agora())
         if member:
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -8978,7 +9025,14 @@ async def atualizar_embed_meta(user_id):
             status_meta = "🟠 Começando..."
         else:
             status_meta = "🔴 Comece já!"
-        embed.add_field(name=f"📊 PROGRESSO • {porcentagem}%", value=f"```prolog\n{barra_progresso}\n{formatar_dinheiro(valor_progresso)} / {formatar_dinheiro(meta_total)}\n\n{status_meta}\n```", inline=False)
+
+        # Mostrar valor da meta
+        if meta_total > 0:
+            meta_texto = f"{formatar_dinheiro(valor_progresso)} / {formatar_dinheiro(meta_total)}"
+        else:
+            meta_texto = "ISENTO"
+
+        embed.add_field(name=f"📊 PROGRESSO • {porcentagem}%", value=f"```prolog\n{barra_progresso}\n{meta_texto}\n\n{status_meta}\n```", inline=False)
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
         if is_soldado:
             texto_acao = "**🎯 Participar de Ações** - Sua meta é paga com ações realizadas\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro extra"
@@ -8986,6 +9040,7 @@ async def atualizar_embed_meta(user_id):
             texto_acao = "**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta"
         embed.add_field(name="⚙️ COMO USAR", value=texto_acao, inline=False)
         embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}", icon_url=bot.user.display_avatar.url if bot.user else None)
+
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
                 try:
@@ -8993,6 +9048,7 @@ async def atualizar_embed_meta(user_id):
                     await asyncio.sleep(0.3)
                 except:
                     pass
+
         msg = await canal.send(embed=embed, view=MetaView(user_id))
         await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
         await verificar_meta_concluida(user_id, valor_progresso)
@@ -9107,10 +9163,40 @@ class MetaView(discord.ui.View):
             if not meta:
                 await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
                 return
-            dados = {"dinheiro": meta["dinheiro"] or 0, "saldo_excedente": meta.get("saldo_excedente") or 0}
+            dados = {
+                "dinheiro": meta["dinheiro"] or 0,
+                "saldo_excedente": meta.get("saldo_excedente") or 0
+            }
             await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
         except Exception as e:
             logger.error(f"❌ Erro no botão Editar Meta: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    # =========================================================
+    # NOVO BOTÃO: EDITAR VALOR DA META (APENAS GERENTES)
+    # =========================================================
+    @discord.ui.button(label="⚙️ Editar Valor da Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_valor_fixo", emoji="⚙️", row=1)
+    async def editar_valor_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Verificar se é gerente ou admin
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
+            if not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM** podem editar o valor da meta!", ephemeral=True)
+                return
+
+            # Buscar valor atual da meta
+            meta_total = await definir_valor_meta_por_id(self.user_id)
+
+            # Abrir modal para digitar o novo valor
+            modal = EditarValorMetaModal(self.user_id, meta_total)
+            await interaction.response.send_modal(modal)
+
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Valor da Meta: {e}")
             try:
                 await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
@@ -9137,7 +9223,6 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
             await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
             return
 
-        # Verificar se a meta existe
         async with pool.acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
 
@@ -9201,31 +9286,86 @@ class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
             logger.error(f"❌ Erro ao editar meta: {e}")
             await interaction.followup.send(f"❌ Erro ao editar meta: {str(e)}", ephemeral=True)
 
+# =========================================================
+# NOVO MODAL: EDITAR VALOR DA META (GERENTE)
+# =========================================================
+class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"):
+    def __init__(self, user_id, valor_atual):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.valor_atual = valor_atual
+
+        self.novo_valor = discord.ui.TextInput(
+            label="💰 NOVO VALOR DA META",
+            placeholder=f"Valor atual: {formatar_dinheiro(valor_atual)}",
+            required=True,
+            max_length=15
+        )
+        self.add_item(self.novo_valor)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            novo_valor = safe_int(self.novo_valor.value)
+            if novo_valor < 0:
+                raise ValueError("O valor não pode ser negativo")
+        except ValueError as e:
+            await interaction.followup.send(f"❌ **Valor inválido!** {str(e)}", ephemeral=True)
+            return
+
+        # Atualizar no banco
+        sucesso = await atualizar_valor_meta_personalizado(self.user_id, novo_valor)
+
+        if not sucesso:
+            await interaction.followup.send("❌ **Erro ao atualizar o valor da meta!**", ephemeral=True)
+            return
+
+        # Atualizar cache
+        if str(self.user_id) in metas_cache:
+            metas_cache[str(self.user_id)]["valor_meta_personalizado"] = novo_valor
+
+        # Atualizar o embed da meta
+        await atualizar_embed_meta(self.user_id)
+
+        embed = discord.Embed(
+            title="✅ VALOR DA META ATUALIZADO!",
+            description=f"**👤 <@{self.user_id}>**",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.add_field(
+            name="💰 NOVO VALOR DA META",
+            value=f"```yaml\n{formatar_dinheiro(novo_valor)}\n```",
+            inline=False
+        )
+        embed.add_field(
+            name="👤 ALTERADO POR",
+            value=interaction.user.mention,
+            inline=True
+        )
+        embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Metas")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 class SolicitarSalaView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="➕ Criar Sala para Membro", style=discord.ButtonStyle.success, custom_id="criar_sala_gerencia")
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # =========================================================
-        # VERIFICAR PERMISSÃO
-        # =========================================================
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
-        
+
         if not is_admin and not is_gerente:
             await interaction.response.send_message(
                 "❌ **Apenas Gerentes, Cargo 01, Cargo 02 e ADM podem criar salas para outros membros!**",
                 ephemeral=True
             )
             return
-        
-        # =========================================================
-        # ABRIR MODAL PARA ESCOLHER O MEMBRO
-        # =========================================================
+
         modal = CriarSalaParaMembroModal()
         await interaction.response.send_modal(modal)
-
 
 class CriarSalaParaMembroModal(discord.ui.Modal, title="📂 Criar Sala para Membro"):
     membro_id = discord.ui.TextInput(
@@ -9236,38 +9376,36 @@ class CriarSalaParaMembroModal(discord.ui.Modal, title="📂 Criar Sala para Mem
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
+
         try:
             user_id = int(self.membro_id.value.strip())
         except:
             await interaction.followup.send("❌ ID inválido! Digite apenas números.", ephemeral=True)
             return
-        
+
         guild = interaction.guild
         member = guild.get_member(user_id)
-        
+
         if not member:
             await interaction.followup.send(f"❌ Membro com ID `{user_id}` não encontrado no servidor!", ephemeral=True)
             return
-        
-        # Verificar se o membro já tem sala
+
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
-        
+
         async with pool.acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
-        
+
         if meta:
             canal = guild.get_channel(meta["canal_id"])
             if canal:
                 await interaction.followup.send(f"✅ {member.mention} já possui uma sala! {canal.mention}", ephemeral=True)
                 return
-        
-        # Criar a sala
+
         sala = await criar_sala_meta(member)
-        
+
         if sala:
             await interaction.followup.send(
                 f"✅ **Sala criada com sucesso para {member.mention}!**\n"
@@ -9489,7 +9627,14 @@ async def carregar_metas_cache():
         rows = await carregar_metas_db()
         metas_cache = {}
         for r in rows:
-            metas_cache[str(r["user_id"])] = {"canal_id": int(r["canal_id"]), "dinheiro": r["dinheiro"], "acao": r["acao"], "dinheiro_acoes": r.get("dinheiro_acoes") or 0, "saldo_excedente": r.get("saldo_excedente") or 0}
+            metas_cache[str(r["user_id"])] = {
+                "canal_id": int(r["canal_id"]),
+                "dinheiro": r["dinheiro"],
+                "acao": r["acao"],
+                "dinheiro_acoes": r.get("dinheiro_acoes") or 0,
+                "saldo_excedente": r.get("saldo_excedente") or 0,
+                "valor_meta_personalizado": r.get("valor_meta_personalizado")
+            }
         return True
     except Exception as e:
         logger.error(f"❌ Erro ao recarregar cache de metas: {e}")
@@ -9521,12 +9666,13 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 dinheiro = meta["dinheiro"] or 0
                 acao = meta["acao"] or "N/A"
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+                meta_limite = await definir_valor_meta_por_id(user_id)
                 try:
-                    await conn.execute("INSERT INTO metas_historico (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento) VALUES ($1, $2, $3, $4, $5, $6, $7)", user_id, min(dinheiro, 300000), acao, dinheiro_acoes, data_inicio_naive, data_fim_naive, data_fechamento)
+                    await conn.execute("INSERT INTO metas_historico (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento) VALUES ($1, $2, $3, $4, $5, $6, $7)", user_id, min(dinheiro, meta_limite), acao, dinheiro_acoes, data_inicio_naive, data_fim_naive, data_fechamento)
                     salvos += 1
                 except Exception as e:
                     logger.error(f"❌ Erro ao salvar meta de {user_id} no histórico: {e}")
-                relatorio.append({"user_id": user_id, "dinheiro": min(dinheiro, 300000), "acao": acao, "dinheiro_acoes": dinheiro_acoes, "total_meta": min(dinheiro, 300000), "status": status})
+                relatorio.append({"user_id": user_id, "dinheiro": min(dinheiro, meta_limite), "acao": acao, "dinheiro_acoes": dinheiro_acoes, "total_meta": min(dinheiro, meta_limite), "status": status})
             membros_sem_meta = []
             if guild:
                 cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID, CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]
@@ -9719,7 +9865,7 @@ async def verificar_meta_concluida(user_id, valor_total):
     member = guild.get_member(int(user_id))
     if not member:
         return False
-    meta_total = await definir_valor_meta_por_cargo(member)
+    meta_total = await definir_valor_meta_por_id(user_id)
     if meta_total == 0:
         return False
     if valor_total >= meta_total:
@@ -9742,7 +9888,7 @@ async def verificar_meta_concluida(user_id, valor_total):
                         canal = bot.get_channel(int(canal_id))
                         if canal:
                             user = await pegar_usuario(user_id)
-                            
+
                             # =========================================================
                             # VDRZINHO - Meta concluída
                             # =========================================================
@@ -9752,7 +9898,7 @@ async def verificar_meta_concluida(user_id, valor_total):
                                 nome=member.display_name if member else str(user_id),
                                 dados={"valor": valor_total, "meta": meta_total}
                             ))
-                            
+
                             embed = discord.Embed(
                                 title="🎉 META SEMANAL CONCLUÍDA!",
                                 description=f"{user.mention} **parabéns!** Sua meta semanal foi atingida! 🎉",
