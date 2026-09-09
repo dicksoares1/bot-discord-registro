@@ -13323,6 +13323,18 @@ async def on_member_update(before, after):
     tem_resp = any(r.id == CARGO_RESP_METAS_ID for r in after.roles)
     if not tinha_resp and tem_resp:
         await atualizar_acesso_responsaveis()
+    
+    # =========================================================
+    # DETECTAR QUANDO O CARGO GERENTE MECANICA É ADICIONADO
+    # =========================================================
+    tinha_gerente_mecanica = any(r.id == CARGO_GERENTE_MECANICA_ID for r in before.roles)
+    tem_gerente_mecanica = any(r.id == CARGO_GERENTE_MECANICA_ID for r in after.roles)
+    
+    if not tinha_gerente_mecanica and tem_gerente_mecanica:
+        # Atualizar a meta do membro
+        await atualizar_embed_meta(after.id)
+        logger.info(f"🔄 Meta de {after.display_name} atualizada (Gerente Mecânica adicionado)")
+    
     tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
     tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
     if not tinha_agregado and tem_agregado:
