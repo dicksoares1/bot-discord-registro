@@ -12617,6 +12617,17 @@ async def cmd_desativar_vendas_concluidas(ctx):
     await ctx.send(f"✅ **{contador} vendas concluídas desativadas!**")
 
 # =========================================================
+# 19.2 COMANDO RESTAURAR PRODUÇÃO TRAVADA
+# =========================================================
+
+@bot.command(name="restaurar_producoes")
+@commands.has_permissions(administrator=True)
+async def cmd_restaurar_producoes(ctx):
+    await ctx.send("🔄 Restaurando produções...")
+    await restaurar_producoes()
+    await ctx.send("✅ Produções restauradas!")
+
+# =========================================================
 # ==================== SISTEMA XLSPY ======================
 # =========================================================
 # FUNCIONALIDADES:
