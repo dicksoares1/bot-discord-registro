@@ -201,26 +201,29 @@ CATEGORIA_META_SETADO_ID = 1461335748870541323  # Ajuste se tiver uma categoria 
 # =========================================================
 # MAPEAMENTO: CATEGORIA POR CARGO (HIERARQUIA)
 # =========================================================
+# TODOS os cargos vão criar categoria automaticamente
+# O bot vai usar o nome do grupo da HIERARQUIA_CARGOS
 CATEGORIA_POR_CARGO = {
-    CARGO_GERENTE_ID: CATEGORIA_META_GERENTE_ID,
-    CARGO_GERENTE_MECANICA_ID: CATEGORIA_META_GERENTE_ID,
-    CARGO_01_ID: CATEGORIA_META_GERENTE_ID,
-    CARGO_02_ID: CATEGORIA_META_GERENTE_ID,
-    CARGO_03_ID: CATEGORIA_META_GERENTE_ID,
-    CARGO_RESP_METAS_ID: CATEGORIA_META_RESPONSAVEIS_ID,
-    CARGO_RESP_ACAO_ID: CATEGORIA_META_RESPONSAVEIS_ID,
-    CARGO_RESP_P1_ID: CATEGORIA_META_RESPONSAVEIS_ID,
-    CARGO_RESP_VENDAS_ID: CATEGORIA_META_RESPONSAVEIS_ID,
-    CARGO_RESP_PRODUCAO_ID: CATEGORIA_META_RESPONSAVEIS_ID,
-    CARGO_RESP_AGREGADOS_ID: CATEGORIA_META_RESPONSAVEIS_ID,
-    CARGO_RESP_MECANICA_ID: CATEGORIA_META_RESPONSAVEIS_ID,
-    CARGO_RESP_BAU_ID: CATEGORIA_META_RESPONSAVEIS_ID,
-    CARGO_MECANICO_ID: CATEGORIA_META_MECANICO_ID,
-    CARGO_SOLDADO_ID: CATEGORIA_META_SOLDADO_ID,
-    CARGO_MEMBRO_ID: CATEGORIA_META_MEMBRO_ID,
-    CARGO_MORADOR_ID: CATEGORIA_META_MORADOR_ID,
-    CARGO_AGREGADO_ID: CATEGORIA_META_AGREGADO_ID,
-    CARGO_SETADO_ID: CATEGORIA_META_SETADO_ID,
+    # Todos None = cria automaticamente
+    CARGO_GERENTE_ID: None,
+    CARGO_GERENTE_MECANICA_ID: None,
+    CARGO_01_ID: None,
+    CARGO_02_ID: None,
+    CARGO_03_ID: None,
+    CARGO_RESP_METAS_ID: None,
+    CARGO_RESP_ACAO_ID: None,
+    CARGO_RESP_P1_ID: None,
+    CARGO_RESP_VENDAS_ID: None,
+    CARGO_RESP_PRODUCAO_ID: None,
+    CARGO_RESP_AGREGADOS_ID: None,
+    CARGO_RESP_MECANICA_ID: None,
+    CARGO_RESP_BAU_ID: None,
+    CARGO_MECANICO_ID: None,
+    CARGO_SOLDADO_ID: None,
+    CARGO_MEMBRO_ID: None,
+    CARGO_MORADOR_ID: None,
+    CARGO_AGREGADO_ID: None,
+    CARGO_SETADO_ID: None,
 }
 
 # =========================================================
@@ -11983,13 +11986,15 @@ async def on_member_update(before, after):
     tem_sm = any(r.id == CARGO_SEM_META_ID for r in after.roles)
 
     if not tinha_sm and tem_sm:
+        logger.info(f"🔍 {after.display_name} ganhou cargo SM, deletando sala...")
         # Deletar a sala de meta do membro
         pool = await get_pool()
         if pool:
             async with pool.acquire() as conn:
                 meta = await conn.fetchrow("SELECT canal_id FROM metas WHERE user_id = $1", str(after.id))
                 if meta:
-                    canal = after.guild.get_channel(int(meta["canal_id"]))
+                    canal_id = int(meta["canal_id"])
+                    canal = after.guild.get_channel(canal_id)
                     if canal:
                         try:
                             await canal.delete(reason="Membro recebeu cargo SM (Sem Meta)")
@@ -11999,6 +12004,8 @@ async def on_member_update(before, after):
                     await conn.execute("DELETE FROM metas WHERE user_id = $1", str(after.id))
                     if str(after.id) in metas_cache:
                         del metas_cache[str(after.id)]
+                else:
+                    logger.info(f"ℹ️ {after.display_name} não tem sala de meta no banco")
         logger.info(f"✅ {after.display_name} agora é isento de meta (SM)")
 
 
@@ -12898,7 +12905,7 @@ async def cmd_desativar_vendas_concluidas(ctx):
     await ctx.send(f"✅ **{contador} vendas concluídas desativadas!**")
 
 # =========================================================
-# 19.2 COMANDO RESTAURAR PRODUÇÃO TRAVADA
+# 19.22 COMANDO RESTAURAR PRODUÇÃO TRAVADA
 # =========================================================
 
 @bot.command(name="restaurar_producoes")
@@ -12907,6 +12914,25 @@ async def cmd_restaurar_producoes(ctx):
     await ctx.send("🔄 Restaurando produções...")
     await restaurar_producoes()
     await ctx.send("✅ Produções restauradas!")
+
+# =========================================================
+# 19.3 RECRIAR CATEGORIA
+# =========================================================
+
+@bot.command(name="recriar_categorias")
+@commands.has_permissions(administrator=True)
+async def cmd_recriar_categorias(ctx):
+    """Recria todas as categorias de metas"""
+    pool = await get_pool()
+    if not pool:
+        await ctx.send("❌ Banco de dados indisponível!")
+        return
+    
+    # Limpar tabela de categorias
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM categorias_metas")
+    
+    await ctx.send("🗑️ Cache de categorias limpo! Agora use `!atualizar_metas` para recriar.")
 
 # =========================================================
 # ==================== SISTEMA XLSPY ======================
