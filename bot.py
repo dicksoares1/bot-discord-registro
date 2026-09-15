@@ -157,7 +157,9 @@ CARGOS_PERMITIDOS_ESCALACAO = [
 # =========================================================
 HIERARQUIA_CARGOS = [
     # Liderança (mais alto)
-    ("Liderança", [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]),
+    ("Liderança", [CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]),
+    # Gerentes (categoria separada)
+    ("Gerentes", [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID]),
     # Responsáveis
     ("Responsáveis", [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID]),
     # Mecânicos
