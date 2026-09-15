@@ -843,6 +843,20 @@ async def inicializar_tabelas(pool):
                 data_verificacao TIMESTAMP DEFAULT NOW()
             )
         """)
+        # =========================================================
+        # PONTOS MECÂNICA (controle de horas)
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pontos_mecanica (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                entrada TIMESTAMP NOT NULL,
+                saida TIMESTAMP,
+                tempo_segundos BIGINT DEFAULT 0,
+                ativo BOOLEAN DEFAULT true,
+                data_criacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
 
     logger.info("✅ Todas as tabelas criadas/verificadas com sucesso!")
 
@@ -9246,7 +9260,136 @@ async def definir_valor_meta_por_cargo(member: discord.Member):
         return 300000
 
     return 300000
+# =========================================================
+# FUNÇÕES DE PONTO MECÂNICA
+# =========================================================
+async def buscar_ponto_ativo(user_id):
+    """Busca o ponto ativo do mecânico"""
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM pontos_mecanica WHERE user_id = $1 AND ativo = true ORDER BY entrada DESC LIMIT 1",
+                str(user_id)
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar ponto ativo: {e}")
+        return None
 
+async def abrir_ponto(user_id):
+    """Abre um novo ponto para o mecânico"""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            # Verificar se já tem ponto ativo
+            ativo = await conn.fetchrow(
+                "SELECT id FROM pontos_mecanica WHERE user_id = $1 AND ativo = true",
+                str(user_id)
+            )
+            if ativo:
+                return False  # Já tem ponto aberto
+            await conn.execute(
+                "INSERT INTO pontos_mecanica (user_id, entrada, ativo) VALUES ($1, $2, true)",
+                str(user_id), agora_db()
+            )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao abrir ponto: {e}")
+        return False
+
+async def fechar_ponto(user_id):
+    """Fecha o ponto ativo do mecânico"""
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            ponto = await conn.fetchrow(
+                "SELECT * FROM pontos_mecanica WHERE user_id = $1 AND ativo = true ORDER BY entrada DESC LIMIT 1",
+                str(user_id)
+            )
+            if not ponto:
+                return None
+            entrada = ponto["entrada"]
+            if isinstance(entrada, datetime) and entrada.tzinfo is None:
+                entrada = entrada.replace(tzinfo=BRASIL)
+            saida = agora()
+            tempo = int((saida - entrada).total_seconds())
+            await conn.execute(
+                "UPDATE pontos_mecanica SET saida = $1, tempo_segundos = $2, ativo = false WHERE id = $3",
+                para_db_naive(saida), tempo, ponto["id"]
+            )
+            return {"entrada": entrada, "saida": saida, "tempo": tempo}
+    except Exception as e:
+        logger.error(f"❌ Erro ao fechar ponto: {e}")
+        return None
+
+async def calcular_horas_semana(user_id):
+    """Calcula o total de horas do mecânico na semana atual (segunda a domingo)"""
+    pool = await get_pool()
+    if not pool:
+        return 0
+    try:
+        # Calcular início e fim da semana atual
+        hoje = agora()
+        dia_semana = hoje.weekday()  # 0=segunda, 6=domingo
+        segunda = (hoje - timedelta(days=dia_semana)).replace(hour=0, minute=0, second=0, microsecond=0)
+        domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+        async with pool.acquire() as conn:
+            # Buscar todos os pontos FECHADOS da semana
+            rows = await conn.fetch(
+                "SELECT tempo_segundos FROM pontos_mecanica WHERE user_id = $1 AND ativo = false AND entrada >= $2 AND entrada <= $3",
+                str(user_id), para_db_naive(segunda), para_db_naive(domingo)
+            )
+            total_fechados = sum(r["tempo_segundos"] for r in rows)
+
+            # Verificar se tem ponto ABERTO agora
+            aberto = await conn.fetchrow(
+                "SELECT entrada FROM pontos_mecanica WHERE user_id = $1 AND ativo = true",
+                str(user_id)
+            )
+            total_aberto = 0
+            if aberto:
+                entrada_aberto = aberto["entrada"]
+                if isinstance(entrada_aberto, datetime) and entrada_aberto.tzinfo is None:
+                    entrada_aberto = entrada_aberto.replace(tzinfo=BRASIL)
+                total_aberto = int((agora() - entrada_aberto).total_seconds())
+
+            return total_fechados + total_aberto
+    except Exception as e:
+        logger.error(f"❌ Erro ao calcular horas da semana: {e}")
+        return 0
+
+async def resetar_pontos_semana():
+    """Reseta os pontos da semana (chamado no fechamento semanal)"""
+    pool = await get_pool()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            # Fechar qualquer ponto que ficou aberto
+            await conn.execute(
+                "UPDATE pontos_mecanica SET ativo = false, saida = $1 WHERE ativo = true",
+                agora_db()
+            )
+            logger.info("✅ Pontos da mecânica resetados para a nova semana")
+    except Exception as e:
+        logger.error(f"❌ Erro ao resetar pontos: {e}")
+
+def formatar_horas(segundos):
+    """Formata segundos em Xh Ymin"""
+    if segundos < 60:
+        return f"{segundos}s"
+    horas = segundos // 3600
+    minutos = (segundos % 3600) // 60
+    if horas > 0:
+        return f"{horas}h {minutos}min"
+    return f"{minutos}min"
 # =========================================================
 # FUNÇÕES DE CATEGORIA (COM CRIAÇÃO AUTOMÁTICA)
 # =========================================================
@@ -9284,7 +9427,7 @@ async def salvar_categoria_db(nome_cargo, categoria_id):
 async def criar_categoria_automatica(guild, nome_cargo):
     """Cria uma categoria automaticamente"""
     try:
-        nome_categoria = f"📁 {nome_cargo.upper()}"
+        nome_categoria = f"📜 | METAS {nome_cargo.upper()}"
         nova_categoria = await guild.create_category(nome_categoria)
         logger.info(f"✅ Categoria criada: {nome_categoria} (ID: {nova_categoria.id})")
         await salvar_categoria_db(nome_cargo, nova_categoria.id)
@@ -9557,14 +9700,68 @@ async def atualizar_embed_meta(user_id):
         else:
             meta_texto = "ISENTO"
 
-        embed.add_field(name=f"📊 PROGRESSO • {porcentagem}%", value=f"```prolog\n{barra_progresso}\n{meta_texto}\n\n{status_meta}\n```", inline=False)
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+        # =========================================================
+        # SISTEMA DE PONTO (APENAS PARA MECÂNICOS)
+        # =========================================================
+        is_mecanico = CARGO_MECANICO_ID in [r.id for r in member.roles] if member else False
+        if is_mecanico:
+            # Calcular horas da semana
+            segundos_semana = await calcular_horas_semana(user_id)
+            META_HORAS_SEMANA = 6 * 3600  # 6 horas em segundos
+            progresso_horas = min(segundos_semana / META_HORAS_SEMANA, 1.0) if META_HORAS_SEMANA > 0 else 0
+            porcentagem_horas = int(progresso_horas * 100)
+            barra_horas = "▓" * int(progresso_horas * 20) + "░" * (20 - int(progresso_horas * 20))
+
+            if segundos_semana >= META_HORAS_SEMANA:
+                status_horas = "✅ META DE HORAS CONCLUÍDA!"
+            elif progresso_horas >= 0.7:
+                status_horas = "🟢 Quase lá!"
+            elif progresso_horas >= 0.4:
+                status_horas = "🟡 Vamos acelerar!"
+            else:
+                status_horas = "🔴 Comece já!"
+
+            # Verificar se tem ponto aberto
+            ponto_ativo = await buscar_ponto_ativo(user_id)
+            status_ponto = "🟢 **PONTO ABERTO**" if ponto_ativo else "⚪ **PONTO FECHADO**"
+
+            embed.add_field(
+                name="⏰ META DE HORAS (MECÂNICA)",
+                value=(
+                    f"```yaml\n"
+                    f"Meta semanal: 6h\n"
+                    f"Tempo total: {formatar_horas(segundos_semana)}\n"
+                    f"Status: {status_horas}\n"
+                    f"```"
+                ),
+                inline=False
+            )
+            embed.add_field(
+                name=f"📊 PROGRESSO DE HORAS • {porcentagem_horas}%",
+                value=f"```prolog\n{barra_horas}\n{formatar_horas(segundos_semana)} / 6h\n```",
+                inline=False
+            )
+            embed.add_field(
+                name="📍 STATUS DO PONTO",
+                value=status_ponto,
+                inline=False
+            )
+
+        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
         if is_soldado:
             texto_acao = "**🎯 Participar de Ações** - Sua meta é paga com ações realizadas\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro extra"
         else:
             texto_acao = "**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta"
         embed.add_field(name="⚙️ COMO USAR", value=texto_acao, inline=False)
         embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+        # =========================================================
+        # BOTÕES DA VIEW (MetaView ou MecanicoView)
+        # =========================================================
+        view_class = MecanicoView if is_mecanico else MetaView
 
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
@@ -9574,7 +9771,28 @@ async def atualizar_embed_meta(user_id):
                 except:
                     pass
 
-        msg = await canal.send(embed=embed, view=MetaView(user_id))
+        # Verificar se tem ponto aberto para escolher o botão correto
+        if is_mecanico:
+            ponto_ativo = await buscar_ponto_ativo(user_id)
+            if ponto_ativo:
+                # Ponto aberto → Botão vermelho "Fechar Ponto"
+                view_final = MecanicoView(user_id)
+                for item in view_final.children:
+                    if item.custom_id == "mecanico_ponto_dinamico":
+                        item.label = "🔴 Fechar Ponto"
+                        item.style = discord.ButtonStyle.danger
+                        item.emoji = "🔴"
+            else:
+                # Ponto fechado → Botão verde "Abrir Ponto"
+                view_final = MecanicoView(user_id)
+                for item in view_final.children:
+                    if item.custom_id == "mecanico_ponto_dinamico":
+                        item.label = "🟢 Abrir Ponto"
+                        item.style = discord.ButtonStyle.success
+                        item.emoji = "🟢"
+        else:
+            view_final = MetaView(user_id)
+        msg = await canal.send(embed=embed, view=view_final)
         await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
         await verificar_meta_concluida(user_id, valor_progresso)
     except Exception as e:
@@ -9718,6 +9936,128 @@ class MetaView(discord.ui.View):
             except:
                 pass
 
+# =========================================================
+# VIEW ESPECIAL PARA MECÂNICOS (COM BOTÃO DE PONTO DINÂMICO)
+# =========================================================
+class MecanicoView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+
+    @discord.ui.button(label="🟢 Abrir Ponto", style=discord.ButtonStyle.success, custom_id="mecanico_ponto_dinamico", emoji="🟢", row=0)
+    async def ponto_dinamico(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Verificar se é o dono da sala
+        if str(interaction.user.id) != str(self.user_id):
+            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Verificar se tem ponto aberto
+        ponto_ativo = await buscar_ponto_ativo(self.user_id)
+
+        if ponto_ativo:
+            # =========================================================
+            # FECHAR PONTO
+            # =========================================================
+            resultado = await fechar_ponto(self.user_id)
+            if not resultado:
+                await interaction.followup.send("⚠️ Erro ao fechar ponto. Tente novamente.", ephemeral=True)
+                return
+
+            await atualizar_embed_meta(self.user_id)
+
+            tempo_formatado = formatar_horas(resultado["tempo"])
+            await interaction.followup.send(
+                f"✅ **Ponto fechado!**\n"
+                f"⏰ **Entrada:** {resultado['entrada'].strftime('%H:%M:%S')}\n"
+                f"⏰ **Saída:** {resultado['saida'].strftime('%H:%M:%S')}\n"
+                f"⏱️ **Tempo desta sessão:** {tempo_formatado}",
+                ephemeral=True
+            )
+        else:
+            # =========================================================
+            # ABRIR PONTO
+            # =========================================================
+            sucesso = await abrir_ponto(self.user_id)
+            if not sucesso:
+                await interaction.followup.send("❌ Erro ao abrir ponto. Tente novamente.", ephemeral=True)
+                return
+
+            await atualizar_embed_meta(self.user_id)
+            await interaction.followup.send(
+                f"✅ **Ponto aberto às {agora().strftime('%H:%M:%S')}!**\n⏰ O tempo está contando...",
+                ephemeral=True
+            )
+
+    @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="mecanico_adicionar_dinheiro", emoji="💰", row=1)
+    async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+                return
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            if not meta:
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                return
+            await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Adicionar Dinheiro: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_meta", emoji="✏️", row=1)
+    async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            is_dono = str(interaction.user.id) == str(self.user_id)
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
+            if not is_dono and not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
+                return
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+                return
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            if not meta:
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                return
+            dados = {
+                "dinheiro": meta["dinheiro"] or 0,
+                "saldo_excedente": meta.get("saldo_excedente") or 0
+            }
+            await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Meta: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    @discord.ui.button(label="⚙️ Editar Valor da Meta", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_valor", emoji="⚙️", row=2)
+    async def editar_valor_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
+            if not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM** podem editar o valor da meta!", ephemeral=True)
+                return
+            meta_total = await definir_valor_meta_por_id(self.user_id)
+            modal = EditarValorMetaModal(self.user_id, meta_total)
+            await interaction.response.send_modal(modal)
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Valor da Meta: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+                
 class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Sujo"):
     quantidade = discord.ui.TextInput(label="Valor do Dinheiro Sujo", placeholder="Digite o valor (ex: 5000)", required=True)
 
@@ -10218,6 +10558,7 @@ async def zerar_exibicao_metas():
         async with pool.acquire() as conn:
             await conn.execute("UPDATE metas SET dinheiro = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL")
             logger.info("⚠️ METAS ZERADAS PARA A NOVA SEMANA!")
+            await resetar_pontos_semana()
         await carregar_metas_cache()
         contador = 0
         for uid in list(metas_cache.keys()):
