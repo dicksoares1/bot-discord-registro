@@ -11515,7 +11515,6 @@ async def on_message_edit(before, after):
     await canal_log.send(embed=embed)
 
 @bot.event
-@bot.event
 async def on_member_join(member):
     if member.bot:
         return
@@ -11533,32 +11532,52 @@ async def on_member_join(member):
             timestamp=agora()
         )
         embed.set_thumbnail(url=member.display_avatar.url)
+
+        # NOME
         embed.add_field(
             name="👤 NOME",
             value=f"```yaml\n{member.display_name}\n```",
             inline=True
         )
+
+        # APELIDO
         embed.add_field(
             name="🏷️ APELIDO",
             value=f"```yaml\n{member.name}\n```",
             inline=True
         )
+
+        # ID
         embed.add_field(
             name="🆔 ID",
             value=f"```yaml\n{member.id}\n```",
             inline=True
         )
+
+        # CONTA CRIADA
         embed.add_field(
             name="📅 CONTA CRIADA",
             value=f"```yaml\n{member.created_at.strftime('%d/%m/%Y %H:%M')}\n```",
             inline=False
         )
+
+        # ENTRou NO SERVIDOR
+        embed.add_field(
+            name="📅 ENTROU NO SERVIDOR",
+            value=f"```yaml\n{member.joined_at.strftime('%d/%m/%Y %H:%M') if member.joined_at else 'Desconhecido'}\n```",
+            inline=False
+        )
+
         embed.set_footer(
-            text=f"🛡 Vida Rasa 442 • Logs de Entrada",
+            text="🛡 Vida Rasa 442 • Logs de Entrada",
             icon_url=bot.user.display_avatar.url if bot.user else None
         )
         await canal_entrada.send(embed=embed)
 
+    # =========================================================
+    # SISTEMA XLSPY - VERIFICAÇÃO AUTOMÁTICA
+    # =========================================================
+    await verificar_seguranca_entrada(member)
     # =========================================================
     # SISTEMA XLSPY - VERIFICAÇÃO AUTOMÁTICA
     # =========================================================
