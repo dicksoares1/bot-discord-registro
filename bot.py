@@ -9661,6 +9661,9 @@ async def atualizar_embed_meta(user_id):
         acao = meta.get("acao") or "Nenhuma"
         meta_total = await definir_valor_meta_por_id(user_id)
 
+        # =========================================================
+        # EMBED BASE (IGUAL AO ORIGINAL)
+        # =========================================================
         embed = discord.Embed(title=f"💀 ── META SEMANAL ── 💀", description=f"👤 {nome.upper()} • VDR 442", color=Cores.META, timestamp=agora())
         if member:
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -9671,6 +9674,10 @@ async def atualizar_embed_meta(user_id):
             embed.add_field(name="🎯 DINHEIRO DE AÇÕES", value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)}\n```", inline=False)
         if saldo_excedente > 0:
             embed.add_field(name="📦 SALDO EXCEDENTE", value=f"```yaml\n{formatar_dinheiro(saldo_excedente)}\n```", inline=False)
+
+        # =========================================================
+        # PROGRESSO DA META EM R$
+        # =========================================================
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
         if is_soldado:
             valor_progresso = dinheiro_acoes
@@ -9700,16 +9707,17 @@ async def atualizar_embed_meta(user_id):
         else:
             meta_texto = "ISENTO"
 
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+        embed.add_field(name=f"📊 PROGRESSO • {porcentagem}%", value=f"```prolog\n{barra_progresso}\n{meta_texto}\n\n{status_meta}\n```", inline=False)
 
         # =========================================================
-        # SISTEMA DE PONTO (APENAS PARA MECÂNICOS)
+        # SISTEMA DE PONTO (APENAS PARA MECÂNICOS) - ADICIONA SEM REMOVER
         # =========================================================
         is_mecanico = CARGO_MECANICO_ID in [r.id for r in member.roles] if member else False
         if is_mecanico:
-            # Calcular horas da semana
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
             segundos_semana = await calcular_horas_semana(user_id)
-            META_HORAS_SEMANA = 6 * 3600  # 6 horas em segundos
+            META_HORAS_SEMANA = 6 * 3600
             progresso_horas = min(segundos_semana / META_HORAS_SEMANA, 1.0) if META_HORAS_SEMANA > 0 else 0
             porcentagem_horas = int(progresso_horas * 100)
             barra_horas = "▓" * int(progresso_horas * 20) + "░" * (20 - int(progresso_horas * 20))
@@ -9723,19 +9731,12 @@ async def atualizar_embed_meta(user_id):
             else:
                 status_horas = "🔴 Comece já!"
 
-            # Verificar se tem ponto aberto
             ponto_ativo = await buscar_ponto_ativo(user_id)
             status_ponto = "🟢 **PONTO ABERTO**" if ponto_ativo else "⚪ **PONTO FECHADO**"
 
             embed.add_field(
                 name="⏰ META DE HORAS (MECÂNICA)",
-                value=(
-                    f"```yaml\n"
-                    f"Meta semanal: 6h\n"
-                    f"Tempo total: {formatar_horas(segundos_semana)}\n"
-                    f"Status: {status_horas}\n"
-                    f"```"
-                ),
+                value=f"```yaml\nMeta semanal: 6h\nTempo total: {formatar_horas(segundos_semana)}\nStatus: {status_horas}\n```",
                 inline=False
             )
             embed.add_field(
@@ -9743,26 +9744,24 @@ async def atualizar_embed_meta(user_id):
                 value=f"```prolog\n{barra_horas}\n{formatar_horas(segundos_semana)} / 6h\n```",
                 inline=False
             )
-            embed.add_field(
-                name="📍 STATUS DO PONTO",
-                value=status_ponto,
-                inline=False
-            )
+            embed.add_field(name="📍 STATUS DO PONTO", value=status_ponto, inline=False)
 
+        # =========================================================
+        # COMO USAR
+        # =========================================================
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
         if is_soldado:
             texto_acao = "**🎯 Participar de Ações** - Sua meta é paga com ações realizadas\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro extra"
+        elif is_mecanico:
+            texto_acao = "**⏰ Bater Ponto** - Abra/fecha o ponto na mecânica\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta"
         else:
             texto_acao = "**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta"
         embed.add_field(name="⚙️ COMO USAR", value=texto_acao, inline=False)
         embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
         # =========================================================
-        # BOTÕES DA VIEW (MetaView ou MecanicoView)
+        # LIMPAR MENSAGENS ANTIGAS
         # =========================================================
-        view_class = MecanicoView if is_mecanico else MetaView
-
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
                 try:
@@ -9771,27 +9770,25 @@ async def atualizar_embed_meta(user_id):
                 except:
                     pass
 
-        # Verificar se tem ponto aberto para escolher o botão correto
+        # =========================================================
+        # VIEW (MECÂNICO OU NORMAL)
+        # =========================================================
         if is_mecanico:
             ponto_ativo = await buscar_ponto_ativo(user_id)
-            if ponto_ativo:
-                # Ponto aberto → Botão vermelho "Fechar Ponto"
-                view_final = MecanicoView(user_id)
-                for item in view_final.children:
-                    if item.custom_id == "mecanico_ponto_dinamico":
+            view_final = MecanicoView(user_id)
+            for item in view_final.children:
+                if item.custom_id == "mecanico_ponto_dinamico":
+                    if ponto_ativo:
                         item.label = "🔴 Fechar Ponto"
                         item.style = discord.ButtonStyle.danger
                         item.emoji = "🔴"
-            else:
-                # Ponto fechado → Botão verde "Abrir Ponto"
-                view_final = MecanicoView(user_id)
-                for item in view_final.children:
-                    if item.custom_id == "mecanico_ponto_dinamico":
+                    else:
                         item.label = "🟢 Abrir Ponto"
                         item.style = discord.ButtonStyle.success
                         item.emoji = "🟢"
         else:
             view_final = MetaView(user_id)
+
         msg = await canal.send(embed=embed, view=view_final)
         await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
         await verificar_meta_concluida(user_id, valor_progresso)
