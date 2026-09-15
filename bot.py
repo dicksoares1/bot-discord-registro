@@ -3475,6 +3475,25 @@ CATEGORIAS_ACOES = {
     "Helicrash": {"limite": None, "emoji": "🚁", "acoes": ["🚁 Helicrash (13h)", "🚁 Helicrash (15h)", "🚁 Helicrash (22h)", "🚁 Helicrash (02h)"]}
 }
 
+# =========================================================
+# LIMITES ESPECÍFICOS POR AÇÃO (SOBRESCREVEM O LIMITE DA CATEGORIA)
+# =========================================================
+LIMITES_ACOES_ESPECIFICOS = {
+    # Bahamas - Limites individuais
+    "Banco Bahamas": 1,
+    "Museu (Bahamas)": 1,
+}
+
+# =========================================================
+# GRUPOS DE LIMITE COMPARTILHADO (TODAS AS AÇÕES DO GRUPO COMPARTILHAM O MESMO LIMITE)
+# =========================================================
+GRUPOS_LIMITE_COMPARTILHADO = {
+    "Lan Houses": {
+        "acoes": ["Lan House - (Bahamas)", "Lan House - Jersey", "Lan House - Brooklyn", "Lan House - Manhattan"],
+        "limite": 4
+    },
+}
+}
 ACAO_PARA_CATEGORIA = {}
 for categoria, dados in CATEGORIAS_ACOES.items():
     for acao in dados["acoes"]:
@@ -3628,6 +3647,36 @@ async def concluir_acao_db(acao_id, resultado, valor=0):
 # 11.3 FUNÇÃO DE VERIFICAÇÃO DE LIMITE
 # =========================================================
 async def verificar_limite_categoria(acao_tipo):
+    pool = await get_pool()
+    if not pool:
+        return True
+
+    # =========================================================
+    # VERIFICAR SE FAZ PARTE DE UM GRUPO COMPARTILHADO
+    # =========================================================
+    for grupo_nome, grupo_dados in GRUPOS_LIMITE_COMPARTILHADO.items():
+        if acao_tipo in grupo_dados["acoes"]:
+            limite = grupo_dados["limite"]
+            async with pool.acquire() as conn:
+                acoes_grupo = grupo_dados["acoes"]
+                placeholders = ",".join([f"${i+1}" for i in range(len(acoes_grupo))])
+                query = f"SELECT COUNT(*) FROM acoes_semana WHERE tipo IN ({placeholders}) AND status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu') AND data > NOW() - INTERVAL '7 days'"
+                qtd = await conn.fetchval(query, *acoes_grupo)
+                return qtd < limite
+
+    # =========================================================
+    # VERIFICAR LIMITE ESPECÍFICO INDIVIDUAL
+    # =========================================================
+    if acao_tipo in LIMITES_ACOES_ESPECIFICOS:
+        limite = LIMITES_ACOES_ESPECIFICOS[acao_tipo]
+        async with pool.acquire() as conn:
+            query = "SELECT COUNT(*) FROM acoes_semana WHERE tipo = $1 AND status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu') AND data > NOW() - INTERVAL '7 days'"
+            qtd = await conn.fetchval(query, acao_tipo)
+            return qtd < limite
+
+    # =========================================================
+    # VERIFICAR LIMITE DA CATEGORIA
+    # =========================================================
     categoria = ACAO_PARA_CATEGORIA.get(acao_tipo)
     if not categoria:
         return True
@@ -3637,16 +3686,12 @@ async def verificar_limite_categoria(acao_tipo):
     limite = dados_categoria["limite"]
     if limite is None:
         return True
-    pool = await get_pool()
-    if not pool:
-        return True
     async with pool.acquire() as conn:
         acoes_da_categoria = dados_categoria["acoes"]
         placeholders = ",".join([f"${i+1}" for i in range(len(acoes_da_categoria))])
         query = f"SELECT COUNT(*) FROM acoes_semana WHERE tipo IN ({placeholders}) AND status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu') AND data > NOW() - INTERVAL '7 days'"
         qtd = await conn.fetchval(query, *acoes_da_categoria)
         return qtd < limite
-
 # =========================================================
 # 11.4 VIEWS DE AÇÕES
 # =========================================================
@@ -3673,10 +3718,28 @@ class SelecionarAcaoView(discord.ui.View):
                 emoji_acao = "🏦"
             if "Carro Forte" in nome:
                 emoji_acao = "🚚"
-            if limite is not None:
+            if "Museu" in nome:
+                emoji_acao = "🏛️"
+            if "Lan House" in nome:
+                emoji_acao = "🖥️"
+
+            # Verificar se faz parte de grupo compartilhado
+            limite_grupo = None
+            for grupo_nome, grupo_dados in GRUPOS_LIMITE_COMPARTILHADO.items():
+                if nome in grupo_dados["acoes"]:
+                    limite_grupo = grupo_dados["limite"]
+                    break
+
+            if limite_grupo is not None:
+                options.append(discord.SelectOption(label=nome, description=f"Limite compartilhado: {limite_grupo}/semana", emoji=emoji_acao))
+            elif nome in LIMITES_ACOES_ESPECIFICOS:
+                limite_especifico = LIMITES_ACOES_ESPECIFICOS[nome]
+                options.append(discord.SelectOption(label=nome, description=f"Limite: {limite_especifico}/semana", emoji=emoji_acao))
+            elif limite is not None:
                 options.append(discord.SelectOption(label=nome, description=f"Limite: {limite}/semana", emoji=emoji_acao))
             else:
                 options.append(discord.SelectOption(label=nome, description="Ilimitado", emoji=emoji_acao))
+
         self.select = discord.ui.Select(placeholder=f"📋 {titulo}", options=options, max_values=1)
         self.select.callback = self.select_callback
         self.add_item(self.select)
@@ -3687,15 +3750,26 @@ class SelecionarAcaoView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         pode_fazer = await verificar_limite_categoria(acao_tipo)
         if not pode_fazer:
-            categoria = ACAO_PARA_CATEGORIA.get(acao_tipo, "Desconhecida")
-            dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
-            limite = dados_categoria.get("limite", "?")
-            await interaction.followup.send(f"❌ **Limite semanal da categoria {categoria} atingido!**\n📊 Limite: **{limite}** ação(ões) por semana\n📌 Ação: **{acao_tipo}**", ephemeral=True)
+            # Descobrir qual é o limite (grupo, específico ou categoria)
+            limite_texto = "?"
+            for grupo_nome, grupo_dados in GRUPOS_LIMITE_COMPARTILHADO.items():
+                if acao_tipo in grupo_dados["acoes"]:
+                    limite_texto = f"{grupo_dados['limite']} (compartilhado entre {len(grupo_dados['acoes'])} Lan Houses)"
+                    break
+            if limite_texto == "?" and acao_tipo in LIMITES_ACOES_ESPECIFICOS:
+                limite_texto = str(LIMITES_ACOES_ESPECIFICOS[acao_tipo])
+            if limite_texto == "?":
+                categoria = ACAO_PARA_CATEGORIA.get(acao_tipo, "Desconhecida")
+                dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
+                limite_texto = str(dados_categoria.get("limite", "?"))
+            await interaction.followup.send(f"❌ **Limite semanal atingido!**\n📊 Limite: **{limite_texto}**\n📌 Ação: **{acao_tipo}**", ephemeral=True)
             return
+
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
         acao_id = await salvar_acao_db(acao_tipo, interaction.user.id)
         regras_data = REGRAS_ACOES.get(acao_tipo, {"regras": ["📌 Regras não definidas para esta ação."]})
         regras = regras_data.get("regras", [])
@@ -3711,6 +3785,13 @@ class SelecionarAcaoView(discord.ui.View):
         if "Carro Forte" in acao_tipo:
             emoji = "🚚"
             cor = 0xf39c12
+        if "Museu" in acao_tipo:
+            emoji = "🏛️"
+            cor = 0x9b59b6
+        if "Lan House" in acao_tipo:
+            emoji = "🖥️"
+            cor = 0x3498db
+
         embed = discord.Embed(title=f"{emoji} ESCALAÇÃO - {acao_tipo}", color=cor, timestamp=agora())
         embed.add_field(name="📌 REGRAS DA AÇÃO", value="\n".join(regras), inline=False)
         if is_bahamas:
@@ -3732,18 +3813,48 @@ class SelecionarAcaoView(discord.ui.View):
         if "Helicrash" in acao_tipo:
             horario = acao_tipo.split("(")[1].replace(")", "")
             embed.add_field(name="⏰ HORÁRIO", value=f"{horario} (horário de Brasília)", inline=False)
-        categoria = ACAO_PARA_CATEGORIA.get(acao_tipo)
-        if categoria:
-            dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
-            limite = dados_categoria.get("limite")
-            if limite is not None:
+
+        # Mostrar limite (grupo, específico ou categoria)
+        mostrar_limite = False
+        for grupo_nome, grupo_dados in GRUPOS_LIMITE_COMPARTILHADO.items():
+            if acao_tipo in grupo_dados["acoes"]:
                 async with pool.acquire() as conn:
-                    acoes_da_categoria = dados_categoria["acoes"]
-                    placeholders = ",".join([f"${i+1}" for i in range(len(acoes_da_categoria))])
+                    acoes_grupo = grupo_dados["acoes"]
+                    placeholders = ",".join([f"${i+1}" for i in range(len(acoes_grupo))])
                     query = f"SELECT COUNT(*) FROM acoes_semana WHERE tipo IN ({placeholders}) AND status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu') AND data > NOW() - INTERVAL '7 days'"
-                    qtd_feita = await conn.fetchval(query, *acoes_da_categoria)
-                    restante = max(0, limite - qtd_feita)
+                    qtd_feita = await conn.fetchval(query, *acoes_grupo)
+                    restante = max(0, grupo_dados["limite"] - qtd_feita)
+                embed.add_field(
+                    name=f"📊 LIMITE COMPARTILHADO - {grupo_nome.upper()}",
+                    value=f"{qtd_feita}/{grupo_dados['limite']} ações realizadas\n✅ Restam: {restante}\n*Todas as Lan Houses compartilham este limite*",
+                    inline=False
+                )
+                mostrar_limite = True
+                break
+
+        if not mostrar_limite and acao_tipo in LIMITES_ACOES_ESPECIFICOS:
+            limite = LIMITES_ACOES_ESPECIFICOS[acao_tipo]
+            async with pool.acquire() as conn:
+                query = "SELECT COUNT(*) FROM acoes_semana WHERE tipo = $1 AND status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu') AND data > NOW() - INTERVAL '7 days'"
+                qtd_feita = await conn.fetchval(query, acao_tipo)
+                restante = max(0, limite - qtd_feita)
+            embed.add_field(name=f"📊 LIMITE SEMANAL", value=f"{qtd_feita}/{limite} ações realizadas\n✅ Restam: {restante}", inline=False)
+            mostrar_limite = True
+
+        if not mostrar_limite:
+            categoria = ACAO_PARA_CATEGORIA.get(acao_tipo)
+            if categoria:
+                dados_categoria = CATEGORIAS_ACOES.get(categoria, {})
+                limite = dados_categoria.get("limite")
+                if limite is not None:
+                    async with pool.acquire() as conn:
+                        acoes_da_categoria = dados_categoria["acoes"]
+                        placeholders = ",".join([f"${i+1}" for i in range(len(acoes_da_categoria))])
+                        query = f"SELECT COUNT(*) FROM acoes_semana WHERE tipo IN ({placeholders}) AND status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu') AND data > NOW() - INTERVAL '7 days'"
+                        qtd_feita = await conn.fetchval(query, *acoes_da_categoria)
+                        restante = max(0, limite - qtd_feita)
                     embed.add_field(name=f"📊 LIMITE DA CATEGORIA {categoria.upper()}", value=f"{qtd_feita}/{limite} ações realizadas\n✅ Restam: {restante}", inline=False)
+
         embed.add_field(name="👥 PARTICIPANTES (0)", value="Nenhum participante ainda.\nClique no botão ✅ PARTICIPAR para se inscrever!", inline=False)
         embed.add_field(name="👤 CRIADO POR", value=interaction.user.mention, inline=True)
         embed.add_field(name="📅 DATA", value=agora().strftime('%d/%m/%Y %H:%M'), inline=True)
@@ -3762,7 +3873,7 @@ class SelecionarAcaoView(discord.ui.View):
                 pass
         else:
             await interaction.followup.send("❌ Canal de escalações não encontrado!", ephemeral=True)
-
+            
 class AcaoView(discord.ui.View):
     def __init__(self, acao_id, criador_id):
         super().__init__(timeout=None)
@@ -4869,13 +4980,50 @@ async def enviar_painel_acoes(guild):
     pool = await get_pool()
     if not pool:
         return
+
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT tipo, COUNT(*) as qtd FROM acoes_semana WHERE status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu') AND data > NOW() - INTERVAL '7 days' GROUP BY tipo")
     feitas = {r["tipo"]: r["qtd"] for r in rows}
+
     descricao = "**📊 AÇÕES DA SEMANA - POR CATEGORIA**\n\n"
     total_geral_feitas = 0
     total_geral_meta = 0
+
+    # =========================================================
+    # BAHAMAS - AÇÕES COM LIMITES INDIVIDUAIS E GRUPO COMPARTILHADO
+    # =========================================================
+    texto_bahamas = ""
+
+    # Ações individuais de Bahamas (Banco e Museu)
+    for acao, limite in LIMITES_ACOES_ESPECIFICOS.items():
+        if "Bahamas" in acao or "Museu" in acao:
+            qtd_feita = feitas.get(acao, 0)
+            restante = max(0, limite - qtd_feita)
+            status = "✅ COMPLETO" if qtd_feita >= limite else f"⏳ {restante} restantes"
+            texto_bahamas += f"**🏝️ {acao}:** {qtd_feita}/{limite} - {status}\n"
+            total_geral_feitas += qtd_feita
+            total_geral_meta += limite
+
+    # Lan Houses (grupo compartilhado)
+    for grupo_nome, grupo_dados in GRUPOS_LIMITE_COMPARTILHADO.items():
+        acoes_grupo = grupo_dados["acoes"]
+        limite = grupo_dados["limite"]
+        qtd_feita = sum(feitas.get(acao, 0) for acao in acoes_grupo)
+        restante = max(0, limite - qtd_feita)
+        status = "✅ COMPLETO" if qtd_feita >= limite else f"⏳ {restante} restantes"
+        texto_bahamas += f"**🖥️ {grupo_nome}:** {qtd_feita}/{limite} - {status}\n"
+        total_geral_feitas += qtd_feita
+        total_geral_meta += limite
+
+    if texto_bahamas:
+        descricao += f"**🏝️ BAHAMAS**\n{texto_bahamas}\n"
+
+    # =========================================================
+    # OUTRAS CATEGORIAS (COM LIMITE)
+    # =========================================================
     for categoria, dados in CATEGORIAS_ACOES.items():
+        if categoria == "Bahamas":
+            continue
         limite = dados["limite"]
         acoes = dados["acoes"]
         emoji = dados["emoji"]
@@ -4888,16 +5036,20 @@ async def enviar_painel_acoes(guild):
             restante = max(0, limite - qtd_feita)
             status = "✅ COMPLETO" if qtd_feita >= limite else f"⏳ {restante} restantes"
             descricao += f"**{emoji} {categoria}:** {qtd_feita}/{limite} - {status}\n"
+
+    # =========================================================
+    # PROGRESSO GERAL
+    # =========================================================
     if total_geral_meta > 0:
         porcentagem = int((total_geral_feitas / total_geral_meta) * 100)
         barra_progresso = "▓" * (porcentagem // 5) + "░" * (20 - (porcentagem // 5))
         descricao += f"\n**📊 PROGRESSO GERAL:** {porcentagem}% {barra_progresso}"
         descricao += f"\n{total_geral_feitas}/{total_geral_meta} ações realizadas"
+
     embed = discord.Embed(title="📊 AÇÕES DA SEMANA", description=descricao, color=0x2ecc71, timestamp=agora())
     embed.set_footer(text=f"Atualizado em {agora().strftime('%d/%m/%Y %H:%M')}")
 
-    # VIEW COM BOTÃO DE RESET
-    view = PainelAcoesView()  # ← AGORA TEM O BOTÃO DE RESET
+    view = PainelAcoesView()
     await enviar_ou_atualizar_painel("painel_acoes", CANAL_ESCALACOES_ID, embed, view)
 # =========================================================
 # ==================== PARTE 12: SISTEMA DE VENDAS ========
