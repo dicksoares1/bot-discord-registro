@@ -8828,24 +8828,61 @@ async def restaurar_producoes():
             return
 
         async with pool.acquire() as conn:
-            rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+            # Buscar TODAS as produções (sem filtro de data primeiro)
+            rows = await conn.fetch("SELECT pid, fim FROM producoes")
 
         if not rows:
-            logger.info("📭 Nenhuma produção ativa para restaurar")
+            logger.info("📭 Nenhuma produção encontrada no banco")
             return
 
-        logger.info(f"🔄 Restaurando {len(rows)} produções...")
+        agora_br = agora()
+        restauradas = 0
+        finalizadas = 0
 
         for row in rows:
             pid = row["pid"]
-            if pid not in producoes_tasks or producoes_tasks[pid].done():
-                if pid in producoes_tasks:
-                    del producoes_tasks[pid]
-                task = asyncio.create_task(acompanhar_producao(pid))
-                producoes_tasks[pid] = task
-                logger.info(f"✅ Produção {pid} restaurada")
+            fim = row["fim"]
 
-        logger.info(f"✅ {len(rows)} produções restauradas com sucesso!")
+            # Converter fim para datetime se for string
+            if isinstance(fim, str):
+                try:
+                    fim_dt = str_para_datetime_completa(fim)
+                except:
+                    logger.error(f"❌ Erro ao converter fim da produção {pid}")
+                    continue
+            else:
+                fim_dt = fim
+                if isinstance(fim_dt, datetime) and fim_dt.tzinfo is None:
+                    fim_dt = fim_dt.replace(tzinfo=BRASIL)
+
+            # Se a produção ainda está ativa
+            if fim_dt and agora_br < fim_dt:
+                if pid not in producoes_tasks or producoes_tasks[pid].done():
+                    if pid in producoes_tasks:
+                        del producoes_tasks[pid]
+                    task = asyncio.create_task(acompanhar_producao(pid))
+                    producoes_tasks[pid] = task
+                    restauradas += 1
+                    logger.info(f"✅ Produção {pid} restaurada (termina em {fim_dt.strftime('%H:%M')})")
+            else:
+                # Produção já terminou - finalizar automaticamente
+                logger.info(f"⏰ Produção {pid} já terminou, finalizando...")
+                prod = await carregar_producao(pid)
+                if prod:
+                    canal = bot.get_channel(prod["canal_id"])
+                    msg = None
+                    if canal:
+                        try:
+                            msg = await safe_fetch_message(canal, prod["msg_id"])
+                        except:
+                            pass
+                    await finalizar_producao(pid, msg, prod)
+                    finalizadas += 1
+
+        if restauradas == 0 and finalizadas == 0:
+            logger.info("📭 Nenhuma produção ativa ou pendente para processar")
+        else:
+            logger.info(f"✅ {restauradas} produções restauradas | {finalizadas} finalizadas automaticamente")
 
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar produções: {e}")
