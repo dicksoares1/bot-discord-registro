@@ -8826,16 +8826,16 @@ async def restaurar_producoes():
         if not pool:
             logger.error("❌ Banco de dados indisponível para restaurar produções")
             return
-        
+
         async with pool.acquire() as conn:
             rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
-        
+
         if not rows:
             logger.info("📭 Nenhuma produção ativa para restaurar")
             return
-        
+
         logger.info(f"🔄 Restaurando {len(rows)} produções...")
-        
+
         for row in rows:
             pid = row["pid"]
             if pid not in producoes_tasks or producoes_tasks[pid].done():
@@ -8844,9 +8844,9 @@ async def restaurar_producoes():
                 task = asyncio.create_task(acompanhar_producao(pid))
                 producoes_tasks[pid] = task
                 logger.info(f"✅ Produção {pid} restaurada")
-        
+
         logger.info(f"✅ {len(rows)} produções restauradas com sucesso!")
-        
+
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar produções: {e}")
 
@@ -11833,6 +11833,35 @@ async def iniciar_tarefas_background():
         if not salvar_memoria_vdrzinho.is_running():
             salvar_memoria_vdrzinho.start()
 
+async def heartbeat_producao_loop():
+    """Loop que verifica produções ativas a cada 30 segundos e garante que estão sendo acompanhadas"""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            pool = await get_pool()
+            if not pool:
+                continue
+
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT pid FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+
+            if not rows:
+                continue
+
+            for row in rows:
+                pid = row["pid"]
+                # Verificar se a task está rodando
+                if pid not in producoes_tasks or producoes_tasks[pid].done():
+                    if pid in producoes_tasks:
+                        del producoes_tasks[pid]
+                    # Reiniciar a task
+                    task = asyncio.create_task(acompanhar_producao(pid))
+                    producoes_tasks[pid] = task
+                    logger.info(f"🔄 Produção {pid} restaurada pelo heartbeat")
+
+        except Exception as e:
+            logger.error(f"❌ Erro no heartbeat de produção: {e}")
+
 async def limpeza_cache_periodica():
     while True:
         try:
@@ -13340,6 +13369,12 @@ async def on_ready():
     
     # Setup status
     await setup_status()
+    # =========================================================
+    # INICIAR HEARTBEAT DE PRODUÇÕES
+    # =========================================================
+    if not hasattr(bot, "heartbeat_producao_started"):
+        bot.loop.create_task(heartbeat_producao_loop())
+        bot.heartbeat_producao_started = True
 
     gc.collect()
     logger.info("=" * 50)
@@ -13362,7 +13397,18 @@ async def carregar_dados_iniciais():
             }
     except Exception as e:
         logger.error(f"Erro ao carregar metas: {e}")
+
+    # =========================================================
+    # RESTAURAR PRODUÇÕES ATIVAS
+    # =========================================================
     await restaurar_producoes()
+
+    # =========================================================
+    # INICIAR HEARTBEAT DE PRODUÇÕES
+    # =========================================================
+    if not hasattr(bot, "heartbeat_producao_started"):
+        bot.loop.create_task(heartbeat_producao_loop())
+        bot.heartbeat_producao_started = True
 
 # =========================================================
 # 20.4 FUNÇÃO RESTAURAR_BOTOES_METAS
