@@ -97,33 +97,93 @@ META_LIMITE = 300000
 # =========================================================
 # 1.4 IDs - CARGOS
 # =========================================================
+
+# =========================================================
+# CARGOS DE LIDERANÇA
+# =========================================================
 CARGO_GERENTE_ID = 1324499473296134154
-CARGO_GERENTE_GERAL_ID = 1462804425163935796
+CARGO_GERENTE_MECANICA_ID = 1475910336056922222
 CARGO_01_ID = 1258753233355014144
 CARGO_02_ID = 1258753479082512394
+CARGO_03_ID = 1471284152945873041
+
+# =========================================================
+# CARGOS DE RESPONSÁVEIS
+# =========================================================
 CARGO_RESP_METAS_ID = 1337407399656423485
 CARGO_RESP_ACAO_ID = 1337379517274259509
 CARGO_RESP_P1_ID = 1537563287393402920
 CARGO_RESP_VENDAS_ID = 1337379530586980352
 CARGO_RESP_PRODUCAO_ID = 1337379524949573662
-CARGO_SOLDADO_ID = 1537803858611281940
-CARGO_MEMBRO_ID = 1422847198789369926
+CARGO_RESP_AGREGADOS_ID = 1478240255512543282
+CARGO_RESP_MECANICA_ID = 1478240256468975648
+CARGO_RESP_BAU_ID = 1478240640012914688
+
+# =========================================================
+# CARGOS DE MEMBROS
+# =========================================================
+CARGO_SETADO_ID = 1422845496124375090
 CARGO_AGREGADO_ID = 1422847202937536532
+CARGO_MORADOR_ID = 1422845498863259700
+CARGO_MEMBRO_ID = 1422847198789369926
+CARGO_SOLDADO_ID = 1537803858611281940
+CARGO_MECANICO_ID = 1448526080645398641
+
+# =========================================================
+# CARGOS ESPECIAIS
+# =========================================================
+CARGO_SEM_META_ID = 1549396105920249956  # SM - Sem Meta (isento)
 CARGO_AUSENTE_ID = 1337420032212336823
 CONVIDADO_ROLE_ID = 1337382961456353342
 EM_REGISTRO_ROLE_ID = 1337382961456353342
 AGREGADO_ROLE_ID = 1422847202937536532
-CARGO_MECANICO_ID = 1448526080645398641
-CARGO_GERENTE_MECANICA_ID = 1475910336056922222
 
+# =========================================================
+# LISTAS DE CARGOS
+# =========================================================
 CARGOS_PERMITIDOS_REMOVER = [
-    CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID,
-    CARGO_01_ID, CARGO_02_ID
+    CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID,
+    CARGO_01_ID, CARGO_02_ID, CARGO_03_ID
 ]
 
 CARGOS_PERMITIDOS_ESCALACAO = [
     CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
-    CARGO_01_ID, CARGO_02_ID, CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID
+    CARGO_01_ID, CARGO_02_ID, CARGO_03_ID,
+    CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID
+]
+
+# =========================================================
+# HIERARQUIA DE CARGOS (DO MAIS ALTO PARA O MAIS BAIXO)
+# =========================================================
+HIERARQUIA_CARGOS = [
+    # Liderança (mais alto)
+    ("Liderança", [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]),
+    # Responsáveis
+    ("Responsáveis", [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID]),
+    # Mecânicos
+    ("Mecânicos", [CARGO_MECANICO_ID]),
+    # Soldados
+    ("Soldados", [CARGO_SOLDADO_ID]),
+    # Membros
+    ("Membros", [CARGO_MEMBRO_ID]),
+    # Moradores
+    ("Moradores", [CARGO_MORADOR_ID]),
+    # Agregados
+    ("Agregados", [CARGO_AGREGADO_ID]),
+    # Setados
+    ("Setados", [CARGO_SETADO_ID]),
+]
+
+# =========================================================
+# CARGOS ISENTOS DE META (SM + LIDERANÇA)
+# =========================================================
+CARGOS_ISENTOS_META = [
+    CARGO_SEM_META_ID,
+    CARGO_GERENTE_ID,
+    CARGO_GERENTE_MECANICA_ID,
+    CARGO_01_ID,
+    CARGO_02_ID,
+    CARGO_03_ID,
 ]
 
 # =========================================================
@@ -134,6 +194,34 @@ CATEGORIA_META_RESPONSAVEIS_ID = 1462810826992783422
 CATEGORIA_META_SOLDADO_ID = 1537807041022664835
 CATEGORIA_META_MEMBRO_ID = 1461335697209163900
 CATEGORIA_META_AGREGADO_ID = 1461335748870541323
+CATEGORIA_META_MECANICO_ID = 1461335697209163900  # Ajuste se tiver uma categoria específica
+CATEGORIA_META_MORADOR_ID = 1461335748870541323  # Ajuste se tiver uma categoria específica
+CATEGORIA_META_SETADO_ID = 1461335748870541323  # Ajuste se tiver uma categoria específica
+
+# =========================================================
+# MAPEAMENTO: CATEGORIA POR CARGO (HIERARQUIA)
+# =========================================================
+CATEGORIA_POR_CARGO = {
+    CARGO_GERENTE_ID: CATEGORIA_META_GERENTE_ID,
+    CARGO_GERENTE_MECANICA_ID: CATEGORIA_META_GERENTE_ID,
+    CARGO_01_ID: CATEGORIA_META_GERENTE_ID,
+    CARGO_02_ID: CATEGORIA_META_GERENTE_ID,
+    CARGO_03_ID: CATEGORIA_META_GERENTE_ID,
+    CARGO_RESP_METAS_ID: CATEGORIA_META_RESPONSAVEIS_ID,
+    CARGO_RESP_ACAO_ID: CATEGORIA_META_RESPONSAVEIS_ID,
+    CARGO_RESP_P1_ID: CATEGORIA_META_RESPONSAVEIS_ID,
+    CARGO_RESP_VENDAS_ID: CATEGORIA_META_RESPONSAVEIS_ID,
+    CARGO_RESP_PRODUCAO_ID: CATEGORIA_META_RESPONSAVEIS_ID,
+    CARGO_RESP_AGREGADOS_ID: CATEGORIA_META_RESPONSAVEIS_ID,
+    CARGO_RESP_MECANICA_ID: CATEGORIA_META_RESPONSAVEIS_ID,
+    CARGO_RESP_BAU_ID: CATEGORIA_META_RESPONSAVEIS_ID,
+    CARGO_MECANICO_ID: CATEGORIA_META_MECANICO_ID,
+    CARGO_SOLDADO_ID: CATEGORIA_META_SOLDADO_ID,
+    CARGO_MEMBRO_ID: CATEGORIA_META_MEMBRO_ID,
+    CARGO_MORADOR_ID: CATEGORIA_META_MORADOR_ID,
+    CARGO_AGREGADO_ID: CATEGORIA_META_AGREGADO_ID,
+    CARGO_SETADO_ID: CATEGORIA_META_SETADO_ID,
+}
 
 # =========================================================
 # 1.6 IDs - CANAIS
@@ -716,6 +804,18 @@ async def inicializar_tabelas(pool):
                 criado_em TIMESTAMP DEFAULT NOW()
             )
         """)
+
+        # =========================================================
+        # CATEGORIAS DE METAS (para criação automática)
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS categorias_metas (
+                id SERIAL PRIMARY KEY,
+                nome_cargo VARCHAR(100) UNIQUE NOT NULL,
+                categoria_id VARCHAR(30) NOT NULL,
+                data_criacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
         
         
         # =========================================================
@@ -941,38 +1041,47 @@ def pode_gerenciar_lavagem(member):
     return any(role.id in cargos_permitidos for role in member.roles)
 
 def obter_categoria_meta(member):
+    """Retorna a categoria baseada no CARGO MAIS ALTO do membro"""
     if not member:
         return None
+
     roles = [r.id for r in member.roles]
-    # =========================================================
-    # GERENTES (incluindo Gerência Mecânica) → Categoria Gerência
-    # =========================================================
-    if CARGO_GERENTE_ID in roles or CARGO_GERENTE_GERAL_ID in roles or CARGO_01_ID in roles or CARGO_02_ID in roles or CARGO_GERENTE_MECANICA_ID in roles:
-        return CATEGORIA_META_GERENTE_ID
-    if any(r in roles for r in [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]):
-        return CATEGORIA_META_RESPONSAVEIS_ID
-    if CARGO_SOLDADO_ID in roles:
-        return CATEGORIA_META_SOLDADO_ID
-    if CARGO_MEMBRO_ID in roles:
-        return CATEGORIA_META_MEMBRO_ID
-    if AGREGADO_ROLE_ID in roles:
-        return CATEGORIA_META_AGREGADO_ID
+
+    # Percorrer a hierarquia do mais alto para o mais baixo
+    for nome_grupo, cargos_grupo in HIERARQUIA_CARGOS:
+        for cargo_id in cargos_grupo:
+            if cargo_id in roles:
+                return CATEGORIA_POR_CARGO.get(cargo_id)
+
     return None
 
 def membro_deve_ter_meta(member):
+    """Verifica se o membro deve ter meta (para o relatório)"""
     if not member:
         return None
+
+    roles = [r.id for r in member.roles]
+
+    # SM (Sem Meta) - NÃO entra no relatório
+    if CARGO_SEM_META_ID in roles:
+        return None
+
+    # Liderança - isento (aparece no relatório como isento)
+    cargos_lideranca = [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]
+    if any(r in roles for r in cargos_lideranca):
+        return "isento"
+
+    # Cargos que devem ter meta
     cargos_com_meta = [
         CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
-        CARGO_RESP_METAS_ID, CARGO_RESP_P1_ID, CARGO_RESP_ACAO_ID,
-        CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID
+        CARGO_MORADOR_ID, CARGO_MECANICO_ID,
+        CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID,
+        CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID,
+        CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID
     ]
-    cargos_isentos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID, CARGO_GERENTE_MECANICA_ID]
-    roles = [r.id for r in member.roles]
-    if any(r in roles for r in cargos_isentos):
-        return "isento"
     if any(r in roles for r in cargos_com_meta):
         return "obrigado"
+
     return None
 
 # =========================================================
@@ -8992,16 +9101,12 @@ async def salvar_meta_db(user_id, canal_id, dinheiro, acao):
         logger.error(f"❌ Erro ao salvar meta: {e}")
 
 async def atualizar_valor_meta_personalizado(user_id, novo_valor):
-    """Atualiza o valor da meta personalizada para um usuário"""
     pool = await get_pool()
     if not pool:
         return False
     try:
         async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE metas SET valor_meta_personalizado = $1 WHERE user_id = $2",
-                novo_valor, str(user_id)
-            )
+            await conn.execute("UPDATE metas SET valor_meta_personalizado = $1 WHERE user_id = $2", novo_valor, str(user_id))
             return True
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar valor personalizado da meta: {e}")
@@ -9079,8 +9184,7 @@ async def definir_valor_meta_por_id(user_id):
 
     # Verificar se o membro é isento (prioridade máxima)
     roles = [r.id for r in member.roles]
-    cargos_isentos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID, CARGO_GERENTE_MECANICA_ID]
-    if any(r in roles for r in cargos_isentos):
+    if any(r in roles for r in CARGOS_ISENTOS_META):
         return 0
 
     # Se não for isento, verificar se tem valor personalizado
@@ -9098,26 +9202,129 @@ async def definir_valor_meta_por_cargo(member: discord.Member):
     roles = [r.id for r in member.roles]
 
     # =========================================================
-    # CARGO MECÂNICO - META 150
+    # ISENTOS (SM + LIDERANÇA)
+    # =========================================================
+    if any(r in roles for r in CARGOS_ISENTOS_META):
+        return 0
+
+    # =========================================================
+    # RESPONSÁVEIS (meta 100)
+    # =========================================================
+    cargos_responsaveis = [
+        CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID,
+        CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID,
+        CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID
+    ]
+    if any(r in roles for r in cargos_responsaveis):
+        return 100000
+
+    # =========================================================
+    # MECÂNICOS (meta 150)
     # =========================================================
     if CARGO_MECANICO_ID in roles:
         return 150000
 
-    # Isentos (não pagam meta)
-    cargos_isentos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
-    if any(r in roles for r in cargos_isentos):
-        return 0
+    # =========================================================
+    # SOLDADOS E MEMBROS (meta 300)
+    # =========================================================
+    if CARGO_SOLDADO_ID in roles or CARGO_MEMBRO_ID in roles:
+        return 300000
 
-    # Responsáveis
-    cargos_responsaveis = [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]
-    if any(r in roles for r in cargos_responsaveis):
-        return 100000
+    # =========================================================
+    # MORADORES E AGREGADOS (meta 300)
+    # =========================================================
+    if CARGO_MORADOR_ID in roles or CARGO_AGREGADO_ID in roles:
+        return 300000
 
-    # Soldados e Membros
-    if CARGO_SOLDADO_ID in roles:
+    # =========================================================
+    # SETADOS (meta 300)
+    # =========================================================
+    if CARGO_SETADO_ID in roles:
         return 300000
 
     return 300000
+
+# =========================================================
+# FUNÇÕES DE CATEGORIA (COM CRIAÇÃO AUTOMÁTICA)
+# =========================================================
+async def buscar_categoria_salva(nome_cargo):
+    """Busca a categoria salva no banco pelo nome do cargo"""
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT categoria_id FROM categorias_metas WHERE nome_cargo = $1", nome_cargo)
+            if row:
+                return int(row["categoria_id"])
+            return None
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar categoria salva: {e}")
+        return None
+
+async def salvar_categoria_db(nome_cargo, categoria_id):
+    """Salva a categoria no banco"""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO categorias_metas (nome_cargo, categoria_id) VALUES ($1, $2) ON CONFLICT (nome_cargo) DO UPDATE SET categoria_id = $2",
+                nome_cargo, str(categoria_id)
+            )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao salvar categoria: {e}")
+        return False
+
+async def criar_categoria_automatica(guild, nome_cargo):
+    """Cria uma categoria automaticamente"""
+    try:
+        nome_categoria = f"📁 {nome_cargo.upper()}"
+        nova_categoria = await guild.create_category(nome_categoria)
+        logger.info(f"✅ Categoria criada: {nome_categoria} (ID: {nova_categoria.id})")
+        await salvar_categoria_db(nome_cargo, nova_categoria.id)
+        return nova_categoria
+    except Exception as e:
+        logger.error(f"❌ Erro ao criar categoria {nome_cargo}: {e}")
+        return None
+
+async def obter_categoria_meta(member):
+    """Retorna a categoria baseada no CARGO MAIS ALTO do membro (cria automaticamente se não existir)"""
+    if not member:
+        return None
+
+    roles = [r.id for r in member.roles]
+
+    # Percorrer a hierarquia do mais alto para o mais baixo
+    for nome_grupo, cargos_grupo in HIERARQUIA_CARGOS:
+        for cargo_id in cargos_grupo:
+            if cargo_id in roles:
+                # Buscar categoria no mapeamento
+                categoria_id = CATEGORIA_POR_CARGO.get(cargo_id)
+
+                # Se tem ID da categoria, verificar se ela existe
+                if categoria_id:
+                    categoria = member.guild.get_channel(categoria_id)
+                    if categoria:
+                        return categoria_id
+
+                # Se não tem ID ou a categoria não existe, buscar no banco
+                categoria_salva = await buscar_categoria_salva(nome_grupo)
+                if categoria_salva:
+                    categoria = member.guild.get_channel(categoria_salva)
+                    if categoria:
+                        return categoria_salva
+
+                # Se não encontrou, criar automaticamente
+                nova_categoria = await criar_categoria_automatica(member.guild, nome_grupo)
+                if nova_categoria:
+                    return nova_categoria.id
+                else:
+                    return None
+
+    return None
 
 async def criar_sala_meta(member: discord.Member):
     """Cria uma sala de meta para um membro"""
@@ -9125,6 +9332,14 @@ async def criar_sala_meta(member: discord.Member):
     pool = await get_pool()
     if not pool:
         logger.error("❌ Banco de dados indisponível em criar_sala_meta")
+        return None
+
+    # =========================================================
+    # VERIFICAR SE TEM CARGO SM (SEM META)
+    # =========================================================
+    roles = [r.id for r in member.roles]
+    if CARGO_SEM_META_ID in roles:
+        logger.info(f"⏭️ {member.display_name} tem cargo SM, não cria sala")
         return None
 
     try:
@@ -9188,7 +9403,7 @@ async def criar_sala_meta(member: discord.Member):
                                     logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
                     return canal
 
-            categoria_id = obter_categoria_meta(member)
+            categoria_id = await obter_categoria_meta(member)
             if not categoria_id:
                 logger.error(f"❌ Categoria não encontrada para {member.display_name}")
                 return None
@@ -9210,6 +9425,10 @@ async def criar_sala_meta(member: discord.Member):
             gerente_geral = guild.get_role(CARGO_GERENTE_GERAL_ID)
             if gerente_geral:
                 overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
+
+            gerente_mecanica = guild.get_role(CARGO_GERENTE_MECANICA_ID)
+            if gerente_mecanica:
+                overwrites[gerente_mecanica] = discord.PermissionOverwrite(view_channel=True)
 
             nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
             canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
@@ -9330,7 +9549,6 @@ async def atualizar_embed_meta(user_id):
         else:
             status_meta = "🔴 Comece já!"
 
-        # Mostrar valor da meta
         if meta_total > 0:
             meta_texto = f"{formatar_dinheiro(valor_progresso)} / {formatar_dinheiro(meta_total)}"
         else:
@@ -9367,7 +9585,7 @@ async def atualizar_categoria_meta(member):
         canal = member.guild.get_channel(dados["canal_id"])
         if not canal:
             return
-        nova_categoria_id = obter_categoria_meta(member)
+        nova_categoria_id = await obter_categoria_meta(member)
         if not nova_categoria_id:
             return
         nova_categoria = member.guild.get_channel(nova_categoria_id)
@@ -9453,7 +9671,7 @@ class MetaView(discord.ui.View):
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             is_dono = str(interaction.user.id) == str(self.user_id)
-            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
             is_admin = interaction.user.guild_permissions.administrator
             if not is_dono and not is_gerente and not is_admin:
                 await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
@@ -9479,26 +9697,17 @@ class MetaView(discord.ui.View):
             except:
                 pass
 
-    # =========================================================
-    # NOVO BOTÃO: EDITAR VALOR DA META (APENAS GERENTES)
-    # =========================================================
     @discord.ui.button(label="⚙️ Editar Valor da Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_valor_fixo", emoji="⚙️", row=1)
     async def editar_valor_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Verificar se é gerente ou admin
-            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
             is_admin = interaction.user.guild_permissions.administrator
             if not is_gerente and not is_admin:
                 await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM** podem editar o valor da meta!", ephemeral=True)
                 return
-
-            # Buscar valor atual da meta
             meta_total = await definir_valor_meta_por_id(self.user_id)
-
-            # Abrir modal para digitar o novo valor
             modal = EditarValorMetaModal(self.user_id, meta_total)
             await interaction.response.send_modal(modal)
-
         except Exception as e:
             logger.error(f"❌ Erro no botão Editar Valor da Meta: {e}")
             try:
@@ -9590,9 +9799,6 @@ class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
             logger.error(f"❌ Erro ao editar meta: {e}")
             await interaction.followup.send(f"❌ Erro ao editar meta: {str(e)}", ephemeral=True)
 
-# =========================================================
-# NOVO MODAL: EDITAR VALOR DA META (GERENTE)
-# =========================================================
 class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"):
     def __init__(self, user_id, valor_atual):
         super().__init__(timeout=300)
@@ -9618,18 +9824,15 @@ class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"
             await interaction.followup.send(f"❌ **Valor inválido!** {str(e)}", ephemeral=True)
             return
 
-        # Atualizar no banco
         sucesso = await atualizar_valor_meta_personalizado(self.user_id, novo_valor)
 
         if not sucesso:
             await interaction.followup.send("❌ **Erro ao atualizar o valor da meta!**", ephemeral=True)
             return
 
-        # Atualizar cache
         if str(self.user_id) in metas_cache:
             metas_cache[str(self.user_id)]["valor_meta_personalizado"] = novo_valor
 
-        # Atualizar o embed da meta
         await atualizar_embed_meta(self.user_id)
 
         embed = discord.Embed(
@@ -9659,11 +9862,11 @@ class SolicitarSalaView(discord.ui.View):
     @discord.ui.button(label="➕ Criar Sala para Membro", style=discord.ButtonStyle.success, custom_id="criar_sala_gerencia")
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID] for r in interaction.user.roles)
 
         if not is_admin and not is_gerente:
             await interaction.response.send_message(
-                "❌ **Apenas Gerentes, Cargo 01, Cargo 02 e ADM podem criar salas para outros membros!**",
+                "❌ **Apenas Gerentes, Cargo 01, Cargo 02, Cargo 03 e ADM podem criar salas para outros membros!**",
                 ephemeral=True
             )
             return
@@ -9692,6 +9895,12 @@ class CriarSalaParaMembroModal(discord.ui.Modal, title="📂 Criar Sala para Mem
 
         if not member:
             await interaction.followup.send(f"❌ Membro com ID `{user_id}` não encontrado no servidor!", ephemeral=True)
+            return
+
+        # Verificar se tem cargo SM
+        roles = [r.id for r in member.roles]
+        if CARGO_SEM_META_ID in roles:
+            await interaction.followup.send(f"⏭️ {member.mention} tem cargo **SM (Sem Meta)**, não precisa de sala!", ephemeral=True)
             return
 
         pool = await get_pool()
@@ -9835,7 +10044,7 @@ class FecharMetasAutomaticoButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
         if not is_admin and not is_gerente:
             await interaction.response.send_message("❌ Apenas ADM ou Gerentes podem fechar todas as metas!", ephemeral=True)
             return
@@ -9979,7 +10188,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 relatorio.append({"user_id": user_id, "dinheiro": min(dinheiro, meta_limite), "acao": acao, "dinheiro_acoes": dinheiro_acoes, "total_meta": min(dinheiro, meta_limite), "status": status})
             membros_sem_meta = []
             if guild:
-                cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID, CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID]
+                cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID, CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID, CARGO_MECANICO_ID, CARGO_MORADOR_ID]
                 for member in guild.members:
                     if member.bot:
                         continue
@@ -10031,11 +10240,13 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
         total_geral = total_dinheiro + total_acoes
         guild = interaction.guild
         grupos = {
-            "gerentes": {"cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID], "nome": "🟢 GERENTES (ISENTOS)", "cor": 0x2ecc71, "itens": [], "is_isento": True},
-            "cargos_01_02": {"cargos": [CARGO_01_ID, CARGO_02_ID], "nome": "🟡 CARGOS 01/02 (ISENTOS)", "cor": 0xf1c40f, "itens": [], "is_isento": True},
-            "responsaveis": {"cargos": [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID], "nome": "🔵 RESPONSÁVEIS", "cor": 0x3498db, "itens": [], "is_isento": False},
+            "gerentes": {"cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID], "nome": "🟢 GERENTES (ISENTOS)", "cor": 0x2ecc71, "itens": [], "is_isento": True},
+            "cargos_01_02": {"cargos": [CARGO_01_ID, CARGO_02_ID, CARGO_03_ID], "nome": "🟡 CARGOS 01/02/03 (ISENTOS)", "cor": 0xf1c40f, "itens": [], "is_isento": True},
+            "responsaveis": {"cargos": [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID], "nome": "🔵 RESPONSÁVEIS", "cor": 0x3498db, "itens": [], "is_isento": False},
             "soldados": {"cargos": [CARGO_SOLDADO_ID], "nome": "🟠 SOLDADOS", "cor": 0xe67e22, "itens": [], "is_isento": False},
             "membros": {"cargos": [CARGO_MEMBRO_ID], "nome": "🔴 MEMBROS", "cor": 0xe74c3c, "itens": [], "is_isento": False},
+            "mecanicos": {"cargos": [CARGO_MECANICO_ID], "nome": "🔧 MECÂNICOS", "cor": 0x9b59b6, "itens": [], "is_isento": False},
+            "moradores": {"cargos": [CARGO_MORADOR_ID], "nome": "🏠 MORADORES", "cor": 0x1abc9c, "itens": [], "is_isento": False},
             "agregados": {"cargos": [CARGO_AGREGADO_ID], "nome": "⚪ AGREGADOS", "cor": 0x95a5a6, "itens": [], "is_isento": False}
         }
         for item in historico:
@@ -10081,7 +10292,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             f"🎯 **Dinheiro de Ações:** {formatar_dinheiro(total_acoes)}\n"
             f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
             f"👥 **Total de metas fechadas:** {len(historico)}\n"
-            f"🟡 **Isentos (Gerentes + 01/02):** {total_isentos}\n"
+            f"🟡 **Isentos (Gerentes + 01/02/03):** {total_isentos}\n"
             f"📊 **Obrigados (Demais cargos):** {total_nao_isentos}"
         )
         embed_resumo.add_field(name="📊 RESUMO GERAL", value=resumo_texto, inline=False)
@@ -10192,7 +10403,6 @@ async def verificar_meta_concluida(user_id, valor_total):
                         canal = bot.get_channel(int(canal_id))
                         if canal:
                             user = await pegar_usuario(user_id)
-                            
                             embed = discord.Embed(
                                 title="🎉 META SEMANAL CONCLUÍDA!",
                                 description=f"{user.mention} **parabéns!** Sua meta semanal foi atingida! 🎉",
@@ -10224,8 +10434,10 @@ async def verificar_avisos_quarta():
             return
         cargos_obrigados = [
             CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
-            CARGO_01_ID, CARGO_02_ID, CARGO_RESP_METAS_ID, CARGO_RESP_P1_ID,
-            CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID
+            CARGO_01_ID, CARGO_02_ID, CARGO_03_ID, CARGO_RESP_METAS_ID, CARGO_RESP_P1_ID,
+            CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID,
+            CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
+            CARGO_MECANICO_ID, CARGO_MORADOR_ID
         ]
         async with pool.acquire() as conn:
             avisos_enviados = 0
@@ -10234,6 +10446,9 @@ async def verificar_avisos_quarta():
                     continue
                 tem_cargo = any(r.id in cargos_obrigados for r in member.roles)
                 if not tem_cargo:
+                    continue
+                # Verificar se tem cargo SM
+                if CARGO_SEM_META_ID in [r.id for r in member.roles]:
                     continue
                 user_id = str(member.id)
                 meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
@@ -10299,8 +10514,10 @@ async def verificar_avisos_quarta_forcado():
             return False
         cargos_obrigados = [
             CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
-            CARGO_01_ID, CARGO_02_ID, CARGO_RESP_P1_ID, CARGO_RESP_METAS_ID,
-            CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID
+            CARGO_01_ID, CARGO_02_ID, CARGO_03_ID, CARGO_RESP_P1_ID, CARGO_RESP_METAS_ID,
+            CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID,
+            CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
+            CARGO_MECANICO_ID, CARGO_MORADOR_ID
         ]
         async with pool.acquire() as conn:
             avisos_enviados = 0
@@ -10309,6 +10526,8 @@ async def verificar_avisos_quarta_forcado():
                     continue
                 tem_cargo = any(r.id in cargos_obrigados for r in member.roles)
                 if not tem_cargo:
+                    continue
+                if CARGO_SEM_META_ID in [r.id for r in member.roles]:
                     continue
                 user_id = str(member.id)
                 meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
@@ -10335,7 +10554,7 @@ async def verificar_avisos_quarta_forcado():
                                     "• Se NÃO fechar a meta: **REBAIXAMENTO** na facção\n"
                                     "• Se atrasar 2 vezes: **REMOÇÃO** da facção\n\n"
                                     "💪 **Corra atrás do prejuízo!**\n\n"
-                                    "🔴 **ESTE É UM TESTE**"
+                                    
                                 ),
                                 inline=False
                             )
@@ -11757,6 +11976,31 @@ async def on_member_update(before, after):
             embed.add_field(name="🆔 ID do cargo", value=cargo.id, inline=True)
             embed.set_footer(text="Vida Rasa 442 • Logs")
             await canal_log.send(embed=embed)
+    # =========================================================
+    # DETECTAR QUANDO O CARGO SM É ADICIONADO
+    # =========================================================
+    tinha_sm = any(r.id == CARGO_SEM_META_ID for r in before.roles)
+    tem_sm = any(r.id == CARGO_SEM_META_ID for r in after.roles)
+
+    if not tinha_sm and tem_sm:
+        # Deletar a sala de meta do membro
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT canal_id FROM metas WHERE user_id = $1", str(after.id))
+                if meta:
+                    canal = after.guild.get_channel(int(meta["canal_id"]))
+                    if canal:
+                        try:
+                            await canal.delete(reason="Membro recebeu cargo SM (Sem Meta)")
+                            logger.info(f"🗑️ Sala de meta de {after.display_name} deletada (cargo SM)")
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao deletar sala de {after.display_name}: {e}")
+                    await conn.execute("DELETE FROM metas WHERE user_id = $1", str(after.id))
+                    if str(after.id) in metas_cache:
+                        del metas_cache[str(after.id)]
+        logger.info(f"✅ {after.display_name} agora é isento de meta (SM)")
+
 
 # =========================================================
 # ==================== PARTE 18: TASKS E EVENTOS ==========
