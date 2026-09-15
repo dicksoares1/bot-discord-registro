@@ -3464,15 +3464,85 @@ async def enviar_painel_armas():
 # =========================================================
 # 11.1 CONSTANTES DAS AÇÕES
 # =========================================================
+
+# =========================================================
+# CATEGORIAS DE AÇÕES (AGRUPAMENTO PADRÃO)
+# =========================================================
 CATEGORIAS_ACOES = {
-    "Fleeca": {"limite": 4, "emoji": "🏦", "acoes": ["Banco Fleeca - Rota 68", "Banco Fleeca - Chaves", "Banco Fleeca - Praia", "Banco Fleeca - Shopping"]},
-    "Banco Central": {"limite": 1, "emoji": "🏛️", "acoes": ["Banco Central Com Refém", "Banco Central Sem Refém"]},
-    "Joalheria": {"limite": 5, "emoji": "💎", "acoes": ["Joalheria"]},
-    "Banco de Paleto": {"limite": 1, "emoji": "🏦", "acoes": ["Banco de Paleto"]},
-    "Nióbio": {"limite": 1, "emoji": "⚗️", "acoes": ["Nióbio"]},
-    "Lojas e Carros Fortes": {"limite": None, "emoji": "🏪", "acoes": ["Loja de Armas (Ammunation)", "Loja de Bebidas", "Loja de Departamento", "Mergulhador", "Grapeseed", "Companhia de Gás", "Life Invader", "Aeroporto de Sucata", "Carro Forte - Açougue", "Carro Forte - Faculdade", "Carro Forte - Grove Street"]},
-    "Bahamas": {"limite": None, "emoji": "🏝️", "acoes": ["Banco Bahamas", "Burgueshot (Bahamas)", "Refinaria (Bahamas)", "Lan House - (Bahamas)", "Lan House - Jersey", "Lan House - Brooklyn", "Lan House - Manhattan", "Museu (Bahamas)"]},
-    "Helicrash": {"limite": None, "emoji": "🚁", "acoes": ["🚁 Helicrash (13h)", "🚁 Helicrash (15h)", "🚁 Helicrash (22h)", "🚁 Helicrash (02h)"]}
+    "Fleeca": {
+        "limite": 4,
+        "emoji": "🏦",
+        "acoes": [
+            "Banco Fleeca - Rota 68",
+            "Banco Fleeca - Chaves",
+            "Banco Fleeca - Praia",
+            "Banco Fleeca - Shopping"
+        ]
+    },
+    "Banco Central": {
+        "limite": 1,
+        "emoji": "🏛️",
+        "acoes": [
+            "Banco Central Com Refém",
+            "Banco Central Sem Refém"
+        ]
+    },
+    "Joalheria": {
+        "limite": 5,
+        "emoji": "💎",
+        "acoes": ["Joalheria"]
+    },
+    "Banco de Paleto": {
+        "limite": 1,
+        "emoji": "🏦",
+        "acoes": ["Banco de Paleto"]
+    },
+    "Nióbio": {
+        "limite": 1,
+        "emoji": "⚗️",
+        "acoes": ["Nióbio"]
+    },
+    "Lojas e Carros Fortes": {
+        "limite": None,
+        "emoji": "🏪",
+        "acoes": [
+            "Loja de Armas (Ammunation)",
+            "Loja de Bebidas",
+            "Loja de Departamento",
+            "Mergulhador",
+            "Grapeseed",
+            "Companhia de Gás",
+            "Life Invader",
+            "Aeroporto de Sucata",
+            "Carro Forte - Açougue",
+            "Carro Forte - Faculdade",
+            "Carro Forte - Grove Street"
+        ]
+    },
+    "Bahamas": {
+        "limite": None,
+        "emoji": "🏝️",
+        "acoes": [
+            "Banco Bahamas",
+            "Burgueshot (Bahamas)",
+            "Refinaria (Bahamas)",
+            "Lan House - (Bahamas)",
+            "Lan House - Jersey",
+            "Lan House - Brooklyn",
+            "Lan House - Manhattan",
+            "Museu (Bahamas)"
+        ]
+    },
+    "Helicrash": {
+        "limite": None,
+        "emoji": "🚁",
+        "acoes": [
+            "🚁 Helicrash (13h)",
+            "🚁 Helicrash (15h)",
+            "🚁 Helicrash (22h)",
+            "🚁 Helicrash (02h)"
+        ]
+    }
 }
 
 # =========================================================
@@ -3485,23 +3555,36 @@ LIMITES_ACOES_ESPECIFICOS = {
 }
 
 # =========================================================
-# GRUPOS DE LIMITE COMPARTILHADO (TODAS AS AÇÕES DO GRUPO COMPARTILHAM O MESMO LIMITE)
+# GRUPOS DE LIMITE COMPARTILHADO
+# (TODAS AS AÇÕES DO GRUPO COMPARTILHAM O MESMO LIMITE)
 # =========================================================
 GRUPOS_LIMITE_COMPARTILHADO = {
     "Lan Houses": {
-        "acoes": ["Lan House - (Bahamas)", "Lan House - Jersey", "Lan House - Brooklyn", "Lan House - Manhattan"],
+        "acoes": [
+            "Lan House - (Bahamas)",
+            "Lan House - Jersey",
+            "Lan House - Brooklyn",
+            "Lan House - Manhattan"
+        ],
         "limite": 4
     },
 }
-}
+
+# =========================================================
+# MAPEAMENTO: AÇÃO → CATEGORIA
+# =========================================================
 ACAO_PARA_CATEGORIA = {}
 for categoria, dados in CATEGORIAS_ACOES.items():
     for acao in dados["acoes"]:
         ACAO_PARA_CATEGORIA[acao] = categoria
 
+# =========================================================
+# AGRUPAMENTO POR TIPO (COMPLEXO / BAHAMAS / HELICRASH)
+# =========================================================
 ACOES_COMPLEXO = {}
 ACOES_BAHAMAS = {}
 ACOES_HELICRASH = {}
+
 for categoria, dados in CATEGORIAS_ACOES.items():
     for acao in dados["acoes"]:
         if categoria == "Bahamas":
@@ -3511,38 +3594,387 @@ for categoria, dados in CATEGORIAS_ACOES.items():
         else:
             ACOES_COMPLEXO[acao] = dados["limite"]
 
+# =========================================================
+# REGRAS DAS AÇÕES
+# =========================================================
 REGRAS_ACOES = {
-    "Loja de Armas (Ammunation)": {"regras": ["👥 **Bandidos:** Obrigatório 2.", "🎯 **Com estande de tiro:** 0 fora.", "🎯 **Sem estande de tiro:** 1 fora.", "👮 **Máximo de policiais:** 3.", "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).", "🤝 **Negociação:** Obrigatória.", "🚫 **Refém:** Proibido."]},
-    "Loja de Bebidas": {"regras": ["👥 **Bandidos:** Obrigatório 3.", "👮 **Máximo de policiais:** 4.", "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).", "🤝 **Negociação:** Obrigatória.", "🚫 **Refém:** Proibido.", "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."]},
-    "Loja de Departamento": {"regras": ["👥 **Bandidos:** Obrigatório 4 (máximo de 2 fora).", "👮 **Máximo de policiais:** 5.", "🚗 **Máximo de veículos:** 1 veículo, 4 rodas ou 2 motos.", "🔫 **Armamento:** Todos de Pistola (exceto Glock Rajada).", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional, máximo."]},
-    "Mergulhador": {"regras": ["👥 **Bandidos:** Obrigatório 6.", "👮 **Máximo de policiais:** 8.", "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido.", "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."]},
-    "Grapeseed": {"regras": ["👥 **Bandidos:** Obrigatório 6.", "👮 **Máximo de policiais:** 7.", "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido.", "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."]},
-    "Companhia de Gás": {"regras": ["👥 **Bandidos:** Obrigatório 6.", "👮 **Máximo de policiais:** 8.", "🚗 **Máximo de veículos:** 3.", "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido.", "📌 1️⃣ Proibido subir em qualquer objeto/lugar durante a ação.", "📌 2️⃣ Proibido atirar contra policiais entrando no perímetro.", "📌 3️⃣ Todos os participantes devem estar dentro do perímetro para o embate começar."]},
-    "Life Invader": {"regras": ["👥 **Bandidos:** Obrigatório 8.", "👮 **Máximo de policiais:** 10.", "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido.", "📌 Proibido subir em qualquer objeto/lugar durante a ação.", "📌 Proibido a utilização dos INTERIORES do perímetro (Life Invader, Cozinha/Piscina)."]},
-    "Aeroporto de Sucata": {"regras": ["👥 **Máximo de bandidos:** 6.", "👮 **Máximo de policiais:** 8.", "🔫 **Armamento:** Obrigatório ter 6 pistolas.", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido."]},
-    "Carro Forte - Açougue": {"regras": ["👥 **Bandidos:** Obrigatório 6.", "👮 **Máximo de policiais:** 8.", "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido.", "📌 **Obs:** Proibido bugar head-glitch."]},
-    "Carro Forte - Faculdade": {"regras": ["👥 **Bandidos:** Obrigatório 6.", "👮 **Máximo de policiais:** 8.", "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido.", "📌 **Obs:** Proibido bugar head-glitch."]},
-    "Carro Forte - Grove Street": {"regras": ["👮 **Máximo de policiais:** 8.", "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido.", "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão).", "📌 **Obs:** Helicóptero somente para visual, sem atirador."]},
-    "Joalheria": {"regras": ["👥 **Bandidos:** Obrigatório 7 (máximo de 3 fora e 4 dentro).", "👮 **Máximo de policiais:** 9.", "🚗 **Máximo de veículos:** 3 (em caso de fuga).", "🔫 **Armamento:** No mínimo Submetralhadora.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional, no máximo 3.", "📌 Proibido a utilização dos INTERIORES do perímetro (Prefeitura)."]},
-    "Banco Fleeca - Rota 68": {"regras": ["👥 **Mínimo de bandidos:** 6 (mínimo de 3 dentro).", "👥 **Máximo de bandidos:** 8 (mínimo de 3 dentro).", "🚗 **Máximo de veículos:** 3.", "👮 **Máximo de policiais:** 9.", "🔫 **Armamento:** Mínimo submetralhadora, obrigatório ter 4 Rifles.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional, no máximo 3.", "📌 Na fuga, só é permitido fazer o Fleeca Chaves."]},
-    "Banco Fleeca - Chaves": {"regras": ["👥 **Mínimo de bandidos:** 6.", "👥 **Máximo de bandidos:** 8.", "🚗 **Máximo de veículos:** 3.", "👮 **Máximo de policiais:** 9.", "🔫 **Armamento:** Mínimo Submetralhadora.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional, no máximo 3.", "📌 Regras de posicionamento: até 3 integrantes em locais altos/acessíveis no prédio e até 3 no interior do resort."]},
-    "Banco Fleeca - Praia": {"regras": ["🔫 **Armamento:** Somente Submetralhadora.", "📌 Heli drone + teti chão.", "📌 Proibido interior da lojinha (cofre).", "📌 Proibido veículo dentro do perímetro.", "📌 Na casa de madeira fica limitado 3 bandidos.", "📌 Polícia não pode marcar saída.", "📌 Proibida a fuga."]},
-    "Banco Fleeca - Shopping": {"regras": ["🔫 **Armamento:** Mínimo submetralhadora, obrigatório ter 4 Rifles.", "📌 Com atirador: máximo 4 bandidos em prédios.", "📌 Sem atirador: uso do interior do prédio proibido.", "📌 Limite máximo de pessoas no metrô: 3.", "📌 Proibida a fuga."]},
-    "Banco de Paleto": {"regras": ["👥 **Bandidos:** Obrigatório 10.", "👮 **Máximo de policiais:** 12.", "🔫 **Armamento:** Todos de Rifle.", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido.", "📌 Os bandidos devem esperar o início da ação.", "📌 Ação inicia quando a polícia entrar no perímetro.", "📌 Helicóptero só poderá ter o piloto.", "📌 Máximo de 6 pessoas dentro do GALINHEIRO."]},
-    "Banco Central Com Refém": {"regras": ["👥 **Bandidos:** Obrigatório 10.", "👥 **Bandidos fora:** Máximo 3 em prédios ou 5 no chão.", "🚗 **Máximo de veículos:** 4.", "👮 **Máximo de policiais:** 12.", "🔫 **Armamento:** Obrigatório RIFLE.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Permitido, máximo 4.", "📌 Reféns podem ser usados para tirar atiradores ou proibir reposicionamento com helicóptero.", "📌 Não pode ser os dois ao mesmo tempo.", "📌 Proibido o uso do interior do apartamento em frente ao POSTAL.", "📌 Obs: Proibido ter bandidos fora se a ação for na fuga."]},
-    "Banco Central Sem Refém": {"regras": ["👥 **Bandidos:** Obrigatório 10.", "👥 **Bandidos fora:** Máximo 3 em prédios ou 5 no chão.", "🚗 **Máximo de veículos:** 3.", "👮 **Máximo de policiais:** 12.", "🔫 **Armamento:** Obrigatório RIFLE.", "🤝 **Negociação:** Obrigatória.", "🚫 **Refém:** Proibido.", "📌 Proibido o uso do interior do apartamento em frente ao POSTAL.", "📌 Obs: Proibido ter bandidos fora se a ação for na fuga."]},
-    "Nióbio": {"regras": ["👥 **Bandidos:** Obrigatório 12 (sem limites fora).", "👮 **Máximo de policiais:** 18.", "🔫 **Armamento:** Obrigatório RIFLE.", "⚔️ **Negociação:** Inexistente.", "🚫 **Refém:** Proibido.", "📌 Proibido marcar a porta que dá acesso a água.", "📌 A parte da água só poderá ser acessada para entrar ou sair do túnel do NIÓBIO.", "📌 Limite de 4 bandidos entre o corredor que dá acesso a água e o quadrado do quebrado.", "📌 Máximo de 4 bandidos no fundo do nióbio."]},
-    "🚁 Helicrash (13h)": {"regras": ["👥 **Máximo de participantes por facção/grupo:** 10.", "🚗 **Máximo de veículos por facção/grupo:** 2.", "🚫 **Proibido** o roubo de veículos durante o evento.", "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.", "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.", "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.", "💉 A reanimação é permitida somente após o término completo da ação.", "🚫 Proibido a utilização de GRANADEIRA."]},
-    "🚁 Helicrash (15h)": {"regras": ["👥 **Máximo de participantes por facção/grupo:** 10.", "🚗 **Máximo de veículos por facção/grupo:** 2.", "🚫 **Proibido** o roubo de veículos durante o evento.", "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.", "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.", "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.", "💉 A reanimação é permitida somente após o término completo da ação.", "🚫 Proibido a utilização de GRANADEIRA."]},
-    "🚁 Helicrash (22h)": {"regras": ["👥 **Máximo de participantes por facção/grupo:** 10.", "🚗 **Máximo de veículos por facção/grupo:** 2.", "🚫 **Proibido** o roubo de veículos durante o evento.", "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.", "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.", "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.", "💉 A reanimação é permitida somente após o término completo da ação.", "🚫 Proibido a utilização de GRANADEIRA."]},
-    "🚁 Helicrash (02h)": {"regras": ["👥 **Máximo de participantes por facção/grupo:** 10.", "🚗 **Máximo de veículos por facção/grupo:** 2.", "🚫 **Proibido** o roubo de veículos durante o evento.", "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.", "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.", "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.", "💉 A reanimação é permitida somente após o término completo da ação.", "🚫 Proibido a utilização de GRANADEIRA."]},
-    "Banco Bahamas": {"regras": ["👥 **Máximo de Bandidos:** 10.", "👮 **Máximo de Policiais:** 14.", "🔫 **Armamento:** Obrigatório RIFLE.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Proibido a utilização das estações de METRO (Subterraneo).", "📌 Limite de 6 pessoas no Salão.", "📌 Máximo de 4 bandidos na parte de baixo do Banco."], "is_bahamas": True},
-    "Burgueshot (Bahamas)": {"regras": ["👥 **Mínimo de Bandidos:** 3.", "👥 **Máximo de Bandidos:** 5.", "👮 **Máximo de Policiais:** 5.", "🔫 **Armamento:** Mínimo pistola.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional."], "is_bahamas": True},
-    "Refinaria (Bahamas)": {"regras": ["👥 **Bandidos:** Obrigatório 6.", "👮 **Máximo de policiais:** 7.", "🔫 **Armamento:** Mínimo SMG.", "⚔️ **Negociação:** Inexistente, ação de confronto direto.", "🚫 **Refém:** Proibido.", "📌 Fica proibido o uso de atirador."], "is_bahamas": True},
-    "Lan House - (Bahamas)": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
-    "Lan House - Jersey": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
-    "Lan House - Brooklyn": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
-    "Lan House - Manhattan": {"regras": ["👥 **Mínimo de Bandidos:** 6.", "👥 **Máximo de Bandidos:** 8.", "👮 **Máximo de Policiais:** 10.", "🔫 **Armamento:** Mínimo SMG.", "🤝 **Negociação:** Obrigatória.", "👤 **Refém:** Opcional.", "📌 Limite de 4 pessoas dentro da Lan House."], "is_bahamas": True},
+    # =========================================================
+    # LOJAS E CARROS FORTES
+    # =========================================================
+    "Loja de Armas (Ammunation)": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 2.",
+            "🎯 **Com estande de tiro:** 0 fora.",
+            "🎯 **Sem estande de tiro:** 1 fora.",
+            "👮 **Máximo de policiais:** 3.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "🤝 **Negociação:** Obrigatória.",
+            "🚫 **Refém:** Proibido."
+        ]
+    },
+    "Loja de Bebidas": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 3.",
+            "👮 **Máximo de policiais:** 4.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "🤝 **Negociação:** Obrigatória.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."
+        ]
+    },
+    "Loja de Departamento": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 4 (máximo de 2 fora).",
+            "👮 **Máximo de policiais:** 5.",
+            "🚗 **Máximo de veículos:** 1 veículo, 4 rodas ou 2 motos.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Glock Rajada).",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional, máximo."
+        ]
+    },
+    "Mergulhador": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."
+        ]
+    },
+    "Grapeseed": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 7.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão)."
+        ]
+    },
+    "Companhia de Gás": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🚗 **Máximo de veículos:** 3.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 1️⃣ Proibido subir em qualquer objeto/lugar durante a ação.",
+            "📌 2️⃣ Proibido atirar contra policiais entrando no perímetro.",
+            "📌 3️⃣ Todos os participantes devem estar dentro do perímetro para o embate começar."
+        ]
+    },
+    "Life Invader": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 8.",
+            "👮 **Máximo de policiais:** 10.",
+            "🔫 **Armamento:** Todos de Pistola (exceto Magnum e Ap-Pistol).",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Proibido subir em qualquer objeto/lugar durante a ação.",
+            "📌 Proibido a utilização dos INTERIORES do perímetro (Life Invader, Cozinha/Piscina)."
+        ]
+    },
+    "Aeroporto de Sucata": {
+        "regras": [
+            "👥 **Máximo de bandidos:** 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Obrigatório ter 6 pistolas.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido."
+        ]
+    },
+    "Carro Forte - Açougue": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido bugar head-glitch."
+        ]
+    },
+    "Carro Forte - Faculdade": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido bugar head-glitch."
+        ]
+    },
+    "Carro Forte - Grove Street": {
+        "regras": [
+            "👮 **Máximo de policiais:** 8.",
+            "🔫 **Armamento:** Mínimo SMG, obrigatório ter 2 RIFLES.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 **Obs:** Proibido o uso de 2 andares ou mais (teti chão).",
+            "📌 **Obs:** Helicóptero somente para visual, sem atirador."
+        ]
+    },
+
+    # =========================================================
+    # JOALHERIA
+    # =========================================================
+    "Joalheria": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 7 (máximo de 3 fora e 4 dentro).",
+            "👮 **Máximo de policiais:** 9.",
+            "🚗 **Máximo de veículos:** 3 (em caso de fuga).",
+            "🔫 **Armamento:** No mínimo Submetralhadora.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional, no máximo 3.",
+            "📌 Proibido a utilização dos INTERIORES do perímetro (Prefeitura)."
+        ]
+    },
+
+    # =========================================================
+    # FLEECA
+    # =========================================================
+    "Banco Fleeca - Rota 68": {
+        "regras": [
+            "👥 **Mínimo de bandidos:** 6 (mínimo de 3 dentro).",
+            "👥 **Máximo de bandidos:** 8 (mínimo de 3 dentro).",
+            "🚗 **Máximo de veículos:** 3.",
+            "👮 **Máximo de policiais:** 9.",
+            "🔫 **Armamento:** Mínimo submetralhadora, obrigatório ter 4 Rifles.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional, no máximo 3.",
+            "📌 Na fuga, só é permitido fazer o Fleeca Chaves."
+        ]
+    },
+    "Banco Fleeca - Chaves": {
+        "regras": [
+            "👥 **Mínimo de bandidos:** 6.",
+            "👥 **Máximo de bandidos:** 8.",
+            "🚗 **Máximo de veículos:** 3.",
+            "👮 **Máximo de policiais:** 9.",
+            "🔫 **Armamento:** Mínimo Submetralhadora.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional, no máximo 3.",
+            "📌 Regras de posicionamento: até 3 integrantes em locais altos/acessíveis no prédio e até 3 no interior do resort."
+        ]
+    },
+    "Banco Fleeca - Praia": {
+        "regras": [
+            "🔫 **Armamento:** Somente Submetralhadora.",
+            "📌 Heli drone + teti chão.",
+            "📌 Proibido interior da lojinha (cofre).",
+            "📌 Proibido veículo dentro do perímetro.",
+            "📌 Na casa de madeira fica limitado 3 bandidos.",
+            "📌 Polícia não pode marcar saída.",
+            "📌 Proibida a fuga."
+        ]
+    },
+    "Banco Fleeca - Shopping": {
+        "regras": [
+            "🔫 **Armamento:** Mínimo submetralhadora, obrigatório ter 4 Rifles.",
+            "📌 Com atirador: máximo 4 bandidos em prédios.",
+            "📌 Sem atirador: uso do interior do prédio proibido.",
+            "📌 Limite máximo de pessoas no metrô: 3.",
+            "📌 Proibida a fuga."
+        ]
+    },
+
+    # =========================================================
+    # BANCOS GRANDES
+    # =========================================================
+    "Banco de Paleto": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 10.",
+            "👮 **Máximo de policiais:** 12.",
+            "🔫 **Armamento:** Todos de Rifle.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Os bandidos devem esperar o início da ação.",
+            "📌 Ação inicia quando a polícia entrar no perímetro.",
+            "📌 Helicóptero só poderá ter o piloto.",
+            "📌 Máximo de 6 pessoas dentro do GALINHEIRO."
+        ]
+    },
+    "Banco Central Com Refém": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 10.",
+            "👥 **Bandidos fora:** Máximo 3 em prédios ou 5 no chão.",
+            "🚗 **Máximo de veículos:** 4.",
+            "👮 **Máximo de policiais:** 12.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Permitido, máximo 4.",
+            "📌 Reféns podem ser usados para tirar atiradores ou proibir reposicionamento com helicóptero.",
+            "📌 Não pode ser os dois ao mesmo tempo.",
+            "📌 Proibido o uso do interior do apartamento em frente ao POSTAL.",
+            "📌 Obs: Proibido ter bandidos fora se a ação for na fuga."
+        ]
+    },
+    "Banco Central Sem Refém": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 10.",
+            "👥 **Bandidos fora:** Máximo 3 em prédios ou 5 no chão.",
+            "🚗 **Máximo de veículos:** 3.",
+            "👮 **Máximo de policiais:** 12.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "🤝 **Negociação:** Obrigatória.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Proibido o uso do interior do apartamento em frente ao POSTAL.",
+            "📌 Obs: Proibido ter bandidos fora se a ação for na fuga."
+        ]
+    },
+    "Nióbio": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 12 (sem limites fora).",
+            "👮 **Máximo de policiais:** 18.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "⚔️ **Negociação:** Inexistente.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Proibido marcar a porta que dá acesso a água.",
+            "📌 A parte da água só poderá ser acessada para entrar ou sair do túnel do NIÓBIO.",
+            "📌 Limite de 4 bandidos entre o corredor que dá acesso a água e o quadrado do quebrado.",
+            "📌 Máximo de 4 bandidos no fundo do nióbio."
+        ]
+    },
+
+    # =========================================================
+    # HELICRASH
+    # =========================================================
+    "🚁 Helicrash (13h)": {
+        "regras": [
+            "👥 **Máximo de participantes por facção/grupo:** 10.",
+            "🚗 **Máximo de veículos por facção/grupo:** 2.",
+            "🚫 **Proibido** o roubo de veículos durante o evento.",
+            "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.",
+            "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.",
+            "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
+            "💉 A reanimação é permitida somente após o término completo da ação.",
+            "🚫 Proibido a utilização de GRANADEIRA."
+        ]
+    },
+    "🚁 Helicrash (15h)": {
+        "regras": [
+            "👥 **Máximo de participantes por facção/grupo:** 10.",
+            "🚗 **Máximo de veículos por facção/grupo:** 2.",
+            "🚫 **Proibido** o roubo de veículos durante o evento.",
+            "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.",
+            "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.",
+            "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
+            "💉 A reanimação é permitida somente após o término completo da ação.",
+            "🚫 Proibido a utilização de GRANADEIRA."
+        ]
+    },
+    "🚁 Helicrash (22h)": {
+        "regras": [
+            "👥 **Máximo de participantes por facção/grupo:** 10.",
+            "🚗 **Máximo de veículos por facção/grupo:** 2.",
+            "🚫 **Proibido** o roubo de veículos durante o evento.",
+            "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.",
+            "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.",
+            "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
+            "💉 A reanimação é permitida somente após o término completo da ação.",
+            "🚫 Proibido a utilização de GRANADEIRA."
+        ]
+    },
+    "🚁 Helicrash (02h)": {
+        "regras": [
+            "👥 **Máximo de participantes por facção/grupo:** 10.",
+            "🚗 **Máximo de veículos por facção/grupo:** 2.",
+            "🚫 **Proibido** o roubo de veículos durante o evento.",
+            "👕 Todos os membros deverão OBRIGATORIAMENTE utilizar a roupa completa da sua facção/grupo.",
+            "👥 Jogadores membros (setados) só poderão participar junto da sua própria facção/grupo.",
+            "👤 Jogadores sem set podem formar grupos entre si, mas deverão usar uma roupa igual.",
+            "💉 A reanimação é permitida somente após o término completo da ação.",
+            "🚫 Proibido a utilização de GRANADEIRA."
+        ]
+    },
+
+    # =========================================================
+    # BAHAMAS
+    # =========================================================
+    "Banco Bahamas": {
+        "regras": [
+            "👥 **Máximo de Bandidos:** 10.",
+            "👮 **Máximo de Policiais:** 14.",
+            "🔫 **Armamento:** Obrigatório RIFLE.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Proibido a utilização das estações de METRO (Subterraneo).",
+            "📌 Limite de 6 pessoas no Salão.",
+            "📌 Máximo de 4 bandidos na parte de baixo do Banco."
+        ],
+        "is_bahamas": True
+    },
+    "Burgueshot (Bahamas)": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 3.",
+            "👥 **Máximo de Bandidos:** 5.",
+            "👮 **Máximo de Policiais:** 5.",
+            "🔫 **Armamento:** Mínimo pistola.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional."
+        ],
+        "is_bahamas": True
+    },
+    "Refinaria (Bahamas)": {
+        "regras": [
+            "👥 **Bandidos:** Obrigatório 6.",
+            "👮 **Máximo de policiais:** 7.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "⚔️ **Negociação:** Inexistente, ação de confronto direto.",
+            "🚫 **Refém:** Proibido.",
+            "📌 Fica proibido o uso de atirador."
+        ],
+        "is_bahamas": True
+    },
+    "Lan House - (Bahamas)": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 6.",
+            "👥 **Máximo de Bandidos:** 8.",
+            "👮 **Máximo de Policiais:** 10.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Limite de 4 pessoas dentro da Lan House."
+        ],
+        "is_bahamas": True
+    },
+    "Lan House - Jersey": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 6.",
+            "👥 **Máximo de Bandidos:** 8.",
+            "👮 **Máximo de Policiais:** 10.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Limite de 4 pessoas dentro da Lan House."
+        ],
+        "is_bahamas": True
+    },
+    "Lan House - Brooklyn": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 6.",
+            "👥 **Máximo de Bandidos:** 8.",
+            "👮 **Máximo de Policiais:** 10.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Limite de 4 pessoas dentro da Lan House."
+        ],
+        "is_bahamas": True
+    },
+    "Lan House - Manhattan": {
+        "regras": [
+            "👥 **Mínimo de Bandidos:** 6.",
+            "👥 **Máximo de Bandidos:** 8.",
+            "👮 **Máximo de Policiais:** 10.",
+            "🔫 **Armamento:** Mínimo SMG.",
+            "🤝 **Negociação:** Obrigatória.",
+            "👤 **Refém:** Opcional.",
+            "📌 Limite de 4 pessoas dentro da Lan House."
+        ],
+        "is_bahamas": True
+    },
     "Museu (Bahamas)": {
         "regras": [
             "👥 **Máximo de Bandidos:** 10.",
