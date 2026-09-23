@@ -8962,50 +8962,57 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
         if not historico:
             await interaction.followup.send(f"📭 Nenhuma meta fechada no período **{data_inicio_str}** até **{data_fim_str}**.", ephemeral=True)
             return
+
         total_dinheiro = sum(r["dinheiro"] for r in historico)
-        total_acoes = sum(r.get("dinheiro_acoes") or 0 for r in historico)
-        total_geral = total_dinheiro + total_acoes
+        total_geral = total_dinheiro
+
         guild = interaction.guild
         grupos = {
-            "gerentes": {"cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID], "nome": "🟢 GERENTES (ISENTOS)", "cor": 0x2ecc71, "itens": [], "is_isento": True},
-            "cargos_01_02": {"cargos": [CARGO_01_ID, CARGO_02_ID, CARGO_03_ID], "nome": "🟡 CARGOS 01/02/03 (ISENTOS)", "cor": 0xf1c40f, "itens": [], "is_isento": True},
+            "gerentes": {"cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID], "nome": "🟢 GERENTES (ISENTOS)", "cor": 0x2ecc71, "itens": [], "is_isento": True},
+            "cargos_01_02_03": {"cargos": [CARGO_01_ID, CARGO_02_ID, CARGO_03_ID], "nome": "🟡 CARGOS 01/02/03 (ISENTOS)", "cor": 0xf1c40f, "itens": [], "is_isento": True},
             "responsaveis": {"cargos": [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID], "nome": "🔵 RESPONSÁVEIS", "cor": 0x3498db, "itens": [], "is_isento": False},
+            "mecanicos": {"cargos": [CARGO_MECANICO_ID], "nome": "🔧 MECÂNICOS", "cor": 0x9b59b6, "itens": [], "is_isento": False},
             "soldados": {"cargos": [CARGO_SOLDADO_ID], "nome": "🟠 SOLDADOS", "cor": 0xe67e22, "itens": [], "is_isento": False},
             "membros": {"cargos": [CARGO_MEMBRO_ID], "nome": "🔴 MEMBROS", "cor": 0xe74c3c, "itens": [], "is_isento": False},
-            "mecanicos": {"cargos": [CARGO_MECANICO_ID], "nome": "🔧 MECÂNICOS", "cor": 0x9b59b6, "itens": [], "is_isento": False},
             "moradores": {"cargos": [CARGO_MORADOR_ID], "nome": "🏠 MORADORES", "cor": 0x1abc9c, "itens": [], "is_isento": False},
-            "agregados": {"cargos": [CARGO_AGREGADO_ID], "nome": "⚪ AGREGADOS", "cor": 0x95a5a6, "itens": [], "is_isento": False}
+            "agregados": {"cargos": [CARGO_AGREGADO_ID], "nome": "⚪ AGREGADOS", "cor": 0x95a5a6, "itens": [], "is_isento": False},
+            "setados": {"cargos": [CARGO_SETADO_ID], "nome": "🎯 SETADOS", "cor": 0x7289da, "itens": [], "is_isento": False}
         }
+
         for item in historico:
             user_id = int(item["user_id"])
             member = guild.get_member(user_id) if guild else None
             if not member:
                 continue
+
             total_meta = item["dinheiro"]
-            total_acoes_item = item.get("dinheiro_acoes") or 0
-            total_geral_item = total_meta + total_acoes_item
             item_dict = dict(item)
             item_dict["total_meta"] = total_meta
-            item_dict["total_acoes"] = total_acoes_item
-            item_dict["total_geral"] = total_geral_item
             item_dict["nome"] = member.display_name
+            item_dict["is_mecanico"] = CARGO_MECANICO_ID in [r.id for r in member.roles]
+
             cargo_encontrado = False
             for grupo_key, grupo_data in grupos.items():
                 if any(role.id in grupo_data["cargos"] for role in member.roles):
                     grupo_data["itens"].append(item_dict)
                     cargo_encontrado = True
                     break
+
             if not cargo_encontrado:
                 if "outros" not in grupos:
                     grupos["outros"] = {"nome": "📌 OUTROS", "cor": 0x808080, "itens": [], "is_isento": False}
                 grupos["outros"]["itens"].append(item_dict)
+
         canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
         if not canal_resultados:
             canal_resultados = interaction.channel
+
         titulo = f"📊 RELATÓRIO DE METAS FECHADAS"
         if titulo_extra:
             titulo = f"📊 {titulo_extra}"
+
         embed_resumo = discord.Embed(title=titulo, description=f"📅 **Período:** {data_inicio_str} até {data_fim_str}", color=0x2ecc71, timestamp=agora())
+
         total_nao_isentos = 0
         total_isentos = 0
         for grupo_key, grupo_data in grupos.items():
@@ -9014,33 +9021,39 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                     total_isentos += len(grupo_data["itens"])
                 else:
                     total_nao_isentos += len(grupo_data["itens"])
+
         resumo_texto = (
             f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
-            f"🎯 **Dinheiro de Ações:** {formatar_dinheiro(total_acoes)}\n"
             f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
             f"👥 **Total de metas fechadas:** {len(historico)}\n"
-            f"🟡 **Isentos (Gerentes + 01/02/03):** {total_isentos}\n"
-            f"📊 **Obrigados (Demais cargos):** {total_nao_isentos}"
+            f"🟡 **Isentos:** {total_isentos}\n"
+            f"📊 **Obrigados:** {total_nao_isentos}"
         )
         embed_resumo.add_field(name="📊 RESUMO GERAL", value=resumo_texto, inline=False)
+
         resumo_grupos = ""
         for grupo_key, grupo_data in grupos.items():
             if grupo_data["itens"]:
                 qtd = len(grupo_data["itens"])
-                total_grupo = sum(item["total_geral"] for item in grupo_data["itens"])
+                total_grupo = sum(item["total_meta"] for item in grupo_data["itens"])
                 if grupo_data.get("is_isento", False):
                     resumo_grupos += f"{grupo_data['nome']}: {qtd} membros (ISENTOS)\n"
                 else:
                     resumo_grupos += f"{grupo_data['nome']}: {qtd} membros | {formatar_dinheiro(total_grupo)}\n"
+
         if resumo_grupos:
             embed_resumo.add_field(name="📊 RESUMO POR CARGO", value=resumo_grupos, inline=False)
+
         embed_resumo.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
         await canal_resultados.send(embed=embed_resumo)
         await asyncio.sleep(1.5)
+
         for grupo_key, grupo_data in grupos.items():
             if not grupo_data["itens"]:
                 continue
-            itens_ordenados = sorted(grupo_data["itens"], key=lambda x: x["total_geral"], reverse=True)
+
+            itens_ordenados = sorted(grupo_data["itens"], key=lambda x: x["total_meta"], reverse=True)
+
             if grupo_data.get("is_isento", False):
                 for i in range(0, len(itens_ordenados), 10):
                     grupo = itens_ordenados[i:i+10]
@@ -9052,15 +9065,23 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                     await canal_resultados.send(embed=embed)
                     await asyncio.sleep(0.3)
                 continue
-            pagaram = [item for item in itens_ordenados if item["total_geral"] > 0]
-            nao_pagaram = [item for item in itens_ordenados if item["total_geral"] == 0]
+
+            pagaram = [item for item in itens_ordenados if item["total_meta"] > 0]
+            nao_pagaram = [item for item in itens_ordenados if item["total_meta"] == 0]
+
             if pagaram:
                 for i in range(0, len(pagaram), 5):
                     grupo = pagaram[i:i+5]
                     embed = discord.Embed(title=f"✅ {grupo_data['nome']} - QUEM PAGOU ({len(pagaram)} membros) - Parte {i//5 + 1}", color=grupo_data["cor"])
                     texto = ""
                     for idx, item in enumerate(grupo, i + 1):
-                        texto += f"**{idx}.** {item['nome']}\n   💰 Meta: {formatar_dinheiro(item['total_meta'])}\n   🎯 Ações: {formatar_dinheiro(item['total_acoes'])}\n   📦 Total: {formatar_dinheiro(item['total_geral'])}\n\n"
+                        texto += f"**{idx}.** {item['nome']}\n"
+                        texto += f"   💰 Meta: {formatar_dinheiro(item['total_meta'])}\n"
+                        if item.get("is_mecanico"):
+                            segundos = await calcular_horas_semana(item["user_id"])
+                            texto += f"   ⏰ Horas Mecânica: {formatar_horas(segundos)}\n"
+                        texto += "\n"
+
                     if len(texto) > 1000:
                         parte1 = texto[:900]
                         parte2 = texto[900:]
@@ -9070,6 +9091,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                         embed.add_field(name="📋 LISTA", value=texto, inline=False)
                     await canal_resultados.send(embed=embed)
                     await asyncio.sleep(0.3)
+
             if nao_pagaram:
                 for i in range(0, len(nao_pagaram), 10):
                     grupo = nao_pagaram[i:i+10]
@@ -9080,22 +9102,25 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                     embed.add_field(name="📋 LISTA", value=texto, inline=False)
                     await canal_resultados.send(embed=embed)
                     await asyncio.sleep(0.3)
+
         total_embeds = 1
         for grupo_key, grupo_data in grupos.items():
             if grupo_data["itens"]:
                 if grupo_data.get("is_isento", False):
                     total_embeds += (len(grupo_data["itens"]) + 9) // 10
                 else:
-                    pagaram = [item for item in grupo_data["itens"] if item["total_geral"] > 0]
-                    nao_pagaram = [item for item in grupo_data["itens"] if item["total_geral"] == 0]
+                    pagaram = [item for item in grupo_data["itens"] if item["total_meta"] > 0]
+                    nao_pagaram = [item for item in grupo_data["itens"] if item["total_meta"] == 0]
                     total_embeds += (len(pagaram) + 4) // 5
                     total_embeds += (len(nao_pagaram) + 9) // 10
+
         await interaction.followup.send(
             f"✅ **Relatório enviado com sucesso!**\n"
             f"📊 {len(historico)} metas processadas\n"
             f"📨 {total_embeds} mensagens enviadas",
             ephemeral=True
         )
+
     except Exception as e:
         logger.error(f"❌ Erro ao gerar relatório: {e}")
         await interaction.followup.send(f"❌ Erro ao gerar relatório: {str(e)}", ephemeral=True)
