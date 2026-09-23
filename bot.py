@@ -8993,6 +8993,9 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
 
             cargo_encontrado = False
             for grupo_key, grupo_data in grupos.items():
+                # Pular grupo "outros" (não tem cargos)
+                if "cargos" not in grupo_data:
+                    continue
                 if any(role.id in grupo_data["cargos"] for role in member.roles):
                     grupo_data["itens"].append(item_dict)
                     cargo_encontrado = True
@@ -9002,7 +9005,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                 if "outros" not in grupos:
                     grupos["outros"] = {"nome": "📌 OUTROS", "cor": 0x808080, "itens": [], "is_isento": False}
                 grupos["outros"]["itens"].append(item_dict)
-
+                
         canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
         if not canal_resultados:
             canal_resultados = interaction.channel
