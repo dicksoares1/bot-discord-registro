@@ -11205,6 +11205,9 @@ class BotaoPersistente:
 # ==================== PARTE 19: COMANDOS =================
 # =========================================================
 
+# =========================================================
+# ==================== COMANDO DE STATUS ==================
+# =========================================================
 @bot.command(name="status")
 async def cmd_status(ctx):
     estoque = await carregar_estoque()
@@ -11233,6 +11236,9 @@ async def cmd_status(ctx):
     embed.set_footer(text=f"🔄 {agora().strftime('%d/%m/%Y %H:%M:%S')}")
     await ctx.send(embed=embed)
 
+# =========================================================
+# ==================== COMANDO DE DIAGNÓSTICO =============
+# =========================================================
 @bot.command(name="diagnostico")
 @commands.has_permissions(administrator=True)
 async def cmd_diagnostico(ctx):
@@ -11258,16 +11264,22 @@ async def cmd_diagnostico(ctx):
     embed.set_footer(text=f"Versão 7.0 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
     await ctx.send(embed=embed)
 
+# =========================================================
+# ==================== COMANDO DE HELP ====================
+# =========================================================
 @bot.command(name="help_vdr")
 async def cmd_help_vdr(ctx):
     embed = discord.Embed(title="📋 LISTA DE COMANDOS - VDR BOT", description="**Comandos disponíveis para todos os membros:**", color=0x3498db)
     embed.add_field(name="📊 ESTOQUE E PRODUÇÃO", value="`!estoque` - Ver estoque completo\n`!historico_producao` - Histórico de produção\n`!historico_vendas_estoque` - Histórico de vendas", inline=False)
     embed.add_field(name="🎥 LIVES", value="`!listar_lives` - Lista lives cadastradas\n`!testar_live twitch NOME` - Testa se está ao vivo", inline=False)
     embed.add_field(name="📊 ESTATÍSTICAS", value="`!status` - Status do bot\n`!dashboard` - Dashboard completo", inline=False)
-    embed.add_field(name="👑 COMANDOS DE ADM", value="`!ausentes` - Lista ausentes\n`!remover_ausencia @membro` - Remove ausência\n`!limpar_sala` - Limpa o canal\n`!atualizar_metas` - Atualiza metas\n`!recriar_metas` - Recria todos os painéis\n`!recriar_meta @membro` - Recria painel de um membro\n`!diagnostico` - Diagnóstico do bot\n`!atualizar_paineis_metas` - Atualiza painéis de metas\n`!atualizar_acesso_resp` - Atualiza acesso dos responsáveis\n`!testar_aviso_quarta` - Testa aviso de quarta\n`!recriar_vendas` - Recria mensagens de vendas\n`!enviar_bau` - Envia painel do baú\n`!enviar_armas` - Envia painel de armas\n`!atualizar_avisos` - Atualiza painel de avisos", inline=False)
+    embed.add_field(name="👑 COMANDOS DE ADM", value="`!ausentes` - Lista ausentes\n`!remover_ausencia @membro` - Remove ausência\n`!limpar_sala` - Limpa o canal\n`!atualizar_metas` - Atualiza metas\n`!recriar_metas` - Recria todos os painéis\n`!recriar_meta @membro` - Recria painel de um membro\n`!diagnostico` - Diagnóstico do bot\n`!atualizar_paineis_metas` - Atualiza painéis de metas\n`!atualizar_acesso_resp` - Atualiza acesso dos responsáveis\n`!testar_aviso_quarta` - Testa aviso de quarta\n`!recriar_vendas` - Recria mensagens de vendas\n`!atualizar_vendas_antigas` - Atualiza botões de vendas antigas\n`!enviar_bau` - Envia painel do baú\n`!enviar_armas` - Envia painel de armas\n`!atualizar_avisos` - Atualiza painel de avisos", inline=False)
     embed.set_footer(text="Sistema VDR • v7.0 COMPLETO")
     await ctx.send(embed=embed)
 
+# =========================================================
+# ==================== COMANDO DE ESTOQUE =================
+# =========================================================
 @bot.command(name="estoque")
 async def cmd_ver_estoque(ctx):
     estoque_municoes = await carregar_estoque()
@@ -11277,6 +11289,9 @@ async def cmd_ver_estoque(ctx):
     embed.add_field(name="💊 INSUMOS", value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades", inline=False)
     await ctx.send(embed=embed)
 
+# =========================================================
+# ==================== COMANDO DE HISTÓRICO PRODUÇÃO ======
+# =========================================================
 @bot.command(name="historico_producao")
 async def cmd_historico_producao(ctx, limite: int = 10):
     pool = await get_pool()
@@ -11300,6 +11315,9 @@ async def cmd_historico_producao(ctx, limite: int = 10):
         )
     await ctx.send(embed=embed)
 
+# =========================================================
+# ==================== COMANDO DE HISTÓRICO VENDAS ========
+# =========================================================
 @bot.command(name="historico_vendas_estoque")
 async def cmd_historico_vendas_estoque(ctx, limite: int = 10):
     pool = await get_pool()
@@ -11323,6 +11341,9 @@ async def cmd_historico_vendas_estoque(ctx, limite: int = 10):
         )
     await ctx.send(embed=embed)
 
+# =========================================================
+# ==================== COMANDO DE AUSENTES ================
+# =========================================================
 @bot.command(name="ausentes")
 @commands.has_permissions(administrator=True)
 async def listar_ausentes(ctx):
@@ -11339,6 +11360,9 @@ async def listar_ausentes(ctx):
         )
     await ctx.send(embed=embed)
 
+# =========================================================
+# ==================== COMANDO DE REMOVER AUSÊNCIA ========
+# =========================================================
 @bot.command(name="remover_ausencia")
 async def remover_ausencia_cmd(ctx, member: discord.Member):
     if not pode_remover_ausencia(ctx.author):
@@ -11355,6 +11379,9 @@ async def remover_ausencia_cmd(ctx, member: discord.Member):
     embed = discord.Embed(title="✅ Ausência Removida (Retorno Antecipado)", description=f"A ausência de {member.mention} foi encerrada!", color=0x2ecc71)
     await ctx.send(embed=embed)
 
+# =========================================================
+# ==================== COMANDO DE TESTAR LIVE =============
+# =========================================================
 @bot.command(name="testar_live")
 async def testar_live_cmd(ctx, plataforma: str = None, canal: str = None):
     if not plataforma or not canal:
@@ -11383,6 +11410,9 @@ async def testar_live_cmd(ctx, plataforma: str = None, canal: str = None):
     else:
         await ctx.send(f"❌ O canal **{canal}** NÃO está ao vivo no momento na {plataforma.upper()}.")
 
+# =========================================================
+# ==================== COMANDO DE LISTAR LIVES ============
+# =========================================================
 @bot.command(name="listar_lives")
 async def listar_lives_cmd(ctx):
     lives = await carregar_lives_db()
@@ -11406,6 +11436,9 @@ async def listar_lives_cmd(ctx):
             embed.add_field(name=f"👤 {nome}", value=f"📺 {plataforma.upper()}\n🔗 {link}\n📌 {divulgado}", inline=False)
     await ctx.send(embed=embed)
 
+# =========================================================
+# ==================== COMANDO DE ATUALIZAR PAINÉIS METAS =
+# =========================================================
 @bot.command(name="atualizar_paineis_metas")
 @commands.has_permissions(administrator=True)
 async def cmd_atualizar_paineis_metas(ctx):
@@ -11427,6 +11460,9 @@ async def cmd_atualizar_paineis_metas(ctx):
         logger.error(f"❌ Erro ao atualizar painéis de metas: {e}")
         await ctx.send(f"❌ Erro ao atualizar painéis: {e}")
 
+# =========================================================
+# ==================== COMANDO DE ATUALIZAR METAS =========
+# =========================================================
 @bot.command(name="atualizar_metas")
 @commands.has_permissions(administrator=True)
 async def cmd_atualizar_metas(ctx):
@@ -11443,6 +11479,9 @@ async def cmd_atualizar_metas(ctx):
         logger.error(f"❌ Erro: {e}")
         await ctx.send(f"❌ Erro: {e}")
 
+# =========================================================
+# ==================== COMANDO DE RECRIAR METAS ===========
+# =========================================================
 @bot.command(name="recriar_metas")
 @commands.has_permissions(administrator=True)
 async def cmd_recriar_metas(ctx):
@@ -11462,6 +11501,9 @@ async def cmd_recriar_metas(ctx):
         logger.error(f"❌ Erro ao recriar metas: {e}")
         await ctx.send(f"❌ Erro ao recriar metas: {e}")
 
+# =========================================================
+# ==================== COMANDO DE RECRIAR META ============
+# =========================================================
 @bot.command(name="recriar_meta")
 @commands.has_permissions(administrator=True)
 async def cmd_recriar_meta(ctx, member: discord.Member):
@@ -11473,6 +11515,9 @@ async def cmd_recriar_meta(ctx, member: discord.Member):
         logger.error(f"❌ Erro ao recriar meta de {member.id}: {e}")
         await ctx.send(f"❌ Erro ao recriar meta: {e}")
 
+# =========================================================
+# ==================== COMANDO DE ATUALIZAR ACESSO RESP ===
+# =========================================================
 @bot.command(name="atualizar_acesso_resp")
 @commands.has_permissions(administrator=True)
 async def cmd_atualizar_acesso_resp(ctx):
@@ -11480,6 +11525,9 @@ async def cmd_atualizar_acesso_resp(ctx):
     await atualizar_acesso_responsaveis()
     await ctx.send("✅ Acesso dos responsáveis atualizado!")
 
+# =========================================================
+# ==================== COMANDO DE TESTAR AVISO QUARTA =====
+# =========================================================
 @bot.command(name="testar_aviso_quarta")
 @commands.has_permissions(administrator=True)
 async def cmd_testar_aviso_quarta(ctx):
@@ -11490,6 +11538,9 @@ async def cmd_testar_aviso_quarta(ctx):
     else:
         await ctx.send("❌ Erro ao enviar avisos. Verifique os logs.")
 
+# =========================================================
+# ==================== COMANDO DE LIMPAR SALA =============
+# =========================================================
 @bot.command(name="limpar_sala")
 @commands.has_permissions(administrator=True)
 async def cmd_limpar_sala(ctx):
@@ -11531,6 +11582,9 @@ async def cmd_limpar_sala(ctx):
         logger.error(f"Erro ao limpar sala: {e}")
         await ctx.send(f"❌ **Erro ao limpar a sala:** {e}")
 
+# =========================================================
+# ==================== COMANDO DE RECRIAR VENDAS ==========
+# =========================================================
 @bot.command(name="recriar_vendas")
 @commands.has_permissions(administrator=True)
 async def cmd_recriar_vendas(ctx):
@@ -11538,6 +11592,131 @@ async def cmd_recriar_vendas(ctx):
     await recriar_mensagens_vendas()
     await ctx.send("✅ Mensagens de vendas recriadas!")
 
+# =========================================================
+# ==================== COMANDO DE ATUALIZAR VENDAS ANTIGAS
+# =========================================================
+@bot.command(name="atualizar_vendas_antigas")
+@commands.has_permissions(administrator=True)
+async def cmd_atualizar_vendas_antigas(ctx):
+    """Atualiza todos os botões de vendas antigas para o novo formato"""
+    await ctx.send("🔄 Atualizando vendas antigas...")
+
+    canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
+    if not canal:
+        await ctx.send("❌ Canal de encomendas não encontrado!")
+        return
+
+    contador_atualizadas = 0
+    contador_ignoradas = 0
+
+    async for msg in canal.history(limit=500):
+        if msg.author == bot.user and msg.embeds:
+            embed = msg.embeds[0]
+            titulo = embed.title or ""
+
+            if "ENTREGA" not in titulo.upper() and "ENCOMENDA" not in titulo.upper() and "VENDA" not in titulo.upper():
+                continue
+
+            pago = False
+            entregue = False
+            cancelado = False
+            transferencia_confirmada = False
+
+            for field in embed.fields:
+                if field.name == "📌 STATUS DO PEDIDO" or field.name == "📌 Status":
+                    valor = field.value
+                    if "TRANSFERÊNCIA CONFIRMADA" in valor:
+                        transferencia_confirmada = True
+                        pago = True
+                        entregue = True
+                    if "Pago e Entregue" in valor:
+                        pago = True
+                        entregue = True
+                    elif "💰 Pago" in valor:
+                        pago = True
+                    elif "✅ Entregue" in valor:
+                        entregue = True
+                    if "❌" in valor or "cancelado" in valor.lower():
+                        cancelado = True
+                    break
+
+            entrega_id = None
+            if embed.footer:
+                texto_footer = embed.footer.text
+                if "ID:" in texto_footer:
+                    try:
+                        parte_id = texto_footer.split("ID:")[1].strip().split(" ")[0]
+                        entrega_id = safe_int(parte_id)
+                    except:
+                        pass
+
+            total_entregas = 1
+            entrega_atual = 1
+            if embed.description:
+                if "entregas no total" in embed.description:
+                    try:
+                        total_entregas = safe_int(embed.description.split("tem")[1].split("entregas")[0].strip())
+                    except:
+                        pass
+            if "ENTREGA" in titulo.upper():
+                try:
+                    parte = titulo.split("ENTREGA")[1].strip().split("/")[0].strip()
+                    entrega_atual = safe_int(parte)
+                except:
+                    pass
+
+            valor_total = 0
+            pt = 0
+            sub = 0
+            pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
+            for field in embed.fields:
+                if field.name == "💰 VALOR TOTAL" or field.name == "💰 Valor":
+                    try:
+                        valor_total = safe_int(field.value.replace("R$", "").replace(".", "").replace(",", "").strip())
+                    except:
+                        pass
+                if field.name == "🔫 PT":
+                    try:
+                        pt = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                    except:
+                        pass
+                if field.name == "🔫 SUB":
+                    try:
+                        sub = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                    except:
+                        pass
+
+            view = StatusView(
+                disabled=False,
+                entrega_id=entrega_id,
+                total_entregas=total_entregas,
+                entrega_atual=entrega_atual,
+                pago_ja_clicado=pago,
+                mensagem_original=msg,
+                transferencia_confirmada=transferencia_confirmada or cancelado,
+                valor_total=valor_total,
+                pt=pt,
+                sub=sub,
+                pedido_numero=pedido_numero,
+                entregue_ja_clicado=entregue
+            )
+
+            try:
+                await msg.edit(view=view)
+                contador_atualizadas += 1
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"❌ Erro ao atualizar venda {msg.id}: {e}")
+                contador_ignoradas += 1
+
+    await ctx.send(
+        f"✅ **{contador_atualizadas} vendas atualizadas!**\n"
+        f"❌ {contador_ignoradas} erros"
+    )
+
+# =========================================================
+# ==================== COMANDO DE ENVIAR BAÚ ==============
+# =========================================================
 @bot.command(name="enviar_bau")
 @commands.has_permissions(administrator=True)
 async def cmd_enviar_bau(ctx):
@@ -11545,6 +11724,9 @@ async def cmd_enviar_bau(ctx):
     await enviar_painel_bau()
     await ctx.send("✅ Painel do baú enviado!")
 
+# =========================================================
+# ==================== COMANDO DE ENVIAR ARMAS ============
+# =========================================================
 @bot.command(name="enviar_armas")
 @commands.has_permissions(administrator=True)
 async def cmd_enviar_armas(ctx):
@@ -11552,6 +11734,9 @@ async def cmd_enviar_armas(ctx):
     await enviar_painel_armas()
     await ctx.send("✅ Painel de armas enviado!")
 
+# =========================================================
+# ==================== COMANDO DE ATUALIZAR AVISOS ========
+# =========================================================
 @bot.command(name="atualizar_avisos")
 @commands.has_permissions(administrator=True)
 async def cmd_atualizar_avisos(ctx):
@@ -11559,6 +11744,9 @@ async def cmd_atualizar_avisos(ctx):
     await enviar_painel_avisos()
     await ctx.send("✅ Painel de avisos atualizado!")
 
+# =========================================================
+# ==================== COMANDO DE DASHBOARD ===============
+# =========================================================
 @bot.command(name="dashboard")
 async def cmd_dashboard(ctx):
     estoque = await carregar_estoque()
@@ -11610,6 +11798,9 @@ async def cmd_dashboard(ctx):
     embed.set_footer(text=f"🛡 Vida Rasa 442 • Dashboard • {agora().strftime('%d/%m/%Y %H:%M:%S')}", icon_url=bot.user.display_avatar.url if bot.user else None)
     await ctx.send(embed=embed)
 
+# =========================================================
+# ============ COMANDO DE DESATIVAR VENDAS CONCLUÍDAS =====
+# =========================================================
 @bot.command(name="desativar_vendas_concluidas")
 @commands.has_permissions(administrator=True)
 async def cmd_desativar_vendas_concluidas(ctx):
@@ -11660,6 +11851,9 @@ async def cmd_desativar_vendas_concluidas(ctx):
                     logger.error(f"Erro ao desativar {msg.id}: {e}")
     await ctx.send(f"✅ **{contador} vendas concluídas desativadas!**")
 
+# =========================================================
+# ==================== COMANDO DE RESTAURAR PRODUÇÕES ====
+# =========================================================
 @bot.command(name="restaurar_producoes")
 @commands.has_permissions(administrator=True)
 async def cmd_restaurar_producoes(ctx):
@@ -11667,6 +11861,9 @@ async def cmd_restaurar_producoes(ctx):
     await restaurar_producoes()
     await ctx.send("✅ Produções restauradas!")
 
+# =========================================================
+# ==================== COMANDO DE RECRIAR CATEGORIAS ======
+# =========================================================
 @bot.command(name="recriar_categorias")
 @commands.has_permissions(administrator=True)
 async def cmd_recriar_categorias(ctx):
