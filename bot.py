@@ -6329,6 +6329,81 @@ class RelatorioVendasPeriodoModal(discord.ui.Modal, title="📅 RELATÓRIO DE VE
         embed.set_footer(text="Relatório gerado pelo sistema VDR")
         await interaction.followup.send(embed=embed, ephemeral=False)
 
+class RelatorioVendasModal(discord.ui.Modal, title="📅 RELATÓRIO DE VENDAS"):
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data INÍCIO (DD/MM/AAAA)",
+        placeholder="Ex: 01/09/2026",
+        required=True
+    )
+    data_fim = discord.ui.TextInput(
+        label="📅 Data FIM (DD/MM/AAAA)",
+        placeholder="Ex: 30/09/2026",
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        data_inicio_str = self.data_inicio.value.strip()
+        data_fim_str = self.data_fim.value.strip()
+
+        try:
+            data_inicio = datetime.strptime(data_inicio_str, "%d/%m/%Y").replace(hour=0, minute=0, second=0)
+            data_fim = datetime.strptime(data_fim_str, "%d/%m/%Y").replace(hour=23, minute=59, second=59)
+        except:
+            await interaction.followup.send("❌ Formato inválido! Use DD/MM/AAAA", ephemeral=True)
+            return
+
+        if data_fim < data_inicio:
+            await interaction.followup.send("❌ Data FIM deve ser depois da data INÍCIO!", ephemeral=True)
+            return
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT user_id, SUM(valor) as total, COUNT(*) as quantidade
+                FROM vendas 
+                WHERE TO_DATE(data, 'DD/MM/YYYY') BETWEEN $1::date AND $2::date
+                GROUP BY user_id 
+                ORDER BY total DESC""",
+                data_inicio, data_fim
+            )
+            total_geral = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE TO_DATE(data, 'DD/MM/YYYY') BETWEEN $1::date AND $2::date",
+                data_inicio, data_fim
+            )
+
+        if not rows:
+            await interaction.followup.send(f"📭 Nenhuma venda no período **{data_inicio_str}** a **{data_fim_str}**", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📊 RELATÓRIO DE VENDAS",
+            description=f"📅 **Período:** {data_inicio_str} a {data_fim_str}",
+            color=Cores.VENDA,
+            timestamp=agora()
+        )
+        embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Vendas")
+
+        texto = ""
+        for i, row in enumerate(rows, 1):
+            user = await pegar_usuario(int(row["user_id"]))
+            nome = user.display_name if user else row["user_id"]
+            texto += f"**{i}.** {nome}\n"
+            texto += f"   💰 Vendas: **{formatar_dinheiro(row['total'])}**\n"
+            texto += f"   📦 Pedidos: **{row['quantidade']}**\n\n"
+
+        embed.add_field(name="👥 VENDEDORES", value=texto, inline=False)
+        embed.add_field(name="💰 TOTAL GERAL", value=formatar_dinheiro(total_geral), inline=True)
+        embed.add_field(name="📦 TOTAL DE PEDIDOS", value=sum(r["quantidade"] for r in rows), inline=True)
+        embed.set_footer(text="Relatório gerado pelo sistema VDR")
+
+        await interaction.followup.send(embed=embed, ephemeral=False)
+
 async def restaurar_botoes_vendas():
     try:
         canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
@@ -7380,6 +7455,87 @@ class RelatorioPolvoraModal(discord.ui.Modal, title="📅 RELATÓRIO DE PÓLVORA
         embed.set_footer(text="Relatório gerado pelo sistema VDR")
         await interaction.followup.send(embed=embed, ephemeral=False)
 
+class RelatorioProducaoModal(discord.ui.Modal, title="📊 RELATÓRIO DE PRODUÇÃO"):
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data INÍCIO (DD/MM/AAAA)",
+        placeholder="Ex: 01/09/2026",
+        required=True
+    )
+    data_fim = discord.ui.TextInput(
+        label="📅 Data FIM (DD/MM/AAAA)",
+        placeholder="Ex: 30/09/2026",
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        data_inicio_str = self.data_inicio.value.strip()
+        data_fim_str = self.data_fim.value.strip()
+
+        try:
+            data_inicio = datetime.strptime(data_inicio_str, "%d/%m/%Y").replace(hour=0, minute=0, second=0)
+            data_fim = datetime.strptime(data_fim_str, "%d/%m/%Y").replace(hour=23, minute=59, second=59)
+        except:
+            await interaction.followup.send("❌ Formato inválido! Use DD/MM/AAAA", ephemeral=True)
+            return
+
+        if data_fim < data_inicio:
+            await interaction.followup.send("❌ Data FIM deve ser depois da data INÍCIO!", ephemeral=True)
+            return
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT user_id, SUM(capsulas) as total_capsulas, SUM(polvora) as total_polvora, COUNT(*) as quantidade
+                FROM producoes_finalizadas 
+                WHERE data >= $1 AND data <= $2
+                GROUP BY user_id 
+                ORDER BY total_capsulas DESC""",
+                data_inicio, data_fim
+            )
+            total_capsulas = await conn.fetchval(
+                "SELECT COALESCE(SUM(capsulas), 0) FROM producoes_finalizadas WHERE data >= $1 AND data <= $2",
+                data_inicio, data_fim
+            )
+            total_polvora = await conn.fetchval(
+                "SELECT COALESCE(SUM(polvora), 0) FROM producoes_finalizadas WHERE data >= $1 AND data <= $2",
+                data_inicio, data_fim
+            )
+
+        if not rows:
+            await interaction.followup.send(f"📭 Nenhuma produção no período **{data_inicio_str}** a **{data_fim_str}**", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📊 RELATÓRIO DE PRODUÇÃO",
+            description=f"📅 **Período:** {data_inicio_str} a {data_fim_str}",
+            color=Cores.PRODUCAO,
+            timestamp=agora()
+        )
+        embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Produção")
+
+        texto = ""
+        for i, row in enumerate(rows, 1):
+            user = await pegar_usuario(int(row["user_id"]))
+            nome = user.display_name if user else row["user_id"]
+            texto += f"**{i}.** {nome}\n"
+            texto += f"   💊 Cápsulas: **{fmt_num(row['total_capsulas'])}**\n"
+            texto += f"   💣 Pólvora: **{fmt_num(row['total_polvora'])}**\n"
+            texto += f"   🏭 Produções: **{row['quantidade']}**\n\n"
+
+        embed.add_field(name="👥 PRODUTORES", value=texto, inline=False)
+        embed.add_field(name="💊 TOTAL CÁPSULAS", value=fmt_num(total_capsulas), inline=True)
+        embed.add_field(name="💣 TOTAL PÓLVORA", value=fmt_num(total_polvora), inline=True)
+        embed.add_field(name="🏭 TOTAL PRODUÇÕES", value=sum(r["quantidade"] for r in rows), inline=True)
+        embed.set_footer(text="Relatório gerado pelo sistema VDR")
+
+        await interaction.followup.send(embed=embed, ephemeral=False)
+
 async def gerar_desc_producao(prod, pct=None, restante=None):
     try:
         if isinstance(prod["inicio"], str):
@@ -7793,6 +7949,8 @@ async def enviar_painel_polvoras():
         color=0xe67e22
     )
     await enviar_ou_atualizar_painel("painel_polvora", CANAL_CALCULO_POLVORA_ID, embed, PolvoraView())
+
+
 
 # =========================================================
 # ==================== PARTE 14: SISTEMA DE METAS =========
