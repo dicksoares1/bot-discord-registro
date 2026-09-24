@@ -6389,15 +6389,28 @@ class RelatorioVendasModal(discord.ui.Modal, title="📅 RELATÓRIO DE VENDAS"):
         )
         embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Vendas")
 
-        texto = ""
+        # =========================================================
+        # DIVIDIR EM VÁRIOS CAMPOS PARA NÃO PASSAR DE 1024
+        # =========================================================
+        texto_atual = ""
+        parte = 1
         for i, row in enumerate(rows, 1):
             user = await pegar_usuario(int(row["user_id"]))
             nome = user.display_name if user else row["user_id"]
-            texto += f"**{i}.** {nome}\n"
-            texto += f"   💰 Vendas: **{formatar_dinheiro(row['total'])}**\n"
-            texto += f"   📦 Pedidos: **{row['quantidade']}**\n\n"
+            linha = f"**{i}.** {nome}\n"
+            linha += f"   💰 Vendas: **{formatar_dinheiro(row['total'])}**\n"
+            linha += f"   📦 Pedidos: **{row['quantidade']}**\n\n"
 
-        embed.add_field(name="👥 VENDEDORES", value=texto, inline=False)
+            if len(texto_atual) + len(linha) > 1000:
+                embed.add_field(name=f"👥 VENDEDORES (Parte {parte})", value=texto_atual, inline=False)
+                texto_atual = ""
+                parte += 1
+
+            texto_atual += linha
+
+        if texto_atual:
+            embed.add_field(name=f"👥 VENDEDORES (Parte {parte})", value=texto_atual, inline=False)
+
         embed.add_field(name="💰 TOTAL GERAL", value=formatar_dinheiro(total_geral), inline=True)
         embed.add_field(name="📦 TOTAL DE PEDIDOS", value=sum(r["quantidade"] for r in rows), inline=True)
         embed.set_footer(text="Relatório gerado pelo sistema VDR")
@@ -7519,23 +7532,35 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 RELATÓRIO DE PRODUÇ
         )
         embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Produção")
 
-        texto = ""
+        # =========================================================
+        # DIVIDIR EM VÁRIOS CAMPOS PARA NÃO PASSAR DE 1024
+        # =========================================================
+        texto_atual = ""
+        parte = 1
         for i, row in enumerate(rows, 1):
             user = await pegar_usuario(int(row["user_id"]))
             nome = user.display_name if user else row["user_id"]
-            texto += f"**{i}.** {nome}\n"
-            texto += f"   💊 Cápsulas: **{fmt_num(row['total_capsulas'])}**\n"
-            texto += f"   💣 Pólvora: **{fmt_num(row['total_polvora'])}**\n"
-            texto += f"   🏭 Produções: **{row['quantidade']}**\n\n"
+            linha = f"**{i}.** {nome}\n"
+            linha += f"   💊 Cápsulas: **{fmt_num(row['total_capsulas'])}**\n"
+            linha += f"   💣 Pólvora: **{fmt_num(row['total_polvora'])}**\n"
+            linha += f"   🏭 Produções: **{row['quantidade']}**\n\n"
 
-        embed.add_field(name="👥 PRODUTORES", value=texto, inline=False)
+            if len(texto_atual) + len(linha) > 1000:
+                embed.add_field(name=f"👥 PRODUTORES (Parte {parte})", value=texto_atual, inline=False)
+                texto_atual = ""
+                parte += 1
+
+            texto_atual += linha
+
+        if texto_atual:
+            embed.add_field(name=f"👥 PRODUTORES (Parte {parte})", value=texto_atual, inline=False)
+
         embed.add_field(name="💊 TOTAL CÁPSULAS", value=fmt_num(total_capsulas), inline=True)
         embed.add_field(name="💣 TOTAL PÓLVORA", value=fmt_num(total_polvora), inline=True)
         embed.add_field(name="🏭 TOTAL PRODUÇÕES", value=sum(r["quantidade"] for r in rows), inline=True)
         embed.set_footer(text="Relatório gerado pelo sistema VDR")
 
         await interaction.followup.send(embed=embed, ephemeral=False)
-
 async def gerar_desc_producao(prod, pct=None, restante=None):
     try:
         if isinstance(prod["inicio"], str):
