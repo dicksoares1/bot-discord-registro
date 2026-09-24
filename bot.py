@@ -1,4 +1,3 @@
-# ================================================
 # =========================================================
 # ==================== BOT VDR v.7 - 100% COMPLETO ========
 # =========================================================
@@ -5391,16 +5390,54 @@ class StatusView(discord.ui.View):
                 await interaction.response.send_message("⚠️ O pedido precisa estar **PAGO** antes de confirmar a transferência!", ephemeral=True)
                 return False
 
-            if self.valor_total == 0 or self.pt == 0:
+            # =========================================================
+            # RECUPERAR DADOS DO PEDIDO (CASO VENHAM ZERADOS)
+            # =========================================================
+            # 1. Tentar extrair do embed se pedido_numero estiver zerado
+            pedido_numero_temp = self.pedido_numero
+            if pedido_numero_temp == 0:
+                embed = interaction.message.embeds[0]
+                titulo = embed.title or ""
+                if "#" in titulo:
+                    try:
+                        pedido_numero_temp = safe_int(titulo.split("#")[1].split(" ")[0].strip())
+                        self.pedido_numero = pedido_numero_temp
+                    except:
+                        pass
+
+            # 2. Extrair PT/SUB do embed se estiverem zerados
+            if self.pt == 0 or self.sub == 0:
+                embed = interaction.message.embeds[0]
+                for field in embed.fields:
+                    if field.name == "🔫 PT" and self.pt == 0:
+                        try:
+                            self.pt = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                        except:
+                            pass
+                    if field.name == "🔫 SUB" and self.sub == 0:
+                        try:
+                            self.sub = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                        except:
+                            pass
+
+            # 3. Buscar valor no banco
+            if self.valor_total == 0:
                 try:
                     pool = await get_pool()
                     if pool:
                         async with pool.acquire() as conn:
-                            row = await conn.fetchrow("SELECT valor FROM vendas WHERE pedido_numero = $1", self.pedido_numero)
+                            row = await conn.fetchrow("SELECT valor FROM vendas WHERE pedido_numero = $1", pedido_numero_temp)
                             if row:
                                 self.valor_total = row["valor"]
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"❌ Erro ao buscar valor do pedido: {e}")
+
+            # 4. Se ainda estiver zerado, calcular pelo PT/SUB
+            if self.valor_total == 0:
+                valor_calculado = (self.pt * 50) + (self.sub * 90)
+                if valor_calculado > 0:
+                    self.valor_total = valor_calculado
+                    logger.info(f"✅ Valor calculado: {valor_calculado} (PT: {self.pt}, SUB: {self.sub})")
 
             if self.valor_total == 0:
                 await interaction.response.send_message("❌ Não foi possível encontrar o valor do pedido!", ephemeral=True)
