@@ -5321,7 +5321,7 @@ class StatusView(discord.ui.View):
         self.pedido_numero = pedido_numero
 
         # =========================================================
-        # BOTÃO PAGO (só habilita depois de entregue)
+        # BOTÃO PAGO
         # =========================================================
         self.add_item(discord.ui.Button(
             label="💰 Pago",
@@ -5504,14 +5504,18 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         pagador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
 
+        # =========================================================
+        # DETECTAR SE JÁ FOI ENTREGUE PELO CONTEÚDO DO EMBED
+        # =========================================================
+        entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
+        pago_foi_clicado = True
+
         linhas = [l for l in linhas if not l.startswith("⏳")]
         linhas = [l for l in linhas if not l.startswith("💰")]
         linhas.append(f"💰 Pago • Recebido por {pagador_apelido} • {agora_str}")
 
         embed = self.set_status(embed, idx, linhas)
 
-        pago_foi_clicado = any(l.startswith("💰") for l in linhas)
-        entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
         finalizado = pago_foi_clicado and entregue_foi_clicado
 
         if finalizado:
@@ -5557,7 +5561,7 @@ class StatusView(discord.ui.View):
             pt=self.pt,
             sub=self.sub,
             pedido_numero=self.pedido_numero,
-            entregue_ja_clicado=self.entrega_ja_entregue
+            entregue_ja_clicado=entregue_foi_clicado
         ))
 
         await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
@@ -5599,7 +5603,6 @@ class StatusView(discord.ui.View):
                 except:
                     pass
 
-        # Verificar estoque
         if pacotes_pt > 0:
             estoque_suficiente = await verificar_estoque_suficiente("PT", pacotes_pt)
             if not estoque_suficiente:
@@ -5639,7 +5642,6 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        # Enviar para o baú de produção
         if pacotes_pt > 0 or pacotes_sub > 0:
             canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
             if canal_bau:
@@ -5671,7 +5673,7 @@ class StatusView(discord.ui.View):
                     logger.error(f"Erro envio baú: {e}")
 
         pago_foi_clicado = any(l.startswith("💰") for l in linhas)
-        entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
+        entregue_foi_clicado = True
         finalizado = pago_foi_clicado and entregue_foi_clicado
 
         if finalizado:
@@ -5704,9 +5706,6 @@ class StatusView(discord.ui.View):
 
             await interaction.followup.send("✅ **Venda concluída com sucesso!**", ephemeral=True)
 
-            # =========================================================
-            # CRIAR PRÓXIMA ENTREGA (SE TIVER)
-            # =========================================================
             if self.entrega_atual < self.total_entregas:
                 await self.criar_proxima_entrega(interaction, embed, pedido_numero)
 
@@ -5714,15 +5713,12 @@ class StatusView(discord.ui.View):
             await enviar_painel_fabricacao()
             return
 
-        # =========================================================
-        # NÃO FINALIZADO - ATUALIZAR E CRIAR PRÓXIMA ENTREGA
-        # =========================================================
         await interaction.message.edit(embed=embed, view=StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
-            pago_ja_clicado=self.pago_ja_clicado,
+            pago_ja_clicado=pago_foi_clicado,
             mensagem_original=interaction.message,
             transferencia_confirmada=False,
             valor_total=self.valor_total,
@@ -5734,9 +5730,6 @@ class StatusView(discord.ui.View):
 
         await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
-        # =========================================================
-        # CRIAR PRÓXIMA ENTREGA (SE TIVER)
-        # =========================================================
         if self.entrega_atual < self.total_entregas:
             await self.criar_proxima_entrega(interaction, embed, pedido_numero)
 
