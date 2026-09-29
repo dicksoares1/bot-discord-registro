@@ -8405,6 +8405,13 @@ async def fechar_ponto(user_id):
         return None
 
 async def calcular_horas_semana(user_id):
+    """
+    Calcula o total de horas do mecânico na semana atual.
+    SOMA:
+    - Pontos fechados da semana
+    - Ponto aberto atual (se tiver)
+    - Ajustes manuais do histórico mais recente
+    """
     pool = await get_pool()
     if not pool:
         return 0
@@ -8413,12 +8420,18 @@ async def calcular_horas_semana(user_id):
         dia_semana = hoje.weekday()
         segunda = (hoje - timedelta(days=dia_semana)).replace(hour=0, minute=0, second=0, microsecond=0)
         domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
         async with pool.acquire() as conn:
+            # 1. Pontos fechados da semana
             rows = await conn.fetch(
-                "SELECT tempo_segundos FROM pontos_mecanica WHERE user_id = $1 AND ativo = false AND entrada >= $2 AND entrada <= $3",
+                """SELECT tempo_segundos FROM pontos_mecanica 
+                   WHERE user_id = $1 AND ativo = false 
+                   AND entrada >= $2 AND entrada <= $3""",
                 str(user_id), para_db_naive(segunda), para_db_naive(domingo)
             )
             total_fechados = sum(r["tempo_segundos"] for r in rows)
+
+            # 2. Ponto aberto atual
             aberto = await conn.fetchrow(
                 "SELECT entrada FROM pontos_mecanica WHERE user_id = $1 AND ativo = true",
                 str(user_id)
@@ -8429,7 +8442,36 @@ async def calcular_horas_semana(user_id):
                 if isinstance(entrada_aberto, datetime) and entrada_aberto.tzinfo is None:
                     entrada_aberto = entrada_aberto.replace(tzinfo=BRASIL)
                 total_aberto = int((agora() - entrada_aberto).total_seconds())
-            return total_fechados + total_aberto
+
+            # 3. Horas do histórico (ajustes manuais da semana atual)
+            # Pega registros de horas cujo data_fechamento está DENTRO da semana atual
+            hist_rows = await conn.fetch(
+                """SELECT segundos_totais FROM horas_historico 
+                   WHERE user_id = $1 
+                   AND data_fechamento >= $2 
+                   AND data_fechamento <= $3""",
+                str(user_id), para_db_naive(segunda), para_db_naive(domingo)
+            )
+            total_historico = sum(r["segundos_totais"] or 0 for r in hist_rows)
+
+            # Se NÃO tem histórico da semana, pode ter histórico "solto" criado por edição manual
+            # Nesse caso, pega o último registro e considera como ajuste
+            if total_historico == 0:
+                ultimo_hist = await conn.fetchrow(
+                    """SELECT segundos_totais, data_fechamento FROM horas_historico 
+                       WHERE user_id = $1 
+                       ORDER BY data_fechamento DESC LIMIT 1""",
+                    str(user_id)
+                )
+                if ultimo_hist:
+                    # Se o último registro foi criado DEPOIS do início da semana atual, considera o ajuste
+                    data_fech = ultimo_hist["data_fechamento"]
+                    if isinstance(data_fech, datetime) and data_fech.tzinfo is None:
+                        data_fech = data_fech.replace(tzinfo=BRASIL)
+                    if data_fech >= segunda:
+                        total_historico = ultimo_hist["segundos_totais"] or 0
+
+            return total_fechados + total_aberto + total_historico
     except Exception as e:
         logger.error(f"❌ Erro ao calcular horas da semana: {e}")
         return 0
@@ -9371,6 +9413,7 @@ async def enviar_painel_relatorio_metas():
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharMetasAutomaticoButton())
     view.add_item(RelatorioHorasButton())
+    view.add_item(ResetarHorasSemanaButton())
     await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495685092999279, embed, view)
 
 class RelatorioMetasButton(discord.ui.Button):
@@ -9649,6 +9692,250 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
             f"📨 Enviado em {canal.mention}",
             ephemeral=True
         )
+
+# =========================================================
+# BOTÃO: RESETAR HORAS DA SEMANA (GLOBAL)
+# =========================================================
+class ResetarHorasSemanaButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="🔄 Resetar Horas da Semana",
+            style=discord.ButtonStyle.danger,
+            custom_id="resetar_horas_semana_btn",
+            emoji="🔄",
+            row=1
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        # Só ADM ou Gerentes
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem resetar as horas!",
+                ephemeral=True
+            )
+            return
+
+        # Conta quantos mecânicos serão afetados
+        guild = bot.get_guild(GUILD_ID)
+        cargo_mecanico = guild.get_role(CARGO_MECANICO_ID) if guild else None
+        total_mecanicos = 0
+        total_horas = 0
+
+        if guild and cargo_mecanico:
+            hoje = agora()
+            segunda = (hoje - timedelta(days=hoje.weekday())).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+            for member in guild.members:
+                if member.bot:
+                    continue
+                if cargo_mecanico not in member.roles:
+                    continue
+                segundos = await calcular_horas_periodo(member.id, segunda, domingo)
+                if segundos > 0:
+                    total_mecanicos += 1
+                    total_horas += segundos
+
+        embed = discord.Embed(
+            title="⚠️ ── RESETAR HORAS DA SEMANA ── ⚠️",
+            description=(
+                "**ATENÇÃO!** Esta ação irá **ZERAR TODAS AS HORAS** "
+                "dos mecânicos da **semana atual**.\n\n"
+                "📌 **O que será resetado:**\n"
+                "• Todos os pontos abertos serão fechados\n"
+                "• Todos os pontos da semana serão apagados\n"
+                "• Histórico da semana atual será removido\n"
+                "• Todos os mecânicos voltarão para **0h 0min**\n\n"
+                f"📊 **Ação afetará:**\n"
+                f"• 👥 Mecânicos com horas: **{total_mecanicos}**\n"
+                f"• ⏰ Total a ser zerado: **{formatar_horas(total_horas)}**\n\n"
+                "⚠️ **Esta ação é IRREVERSÍVEL!**\n\n"
+                "Clique em **✅ CONFIRMAR RESET** para continuar."
+            ),
+            color=0xe74c3c,
+            timestamp=agora()
+        )
+        embed.set_footer(
+            text="🛡 Vida Rasa 442 • Reset de Horas (Mecânica)",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        view = ConfirmarResetHorasView()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class ConfirmarResetHorasView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(
+        label="✅ CONFIRMAR RESET",
+        style=discord.ButtonStyle.danger,
+        custom_id="confirmar_reset_horas",
+        emoji="✅"
+    )
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        try:
+            hoje = agora()
+            dia_semana = hoje.weekday()
+            segunda = (hoje - timedelta(days=dia_semana)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+            async with pool.acquire() as conn:
+                # 1. Fecha pontos abertos da semana (calcula tempo)
+                await conn.execute(
+                    """UPDATE pontos_mecanica 
+                       SET saida = $1,
+                           tempo_segundos = EXTRACT(EPOCH FROM ($1::timestamp - entrada))::BIGINT,
+                           ativo = false
+                       WHERE ativo = true 
+                       AND entrada >= $2 
+                       AND entrada <= $3""",
+                    agora_db(), para_db_naive(segunda), para_db_naive(domingo)
+                )
+
+                # 2. Deleta pontos da semana atual
+                deletados = await conn.fetchval(
+                    """SELECT COUNT(*) FROM pontos_mecanica 
+                       WHERE entrada >= $1 AND entrada <= $2""",
+                    para_db_naive(segunda), para_db_naive(domingo)
+                )
+
+                await conn.execute(
+                    """DELETE FROM pontos_mecanica 
+                       WHERE entrada >= $1 AND entrada <= $2""",
+                    para_db_naive(segunda), para_db_naive(domingo)
+                )
+
+                # 3. Deleta histórico de horas da semana atual
+                hist_deletados = await conn.fetchval(
+                    """SELECT COUNT(*) FROM horas_historico 
+                       WHERE data_fechamento >= $1 AND data_fechamento <= $2""",
+                    para_db_naive(segunda), para_db_naive(domingo)
+                )
+
+                await conn.execute(
+                    """DELETE FROM horas_historico 
+                       WHERE data_fechamento >= $1 AND data_fechamento <= $2""",
+                    para_db_naive(segunda), para_db_naive(domingo)
+                )
+
+            logger.info(
+                f"🔄 [RESET HORAS] {deletados} pontos deletados + "
+                f"{hist_deletados} registros de histórico por {interaction.user.display_name}"
+            )
+
+            # 4. Atualiza os embeds de meta de todos os mecânicos
+            guild = bot.get_guild(GUILD_ID)
+            cargo_mecanico = guild.get_role(CARGO_MECANICO_ID) if guild else None
+            atualizados = 0
+
+            if guild and cargo_mecanico:
+                for member in guild.members:
+                    if member.bot:
+                        continue
+                    if cargo_mecanico not in member.roles:
+                        continue
+                    if str(member.id) in metas_cache:
+                        try:
+                            await atualizar_embed_meta(member.id)
+                            atualizados += 1
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao atualizar meta de {member.display_name}: {e}")
+
+            # 5. Envia log no canal geral
+            canal_log = guild.get_channel(CANAL_LOGS_GERAIS_ID) if guild else None
+            if canal_log:
+                embed_log = discord.Embed(
+                    title="🔄 RESET DE HORAS EXECUTADO",
+                    description=f"Todos os pontos da semana foram zerados.",
+                    color=0xe74c3c,
+                    timestamp=agora()
+                )
+                embed_log.add_field(
+                    name="👤 Executado por",
+                    value=interaction.user.mention,
+                    inline=True
+                )
+                embed_log.add_field(
+                    name="📊 Pontos deletados",
+                    value=str(deletados),
+                    inline=True
+                )
+                embed_log.add_field(
+                    name="📋 Históricos deletados",
+                    value=str(hist_deletados),
+                    inline=True
+                )
+                embed_log.add_field(
+                    name="🔄 Embeds atualizados",
+                    value=str(atualizados),
+                    inline=True
+                )
+                embed_log.set_footer(
+                    text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+                    icon_url=bot.user.display_avatar.url if bot.user else None
+                )
+                try:
+                    await canal_log.send(embed=embed_log)
+                except:
+                    pass
+
+            # 6. Confirmação
+            embed = discord.Embed(
+                title="✅ HORAS RESETADAS COM SUCESSO!",
+                description=(
+                    "**Todas as horas da semana atual foram zeradas.**\n\n"
+                    f"📊 **Resumo:**\n"
+                    f"• 🔄 Pontos deletados: **{deletados}**\n"
+                    f"• 📋 Históricos removidos: **{hist_deletados}**\n"
+                    f"• 👤 Embeds atualizados: **{atualizados}**"
+                ),
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            embed.set_footer(
+                text=f"Reset realizado por {interaction.user.display_name}",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao resetar horas: {e}")
+            await interaction.followup.send(
+                f"❌ **Erro ao resetar horas:** {str(e)[:150]}",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="❌ CANCELAR",
+        style=discord.ButtonStyle.secondary,
+        custom_id="cancelar_reset_horas",
+        emoji="❌"
+    )
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ **Reset cancelado.**", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 
 class ConfirmarFechamentoAutomaticoView(discord.ui.View):
     def __init__(self, data_inicio, data_fim, data_inicio_str, data_fim_str):
