@@ -722,8 +722,29 @@ async def inicializar_tabelas(pool):
                 data_criacao TIMESTAMP DEFAULT NOW()
             )
         """)
+        # =========================================================
+        # TABELA: HISTÓRICO DE HORAS (MECÂNICA)
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS horas_historico (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                nome VARCHAR(100),
+                segundos_totais BIGINT DEFAULT 0,
+                data_inicio TIMESTAMP,
+                data_fim TIMESTAMP,
+                data_fechamento TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_horas_hist_user ON horas_historico(user_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_horas_hist_fechamento ON horas_historico(data_fechamento DESC)
+        """)
 
     logger.info("✅ Todas as tabelas criadas/verificadas com sucesso!")
+    logger.info("✅ Tabela horas_historico pronta!")
 
 # =========================================================
 # ==================== PARTE 3: UTILITÁRIOS ===============
@@ -7976,6 +7997,213 @@ async def enviar_painel_polvoras():
     await enviar_ou_atualizar_painel("painel_polvora", CANAL_CALCULO_POLVORA_ID, embed, PolvoraView())
 
 
+# =========================================================
+# ============ SISTEMA DE HISTÓRICO DE HORAS (MECÂNICA) ===
+# =========================================================
+# Corrige bug onde horas eram zeradas sem salvar no histórico
+# ao chegar segunda-feira.
+# =========================================================
+
+async def salvar_horas_historico(user_id, nome, segundos, data_inicio, data_fim):
+    """Salva o total de horas de um mecânico no histórico."""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO horas_historico 
+                   (user_id, nome, segundos_totais, data_inicio, data_fim, data_fechamento) 
+                   VALUES ($1, $2, $3, $4, $5, $6)""",
+                str(user_id), nome, segundos,
+                para_db_naive(data_inicio) if data_inicio else None,
+                para_db_naive(data_fim) if data_fim else None,
+                agora_db()
+            )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao salvar horas no histórico: {e}")
+        return False
+
+
+async def calcular_horas_periodo(user_id, data_inicio, data_fim):
+    """
+    Calcula horas de um mecânico em um período específico.
+    Inclui pontos fechados + ponto aberto atual (se estiver no período).
+    """
+    pool = await get_pool()
+    if not pool:
+        return 0
+    try:
+        inicio_naive = para_db_naive(data_inicio) if data_inicio else None
+        fim_naive = para_db_naive(data_fim) if data_fim else None
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT tempo_segundos FROM pontos_mecanica 
+                   WHERE user_id = $1 AND ativo = false 
+                   AND entrada >= $2 AND entrada <= $3""",
+                str(user_id), inicio_naive, fim_naive
+            )
+            total_fechados = sum(r["tempo_segundos"] or 0 for r in rows)
+
+            aberto = await conn.fetchrow(
+                """SELECT entrada FROM pontos_mecanica 
+                   WHERE user_id = $1 AND ativo = true 
+                   AND entrada >= $2 AND entrada <= $3""",
+                str(user_id), inicio_naive, fim_naive
+            )
+            total_aberto = 0
+            if aberto:
+                entrada_aberto = aberto["entrada"]
+                if isinstance(entrada_aberto, datetime) and entrada_aberto.tzinfo is None:
+                    entrada_aberto = entrada_aberto.replace(tzinfo=BRASIL)
+                total_aberto = int((agora() - entrada_aberto).total_seconds())
+
+            return total_fechados + total_aberto
+    except Exception as e:
+        logger.error(f"❌ Erro ao calcular horas do período: {e}")
+        return 0
+
+
+async def fechar_todas_horas_semana(data_inicio, data_fim):
+    """
+    Fecha as horas da semana e salva no histórico.
+    Retorna lista de dicts com {user_id, nome, segundos}.
+    """
+    pool = await get_pool()
+    if not pool:
+        return []
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return []
+
+    cargo_mecanico = guild.get_role(CARGO_MECANICO_ID)
+    if not cargo_mecanico:
+        return []
+
+    resultados = []
+    for member in guild.members:
+        if member.bot:
+            continue
+        if cargo_mecanico not in member.roles:
+            continue
+
+        segundos = await calcular_horas_periodo(member.id, data_inicio, data_fim)
+
+        # Salva no histórico (mesmo que seja zero, para constar no relatório)
+        await salvar_horas_historico(member.id, member.display_name, segundos, data_inicio, data_fim)
+
+        resultados.append({
+            "user_id": str(member.id),
+            "nome": member.display_name,
+            "segundos": segundos,
+            "horas_formatadas": formatar_horas(segundos),
+        })
+
+    logger.info(f"✅ {len(resultados)} registros de horas salvos no histórico")
+    return resultados
+
+
+async def buscar_horas_historico(data_inicio=None, data_fim=None):
+    """
+    Busca histórico de horas.
+    - Se data_inicio e data_fim forem None, retorna tudo.
+    - Senão, filtra pelo período de data_fechamento.
+    """
+    pool = await get_pool()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            if data_inicio and data_fim:
+                inicio_naive = data_inicio.replace(tzinfo=None) if hasattr(data_inicio, 'replace') else data_inicio
+                fim_naive = data_fim.replace(tzinfo=None) if hasattr(data_fim, 'replace') else data_fim
+                rows = await conn.fetch(
+                    """SELECT * FROM horas_historico 
+                       WHERE data_fechamento >= $1 AND data_fechamento <= $2 
+                       ORDER BY data_fechamento DESC""",
+                    inicio_naive, fim_naive
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM horas_historico ORDER BY data_fechamento DESC LIMIT 500"
+                )
+            return rows
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar histórico de horas: {e}")
+        return []
+
+
+async def adicionar_horas_manual(user_id, nome, segundos_para_adicionar):
+    """
+    Adiciona horas manualmente ao histórico (última semana).
+    Se não existir registro recente, cria um.
+    """
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            # Pega o último registro do mecânico
+            ultimo = await conn.fetchrow(
+                "SELECT id, segundos_totais FROM horas_historico WHERE user_id = $1 ORDER BY data_fechamento DESC LIMIT 1",
+                str(user_id)
+            )
+            if ultimo:
+                novo_total = (ultimo["segundos_totais"] or 0) + segundos_para_adicionar
+                if novo_total < 0:
+                    novo_total = 0
+                await conn.execute(
+                    "UPDATE horas_historico SET segundos_totais = $1 WHERE id = $2",
+                    novo_total, ultimo["id"]
+                )
+            else:
+                # Cria novo registro
+                semana_ant_inicio, semana_ant_fim = calcular_semana_anterior()
+                novo_total = max(0, segundos_para_adicionar)
+                await conn.execute(
+                    """INSERT INTO horas_historico 
+                       (user_id, nome, segundos_totais, data_inicio, data_fim) 
+                       VALUES ($1, $2, $3, $4, $5)""",
+                    str(user_id), nome, novo_total,
+                    para_db_naive(semana_ant_inicio),
+                    para_db_naive(semana_ant_fim)
+                )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao adicionar horas manual: {e}")
+        return False
+
+
+async def resetar_pontos_semana_com_historico(data_inicio, data_fim):
+    """
+    Reset dos pontos de segunda-feira COM salvamento no histórico.
+    Substitui o resetar_pontos_semana() antigo que só zerava.
+    """
+    # 1. Salva horas no histórico ANTES de resetar
+    logger.info("⏰ Salvando horas da semana no histórico...")
+    await fechar_todas_horas_semana(data_inicio, data_fim)
+
+    # 2. Agora reseta os pontos
+    pool = await get_pool()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            # Fecha qualquer ponto que ficou aberto
+            await conn.execute(
+                """UPDATE pontos_mecanica 
+                   SET saida = $1, 
+                       tempo_segundos = EXTRACT(EPOCH FROM ($1::timestamp - entrada))::BIGINT,
+                       ativo = false 
+                   WHERE ativo = true""",
+                agora_db()
+            )
+            logger.info("✅ Pontos da mecânica fechados e histórico salvo")
+    except Exception as e:
+        logger.error(f"❌ Erro ao resetar pontos: {e}")
+
 
 # =========================================================
 # ==================== PARTE 14: SISTEMA DE METAS =========
@@ -8789,6 +9017,27 @@ class MecanicoView(discord.ui.View):
             except:
                 pass
 
+    @discord.ui.button(label="✏️ Editar Horas", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_horas", emoji="⏰", row=2)
+    async def editar_horas(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            is_dono = str(interaction.user.id) == str(self.user_id)
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
+            if not is_dono and not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar as horas!", ephemeral=True)
+                return
+            # Pega horas atuais da semana
+            segundos_atuais = await calcular_horas_semana(self.user_id)
+            horas_texto = formatar_horas(segundos_atuais)
+            modal = EditarHorasModal(self.user_id, segundos_atuais)
+            await interaction.response.send_modal(modal)
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Horas: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
 class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Sujo"):
     quantidade = discord.ui.TextInput(label="Valor do Dinheiro Sujo", placeholder="Digite o valor (ex: 5000)", required=True)
 
@@ -8901,6 +9150,98 @@ class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"
         embed.add_field(name="💰 NOVO VALOR DA META", value=f"```yaml\n{formatar_dinheiro(novo_valor)}\n```", inline=False)
         embed.add_field(name="👤 ALTERADO POR", value=interaction.user.mention, inline=True)
         embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Metas")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
+    def __init__(self, user_id, segundos_atuais=0):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.segundos_atuais = segundos_atuais
+
+        self.acao = discord.ui.TextInput(
+            label="Ação: ADICIONAR ou REMOVER",
+            placeholder="Digite ADICIONAR ou REMOVER",
+            default="ADICIONAR",
+            required=True,
+            max_length=10
+        )
+        self.horas = discord.ui.TextInput(
+            label="Horas (ex: 2 para 2h, 0.5 para 30min)",
+            placeholder="Digite o número de horas (aceita decimal)",
+            required=True,
+            max_length=10
+        )
+        self.add_item(self.acao)
+        self.add_item(self.horas)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        # Valida ação
+        acao = self.acao.value.strip().upper()
+        if acao not in ["ADICIONAR", "REMOVER"]:
+            await interaction.followup.send("❌ Ação inválida! Use **ADICIONAR** ou **REMOVER**.", ephemeral=True)
+            return
+
+        # Valida horas
+        try:
+            horas_float = float(self.horas.value.strip().replace(",", "."))
+            if horas_float <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ Valor de horas inválido! Digite um número positivo (ex: 2 ou 0.5).", ephemeral=True)
+            return
+
+        segundos_delta = int(horas_float * 3600)
+        if acao == "REMOVER":
+            segundos_delta = -segundos_delta
+
+        # Pega nome do usuário
+        guild = bot.get_guild(GUILD_ID)
+        member = guild.get_member(int(self.user_id)) if guild else None
+        nome = member.display_name if member else str(self.user_id)
+
+        # Salva no histórico
+        sucesso = await adicionar_horas_manual(self.user_id, nome, segundos_delta)
+
+        if not sucesso:
+            await interaction.followup.send("❌ Erro ao editar horas! Verifique os logs.", ephemeral=True)
+            return
+
+        # Calcula novo total
+        segundos_final = self.segundos_atuais + segundos_delta
+        if segundos_final < 0:
+            segundos_final = 0
+
+        # Atualiza o embed da meta
+        try:
+            await atualizar_embed_meta(self.user_id)
+        except:
+            pass
+
+        embed = discord.Embed(
+            title="✅ HORAS ATUALIZADAS!",
+            description=f"**👤 <@{self.user_id}>**",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        emoji_acao = "➕" if acao == "ADICIONAR" else "➖"
+        embed.add_field(
+            name=f"{emoji_acao} {acao}",
+            value=f"```yaml\n{formatar_horas(abs(segundos_delta))}\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="⏰ Total atual (semana)",
+            value=f"```yaml\n{formatar_horas(segundos_final)}\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="👤 Editado por",
+            value=interaction.user.mention,
+            inline=False
+        )
+        embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Horas (Mecânica)")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 class SolicitarSalaView(discord.ui.View):
@@ -9029,6 +9370,7 @@ async def enviar_painel_relatorio_metas():
     view = discord.ui.View(timeout=None)
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharMetasAutomaticoButton())
+    view.add_item(RelatorioHorasButton())
     await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495685092999279, embed, view)
 
 class RelatorioMetasButton(discord.ui.Button):
@@ -9084,6 +9426,229 @@ class FecharMetasAutomaticoButton(discord.ui.Button):
             color=0xe67e22
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class RelatorioHorasButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="⏰ Relatório de Horas (Mecânica)",
+            style=discord.ButtonStyle.primary,
+            custom_id="relatorio_horas_btn",
+            emoji="⏰"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        # Só gerentes e ADM
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem gerar o relatório de horas!",
+                ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(RelatorioHorasModal())
+
+
+class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data INÍCIO (DD/MM/AAAA)",
+        placeholder="Ex: 22/09/2026 (ou deixe em branco p/ semana atual)",
+        required=False,
+        max_length=10
+    )
+    data_fim = discord.ui.TextInput(
+        label="📅 Data FIM (DD/MM/AAAA)",
+        placeholder="Ex: 29/09/2026",
+        required=False,
+        max_length=10
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            data_ini_str = self.data_inicio.value.strip() if self.data_inicio.value else ""
+            data_fim_str = self.data_fim.value.strip() if self.data_fim.value else ""
+
+            if data_ini_str and data_fim_str:
+                # Período específico
+                try:
+                    inicio = datetime.strptime(data_ini_str, "%d/%m/%Y").replace(hour=0, minute=0, second=0)
+                    fim = datetime.strptime(data_fim_str, "%d/%m/%Y").replace(hour=23, minute=59, second=59)
+                except:
+                    await interaction.followup.send("❌ Formato de data inválido! Use DD/MM/AAAA", ephemeral=True)
+                    return
+                if fim < inicio:
+                    await interaction.followup.send("❌ Data FIM deve ser depois da INÍCIO!", ephemeral=True)
+                    return
+                # Verifica se o período é da semana atual ou histórico
+                hoje = agora()
+                segunda_atual = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+                domingo_atual = segunda_atual + timedelta(days=6, hours=23, minutes=59, seconds=59)
+                if inicio >= segunda_atual and fim <= domingo_atual:
+                    # Semana atual → pega direto dos pontos
+                    await self._gerar_relatorio_atual(interaction, inicio, fim, data_ini_str, data_fim_str)
+                else:
+                    # Histórico → busca do banco
+                    await self._gerar_relatorio_historico(interaction, inicio, fim, data_ini_str, data_fim_str)
+            else:
+                # Semana atual (padrão)
+                hoje = agora()
+                segunda = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+                domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
+                await self._gerar_relatorio_atual(interaction, segunda, domingo,
+                    segunda.strftime("%d/%m/%Y"), domingo.strftime("%d/%m/%Y"))
+
+        except Exception as e:
+            logger.error(f"❌ Erro no RelatorioHorasModal: {e}")
+            await interaction.followup.send(f"❌ Erro ao gerar relatório: {str(e)[:150]}", ephemeral=True)
+
+    async def _gerar_relatorio_atual(self, interaction, inicio, fim, ini_str, fim_str):
+        """Relatório da semana atual (calculado dos pontos)."""
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            await interaction.followup.send("❌ Guild não encontrada!", ephemeral=True)
+            return
+
+        cargo_mecanico = guild.get_role(CARGO_MECANICO_ID)
+        if not cargo_mecanico:
+            await interaction.followup.send("❌ Cargo de mecânico não encontrado!", ephemeral=True)
+            return
+
+        mecanicos = []
+        for member in guild.members:
+            if member.bot:
+                continue
+            if cargo_mecanico not in member.roles:
+                continue
+            segundos = await calcular_horas_periodo(member.id, inicio, fim)
+            mecanicos.append({
+                "user_id": str(member.id),
+                "nome": member.display_name,
+                "segundos": segundos,
+                "menção": member.mention
+            })
+
+        # Ordena do maior pro menor
+        mecanicos.sort(key=lambda x: x["segundos"], reverse=True)
+        await self._enviar_embeds(interaction, mecanicos, ini_str, fim_str, tipo="ATUAL")
+
+    async def _gerar_relatorio_historico(self, interaction, inicio, fim, ini_str, fim_str):
+        """Relatório do histórico."""
+        # Busca por data_fechamento no período
+        rows = await buscar_horas_historico(inicio, fim)
+
+        # Agrupa por user_id (pega o maior total se houver múltiplos no período)
+        agrupado = {}
+        for r in rows:
+            uid = r["user_id"]
+            if uid not in agrupado:
+                agrupado[uid] = {
+                    "user_id": uid,
+                    "nome": r["nome"] or uid,
+                    "segundos": 0,
+                    "menção": f"<@{uid}>"
+                }
+            agrupado[uid]["segundos"] += r["segundos_totais"] or 0
+
+        mecanicos = list(agrupado.values())
+        mecanicos.sort(key=lambda x: x["segundos"], reverse=True)
+
+        if not mecanicos:
+            await interaction.followup.send(
+                f"📭 Nenhum registro de horas encontrado no período **{ini_str}** a **{fim_str}**.",
+                ephemeral=True
+            )
+            return
+
+        await self._enviar_embeds(interaction, mecanicos, ini_str, fim_str, tipo="HISTÓRICO")
+
+    async def _enviar_embeds(self, interaction, mecanicos, ini_str, fim_str, tipo="ATUAL"):
+        """Envia os embeds formatados."""
+        if not mecanicos:
+            await interaction.followup.send(
+                f"📭 Nenhum mecânico registrado no período.",
+                ephemeral=True
+            )
+            return
+
+        total_geral = sum(m["segundos"] for m in mecanicos)
+        media = total_geral // len(mecanicos) if mecanicos else 0
+        meta_horas = 6 * 3600  # 6h por semana
+        cumprindo = len([m for m in mecanicos if m["segundos"] >= meta_horas])
+        nao_cumprindo = len(mecanicos) - cumprindo
+
+        # Embed de resumo
+        embed_resumo = discord.Embed(
+            title="⏰ ── RELATÓRIO DE HORAS (MECÂNICA) ── ⏰",
+            description=f"📅 **Período:** {ini_str} a {fim_str}\n🔖 **Tipo:** {tipo}",
+            color=Cores.PRODUCAO,
+            timestamp=agora()
+        )
+        embed_resumo.set_author(
+            name="🛡 Vida Rasa 442 • Relatório de Horas",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        embed_resumo.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+        embed_resumo.add_field(
+            name="📊 RESUMO GERAL",
+            value=(
+                f"```yaml\n"
+                f"👥 Total de mecânicos: {len(mecanicos)}\n"
+                f"⏰ Total de horas: {formatar_horas(total_geral)}\n"
+                f"📊 Média por mecânico: {formatar_horas(media)}\n"
+                f"🎯 Meta semanal: 6h por mecânico\n"
+                f"✅ Cumprindo meta: {cumprindo}\n"
+                f"❌ Não cumprindo: {nao_cumprindo}\n"
+                f"```"
+            ),
+            inline=False
+        )
+
+        # Ranking top 15
+        texto_ranking = ""
+        for i, m in enumerate(mecanicos[:15], 1):
+            emoji_medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"`{i}.`"
+            status = "✅" if m["segundos"] >= meta_horas else "⚠️" if m["segundos"] >= meta_horas * 0.5 else "❌"
+            texto_ranking += f"{emoji_medalha} **{m['nome']}** — {formatar_horas(m['segundos'])} {status}\n"
+
+        if len(mecanicos) > 15:
+            texto_ranking += f"\n*... e mais {len(mecanicos) - 15} mecânicos*"
+
+        if not texto_ranking:
+            texto_ranking = "📭 Nenhum registro."
+
+        embed_resumo.add_field(
+            name="🏆 RANKING DE HORAS",
+            value=texto_ranking[:1024],
+            inline=False
+        )
+
+        # Legenda
+        embed_resumo.add_field(
+            name="📌 LEGENDA",
+            value="✅ Cumprindo meta (≥6h) • ⚠️ Em andamento (≥3h) • ❌ Abaixo (menos de 3h)",
+            inline=False
+        )
+
+        embed_resumo.set_footer(
+            text=f"🛡 Vida Rasa 442 • Gerado em {agora().strftime('%d/%m/%Y %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        # Envia no canal de resultados de metas
+        canal = interaction.guild.get_channel(RESULTADOS_METAS_ID)
+        if not canal:
+            canal = interaction.channel
+
+        await canal.send(embed=embed_resumo)
+
+        await interaction.followup.send(
+            f"✅ **Relatório de horas gerado!**\n"
+            f"📊 {len(mecanicos)} mecânicos • Total: {formatar_horas(total_geral)}\n"
+            f"📨 Enviado em {canal.mention}",
+            ephemeral=True
+        )
 
 class ConfirmarFechamentoAutomaticoView(discord.ui.View):
     def __init__(self, data_inicio, data_fim, data_inicio_str, data_fim_str):
@@ -9238,7 +9803,13 @@ async def zerar_exibicao_metas():
         async with pool.acquire() as conn:
             await conn.execute("UPDATE metas SET dinheiro = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL")
             logger.info("⚠️ METAS ZERADAS PARA A NOVA SEMANA!")
-            await resetar_pontos_semana()
+                        # Salva horas no histórico ANTES de resetar (correção do bug)
+            try:
+                semana_ini, semana_fim = calcular_semana_anterior()
+                await resetar_pontos_semana_com_historico(semana_ini, semana_fim)
+            except Exception as e:
+                logger.error(f"❌ Erro ao salvar histórico de horas: {e}")
+                await resetar_pontos_semana()
         await carregar_metas_cache()
         contador = 0
         for uid in list(metas_cache.keys()):
