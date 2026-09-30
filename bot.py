@@ -8530,6 +8530,9 @@ async def criar_sala_meta(member: discord.Member):
     Cria ou retorna a sala de meta de um membro.
     ✅ SEMPRE verifica por ID do Discord (nunca por nome).
     ✅ Nunca duplica salas.
+    ✅ Renomeia se o apelido mudou.
+    ✅ Se o membro tem cargo MECÂNICO (mesmo com outros cargos),
+       o Gerente Mecânica ganha acesso à sala dele.
     """
     guild = member.guild
     pool = await get_pool()
@@ -8545,9 +8548,14 @@ async def criar_sala_meta(member: discord.Member):
         logger.info(f"⏭️ {member.display_name} tem cargo SM, não cria sala")
         return None
 
+    # =========================================================
+    # 2. VERIFICA SE TEM CARGO MECÂNICO (Opção A)
+    # =========================================================
+    is_mecanico = CARGO_MECANICO_ID in roles
+
     try:
         # =========================================================
-        # 2. VERIFICAR SE JÁ EXISTE META PELO ID DO DISCORD
+        # 3. VERIFICAR SE JÁ EXISTE META PELO ID DO DISCORD
         # =========================================================
         async with pool.acquire() as conn:
             meta_existente = await conn.fetchrow(
@@ -8560,7 +8568,7 @@ async def criar_sala_meta(member: discord.Member):
             canal_existe = guild.get_channel(canal_id)
 
             if canal_existe:
-                # ✅ Já tem sala → só atualiza o nome se necessário e retorna
+                # ✅ Já tem sala → renomeia se necessário e retorna
                 nome_correto = f"📁・{member.display_name.lower().replace(' ', '-')}"
                 if canal_existe.name.lower() != nome_correto.lower():
                     try:
@@ -8580,17 +8588,8 @@ async def criar_sala_meta(member: discord.Member):
                 }
                 await atualizar_embed_meta(member.id)
 
-                # Garante acesso dos responsáveis
-                cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
-                if cargo_resp:
-                    for resp_member in guild.members:
-                        if cargo_resp in resp_member.roles:
-                            try:
-                                perms = canal_existe.permissions_for(resp_member)
-                                if not perms.view_channel:
-                                    await canal_existe.set_permissions(resp_member, view_channel=True, send_messages=True)
-                            except Exception as e:
-                                logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+                # Ajusta permissões (responsáveis + gerente mecânica se mecânico)
+                await ajustar_permissoes_sala(canal_existe, member, is_mecanico)
                 return canal_existe
 
             else:
@@ -8602,7 +8601,7 @@ async def criar_sala_meta(member: discord.Member):
                 logger.warning(f"⚠️ Sala de {member.display_name} foi deletada, criando nova...")
 
         # =========================================================
-        # 3. NÃO EXISTE META → CRIAR NOVA SALA
+        # 4. NÃO EXISTE META → CRIAR NOVA SALA
         # =========================================================
         categoria_id = await obter_categoria_meta(member)
         if not categoria_id:
@@ -8614,11 +8613,15 @@ async def criar_sala_meta(member: discord.Member):
             logger.error(f"❌ Categoria {categoria_id} não encontrada")
             return None
 
+        # =========================================================
+        # OVERWRITES BÁSICOS
+        # =========================================================
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             member: discord.PermissionOverwrite(view_channel=True, send_messages=True)
         }
 
+        # Gerentes (sempre veem)
         gerente = guild.get_role(CARGO_GERENTE_ID)
         if gerente:
             overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
@@ -8627,9 +8630,11 @@ async def criar_sala_meta(member: discord.Member):
         if gerente_geral:
             overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
 
-        gerente_mecanica = guild.get_role(CARGO_GERENTE_MECANICA_ID)
-        if gerente_mecanica:
-            overwrites[gerente_mecanica] = discord.PermissionOverwrite(view_channel=True)
+        # ✅ Gerente Mecânica — só adiciona no overwrite se o membro for mecânico
+        if is_mecanico:
+            gerente_mecanica = guild.get_role(CARGO_GERENTE_MECANICA_ID)
+            if gerente_mecanica:
+                overwrites[gerente_mecanica] = discord.PermissionOverwrite(view_channel=True)
 
         nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
         canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
@@ -8648,22 +8653,57 @@ async def criar_sala_meta(member: discord.Member):
         await asyncio.sleep(1)
         await atualizar_embed_meta(member.id)
 
-        # Adiciona responsáveis
-        cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
-        if cargo_resp:
-            for resp_member in guild.members:
-                if cargo_resp in resp_member.roles:
-                    try:
-                        await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
-                    except Exception as e:
-                        logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+        # Ajusta permissões finais (responsáveis + gerente mecânica se mecânico)
+        await ajustar_permissoes_sala(canal, member, is_mecanico)
 
-        logger.info(f"✅ Sala criada para {member.display_name}: {canal.name}")
+        logger.info(f"✅ Sala criada para {member.display_name}: {canal.name} (mecânico={is_mecanico})")
         return canal
 
     except Exception as e:
         logger.error(f"❌ Erro ao criar sala meta para {member.display_name}: {e}")
         return None
+
+async def ajustar_permissoes_sala(canal, member, is_mecanico):
+    """
+    Ajusta as permissões da sala de meta.
+    - SEMPRE dá acesso aos RESPONSÁVEIS (cargo Resp. Metas)
+    - Se o membro tem cargo MECÂNICO → Gerente Mecânica também vê
+    - Se NÃO tem cargo mecânico → Gerente Mecânica perde acesso
+    """
+    try:
+        guild = member.guild
+
+        # =========================================================
+        # 1. RESPONSÁVEIS DE METAS (sempre veem)
+        # =========================================================
+        cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+        if cargo_resp:
+            for resp_member in guild.members:
+                if cargo_resp in resp_member.roles:
+                    try:
+                        perms = canal.permissions_for(resp_member)
+                        if not perms.view_channel:
+                            await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+
+        # =========================================================
+        # 2. GERENTE MECÂNICA (só vê se o membro for MECÂNICO)
+        # =========================================================
+        cargo_gerente_mec = guild.get_role(CARGO_GERENTE_MECANICA_ID)
+        if cargo_gerente_mec:
+            if is_mecanico:
+                await canal.set_permissions(cargo_gerente_mec, view_channel=True, send_messages=True)
+                logger.info(f"👁️ Gerente Mecânica ganhou acesso à sala de {member.display_name}")
+            else:
+                try:
+                    await canal.set_permissions(cargo_gerente_mec, overwrite=None)
+                    logger.info(f"🚫 Gerente Mecânica sem acesso à sala de {member.display_name} (não é mecânico)")
+                except:
+                    pass
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao ajustar permissões da sala: {e}")
 
 async def atualizar_embed_meta(user_id):
     try:
@@ -11880,6 +11920,23 @@ async def on_member_update(before, after):
                         logger.info(f"✏️ Sala de meta renomeada: {before.display_name} → {after.display_name}")
         except Exception as e:
             logger.error(f"❌ Erro ao renomear sala de meta de {after.display_name}: {e}")
+
+    # =========================================================
+    # PARTE 2.5: ATUALIZAR PERMISSÕES QUANDO GANHA/PERDE CARGO MECÂNICO
+    # =========================================================
+    try:
+        tinha_mecanico = any(r.id == CARGO_MECANICO_ID for r in before.roles)
+        tem_mecanico = any(r.id == CARGO_MECANICO_ID for r in after.roles)
+
+        if tinha_mecanico != tem_mecanico:  # Mudou de estado
+            if str(after.id) in metas_cache:
+                dados_meta = metas_cache[str(after.id)]
+                canal_sala = after.guild.get_channel(dados_meta["canal_id"])
+                if canal_sala:
+                    await ajustar_permissoes_sala(canal_sala, after, tem_mecanico)
+                    logger.info(f"🔄 Permissões atualizadas para {after.display_name} (mecânico={tem_mecanico})")
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar permissões de mecânico: {e}")
 
     # =========================================================
     # PARTE 3: CARGO SM (deletar sala de meta)
