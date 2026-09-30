@@ -8405,13 +8405,7 @@ async def fechar_ponto(user_id):
         return None
 
 async def calcular_horas_semana(user_id):
-    """
-    Calcula o total de horas do mecânico na semana atual.
-    SOMA:
-    - Pontos fechados da semana
-    - Ponto aberto atual (se tiver)
-    - Ajustes manuais do histórico mais recente
-    """
+    """Calcula o total de horas do mecânico na semana atual (segunda a domingo)."""
     pool = await get_pool()
     if not pool:
         return 0
@@ -8422,16 +8416,12 @@ async def calcular_horas_semana(user_id):
         domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
         async with pool.acquire() as conn:
-            # 1. Pontos fechados da semana
             rows = await conn.fetch(
-                """SELECT tempo_segundos FROM pontos_mecanica 
-                   WHERE user_id = $1 AND ativo = false 
-                   AND entrada >= $2 AND entrada <= $3""",
+                "SELECT tempo_segundos FROM pontos_mecanica WHERE user_id = $1 AND ativo = false AND entrada >= $2 AND entrada <= $3",
                 str(user_id), para_db_naive(segunda), para_db_naive(domingo)
             )
             total_fechados = sum(r["tempo_segundos"] for r in rows)
 
-            # 2. Ponto aberto atual
             aberto = await conn.fetchrow(
                 "SELECT entrada FROM pontos_mecanica WHERE user_id = $1 AND ativo = true",
                 str(user_id)
@@ -8443,35 +8433,7 @@ async def calcular_horas_semana(user_id):
                     entrada_aberto = entrada_aberto.replace(tzinfo=BRASIL)
                 total_aberto = int((agora() - entrada_aberto).total_seconds())
 
-            # 3. Horas do histórico (ajustes manuais da semana atual)
-            # Pega registros de horas cujo data_fechamento está DENTRO da semana atual
-            hist_rows = await conn.fetch(
-                """SELECT segundos_totais FROM horas_historico 
-                   WHERE user_id = $1 
-                   AND data_fechamento >= $2 
-                   AND data_fechamento <= $3""",
-                str(user_id), para_db_naive(segunda), para_db_naive(domingo)
-            )
-            total_historico = sum(r["segundos_totais"] or 0 for r in hist_rows)
-
-            # Se NÃO tem histórico da semana, pode ter histórico "solto" criado por edição manual
-            # Nesse caso, pega o último registro e considera como ajuste
-            if total_historico == 0:
-                ultimo_hist = await conn.fetchrow(
-                    """SELECT segundos_totais, data_fechamento FROM horas_historico 
-                       WHERE user_id = $1 
-                       ORDER BY data_fechamento DESC LIMIT 1""",
-                    str(user_id)
-                )
-                if ultimo_hist:
-                    # Se o último registro foi criado DEPOIS do início da semana atual, considera o ajuste
-                    data_fech = ultimo_hist["data_fechamento"]
-                    if isinstance(data_fech, datetime) and data_fech.tzinfo is None:
-                        data_fech = data_fech.replace(tzinfo=BRASIL)
-                    if data_fech >= segunda:
-                        total_historico = ultimo_hist["segundos_totais"] or 0
-
-            return total_fechados + total_aberto + total_historico
+            return total_fechados + total_aberto
     except Exception as e:
         logger.error(f"❌ Erro ao calcular horas da semana: {e}")
         return 0
@@ -8564,108 +8526,141 @@ async def obter_categoria_meta(member):
     return None
 
 async def criar_sala_meta(member: discord.Member):
+    """
+    Cria ou retorna a sala de meta de um membro.
+    ✅ SEMPRE verifica por ID do Discord (nunca por nome).
+    ✅ Nunca duplica salas.
+    """
     guild = member.guild
     pool = await get_pool()
     if not pool:
         logger.error("❌ Banco de dados indisponível em criar_sala_meta")
         return None
+
+    # =========================================================
+    # 1. SE TEM CARGO SM → NÃO CRIA SALA
+    # =========================================================
     roles = [r.id for r in member.roles]
     if CARGO_SEM_META_ID in roles:
         logger.info(f"⏭️ {member.display_name} tem cargo SM, não cria sala")
         return None
+
     try:
+        # =========================================================
+        # 2. VERIFICAR SE JÁ EXISTE META PELO ID DO DISCORD
+        # =========================================================
         async with pool.acquire() as conn:
-            meta_existente = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(member.id))
-            if meta_existente:
-                canal_id = int(meta_existente["canal_id"])
-                canal_existe = guild.get_channel(canal_id)
-                if canal_existe:
-                    metas_cache[str(member.id)] = {
-                        "canal_id": canal_id,
-                        "dinheiro": meta_existente["dinheiro"] or 0,
-                        "acao": meta_existente["acao"],
-                        "dinheiro_acoes": meta_existente.get("dinheiro_acoes") or 0,
-                        "saldo_excedente": meta_existente.get("saldo_excedente") or 0,
-                        "valor_meta_personalizado": meta_existente.get("valor_meta_personalizado")
-                    }
-                    await atualizar_embed_meta(member.id)
-                    cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
-                    if cargo_resp:
-                        for resp_member in guild.members:
-                            if cargo_resp in resp_member.roles:
-                                try:
-                                    perms = canal_existe.permissions_for(resp_member)
-                                    if not perms.view_channel:
-                                        await canal_existe.set_permissions(resp_member, view_channel=True, send_messages=True)
-                                except Exception as e:
-                                    logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
-                    return canal_existe
-                else:
+            meta_existente = await conn.fetchrow(
+                "SELECT * FROM metas WHERE user_id = $1",
+                str(member.id)
+            )
+
+        if meta_existente:
+            canal_id = int(meta_existente["canal_id"])
+            canal_existe = guild.get_channel(canal_id)
+
+            if canal_existe:
+                # ✅ Já tem sala → só atualiza o nome se necessário e retorna
+                nome_correto = f"📁・{member.display_name.lower().replace(' ', '-')}"
+                if canal_existe.name.lower() != nome_correto.lower():
+                    try:
+                        await canal_existe.edit(name=nome_correto)
+                        logger.info(f"✏️ Sala renomeada: {canal_existe.name} → {nome_correto}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao renomear sala: {e}")
+
+                # Atualiza cache
+                metas_cache[str(member.id)] = {
+                    "canal_id": canal_id,
+                    "dinheiro": meta_existente["dinheiro"] or 0,
+                    "acao": meta_existente["acao"],
+                    "dinheiro_acoes": meta_existente.get("dinheiro_acoes") or 0,
+                    "saldo_excedente": meta_existente.get("saldo_excedente") or 0,
+                    "valor_meta_personalizado": meta_existente.get("valor_meta_personalizado")
+                }
+                await atualizar_embed_meta(member.id)
+
+                # Garante acesso dos responsáveis
+                cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+                if cargo_resp:
+                    for resp_member in guild.members:
+                        if cargo_resp in resp_member.roles:
+                            try:
+                                perms = canal_existe.permissions_for(resp_member)
+                                if not perms.view_channel:
+                                    await canal_existe.set_permissions(resp_member, view_channel=True, send_messages=True)
+                            except Exception as e:
+                                logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+                return canal_existe
+
+            else:
+                # Canal foi deletado manualmente → limpa do banco e vai criar de novo
+                async with pool.acquire() as conn:
                     await conn.execute("DELETE FROM metas WHERE user_id = $1", str(member.id))
-                    if str(member.id) in metas_cache:
-                        del metas_cache[str(member.id)]
-            nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
-            for canal in guild.text_channels:
-                if canal.name.lower() == nome_canal.lower():
-                    await salvar_meta_db(member.id, canal.id, 0, 0)
-                    metas_cache[str(member.id)] = {
-                        "canal_id": canal.id, "dinheiro": 0, "acao": None,
-                        "dinheiro_acoes": 0, "saldo_excedente": 0,
-                        "valor_meta_personalizado": None
-                    }
-                    await atualizar_embed_meta(member.id)
-                    cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
-                    if cargo_resp:
-                        for resp_member in guild.members:
-                            if cargo_resp in resp_member.roles:
-                                try:
-                                    perms = canal.permissions_for(resp_member)
-                                    if not perms.view_channel:
-                                        await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
-                                except Exception as e:
-                                    logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
-                    return canal
-            categoria_id = await obter_categoria_meta(member)
-            if not categoria_id:
-                logger.error(f"❌ Categoria não encontrada para {member.display_name}")
-                return None
-            categoria = guild.get_channel(categoria_id)
-            if not categoria:
-                logger.error(f"❌ Categoria {categoria_id} não encontrada")
-                return None
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                member: discord.PermissionOverwrite(view_channel=True, send_messages=True)
-            }
-            gerente = guild.get_role(CARGO_GERENTE_ID)
-            if gerente:
-                overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
-            gerente_geral = guild.get_role(CARGO_GERENTE_GERAL_ID)
-            if gerente_geral:
-                overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
-            gerente_mecanica = guild.get_role(CARGO_GERENTE_MECANICA_ID)
-            if gerente_mecanica:
-                overwrites[gerente_mecanica] = discord.PermissionOverwrite(view_channel=True)
-            nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
-            canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
-            await salvar_meta_db(member.id, canal.id, 0, 0)
-            metas_cache[str(member.id)] = {
-                "canal_id": canal.id, "dinheiro": 0, "acao": None,
-                "dinheiro_acoes": 0, "saldo_excedente": 0,
-                "valor_meta_personalizado": None
-            }
-            await asyncio.sleep(1)
-            await atualizar_embed_meta(member.id)
-            cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
-            if cargo_resp:
-                for resp_member in guild.members:
-                    if cargo_resp in resp_member.roles:
-                        try:
-                            await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
-                        except Exception as e:
-                            logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
-            logger.info(f"✅ Sala criada para {member.display_name}: {canal.name}")
-            return canal
+                if str(member.id) in metas_cache:
+                    del metas_cache[str(member.id)]
+                logger.warning(f"⚠️ Sala de {member.display_name} foi deletada, criando nova...")
+
+        # =========================================================
+        # 3. NÃO EXISTE META → CRIAR NOVA SALA
+        # =========================================================
+        categoria_id = await obter_categoria_meta(member)
+        if not categoria_id:
+            logger.error(f"❌ Categoria não encontrada para {member.display_name}")
+            return None
+
+        categoria = guild.get_channel(categoria_id)
+        if not categoria:
+            logger.error(f"❌ Categoria {categoria_id} não encontrada")
+            return None
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        }
+
+        gerente = guild.get_role(CARGO_GERENTE_ID)
+        if gerente:
+            overwrites[gerente] = discord.PermissionOverwrite(view_channel=True)
+
+        gerente_geral = guild.get_role(CARGO_GERENTE_GERAL_ID)
+        if gerente_geral:
+            overwrites[gerente_geral] = discord.PermissionOverwrite(view_channel=True)
+
+        gerente_mecanica = guild.get_role(CARGO_GERENTE_MECANICA_ID)
+        if gerente_mecanica:
+            overwrites[gerente_mecanica] = discord.PermissionOverwrite(view_channel=True)
+
+        nome_canal = f"📁・{member.display_name.lower().replace(' ', '-')}"
+        canal = await guild.create_text_channel(nome_canal, category=categoria, overwrites=overwrites)
+
+        # Salva no banco vinculado ao ID
+        await salvar_meta_db(member.id, canal.id, 0, 0)
+        metas_cache[str(member.id)] = {
+            "canal_id": canal.id,
+            "dinheiro": 0,
+            "acao": None,
+            "dinheiro_acoes": 0,
+            "saldo_excedente": 0,
+            "valor_meta_personalizado": None
+        }
+
+        await asyncio.sleep(1)
+        await atualizar_embed_meta(member.id)
+
+        # Adiciona responsáveis
+        cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+        if cargo_resp:
+            for resp_member in guild.members:
+                if cargo_resp in resp_member.roles:
+                    try:
+                        await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
+
+        logger.info(f"✅ Sala criada para {member.display_name}: {canal.name}")
+        return canal
+
     except Exception as e:
         logger.error(f"❌ Erro ao criar sala meta para {member.display_name}: {e}")
         return None
@@ -8823,6 +8818,10 @@ async def atualizar_embed_meta(user_id):
         logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
 
 async def atualizar_categoria_meta(member):
+    """
+    Atualiza a categoria da sala de meta + renomeia se o apelido mudou.
+    ✅ Nunca cria sala nova — só move/renomeia a existente.
+    """
     try:
         if str(member.id) not in metas_cache:
             return
@@ -8830,6 +8829,17 @@ async def atualizar_categoria_meta(member):
         canal = member.guild.get_channel(dados["canal_id"])
         if not canal:
             return
+
+        # ✅ Renomeia se o apelido mudou
+        nome_correto = f"📁・{member.display_name.lower().replace(' ', '-')}"
+        if canal.name.lower() != nome_correto.lower():
+            try:
+                await canal.edit(name=nome_correto)
+                logger.info(f"✏️ Sala renomeada em atualizar_categoria_meta: {canal.name} → {nome_correto}")
+            except Exception as e:
+                logger.error(f"❌ Erro ao renomear sala: {e}")
+
+        # Move para a nova categoria (se mudou)
         nova_categoria_id = await obter_categoria_meta(member)
         if not nova_categoria_id:
             return
@@ -8842,7 +8852,7 @@ async def atualizar_categoria_meta(member):
         await atualizar_embed_meta(member.id)
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar categoria de {member.name}: {e}")
-
+        
 async def fixar_painel_meta_no_final(user_id):
     try:
         if str(user_id) not in metas_cache:
@@ -9238,54 +9248,129 @@ class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
         if acao == "REMOVER":
             segundos_delta = -segundos_delta
 
-        # Pega nome do usuário
-        guild = bot.get_guild(GUILD_ID)
-        member = guild.get_member(int(self.user_id)) if guild else None
-        nome = member.display_name if member else str(self.user_id)
-
-        # Salva no histórico
-        sucesso = await adicionar_horas_manual(self.user_id, nome, segundos_delta)
-
-        if not sucesso:
-            await interaction.followup.send("❌ Erro ao editar horas! Verifique os logs.", ephemeral=True)
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
 
-        # Calcula novo total
-        segundos_final = self.segundos_atuais + segundos_delta
-        if segundos_final < 0:
-            segundos_final = 0
-
-        # Atualiza o embed da meta
         try:
-            await atualizar_embed_meta(self.user_id)
-        except:
-            pass
+            # Calcular semana atual
+            hoje = agora()
+            dia_semana = hoje.weekday()
+            segunda = (hoje - timedelta(days=dia_semana)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
-        embed = discord.Embed(
-            title="✅ HORAS ATUALIZADAS!",
-            description=f"**👤 <@{self.user_id}>**",
-            color=0x2ecc71,
-            timestamp=agora()
-        )
-        emoji_acao = "➕" if acao == "ADICIONAR" else "➖"
-        embed.add_field(
-            name=f"{emoji_acao} {acao}",
-            value=f"```yaml\n{formatar_horas(abs(segundos_delta))}\n```",
-            inline=True
-        )
-        embed.add_field(
-            name="⏰ Total atual (semana)",
-            value=f"```yaml\n{formatar_horas(segundos_final)}\n```",
-            inline=True
-        )
-        embed.add_field(
-            name="👤 Editado por",
-            value=interaction.user.mention,
-            inline=False
-        )
-        embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Horas (Mecânica)")
-        await interaction.followup.send(embed=embed, ephemeral=True)
+            async with pool.acquire() as conn:
+                # =========================================================
+                # ADICIONAR HORAS → cria ponto manual
+                # =========================================================
+                if acao == "ADICIONAR":
+                    entrada = agora() - timedelta(seconds=segundos_delta)
+                    await conn.execute(
+                        """INSERT INTO pontos_mecanica 
+                           (user_id, entrada, saida, tempo_segundos, ativo) 
+                           VALUES ($1, $2, $3, $4, false)""",
+                        str(self.user_id),
+                        para_db_naive(entrada),
+                        para_db_naive(agora()),
+                        segundos_delta
+                    )
+                    logger.info(f"➕ [EDIT HORAS] +{horas_float}h para {self.user_id} (ponto manual)")
 
+                # =========================================================
+                # REMOVER HORAS → subtrai dos pontos da semana
+                # =========================================================
+                else:
+                    # Busca todos os pontos da semana (fechados + abertos)
+                    pontos = await conn.fetch(
+                        """SELECT id, tempo_segundos, ativo FROM pontos_mecanica 
+                           WHERE user_id = $1 
+                           AND entrada >= $2 AND entrada <= $3
+                           ORDER BY entrada DESC""",
+                        str(self.user_id),
+                        para_db_naive(segunda),
+                        para_db_naive(domingo)
+                    )
+
+                    segundos_restantes = abs(segundos_delta)
+                    pontos_afetados = 0
+
+                    for ponto in pontos:
+                        if segundos_restantes <= 0:
+                            break
+
+                        tempo_atual = ponto["tempo_segundos"] or 0
+                        if tempo_atual <= 0:
+                            continue
+
+                        if tempo_atual <= segundos_restantes:
+                            # Remove o ponto inteiro
+                            await conn.execute(
+                                "DELETE FROM pontos_mecanica WHERE id = $1",
+                                ponto["id"]
+                            )
+                            segundos_restantes -= tempo_atual
+                        else:
+                            # Subtrai parcialmente
+                            novo_tempo = tempo_atual - segundos_restantes
+                            await conn.execute(
+                                "UPDATE pontos_mecanica SET tempo_segundos = $1 WHERE id = $2",
+                                novo_tempo, ponto["id"]
+                            )
+                            segundos_restantes = 0
+
+                        pontos_afetados += 1
+
+                    # Se sobrar valor, cria um "ponto negativo" não existe, então ignora
+                    logger.info(f"➖ [EDIT HORAS] -{horas_float}h para {self.user_id} ({pontos_afetados} pontos afetados)")
+
+            # Recalcula novo total
+            segundos_final = await calcular_horas_semana(self.user_id)
+
+            # Atualiza o embed da meta
+            try:
+                await atualizar_embed_meta(self.user_id)
+            except Exception as e:
+                logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
+
+            # Busca nome
+            guild = bot.get_guild(GUILD_ID)
+            member = guild.get_member(int(self.user_id)) if guild else None
+            nome = member.display_name if member else str(self.user_id)
+
+            # Confirmação
+            embed = discord.Embed(
+                title="✅ HORAS ATUALIZADAS!",
+                description=f"**👤 {nome}**",
+                color=0x2ecc71,
+                timestamp=agora()
+            )
+            emoji_acao = "➕" if acao == "ADICIONAR" else "➖"
+            embed.add_field(
+                name=f"{emoji_acao} {acao}",
+                value=f"```yaml\n{formatar_horas(abs(segundos_delta))}\n```",
+                inline=True
+            )
+            embed.add_field(
+                name="⏰ Novo total da semana",
+                value=f"```yaml\n{formatar_horas(segundos_final)}\n```",
+                inline=True
+            )
+            embed.add_field(
+                name="👤 Editado por",
+                value=interaction.user.mention,
+                inline=False
+            )
+            embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Horas (Mecânica)")
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao editar horas: {e}")
+            await interaction.followup.send(f"❌ Erro: {str(e)[:150]}", ephemeral=True)
+            
 class SolicitarSalaView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -11748,11 +11833,13 @@ async def on_guild_channel_delete(channel):
 
 @bot.event
 async def on_member_update(before, after):
-    """Evento unificado de atualização de membro (BLOCO A)"""
+    """Evento unificado de atualização de membro"""
     if before.bot:
         return
 
+    # =========================================================
     # PARTE 1: LOGS DE ALTERAÇÃO
+    # =========================================================
     canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
     if canal_log:
         try:
@@ -11762,6 +11849,7 @@ async def on_member_update(before, after):
                 embed.add_field(name="📝 DEPOIS", value=after.display_name, inline=True)
                 embed.set_footer(text="Vida Rasa 442 • Logs")
                 await safe_request(canal_log.send, embed=embed)
+
             cargos_adicionados = [r for r in after.roles if r not in before.roles]
             cargos_removidos = [r for r in before.roles if r not in after.roles]
             for cargo in cargos_adicionados:
@@ -11777,7 +11865,25 @@ async def on_member_update(before, after):
         except Exception as e:
             logger.error(f"❌ Erro ao logar update de membro: {e}")
 
-    # PARTE 2: CARGO SM
+    # =========================================================
+    # PARTE 2: RENOMEAR SALA DE META SE APELIDO MUDOU
+    # =========================================================
+    if before.display_name != after.display_name:
+        try:
+            if str(after.id) in metas_cache:
+                dados_meta = metas_cache[str(after.id)]
+                canal_sala = after.guild.get_channel(dados_meta["canal_id"])
+                if canal_sala:
+                    novo_nome = f"📁・{after.display_name.lower().replace(' ', '-')}"
+                    if canal_sala.name.lower() != novo_nome.lower():
+                        await canal_sala.edit(name=novo_nome)
+                        logger.info(f"✏️ Sala de meta renomeada: {before.display_name} → {after.display_name}")
+        except Exception as e:
+            logger.error(f"❌ Erro ao renomear sala de meta de {after.display_name}: {e}")
+
+    # =========================================================
+    # PARTE 3: CARGO SM (deletar sala de meta)
+    # =========================================================
     try:
         tinha_sm = any(r.id == CARGO_SEM_META_ID for r in before.roles)
         tem_sm = any(r.id == CARGO_SEM_META_ID for r in after.roles)
@@ -11805,7 +11911,9 @@ async def on_member_update(before, after):
     except Exception as e:
         logger.error(f"❌ Erro ao processar cargo SM: {e}")
 
-    # PARTE 3: RESPONSÁVEIS
+    # =========================================================
+    # PARTE 4: RESPONSÁVEIS
+    # =========================================================
     try:
         tinha_resp = any(r.id == CARGO_RESP_METAS_ID for r in before.roles)
         tem_resp = any(r.id == CARGO_RESP_METAS_ID for r in after.roles)
@@ -11814,7 +11922,9 @@ async def on_member_update(before, after):
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar acesso responsáveis: {e}")
 
-    # PARTE 4: GERENTE MECÂNICA
+    # =========================================================
+    # PARTE 5: GERENTE MECÂNICA
+    # =========================================================
     try:
         tinha_gerente_mecanica = any(r.id == CARGO_GERENTE_MECANICA_ID for r in before.roles)
         tem_gerente_mecanica = any(r.id == CARGO_GERENTE_MECANICA_ID for r in after.roles)
@@ -11824,7 +11934,9 @@ async def on_member_update(before, after):
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar meta por gerente mecânica: {e}")
 
-    # PARTE 5: AGREGADO
+    # =========================================================
+    # PARTE 6: AGREGADO (criar sala de meta)
+    # =========================================================
     try:
         tinha_agregado = any(r.id == AGREGADO_ROLE_ID for r in before.roles)
         tem_agregado = any(r.id == AGREGADO_ROLE_ID for r in after.roles)
@@ -11865,7 +11977,9 @@ async def on_member_update(before, after):
     except Exception as e:
         logger.error(f"❌ Erro ao processar cargo Agregado: {e}")
 
-    # PARTE 6: ATUALIZAR CATEGORIA DA META
+    # =========================================================
+    # PARTE 7: ATUALIZAR CATEGORIA DA META
+    # =========================================================
     try:
         if str(after.id) in metas_cache:
             await atualizar_categoria_meta(after)
