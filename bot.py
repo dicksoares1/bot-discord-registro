@@ -9620,13 +9620,13 @@ class RelatorioHorasButton(discord.ui.Button):
 class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
     data_inicio = discord.ui.TextInput(
         label="📅 Data INÍCIO (DD/MM/AAAA)",
-        placeholder="Ex: 22/09/2026 (ou deixe em branco p/ semana atual)",
+        placeholder="Ex: 28/09/2026 (ou deixe em branco p/ semana atual)",
         required=False,
         max_length=10
     )
     data_fim = discord.ui.TextInput(
         label="📅 Data FIM (DD/MM/AAAA)",
-        placeholder="Ex: 29/09/2026",
+        placeholder="Ex: 04/10/2026",
         required=False,
         max_length=10
     )
@@ -9648,15 +9648,16 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
                 if fim < inicio:
                     await interaction.followup.send("❌ Data FIM deve ser depois da INÍCIO!", ephemeral=True)
                     return
-                # Verifica se o período é da semana atual ou histórico
+
                 hoje = agora()
                 segunda_atual = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
                 domingo_atual = segunda_atual + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
                 if inicio >= segunda_atual and fim <= domingo_atual:
-                    # Semana atual → pega direto dos pontos
+                    # Semana atual → calcula dos pontos em tempo real
                     await self._gerar_relatorio_atual(interaction, inicio, fim, data_ini_str, data_fim_str)
                 else:
-                    # Histórico → busca do banco
+                    # Histórico → busca do banco (data_fechamento)
                     await self._gerar_relatorio_historico(interaction, inicio, fim, data_ini_str, data_fim_str)
             else:
                 # Semana atual (padrão)
@@ -9696,56 +9697,76 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
                 "menção": member.mention
             })
 
-        # Ordena do maior pro menor
         mecanicos.sort(key=lambda x: x["segundos"], reverse=True)
         await self._enviar_embeds(interaction, mecanicos, ini_str, fim_str, tipo="ATUAL")
 
     async def _gerar_relatorio_historico(self, interaction, inicio, fim, ini_str, fim_str):
-        """Relatório do histórico."""
-        # Busca por data_fechamento no período
-        rows = await buscar_horas_historico(inicio, fim)
-
-        # Agrupa por user_id (pega o maior total se houver múltiplos no período)
-        agrupado = {}
-        for r in rows:
-            uid = r["user_id"]
-            if uid not in agrupado:
-                agrupado[uid] = {
-                    "user_id": uid,
-                    "nome": r["nome"] or uid,
-                    "segundos": 0,
-                    "menção": f"<@{uid}>"
-                }
-            agrupado[uid]["segundos"] += r["segundos_totais"] or 0
-
-        mecanicos = list(agrupado.values())
-        mecanicos.sort(key=lambda x: x["segundos"], reverse=True)
-
-        if not mecanicos:
-            await interaction.followup.send(
-                f"📭 Nenhum registro de horas encontrado no período **{ini_str}** a **{fim_str}**.",
-                ephemeral=True
-            )
+        """
+        Relatório do histórico.
+        ✅ CORRIGIDO: busca registros cuja data_inicio/data_fim INTERSECTA o período pedido.
+        """
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
             return
 
-        await self._enviar_embeds(interaction, mecanicos, ini_str, fim_str, tipo="HISTÓRICO")
+        try:
+            inicio_naive = para_db_naive(inicio)
+            fim_naive = para_db_naive(fim)
+
+            async with pool.acquire() as conn:
+                # ✅ Busca por data_inicio/data_fim (período da semana salva)
+                rows = await conn.fetch(
+                    """SELECT * FROM horas_historico 
+                       WHERE (data_inicio <= $1 AND data_fim >= $2)
+                          OR (data_inicio >= $1 AND data_inicio <= $2)
+                          OR (data_fim >= $1 AND data_fim <= $2)
+                       ORDER BY data_fechamento DESC""",
+                    fim_naive, inicio_naive
+                )
+
+            # Agrupa por user_id (pega o maior total se houver múltiplos)
+            agrupado = {}
+            for r in rows:
+                uid = r["user_id"]
+                if uid not in agrupado:
+                    agrupado[uid] = {
+                        "user_id": uid,
+                        "nome": r["nome"] or uid,
+                        "segundos": 0,
+                        "menção": f"<@{uid}>"
+                    }
+                agrupado[uid]["segundos"] += r["segundos_totais"] or 0
+
+            mecanicos = list(agrupado.values())
+            mecanicos.sort(key=lambda x: x["segundos"], reverse=True)
+
+            if not mecanicos:
+                await interaction.followup.send(
+                    f"📭 Nenhum registro de horas encontrado no período **{ini_str}** a **{fim_str}**.\n\n"
+                    f"💡 Dica: se ainda não fechou a semana, use **semana atual** (deixe os campos em branco).",
+                    ephemeral=True
+                )
+                return
+
+            await self._enviar_embeds(interaction, mecanicos, ini_str, fim_str, tipo="HISTÓRICO")
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao buscar histórico de horas: {e}")
+            await interaction.followup.send(f"❌ Erro: {str(e)[:150]}", ephemeral=True)
 
     async def _enviar_embeds(self, interaction, mecanicos, ini_str, fim_str, tipo="ATUAL"):
         """Envia os embeds formatados."""
         if not mecanicos:
-            await interaction.followup.send(
-                f"📭 Nenhum mecânico registrado no período.",
-                ephemeral=True
-            )
+            await interaction.followup.send("📭 Nenhum mecânico registrado no período.", ephemeral=True)
             return
 
         total_geral = sum(m["segundos"] for m in mecanicos)
         media = total_geral // len(mecanicos) if mecanicos else 0
-        meta_horas = 6 * 3600  # 6h por semana
+        meta_horas = 6 * 3600
         cumprindo = len([m for m in mecanicos if m["segundos"] >= meta_horas])
         nao_cumprindo = len(mecanicos) - cumprindo
 
-        # Embed de resumo
         embed_resumo = discord.Embed(
             title="⏰ ── RELATÓRIO DE HORAS (MECÂNICA) ── ⏰",
             description=f"📅 **Período:** {ini_str} a {fim_str}\n🔖 **Tipo:** {tipo}",
@@ -9773,7 +9794,6 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
             inline=False
         )
 
-        # Ranking top 15
         texto_ranking = ""
         for i, m in enumerate(mecanicos[:15], 1):
             emoji_medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"`{i}.`"
@@ -9786,25 +9806,17 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
         if not texto_ranking:
             texto_ranking = "📭 Nenhum registro."
 
-        embed_resumo.add_field(
-            name="🏆 RANKING DE HORAS",
-            value=texto_ranking[:1024],
-            inline=False
-        )
-
-        # Legenda
+        embed_resumo.add_field(name="🏆 RANKING DE HORAS", value=texto_ranking[:1024], inline=False)
         embed_resumo.add_field(
             name="📌 LEGENDA",
             value="✅ Cumprindo meta (≥6h) • ⚠️ Em andamento (≥3h) • ❌ Abaixo (menos de 3h)",
             inline=False
         )
-
         embed_resumo.set_footer(
             text=f"🛡 Vida Rasa 442 • Gerado em {agora().strftime('%d/%m/%Y %H:%M')}",
             icon_url=bot.user.display_avatar.url if bot.user else None
         )
 
-        # Envia no canal de resultados de metas
         canal = interaction.guild.get_channel(RESULTADOS_METAS_ID)
         if not canal:
             canal = interaction.channel
