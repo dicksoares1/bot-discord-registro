@@ -9638,34 +9638,55 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
             data_fim_str = self.data_fim.value.strip() if self.data_fim.value else ""
 
             if data_ini_str and data_fim_str:
-                # Período específico
+                # =========================================================
+                # ✅ TODAS AS DATAS SÃO NAIVE (sem timezone) — sem erro!
+                # =========================================================
                 try:
-                    inicio = datetime.strptime(data_ini_str, "%d/%m/%Y").replace(hour=0, minute=0, second=0)
-                    fim = datetime.strptime(data_fim_str, "%d/%m/%Y").replace(hour=23, minute=59, second=59)
+                    inicio_naive = datetime.strptime(data_ini_str, "%d/%m/%Y").replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+                    fim_naive = datetime.strptime(data_fim_str, "%d/%m/%Y").replace(
+                        hour=23, minute=59, second=59, microsecond=0
+                    )
                 except:
                     await interaction.followup.send("❌ Formato de data inválido! Use DD/MM/AAAA", ephemeral=True)
                     return
-                if fim < inicio:
+
+                if fim_naive < inicio_naive:
                     await interaction.followup.send("❌ Data FIM deve ser depois da INÍCIO!", ephemeral=True)
                     return
 
-                hoje = agora()
-                segunda_atual = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+                # ✅ Compara naive com naive (agora() removido tz)
+                hoje_naive = agora().replace(tzinfo=None)
+                segunda_atual = (hoje_naive - timedelta(days=hoje_naive.weekday())).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
                 domingo_atual = segunda_atual + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
-                if inicio >= segunda_atual and fim <= domingo_atual:
-                    # Semana atual → calcula dos pontos em tempo real
-                    await self._gerar_relatorio_atual(interaction, inicio, fim, data_ini_str, data_fim_str)
+                if inicio_naive >= segunda_atual and fim_naive <= domingo_atual:
+                    # Semana atual — converte de volta para aware só pra calcular
+                    await self._gerar_relatorio_atual(
+                        interaction,
+                        inicio_naive.replace(tzinfo=BRASIL),
+                        fim_naive.replace(tzinfo=BRASIL),
+                        data_ini_str, data_fim_str
+                    )
                 else:
-                    # Histórico → busca do banco (data_fechamento)
-                    await self._gerar_relatorio_historico(interaction, inicio, fim, data_ini_str, data_fim_str)
+                    # Histórico — passa naive direto
+                    await self._gerar_relatorio_historico(
+                        interaction, inicio_naive, fim_naive, data_ini_str, data_fim_str
+                    )
             else:
-                # Semana atual (padrão)
+                # Semana atual (padrão) — todos aware consistentes
                 hoje = agora()
-                segunda = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+                segunda = (hoje - timedelta(days=hoje.weekday())).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
                 domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
-                await self._gerar_relatorio_atual(interaction, segunda, domingo,
-                    segunda.strftime("%d/%m/%Y"), domingo.strftime("%d/%m/%Y"))
+                await self._gerar_relatorio_atual(
+                    interaction, segunda, domingo,
+                    segunda.strftime("%d/%m/%Y"), domingo.strftime("%d/%m/%Y")
+                )
 
         except Exception as e:
             logger.error(f"❌ Erro no RelatorioHorasModal: {e}")
@@ -9701,22 +9722,18 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
         await self._enviar_embeds(interaction, mecanicos, ini_str, fim_str, tipo="ATUAL")
 
     async def _gerar_relatorio_historico(self, interaction, inicio, fim, ini_str, fim_str):
-        """
-        Relatório do histórico.
-        ✅ CORRIGIDO: remove timezone antes de comparar com o banco.
-        """
+        """Relatório do histórico — recebe datas NAIVE."""
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
             return
 
         try:
-            # ✅ CONVERSÃO SEGURA — remove timezone
-            inicio_naive = para_db_naive(inicio)
-            fim_naive = para_db_naive(fim)
+            # ✅ Já recebe naive, mas garante
+            inicio_naive = inicio.replace(tzinfo=None) if hasattr(inicio, 'tzinfo') and inicio.tzinfo else inicio
+            fim_naive = fim.replace(tzinfo=None) if hasattr(fim, 'tzinfo') and fim.tzinfo else fim
 
             async with pool.acquire() as conn:
-                # ✅ Busca por data_inicio/data_fim (interseção de períodos)
                 rows = await conn.fetch(
                     """SELECT * FROM horas_historico 
                        WHERE (data_inicio <= $1 AND data_fim >= $2)
@@ -9726,7 +9743,6 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
                     fim_naive, inicio_naive
                 )
 
-            # Agrupa por user_id (pega o maior total se houver múltiplos)
             agrupado = {}
             for r in rows:
                 uid = r["user_id"]
