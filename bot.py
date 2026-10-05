@@ -9703,7 +9703,7 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
     async def _gerar_relatorio_historico(self, interaction, inicio, fim, ini_str, fim_str):
         """
         Relatório do histórico.
-        ✅ CORRIGIDO: busca registros cuja data_inicio/data_fim INTERSECTA o período pedido.
+        ✅ CORRIGIDO: remove timezone antes de comparar com o banco.
         """
         pool = await get_pool()
         if not pool:
@@ -9711,11 +9711,12 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
             return
 
         try:
+            # ✅ CONVERSÃO SEGURA — remove timezone
             inicio_naive = para_db_naive(inicio)
             fim_naive = para_db_naive(fim)
 
             async with pool.acquire() as conn:
-                # ✅ Busca por data_inicio/data_fim (período da semana salva)
+                # ✅ Busca por data_inicio/data_fim (interseção de períodos)
                 rows = await conn.fetch(
                     """SELECT * FROM horas_historico 
                        WHERE (data_inicio <= $1 AND data_fim >= $2)
