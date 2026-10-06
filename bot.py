@@ -218,6 +218,7 @@ CANAL_RELATORIO_FINANCEIRO_ID = 1498664038559776768
 CANAL_REGISTRAR_COMPRA_ID = 1498668853465448560
 CANAL_COMPRAS_REGISTRADAS_ID = 1270467793363669053
 CANAL_LOGS_GERAIS_ID = 1541438570705977564
+CANAL_AUDITORIA_ID = 1557007550996807711
 CANAL_BAU_MEMBROS_ID = 1337358932158578719
 CANAL_BAU_LOG_ID = 1337358898784632882
 CANAL_ARMAS_ESTOQUE_ID = 1500983878045798430
@@ -227,6 +228,7 @@ CANAL_AVISOS_ACOES_ID = 1366528075621339227
 CANAL_AVISOS_VENDAS_ID = 1448560922019758241
 CANAL_AVISOS_METAS_ID = 1541794867267641404
 CANAL_CRIAR_AVISOS_ID = 1541795328972562513
+
 
 # =========================================================
 # 1.7 CORES E ESTILOS
@@ -722,6 +724,18 @@ async def inicializar_tabelas(pool):
                 data_criacao TIMESTAMP DEFAULT NOW()
             )
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pontos_mecanica (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                entrada TIMESTAMP NOT NULL,
+                saida TIMESTAMP,
+                tempo_segundos BIGINT DEFAULT 0,
+                ativo BOOLEAN DEFAULT true,
+                data_criacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
+                 
         # =========================================================
         # TABELA: HISTÓRICO DE HORAS (MECÂNICA)
         # =========================================================
@@ -4106,6 +4120,24 @@ class AcaoView(discord.ui.View):
                 return
             await conn.execute("UPDATE acoes_semana SET status='cancelada' WHERE id=$1", self.acao_id)
             acao = await conn.fetchrow("SELECT tipo FROM acoes_semana WHERE id=$1", self.acao_id)
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.CANCELAR_ACAO,
+                modulo=AuditModulo.ACOES,
+                item_id=str(self.acao_id),
+                item_nome=f"Ação ID {self.acao_id} — {acao['tipo'] if acao else 'Desconhecida'}",
+                dados_antes={"status": "aberta"},
+                dados_depois={"status": "cancelada"},
+                detalhes=f"Ação cancelada: {acao['tipo'] if acao else 'Desconhecida'}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar cancelamento de ação: {e}")
+
         await interaction.message.delete()
         await interaction.followup.send(f"✅ Ação **{acao['tipo']}** cancelada e removida!", ephemeral=True)
         await enviar_painel_acoes(interaction.guild)
@@ -4846,10 +4878,47 @@ class ConfirmarResetAcoesView(discord.ui.View):
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
         try:
+            # =========================================================
+            # CONTAR QUANTAS AÇÕES SERÃO DELETADAS (para auditoria)
+            # =========================================================
+            total_acoes = 0
+            total_participantes = 0
+            try:
+                async with pool.acquire() as conn:
+                    total_acoes = await conn.fetchval("SELECT COUNT(*) FROM acoes_semana") or 0
+                    total_participantes = await conn.fetchval("SELECT COUNT(*) FROM participantes_acoes") or 0
+            except Exception as e:
+                logger.error(f"❌ Erro ao contar ações antes do reset: {e}")
+
             async with pool.acquire() as conn:
                 await conn.execute("DELETE FROM participantes_acoes")
                 await conn.execute("DELETE FROM acoes_semana")
+
             await enviar_painel_acoes(interaction.guild)
+
+            # =========================================================
+            # AUDITORIA
+            # =========================================================
+            try:
+                await registrar_auditoria(
+                    user_id=str(interaction.user.id),
+                    acao=AuditAcao.RESETAR_ACOES,
+                    modulo=AuditModulo.ACOES,
+                    item_id=None,
+                    item_nome="Reset global de ações",
+                    dados_antes={
+                        "total_acoes": total_acoes,
+                        "total_participantes": total_participantes
+                    },
+                    dados_depois={
+                        "total_acoes": 0,
+                        "total_participantes": 0
+                    },
+                    detalhes=f"Reset GLOBAL — {total_acoes} ações e {total_participantes} participantes deletados"
+                )
+            except Exception as e:
+                logger.error(f"❌ Erro ao auditar reset de ações: {e}")
+
             embed = discord.Embed(
                 title="♻️ AÇÕES RESETADAS COM SUCESSO!",
                 description="✅ **Todas as ações foram removidas do sistema.**\n\n"
@@ -4875,7 +4944,7 @@ class ConfirmarResetAcoesView(discord.ui.View):
             await interaction.message.delete()
         except:
             pass
-
+            
 async def restaurar_acoes():
     try:
         canal = bot.get_channel(CANAL_ESCALACOES_ID)
@@ -5547,7 +5616,6 @@ class StatusView(discord.ui.View):
         return any(l.startswith("✅") for l in linhas)
 
     async def pago(self, interaction: discord.Interaction, button):
-        """Apenas marca como pago. NÃO cria próxima entrega."""
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
@@ -5562,68 +5630,69 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         pagador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
 
-        # =========================================================
-        # DETECTAR SE JÁ FOI ENTREGUE PELO CONTEÚDO DO EMBED
-        # =========================================================
-        entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
-        pago_foi_clicado = True
-
         linhas = [l for l in linhas if not l.startswith("⏳")]
         linhas = [l for l in linhas if not l.startswith("💰")]
         linhas.append(f"💰 Pago • Recebido por {pagador_apelido} • {agora_str}")
 
         embed = self.set_status(embed, idx, linhas)
 
+        pago_foi_clicado = any(l.startswith("💰") for l in linhas)
+        entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
         finalizado = pago_foi_clicado and entregue_foi_clicado
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            titulo = embed.title or ""
+            pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.MARCAR_PAGO,
+                modulo=AuditModulo.VENDAS,
+                item_id=str(pedido_numero) if pedido_numero else None,
+                item_nome=f"Pedido #{pedido_numero:04d}" if pedido_numero else "Pedido desconhecido",
+                dados_antes={"status": "Pendente"},
+                dados_depois={"status": "Pago", "recebido_por": pagador_apelido},
+                detalhes=f"Pagamento recebido por {pagador_apelido}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar pagamento: {e}")
 
         if finalizado:
             embed.color = 0x2ecc71
             embed.title = "🎉 VENDA CONCLUÍDA"
-
             for i, field in enumerate(embed.fields):
                 if field.name == "📌 STATUS DO PEDIDO":
                     embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="✅ Pago e Entregue", inline=False)
                     break
-
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
 
             await interaction.message.edit(embed=embed, view=StatusView(
-                disabled=False,
-                entrega_id=self.entrega_id,
-                total_entregas=self.total_entregas,
-                entrega_atual=self.entrega_atual,
-                pago_ja_clicado=True,
-                mensagem_original=interaction.message,
-                transferencia_confirmada=False,
-                valor_total=self.valor_total,
-                pt=self.pt,
-                sub=self.sub,
-                pedido_numero=self.pedido_numero,
-                entregue_ja_clicado=True
+                disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas,
+                entrega_atual=self.entrega_atual, pago_ja_clicado=True,
+                mensagem_original=interaction.message, transferencia_confirmada=False,
+                valor_total=self.valor_total, pt=self.pt, sub=self.sub,
+                pedido_numero=self.pedido_numero, entregue_ja_clicado=True
             ))
-
-            await interaction.followup.send("✅ **Pagamento registrado! Agora confirme a transferência.**", ephemeral=True)
+            await interaction.followup.send("✅ **Venda concluída com sucesso!**", ephemeral=True)
+            if self.entrega_atual < self.total_entregas:
+                await self.criar_proxima_entrega(interaction, embed, self.pedido_numero)
+            await enviar_painel_vendas()
+            await enviar_painel_fabricacao()
             return
 
         await interaction.message.edit(embed=embed, view=StatusView(
-            disabled=False,
-            entrega_id=self.entrega_id,
-            total_entregas=self.total_entregas,
-            entrega_atual=self.entrega_atual,
-            pago_ja_clicado=True,
-            mensagem_original=interaction.message,
-            transferencia_confirmada=False,
-            valor_total=self.valor_total,
-            pt=self.pt,
-            sub=self.sub,
-            pedido_numero=self.pedido_numero,
-            entregue_ja_clicado=entregue_foi_clicado
+            disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas,
+            entrega_atual=self.entrega_atual, pago_ja_clicado=True,
+            mensagem_original=interaction.message, transferencia_confirmada=False,
+            valor_total=self.valor_total, pt=self.pt, sub=self.sub,
+            pedido_numero=self.pedido_numero, entregue_ja_clicado=self.entrega_ja_entregue
         ))
-
         await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
-
+        
     async def entregue(self, interaction: discord.Interaction, button):
         """Marca como entregue + cria a próxima entrega (se tiver)."""
         if self.entrega_ja_entregue:
@@ -5699,6 +5768,28 @@ class StatusView(discord.ui.View):
         linhas.append(f"✅ Entregue por {entregador_apelido} • {agora_str}")
 
         embed = self.set_status(embed, idx, linhas)
+
+        # =========================================================
+        # AUDITORIA — NOVO
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.MARCAR_ENTREGUE,
+                modulo=AuditModulo.VENDAS,
+                item_id=str(pedido_numero) if pedido_numero else None,
+                item_nome=f"Pedido #{pedido_numero:04d}" if pedido_numero else "Pedido desconhecido",
+                dados_antes={"status": "Pago (aguardando entrega)"},
+                dados_depois={
+                    "status": "Entregue",
+                    "entregue_por": entregador_apelido,
+                    "pt_pacotes": pacotes_pt,
+                    "sub_pacotes": pacotes_sub
+                },
+                detalhes=f"Entrega realizada — {pacotes_pt} pacotes PT + {pacotes_sub} pacotes SUB"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar entrega: {e}")
 
         if pacotes_pt > 0 or pacotes_sub > 0:
             canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
@@ -5788,6 +5879,7 @@ class StatusView(discord.ui.View):
 
         await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
+        # ✅ ESTE TRECHO VOLTOU (estava no seu original!)
         if self.entrega_atual < self.total_entregas:
             await self.criar_proxima_entrega(interaction, embed, pedido_numero)
 
@@ -5831,7 +5923,16 @@ class StatusView(discord.ui.View):
         titulo = embed.title
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
 
+        # Captura status ANTES para auditoria
         status_anterior = ""
+        if self.entrega_ja_entregue or self.pedido_pago(linhas):
+            if self.entrega_ja_entregue and self.pedido_pago(linhas):
+                status_anterior = "Pago e Entregue"
+            elif self.pedido_pago(linhas):
+                status_anterior = "Pago"
+            elif self.entrega_ja_entregue:
+                status_anterior = "Entregue"
+
         if self.entrega_ja_entregue or self.pedido_pago(linhas):
             if pacotes_pt > 0:
                 await atualizar_estoque("PT", pacotes_pt, "adicionar")
@@ -5839,12 +5940,6 @@ class StatusView(discord.ui.View):
             if pacotes_sub > 0:
                 await atualizar_estoque("SUB", pacotes_sub, "adicionar")
                 logger.info(f"🔄 Estoque SUB reabastecido: +{pacotes_sub} pacotes (Pedido #{pedido_numero})")
-            if self.entrega_ja_entregue and self.pedido_pago(linhas):
-                status_anterior = "Pago e Entregue"
-            elif self.pedido_pago(linhas):
-                status_anterior = "Pago"
-            elif self.entrega_ja_entregue:
-                status_anterior = "Entregue"
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         cancelador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
@@ -5875,22 +5970,35 @@ class StatusView(discord.ui.View):
         embed = self.set_status(embed, idx, linhas)
 
         await interaction.message.edit(embed=embed, view=StatusView(
-            disabled=False,
-            entrega_id=self.entrega_id,
-            total_entregas=self.total_entregas,
-            entrega_atual=self.entrega_atual,
-            pago_ja_clicado=True,
-            mensagem_original=interaction.message,
-            transferencia_confirmada=True,
-            valor_total=self.valor_total,
-            pt=self.pt,
-            sub=self.sub,
-            pedido_numero=self.pedido_numero,
-            entregue_ja_clicado=True
+            disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas,
+            entrega_atual=self.entrega_atual, pago_ja_clicado=True,
+            mensagem_original=interaction.message, transferencia_confirmada=True,
+            valor_total=self.valor_total, pt=self.pt, sub=self.sub,
+            pedido_numero=self.pedido_numero, entregue_ja_clicado=True
         ))
-
         if self.entrega_id:
             await finalizar_entregas(self.entrega_id)
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.CANCELAR_VENDA,
+                modulo=AuditModulo.VENDAS,
+                item_id=str(pedido_numero) if pedido_numero else None,
+                item_nome=f"Pedido #{pedido_numero:04d}" if pedido_numero else "Pedido desconhecido",
+                dados_antes={
+                    "status": status_anterior if status_anterior else "Pendente",
+                    "pt_pacotes": pacotes_pt,
+                    "sub_pacotes": pacotes_sub
+                },
+                dados_depois={"status": "Cancelado"},
+                detalhes=f"Cancelamento de pedido — {status_anterior or 'Sem status'} → Cancelado"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar cancelamento de venda: {e}")
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
@@ -6149,6 +6257,30 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             if grupo:
                 msg_resposta += f"\n📊 **Grupo integrado:** ✅ {org_nome}"
             await interaction.followup.send(msg_resposta, ephemeral=True)
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.CRIAR_VENDA,
+                modulo=AuditModulo.VENDAS,
+                item_id=str(numero_pedido),
+                item_nome=f"Pedido #{numero_pedido:04d} — {org_nome}",
+                dados_depois={
+                    "pedido": numero_pedido,
+                    "organizacao": org_nome,
+                    "pt": pt,
+                    "sub": sub,
+                    "total": total,
+                    "entregas": num_entregas
+                },
+                detalhes=f"Venda registrada: {fmt_num(pt)} PT + {fmt_num(sub)} SUB = {formatar_dinheiro(total)}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar criação de venda: {e}")
+
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
@@ -6218,6 +6350,34 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
         if pedido_numero > 0:
             await atualizar_valor_venda_db(pedido_numero, total)
         await self.message.edit(embed=embed)
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.EDITAR_VENDA,
+                modulo=AuditModulo.VENDAS,
+                item_id=str(pedido_numero),
+                item_nome=f"Pedido #{pedido_numero:04d}",
+                dados_antes={
+                    "pt": pt_atual,
+                    "sub": sub_atual,
+                    "organizacao": organizacao_atual,
+                    "total": (pt_atual * 50) + (sub_atual * 90)
+                },
+                dados_depois={
+                    "pt": nova_pt,
+                    "sub": nova_sub,
+                    "organizacao": nova_organizacao,
+                    "total": total
+                },
+                detalhes=f"Edição de venda — Total: {formatar_dinheiro((pt_atual*50)+(sub_atual*90))} → {valor_formatado}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar edição de venda: {e}")
+
         embed_confirmacao = discord.Embed(title="✅ VENDA EDITADA!", description=f"📦 **Pedido #{pedido_numero:04d}**", color=0x2ecc71)
         embed_confirmacao.add_field(name="🔫 PT", value=f"{fmt_num(nova_pt)} munições ({pacotes_pt} pacotes)", inline=True)
         embed_confirmacao.add_field(name="🔫 SUB", value=f"{fmt_num(nova_sub)} munições ({pacotes_sub} pacotes)", inline=True)
@@ -7054,6 +7214,29 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
         if pid not in producoes_tasks:
             task = asyncio.create_task(acompanhar_producao(pid))
             producoes_tasks[pid] = task
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.CRIAR_PRODUCAO,
+                modulo=AuditModulo.PRODUCAO,
+                item_id=pid,
+                item_nome=f"{self.galpao} ({qtd} galpões)",
+                dados_depois={
+                    "galpao": self.galpao,
+                    "qtd_galpoes": qtd,
+                    "polvora_por_galpao": polvora_por_galpao,
+                    "polvora_total": polvora_total,
+                    "duracao_minutos": tempo_real
+                },
+                detalhes=f"Produção iniciada — {qtd} galpões, {polvora_total} pólvora total"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar criação de produção: {e}")
+
         await interaction.followup.send(
             f"✅ **Produção iniciada com sucesso!**\n\n"
             f"🏭 **Galpão:** {self.galpao}\n"
@@ -7064,7 +7247,6 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
             f"⏱️ **Duração:** {tempo_real} minutos",
             ephemeral=True
         )
-
 class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
     tipo_municao = discord.ui.TextInput(label="Tipo de munição", placeholder="Digite PT ou SUB", required=True, max_length=3)
     quantidade_pacotes = discord.ui.TextInput(label="Quantidade de PACOTES", placeholder="Ex: 100 (cada pacote = 50 munições)", required=True)
@@ -7310,6 +7492,17 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
         try:
+            # =========================================================
+            # CAPTURA VALORES ANTES (para auditoria)
+            # =========================================================
+            antes = await carregar_estoque()
+            insumos_antes = await carregar_estoque_insumos()
+
+            nova_pt = None
+            nova_sub = None
+            nova_capsulas = None
+            nova_embalagens = None
+
             async with pool.acquire() as conn:
                 if self.pt.value and self.pt.value.strip():
                     nova_pt = int(self.pt.value.replace(".", "").replace(",", ""))
@@ -7331,9 +7524,43 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
                     if nova_embalagens < 0:
                         raise ValueError("Valores não podem ser negativos")
                     await conn.execute("UPDATE estoque_embalagens SET quantidade = $1, ultima_atualizacao = NOW() WHERE id = 1", nova_embalagens)
+
             await enviar_painel_fabricacao()
             estoque_atual = await carregar_estoque()
             insumos_atual = await carregar_estoque_insumos()
+
+            # =========================================================
+            # AUDITORIA
+            # =========================================================
+            try:
+                dados_antes = {}
+                dados_depois = {}
+                if nova_pt is not None:
+                    dados_antes["pt"] = antes.get("PT", 0)
+                    dados_depois["pt"] = nova_pt
+                if nova_sub is not None:
+                    dados_antes["sub"] = antes.get("SUB", 0)
+                    dados_depois["sub"] = nova_sub
+                if nova_capsulas is not None:
+                    dados_antes["capsulas"] = insumos_antes.get("capsulas", 0)
+                    dados_depois["capsulas"] = nova_capsulas
+                if nova_embalagens is not None:
+                    dados_antes["embalagens"] = insumos_antes.get("embalagens", 0)
+                    dados_depois["embalagens"] = nova_embalagens
+
+                await registrar_auditoria(
+                    user_id=str(interaction.user.id),
+                    acao=AuditAcao.EDITAR_ESTOQUE,
+                    modulo=AuditModulo.ESTOQUE,
+                    item_id=None,
+                    item_nome="Estoque manual",
+                    dados_antes=dados_antes if dados_antes else None,
+                    dados_depois=dados_depois if dados_depois else None,
+                    detalhes="Edição manual do estoque pelo painel de fabricação"
+                )
+            except Exception as e:
+                logger.error(f"❌ Erro ao auditar edição de estoque: {e}")
+
             embed = discord.Embed(title="✅ ── ESTOQUE ATUALIZADO ── ✅", description="📦 Sistema de Estoque • VDR 442", color=0x2ecc71, timestamp=agora())
             embed.set_author(name="🛡 Vida Rasa 442 • Estoque", icon_url=bot.user.display_avatar.url if bot.user else None)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -7346,7 +7573,7 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
         except Exception as e:
             logger.error(f"❌ Erro ao editar estoque: {e}")
             await interaction.followup.send(f"❌ Erro ao editar estoque: {e}", ephemeral=True)
-
+            
 class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
     quantidade = discord.ui.TextInput(label="Quantidade de Pólvora", placeholder="Digite apenas a quantidade (ex: 100)", required=True)
 
@@ -7794,6 +8021,32 @@ async def finalizar_producao(pid, msg, prod):
         await deletar_producao(pid)
         if pid in producoes_tasks:
             del producoes_tasks[pid]
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(prod["autor"]),
+                acao=AuditAcao.FINALIZAR_PRODUCAO,
+                modulo=AuditModulo.PRODUCAO,
+                item_id=pid,
+                item_nome=f"{galpao} — {autor_apelido}",
+                dados_antes={
+                    "polvora": polvora_total,
+                    "qtd_galpoes": qtd_galpoes
+                },
+                dados_depois={
+                    "capsulas_produzidas": capsulas_total,
+                    "capsulas_por_galpao": capsulas_por_galpao,
+                    "peso_kg": round(peso_total, 2),
+                    "segunda_task": bool(segunda)
+                },
+                detalhes=f"Produção finalizada — {fmt_num(capsulas_total)} cápsulas produzidas"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar finalização de produção: {e}")
+
         canal_bau = bot.get_channel(CANAL_BAU_GALPAO_ID)
         if canal_bau:
             embed_bau = discord.Embed(title="🏭 ── PRODUÇÃO FINALIZADA ── 🏭", description="🔫 Sistema de Produção • VDR 442", color=0x2ecc71, timestamp=agora())
@@ -7818,7 +8071,6 @@ async def finalizar_producao(pid, msg, prod):
         await enviar_painel_fabricacao()
     except Exception as e:
         logger.error(f"❌ ERRO ao finalizar produção {pid}: {e}")
-
 async def verificar_heartbeat_producoes():
     try:
         pool = await get_pool()
@@ -8183,7 +8435,30 @@ async def resetar_pontos_semana_com_historico(data_inicio, data_fim):
     """
     # 1. Salva horas no histórico ANTES de resetar
     logger.info("⏰ Salvando horas da semana no histórico...")
-    await fechar_todas_horas_semana(data_inicio, data_fim)
+    resultados = await fechar_todas_horas_semana(data_inicio, data_fim)
+
+    # =========================================================
+    # AUDITORIA (antes de fechar os pontos)
+    # =========================================================
+    try:
+        total_horas = sum(r.get("segundos", 0) for r in (resultados or []))
+        total_mecanicos = len([r for r in (resultados or []) if r.get("segundos", 0) > 0])
+        await registrar_auditoria(
+            user_id=str(bot.user.id) if bot.user else "0",
+            acao=AuditAcao.FECHAR_HORAS,
+            modulo=AuditModulo.HORAS,
+            item_id=None,
+            item_nome=f"Fechamento de horas {data_inicio.strftime('%d/%m/%Y') if data_inicio else '—'} a {data_fim.strftime('%d/%m/%Y') if data_fim else '—'}",
+            dados_depois={
+                "total_horas": total_horas,
+                "total_mecanicos": total_mecanicos,
+                "periodo_inicio": data_inicio.strftime("%d/%m/%Y") if data_inicio else "—",
+                "periodo_fim": data_fim.strftime("%d/%m/%Y") if data_fim else "—"
+            },
+            detalhes=f"Fechamento automático das horas da semana — {total_mecanicos} mecânicos, total {formatar_horas(total_horas)}"
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro ao auditar fechamento de horas: {e}")
 
     # 2. Agora reseta os pontos
     pool = await get_pool()
@@ -8203,7 +8478,6 @@ async def resetar_pontos_semana_com_historico(data_inicio, data_fim):
             logger.info("✅ Pontos da mecânica fechados e histórico salvo")
     except Exception as e:
         logger.error(f"❌ Erro ao resetar pontos: {e}")
-
 
 # =========================================================
 # ==================== PARTE 14: SISTEMA DE METAS =========
@@ -9175,6 +9449,7 @@ class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
     def __init__(self, user_id, dados_atuais):
         super().__init__(timeout=300)
         self.user_id = user_id
+        self.dados_atuais = dados_atuais  # ✅ salva os dados antigos
         self.dinheiro = discord.ui.TextInput(label="💰 Dinheiro Sujo (Meta)", placeholder="Digite o valor correto", default=str(dados_atuais.get("dinheiro", 0)), required=True, max_length=15)
         self.saldo_excedente = discord.ui.TextInput(label="📦 Saldo Excedente (Próxima semana)", placeholder="Digite o valor correto", default=str(dados_atuais.get("saldo_excedente", 0)), required=True, max_length=15)
         self.add_item(self.dinheiro)
@@ -9190,16 +9465,48 @@ class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
         except ValueError as e:
             await interaction.followup.send(f"❌ **Valor inválido!** {str(e)}", ephemeral=True)
             return
+
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+
         try:
             async with pool.acquire() as conn:
                 await conn.execute("UPDATE metas SET dinheiro = $1, saldo_excedente = $2 WHERE user_id = $3", novo_dinheiro, novo_saldo_excedente, str(self.user_id))
             if str(self.user_id) in metas_cache:
                 metas_cache[str(self.user_id)]["dinheiro"] = novo_dinheiro
                 metas_cache[str(self.user_id)]["saldo_excedente"] = novo_saldo_excedente
+
+            # =========================================================
+            # AUDITORIA
+            # =========================================================
+            try:
+                membro_nome = "Desconhecido"
+                guild = bot.get_guild(GUILD_ID)
+                if guild:
+                    membro = guild.get_member(int(self.user_id))
+                    if membro:
+                        membro_nome = membro.display_name
+                await registrar_auditoria(
+                    user_id=str(interaction.user.id),
+                    acao=AuditAcao.EDITAR_META,
+                    modulo=AuditModulo.METAS,
+                    item_id=str(self.user_id),
+                    item_nome=membro_nome,
+                    dados_antes={
+                        "dinheiro": self.dados_atuais.get("dinheiro", 0),
+                        "saldo_excedente": self.dados_atuais.get("saldo_excedente", 0)
+                    },
+                    dados_depois={
+                        "dinheiro": novo_dinheiro,
+                        "saldo_excedente": novo_saldo_excedente
+                    },
+                    detalhes="Edição manual pelo botão Editar Meta"
+                )
+            except Exception as e:
+                logger.error(f"❌ Erro ao auditar edição de meta: {e}")
+
             await atualizar_embed_meta(self.user_id)
             embed = discord.Embed(title="✅ META ATUALIZADA COM SUCESSO!", description=f"**👤 <@{self.user_id}>**", color=0x2ecc71, timestamp=agora())
             embed.add_field(name="💰 Dinheiro Sujo", value=formatar_dinheiro(novo_dinheiro), inline=True)
@@ -9214,6 +9521,7 @@ class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"
         super().__init__(timeout=300)
         self.user_id = user_id
         self.valor_atual = valor_atual
+
         self.novo_valor = discord.ui.TextInput(
             label="💰 NOVO VALOR DA META",
             placeholder=f"Valor atual: {formatar_dinheiro(valor_atual)}",
@@ -9231,12 +9539,38 @@ class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"
         except ValueError as e:
             await interaction.followup.send(f"❌ **Valor inválido!** {str(e)}", ephemeral=True)
             return
+
         sucesso = await atualizar_valor_meta_personalizado(self.user_id, novo_valor)
         if not sucesso:
             await interaction.followup.send("❌ **Erro ao atualizar o valor da meta!**", ephemeral=True)
             return
+
         if str(self.user_id) in metas_cache:
             metas_cache[str(self.user_id)]["valor_meta_personalizado"] = novo_valor
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            membro_nome = "Desconhecido"
+            guild = bot.get_guild(GUILD_ID)
+            if guild:
+                membro = guild.get_member(int(self.user_id))
+                if membro:
+                    membro_nome = membro.display_name
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.EDITAR_VALOR_META,
+                modulo=AuditModulo.METAS,
+                item_id=str(self.user_id),
+                item_nome=membro_nome,
+                dados_antes={"valor_meta": self.valor_atual},
+                dados_depois={"valor_meta": novo_valor},
+                detalhes="Edição manual pelo botão Editar Valor da Meta"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar edição de valor da meta: {e}")
+
         await atualizar_embed_meta(self.user_id)
         embed = discord.Embed(title="✅ VALOR DA META ATUALIZADO!", description=f"**👤 <@{self.user_id}>**", color=0x2ecc71, timestamp=agora())
         embed.add_field(name="💰 NOVO VALOR DA META", value=f"```yaml\n{formatar_dinheiro(novo_valor)}\n```", inline=False)
@@ -9269,13 +9603,11 @@ class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Valida ação
         acao = self.acao.value.strip().upper()
         if acao not in ["ADICIONAR", "REMOVER"]:
             await interaction.followup.send("❌ Ação inválida! Use **ADICIONAR** ou **REMOVER**.", ephemeral=True)
             return
 
-        # Valida horas
         try:
             horas_float = float(self.horas.value.strip().replace(",", "."))
             if horas_float <= 0:
@@ -9294,18 +9626,15 @@ class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
             return
 
         try:
-            # Calcular semana atual
             hoje = agora()
             dia_semana = hoje.weekday()
-            segunda = (hoje - timedelta(days=dia_semana)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            segunda = (hoje - timedelta(days=dia_semana)).replace(hour=0, minute=0, second=0, microsecond=0)
             domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
+            # ✅ CAPTURA SEGUNDOS ANTES (para auditoria)
+            segundos_antes = await calcular_horas_semana(self.user_id)
+
             async with pool.acquire() as conn:
-                # =========================================================
-                # ADICIONAR HORAS → cria ponto manual
-                # =========================================================
                 if acao == "ADICIONAR":
                     entrada = agora() - timedelta(seconds=segundos_delta)
                     await conn.execute(
@@ -9318,12 +9647,7 @@ class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
                         segundos_delta
                     )
                     logger.info(f"➕ [EDIT HORAS] +{horas_float}h para {self.user_id} (ponto manual)")
-
-                # =========================================================
-                # REMOVER HORAS → subtrai dos pontos da semana
-                # =========================================================
                 else:
-                    # Busca todos os pontos da semana (fechados + abertos)
                     pontos = await conn.fetch(
                         """SELECT id, tempo_segundos, ativo FROM pontos_mecanica 
                            WHERE user_id = $1 
@@ -9340,47 +9664,53 @@ class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
                     for ponto in pontos:
                         if segundos_restantes <= 0:
                             break
-
                         tempo_atual = ponto["tempo_segundos"] or 0
                         if tempo_atual <= 0:
                             continue
-
                         if tempo_atual <= segundos_restantes:
-                            # Remove o ponto inteiro
-                            await conn.execute(
-                                "DELETE FROM pontos_mecanica WHERE id = $1",
-                                ponto["id"]
-                            )
+                            await conn.execute("DELETE FROM pontos_mecanica WHERE id = $1", ponto["id"])
                             segundos_restantes -= tempo_atual
                         else:
-                            # Subtrai parcialmente
                             novo_tempo = tempo_atual - segundos_restantes
-                            await conn.execute(
-                                "UPDATE pontos_mecanica SET tempo_segundos = $1 WHERE id = $2",
-                                novo_tempo, ponto["id"]
-                            )
+                            await conn.execute("UPDATE pontos_mecanica SET tempo_segundos = $1 WHERE id = $2", novo_tempo, ponto["id"])
                             segundos_restantes = 0
-
                         pontos_afetados += 1
-
-                    # Se sobrar valor, cria um "ponto negativo" não existe, então ignora
                     logger.info(f"➖ [EDIT HORAS] -{horas_float}h para {self.user_id} ({pontos_afetados} pontos afetados)")
 
-            # Recalcula novo total
             segundos_final = await calcular_horas_semana(self.user_id)
 
-            # Atualiza o embed da meta
+            # =========================================================
+            # AUDITORIA
+            # =========================================================
+            try:
+                membro_nome = "Desconhecido"
+                guild = bot.get_guild(GUILD_ID)
+                if guild:
+                    membro = guild.get_member(int(self.user_id))
+                    if membro:
+                        membro_nome = membro.display_name
+                await registrar_auditoria(
+                    user_id=str(interaction.user.id),
+                    acao=AuditAcao.EDITAR_HORAS,
+                    modulo=AuditModulo.HORAS,
+                    item_id=str(self.user_id),
+                    item_nome=membro_nome,
+                    dados_antes={"tempo": segundos_antes},
+                    dados_depois={"tempo": segundos_final},
+                    detalhes=f"{acao}: {formatar_horas(abs(segundos_delta))} ({formatar_horas(segundos_antes)} → {formatar_horas(segundos_final)})"
+                )
+            except Exception as e:
+                logger.error(f"❌ Erro ao auditar edição de horas: {e}")
+
             try:
                 await atualizar_embed_meta(self.user_id)
             except Exception as e:
                 logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
 
-            # Busca nome
             guild = bot.get_guild(GUILD_ID)
             member = guild.get_member(int(self.user_id)) if guild else None
             nome = member.display_name if member else str(self.user_id)
 
-            # Confirmação
             embed = discord.Embed(
                 title="✅ HORAS ATUALIZADAS!",
                 description=f"**👤 {nome}**",
@@ -9398,11 +9728,7 @@ class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
                 value=f"```yaml\n{formatar_horas(segundos_final)}\n```",
                 inline=True
             )
-            embed.add_field(
-                name="👤 Editado por",
-                value=interaction.user.mention,
-                inline=False
-            )
+            embed.add_field(name="👤 Editado por", value=interaction.user.mention, inline=False)
             embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Horas (Mecânica)")
 
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -9951,6 +10277,17 @@ class ConfirmarResetHorasView(discord.ui.View):
             )
             domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
+            # ✅ Capturar total ANTES de deletar (para auditoria)
+            total_horas_antes = 0
+            guild = bot.get_guild(GUILD_ID)
+            cargo_mecanico = guild.get_role(CARGO_MECANICO_ID) if guild else None
+            if guild and cargo_mecanico:
+                for member in guild.members:
+                    if member.bot or cargo_mecanico not in member.roles:
+                        continue
+                    segundos_membro = await calcular_horas_periodo(member.id, segunda, domingo)
+                    total_horas_antes += segundos_membro
+
             async with pool.acquire() as conn:
                 # 1. Fecha pontos abertos da semana (calcula tempo)
                 await conn.execute(
@@ -9996,10 +10333,7 @@ class ConfirmarResetHorasView(discord.ui.View):
             )
 
             # 4. Atualiza os embeds de meta de todos os mecânicos
-            guild = bot.get_guild(GUILD_ID)
-            cargo_mecanico = guild.get_role(CARGO_MECANICO_ID) if guild else None
             atualizados = 0
-
             if guild and cargo_mecanico:
                 for member in guild.members:
                     if member.bot:
@@ -10014,35 +10348,36 @@ class ConfirmarResetHorasView(discord.ui.View):
                         except Exception as e:
                             logger.error(f"❌ Erro ao atualizar meta de {member.display_name}: {e}")
 
-            # 5. Envia log no canal geral
+            # =========================================================
+            # AUDITORIA
+            # =========================================================
+            try:
+                await registrar_auditoria(
+                    user_id=str(interaction.user.id),
+                    acao=AuditAcao.RESETAR_HORAS,
+                    modulo=AuditModulo.HORAS,
+                    item_id=None,
+                    item_nome="Reset global de horas",
+                    dados_antes={"total_horas": total_horas_antes},
+                    dados_depois={"total_horas": 0},
+                    detalhes=f"Reset GLOBAL — {deletados} pontos deletados, {hist_deletados} históricos removidos, {atualizados} embeds atualizados. Total zerado: {formatar_horas(total_horas_antes)}"
+                )
+            except Exception as e:
+                logger.error(f"❌ Erro ao auditar reset de horas: {e}")
+
+            # 5. Envia log no canal geral (extra)
             canal_log = guild.get_channel(CANAL_LOGS_GERAIS_ID) if guild else None
             if canal_log:
                 embed_log = discord.Embed(
                     title="🔄 RESET DE HORAS EXECUTADO",
-                    description=f"Todos os pontos da semana foram zerados.",
+                    description="Todos os pontos da semana foram zerados.",
                     color=0xe74c3c,
                     timestamp=agora()
                 )
-                embed_log.add_field(
-                    name="👤 Executado por",
-                    value=interaction.user.mention,
-                    inline=True
-                )
-                embed_log.add_field(
-                    name="📊 Pontos deletados",
-                    value=str(deletados),
-                    inline=True
-                )
-                embed_log.add_field(
-                    name="📋 Históricos deletados",
-                    value=str(hist_deletados),
-                    inline=True
-                )
-                embed_log.add_field(
-                    name="🔄 Embeds atualizados",
-                    value=str(atualizados),
-                    inline=True
-                )
+                embed_log.add_field(name="👤 Executado por", value=interaction.user.mention, inline=True)
+                embed_log.add_field(name="📊 Pontos deletados", value=str(deletados), inline=True)
+                embed_log.add_field(name="📋 Históricos deletados", value=str(hist_deletados), inline=True)
+                embed_log.add_field(name="🔄 Embeds atualizados", value=str(atualizados), inline=True)
                 embed_log.set_footer(
                     text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
                     icon_url=bot.user.display_avatar.url if bot.user else None
@@ -10060,7 +10395,8 @@ class ConfirmarResetHorasView(discord.ui.View):
                     f"📊 **Resumo:**\n"
                     f"• 🔄 Pontos deletados: **{deletados}**\n"
                     f"• 📋 Históricos removidos: **{hist_deletados}**\n"
-                    f"• 👤 Embeds atualizados: **{atualizados}**"
+                    f"• 👤 Embeds atualizados: **{atualizados}**\n"
+                    f"• ⏰ Total zerado: **{formatar_horas(total_horas_antes)}**"
                 ),
                 color=0x2ecc71,
                 timestamp=agora()
@@ -10107,6 +10443,28 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
             if not relatorio and not membros_sem_meta:
                 await interaction.followup.send("📭 Nenhuma meta para fechar.", ephemeral=True)
                 return
+
+            # =========================================================
+            # AUDITORIA
+            # =========================================================
+            try:
+                total_metas = len(relatorio) if relatorio else 0
+                total_sem_meta = len(membros_sem_meta) if membros_sem_meta else 0
+                await registrar_auditoria(
+                    user_id=str(interaction.user.id),
+                    acao=AuditAcao.FECHAR_METAS,
+                    modulo=AuditModulo.METAS,
+                    item_id=None,
+                    item_nome=f"Semana {self.data_inicio_str} a {self.data_fim_str}",
+                    dados_depois={
+                        "metas_fechadas": total_metas,
+                        "membros_sem_meta": total_sem_meta
+                    },
+                    detalhes=f"Fechamento automático das metas - semana {self.data_inicio_str} a {self.data_fim_str}"
+                )
+            except Exception as e:
+                logger.error(f"❌ Erro ao auditar fechamento de metas: {e}")
+
             await gerar_relatorio_metas(
                 interaction=interaction,
                 data_inicio_str=self.data_inicio_str,
@@ -10147,7 +10505,7 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
     @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary, custom_id="cancelar_fechamento_auto", emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
-
+        
 async def buscar_historico_metas(data_inicio, data_fim):
     pool = await get_pool()
     if not pool:
@@ -10232,6 +10590,9 @@ async def fechar_todas_metas(data_inicio, data_fim):
         return None, []
 
 async def zerar_exibicao_metas():
+    """
+    Zera a exibição das metas no Discord (e salva no histórico antes).
+    """
     try:
         guild = bot.get_guild(GUILD_ID)
         if not guild:
@@ -10241,16 +10602,41 @@ async def zerar_exibicao_metas():
         if not pool:
             logger.error("❌ Banco de dados indisponível para zerar exibição")
             return 0
+
+        # =========================================================
+        # CAPTURAR ESTADO ANTES (para auditoria)
+        # =========================================================
+        total_metas_antes = 0
+        total_dinheiro_antes = 0
+        total_dinheiro_acoes_antes = 0
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """SELECT COUNT(*) as total,
+                              COALESCE(SUM(dinheiro), 0) as total_dinheiro,
+                              COALESCE(SUM(dinheiro_acoes), 0) as total_acoes
+                       FROM metas 
+                       WHERE dinheiro > 0 OR dinheiro_acoes > 0 OR saldo_excedente > 0"""
+                )
+                if row:
+                    total_metas_antes = row["total"] or 0
+                    total_dinheiro_antes = row["total_dinheiro"] or 0
+                    total_dinheiro_acoes_antes = row["total_acoes"] or 0
+        except Exception as e:
+            logger.error(f"❌ Erro ao capturar estado das metas antes de zerar: {e}")
+
         async with pool.acquire() as conn:
             await conn.execute("UPDATE metas SET dinheiro = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL")
             logger.info("⚠️ METAS ZERADAS PARA A NOVA SEMANA!")
-                        # Salva horas no histórico ANTES de resetar (correção do bug)
+
+            # Salva horas no histórico ANTES de resetar (correção do bug)
             try:
                 semana_ini, semana_fim = calcular_semana_anterior()
                 await resetar_pontos_semana_com_historico(semana_ini, semana_fim)
             except Exception as e:
                 logger.error(f"❌ Erro ao salvar histórico de horas: {e}")
                 await resetar_pontos_semana()
+
         await carregar_metas_cache()
         contador = 0
         for uid in list(metas_cache.keys()):
@@ -10261,6 +10647,32 @@ async def zerar_exibicao_metas():
             except Exception as e:
                 logger.error(f"❌ Erro ao atualizar meta {uid}: {e}")
         logger.info(f"✅ {contador} embeds de metas zerados e atualizados")
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(bot.user.id) if bot.user else "0",
+                acao=AuditAcao.ZERAR_METAS,
+                modulo=AuditModulo.METAS,
+                item_id=None,
+                item_nome="Zeragem de todas as metas",
+                dados_antes={
+                    "metas_com_saldo": total_metas_antes,
+                    "total_dinheiro": total_dinheiro_antes,
+                    "total_acoes": total_dinheiro_acoes_antes
+                },
+                dados_depois={
+                    "metas_com_saldo": 0,
+                    "total_dinheiro": 0,
+                    "total_acoes": 0
+                },
+                detalhes=f"Zeragem automática na virada da semana — {contador} embeds atualizados"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar zeragem de metas: {e}")
+
         return contador
     except Exception as e:
         logger.error(f"❌ Erro ao zerar exibição das metas: {e}")
@@ -11133,13 +11545,49 @@ class ConfirmarExcluirView(discord.ui.View):
 
     async def confirmar(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+
+        # =========================================================
+        # BUSCAR DADOS ANTES DE DELETAR (para auditoria)
+        # =========================================================
+        dados_antes = None
+        try:
+            grupo_db = await carregar_grupo_db(self.grupo_id)
+            if grupo_db:
+                dados_antes = {
+                    "nome_org": grupo_db.get("nome_org", ""),
+                    "lider": grupo_db.get("lider_nome", ""),
+                    "telefone": grupo_db.get("lider_telefone", ""),
+                    "produto": grupo_db.get("produto", ""),
+                    "tipo": grupo_db.get("tipo_org", "")
+                }
+        except Exception as e:
+            logger.error(f"❌ Erro ao buscar grupo antes de excluir: {e}")
+
         await desativar_grupo_db(self.grupo_id)
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.EXCLUIR_GRUPO,
+                modulo=AuditModulo.GRUPOS,
+                item_id=self.grupo_id,
+                item_nome=self.nome_org,
+                dados_antes=dados_antes,
+                dados_depois={"status": "excluído"},
+                detalhes=f"Grupo {self.nome_org} foi EXCLUÍDO"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar exclusão de grupo: {e}")
+
         await recriar_painel_grupos()
         await interaction.followup.send(f"✅ **GRUPO {self.nome_org} EXCLUÍDO!**", ephemeral=True)
 
     async def cancelar(self, interaction: discord.Interaction):
         await interaction.response.send_message("❌ CANCELADO.", ephemeral=True)
-
+        
 class ConfirmarDesativarView(discord.ui.View):
     def __init__(self, grupo_id, nome_org):
         super().__init__(timeout=60)
@@ -11162,10 +11610,46 @@ class ConfirmarDesativarView(discord.ui.View):
 
     async def confirmar(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+
+        # =========================================================
+        # BUSCAR DADOS ANTES DE DESATIVAR (para auditoria)
+        # =========================================================
+        dados_antes = None
+        try:
+            grupo_db = await carregar_grupo_db(self.grupo_id)
+            if grupo_db:
+                dados_antes = {
+                    "nome_org": grupo_db.get("nome_org", ""),
+                    "lider": grupo_db.get("lider_nome", ""),
+                    "telefone": grupo_db.get("lider_telefone", ""),
+                    "produto": grupo_db.get("produto", ""),
+                    "tipo": grupo_db.get("tipo_org", "")
+                }
+        except Exception as e:
+            logger.error(f"❌ Erro ao buscar grupo antes de desativar: {e}")
+
         pool = await get_pool()
         if pool:
             async with pool.acquire() as conn:
                 await conn.execute("UPDATE grupos SET ativo = false, data_exclusao = NOW() WHERE grupo_id = $1", self.grupo_id)
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.DESATIVAR_GRUPO,
+                modulo=AuditModulo.GRUPOS,
+                item_id=self.grupo_id,
+                item_nome=self.nome_org,
+                dados_antes=dados_antes,
+                dados_depois={"status": "desativado"},
+                detalhes=f"Grupo {self.nome_org} foi DESATIVADO"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar desativação de grupo: {e}")
+
         await recriar_painel_grupos()
         await interaction.followup.send(f"✅ **GRUPO {self.nome_org} DESATIVADO!**", ephemeral=True)
 
@@ -11244,6 +11728,28 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
         logger.info(f"📝 Salvando grupo: {self.nome_org.value.strip().upper()}")
         sucesso = await salvar_grupo_db(grupo_id, self.nome_org.value.strip().upper(), lider_nome.upper(), lider_telefone.upper(), braco_nome.upper() if braco_nome else None, braco_telefone.upper() if braco_telefone else None, self.produto.value.strip().upper(), tipo_org, "")
         if sucesso:
+            # =========================================================
+            # AUDITORIA
+            # =========================================================
+            try:
+                await registrar_auditoria(
+                    user_id=str(interaction.user.id),
+                    acao=AuditAcao.CRIAR_GRUPO,
+                    modulo=AuditModulo.GRUPOS,
+                    item_id=grupo_id,
+                    item_nome=self.nome_org.value.strip().upper(),
+                    dados_depois={
+                        "nome_org": self.nome_org.value.strip().upper(),
+                        "lider": lider_nome.upper(),
+                        "telefone": lider_telefone.upper(),
+                        "produto": self.produto.value.strip().upper(),
+                        "tipo": tipo_org
+                    },
+                    detalhes=f"Novo grupo criado: {self.nome_org.value.strip().upper()}"
+                )
+            except Exception as e:
+                logger.error(f"❌ Erro ao auditar criação de grupo: {e}")
+
             await recriar_painel_grupos()
             await interaction.followup.send(f"✅ **GRUPO {self.nome_org.value.upper()} REGISTRADO!**", ephemeral=True)
         else:
@@ -11258,6 +11764,7 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
     def __init__(self, grupo_id, dados, tipo_escolhido, produtos_texto):
         super().__init__(timeout=300)
         self.grupo_id = grupo_id
+        self.dados_originais = dict(dados)  # ✅ Salva o original para auditoria
         self.nome_org = discord.ui.TextInput(label="🏷️ NOME DA ORGANIZAÇÃO", default=dados.get('nome_org', '').upper(), required=True, max_length=50)
         lider_texto = f"{dados.get('lider_nome', '').upper()} - {dados.get('lider_telefone', '').upper()}"
         self.lider = discord.ui.TextInput(label="👤 LÍDER (NOME - TELEFONE)", default=lider_texto, required=True, max_length=100)
@@ -11289,6 +11796,36 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
             braco_telefone = braco_parts[1] if len(braco_parts) > 1 else "NÃO INFORMADO"
         tipo_org = self.tipo_org.value.strip().upper()
         await atualizar_grupo_db(self.grupo_id, self.nome_org.value.strip().upper(), lider_nome.upper(), lider_telefone.upper(), braco_nome.upper() if braco_nome else None, braco_telefone.upper() if braco_telefone else None, self.produto.value.strip().upper(), tipo_org, "")
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.EDITAR_GRUPO,
+                modulo=AuditModulo.GRUPOS,
+                item_id=self.grupo_id,
+                item_nome=self.nome_org.value.strip().upper(),
+                dados_antes={
+                    "nome_org": self.dados_originais.get('nome_org', ''),
+                    "lider": self.dados_originais.get('lider_nome', ''),
+                    "telefone": self.dados_originais.get('lider_telefone', ''),
+                    "produto": self.dados_originais.get('produto', ''),
+                    "tipo": self.dados_originais.get('tipo_org', '')
+                },
+                dados_depois={
+                    "nome_org": self.nome_org.value.strip().upper(),
+                    "lider": lider_nome.upper(),
+                    "telefone": lider_telefone.upper(),
+                    "produto": self.produto.value.strip().upper(),
+                    "tipo": tipo_org
+                },
+                detalhes=f"Edição do grupo {self.nome_org.value.strip().upper()}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar edição de grupo: {e}")
+
         await recriar_painel_grupos()
         await interaction.followup.send(f"✅ **GRUPO {self.nome_org.value.upper()} ATUALIZADO!**", ephemeral=True)
         await asyncio.sleep(5)
@@ -11296,7 +11833,6 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
             await interaction.delete_original_response()
         except:
             pass
-
 # =========================================================
 # ==================== PARTE 16: SISTEMA DE MENSAGENS =====
 # =========================================================
@@ -12478,7 +13014,438 @@ class BotaoPersistente:
         elif tipo == "producao":
             return SegundaTaskView(dados.get("pid"))
         return None
+# =========================================================
+# =========================================================
+# ============== BLOCO E: SISTEMA DE AUDITORIA ============
+# =========================================================
+# Registra TODAS as ações administrativas do bot:
+# - Quem fez
+# - O que fez
+# - Quando fez
+# - Antes/Depois (valores antigos e novos)
+# =========================================================
 
+# =========================================================
+# E.1 — CONSTANTES DE AÇÕES E MÓDULOS
+# =========================================================
+class AuditAcao:
+    """Tipos de ações auditáveis."""
+    # Metas
+    EDITAR_META = "EDITAR_META"
+    EDITAR_VALOR_META = "EDITAR_VALOR_META"
+    FECHAR_METAS = "FECHAR_METAS"
+    ZERAR_METAS = "ZERAR_METAS"
+    
+    # Horas
+    EDITAR_HORAS = "EDITAR_HORAS"
+    RESETAR_HORAS = "RESETAR_HORAS"
+    FECHAR_HORAS = "FECHAR_HORAS"
+    
+    # Vendas
+    CRIAR_VENDA = "CRIAR_VENDA"
+    EDITAR_VENDA = "EDITAR_VENDA"
+    CANCELAR_VENDA = "CANCELAR_VENDA"
+    TRANSFERIR_VENDA = "TRANSFERIR_VENDA"
+    MARCAR_PAGO = "MARCAR_PAGO"
+    MARCAR_ENTREGUE = "MARCAR_ENTREGUE"
+    
+    # Estoque
+    EDITAR_ESTOQUE = "EDITAR_ESTOQUE"
+    PRODUZIR_MUNICAO = "PRODUZIR_MUNICAO"
+    REGISTRAR_CAPSULAS = "REGISTRAR_CAPSULAS"
+    REGISTRAR_EMBALAGENS = "REGISTRAR_EMBALAGENS"
+    
+    # Grupos
+    CRIAR_GRUPO = "CRIAR_GRUPO"
+    EDITAR_GRUPO = "EDITAR_GRUPO"
+    EXCLUIR_GRUPO = "EDITAR_GRUPO_EXCLUSAO"
+    DESATIVAR_GRUPO = "DESATIVAR_GRUPO"
+    
+    # Ações
+    CRIAR_ACAO = "CRIAR_ACAO"
+    CANCELAR_ACAO = "CANCELAR_ACAO"
+    CONCLUIR_ACAO = "CONCLUIR_ACAO"
+    RESETAR_ACOES = "RESETAR_ACOES"
+    
+    # Cargos críticos
+    ADICIONAR_CARGO = "ADICIONAR_CARGO"
+    REMOVER_CARGO = "REMOVER_CARGO"
+    CARGO_SM = "CARGO_SM"
+    
+    # Produção
+    CRIAR_PRODUCAO = "CRIAR_PRODUCAO"
+    CANCELAR_PRODUCAO = "CANCELAR_PRODUCAO"
+    FINALIZAR_PRODUCAO = "FINALIZAR_PRODUCAO"
+    
+    # Baú
+    BAU_ENTRADA = "BAU_ENTRADA"
+    BAU_SAIDA = "BAU_SAIDA"
+    ARMAS_ENTRADA = "ARMAS_ENTRADA"
+    ARMAS_SAIDA = "ARMAS_SAIDA"
+
+
+class AuditModulo:
+    """Módulos/sistemas auditáveis."""
+    METAS = "metas"
+    HORAS = "horas"
+    VENDAS = "vendas"
+    ESTOQUE = "estoque"
+    GRUPOS = "grupos"
+    ACOES = "acoes"
+    CARGOS = "cargos"
+    PRODUCAO = "producao"
+    BAU = "bau"
+
+
+# =========================================================
+# E.2 — HELPERS DE EMOJI E FORMATAÇÃO
+# =========================================================
+def _audit_emoji_acao(acao: str) -> str:
+    """Retorna emoji baseado no tipo de ação."""
+    mapa = {
+        "EDITAR": "✏️", "CRIAR": "➕", "CANCELAR": "❌", "EXCLUIR": "🗑️",
+        "RESETAR": "🔄", "ZERAR": "🔄", "FECHAR": "🔒", "PRODUZIR": "🔨",
+        "REGISTRAR": "📝", "MARCAR": "✅", "TRANSFERIR": "📤",
+        "ADICIONAR": "➕", "REMOVER": "➖", "DESATIVAR": "🚫",
+        "FINALIZAR": "🏁", "CONCLUIR": "🏆",
+    }
+    for chave, emoji in mapa.items():
+        if chave in acao.upper():
+            return emoji
+    return "📋"
+
+
+def _audit_cor_modulo(modulo: str) -> int:
+    """Retorna cor baseada no módulo."""
+    mapa = {
+        "metas": 0x9B59B6,
+        "horas": 0xE67E22,
+        "vendas": 0x1ABC9C,
+        "estoque": 0x3498DB,
+        "grupos": 0x34495E,
+        "acoes": 0xC0392B,
+        "cargos": 0xF1C40F,
+        "producao": 0xE74C3C,
+        "bau": 0x7F8C8D,
+    }
+    return mapa.get(modulo.lower(), 0x95A5A6)
+
+
+def _audit_nome_modulo(modulo: str) -> str:
+    """Nome amigável do módulo."""
+    mapa = {
+        "metas": "📊 Metas",
+        "horas": "⏰ Horas (Mecânica)",
+        "vendas": "🛒 Vendas",
+        "estoque": "📦 Estoque",
+        "grupos": "👥 Grupos",
+        "acoes": "⚔️ Ações",
+        "cargos": "🏷️ Cargos",
+        "producao": "🏭 Produção",
+        "bau": "📦 Baú",
+    }
+    return mapa.get(modulo.lower(), f"📋 {modulo.capitalize()}")
+
+
+def _audit_nome_acao(acao: str) -> str:
+    """Nome amigável da ação."""
+    return acao.replace("_", " ").title()
+
+
+def _audit_formatar_valor(chave: str, valor):
+    """Formata valores para exibição."""
+    if valor is None:
+        return "—"
+    if isinstance(valor, (int, float)):
+        chave_lower = chave.lower()
+        # Valores monetários
+        if any(k in chave_lower for k in ["dinheiro", "valor", "preco", "total"]):
+            try:
+                return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            except:
+                return str(valor)
+        # Segundos
+        if "segundo" in chave_lower or "tempo" in chave_lower:
+            try:
+                return formatar_horas(int(valor))
+            except:
+                return f"{valor}s"
+        # Quantidades
+        return f"{valor:,}".replace(",", ".")
+    return str(valor)
+
+
+# =========================================================
+# E.3 — FUNÇÃO PRINCIPAL: REGISTRAR AUDITORIA
+# =========================================================
+async def registrar_auditoria(
+    user_id: str,
+    acao: str,
+    modulo: str,
+    item_id: str = None,
+    item_nome: str = None,
+    dados_antes: dict = None,
+    dados_depois: dict = None,
+    detalhes: str = None,
+    enviar_canal: bool = True
+):
+    """
+    Registra uma ação na auditoria.
+    - Salva no banco
+    - Envia embed bonito no canal de logs
+    """
+    try:
+        # Busca nome do autor
+        user_nome = "Desconhecido"
+        try:
+            user = await bot.fetch_user(int(user_id))
+            if user:
+                user_nome = user.display_name or user.name
+        except:
+            pass
+
+        # =========================================================
+        # 1. SALVAR NO BANCO
+        # =========================================================
+        pool = await get_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """INSERT INTO auditoria 
+                           (user_id, user_nome, acao, modulo, item_id, item_nome, 
+                            dados_antes, dados_depois, detalhes) 
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                        str(user_id),
+                        user_nome,
+                        acao,
+                        modulo,
+                        str(item_id) if item_id else None,
+                        item_nome,
+                        json.dumps(dados_antes) if dados_antes else None,
+                        json.dumps(dados_depois) if dados_depois else None,
+                        detalhes
+                    )
+            except Exception as e:
+                logger.error(f"❌ Erro ao salvar auditoria no banco: {e}")
+
+        # =========================================================
+        # 2. ENVIAR EMBED NO CANAL DE LOGS
+        # =========================================================
+        if enviar_canal:
+            try:
+                canal = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+                if canal:
+                    emoji = _audit_emoji_acao(acao)
+                    cor = _audit_cor_modulo(modulo)
+                    nome_modulo = _audit_nome_modulo(modulo)
+                    nome_acao = _audit_nome_acao(acao)
+
+                    embed = discord.Embed(
+                        title=f"{emoji} ── AUDITORIA ── {emoji}",
+                        description=f"**{nome_modulo}**",
+                        color=cor,
+                        timestamp=agora()
+                    )
+                    embed.set_author(
+                        name="🛡 Vida Rasa 442 • Auditoria",
+                        icon_url=bot.user.display_avatar.url if bot.user else None
+                    )
+
+                    embed.add_field(
+                        name="🔧 AÇÃO",
+                        value=f"```yaml\n{nome_acao}\n```",
+                        inline=True
+                    )
+                    embed.add_field(
+                        name="👤 AUTOR",
+                        value=f"```yaml\n{user_nome}\n```",
+                        inline=True
+                    )
+
+                    if item_nome:
+                        embed.add_field(
+                            name="🎯 ALVO",
+                            value=f"```yaml\n{item_nome}\n```",
+                            inline=True
+                        )
+
+                    # Mostrar antes/depois
+                    if dados_antes or dados_depois:
+                        antes_texto = ""
+                        depois_texto = ""
+                        if dados_antes:
+                            for k, v in dados_antes.items():
+                                antes_texto += f"• {k}: {_audit_formatar_valor(k, v)}\n"
+                        if dados_depois:
+                            for k, v in dados_depois.items():
+                                depois_texto += f"• {k}: {_audit_formatar_valor(k, v)}\n"
+
+                        if antes_texto and depois_texto:
+                            embed.add_field(
+                                name="📊 ANTES",
+                                value=f"```yaml\n{antes_texto[:500]}\n```",
+                                inline=True
+                            )
+                            embed.add_field(
+                                name="📊 DEPOIS",
+                                value=f"```yaml\n{depois_texto[:500]}\n```",
+                                inline=True
+                            )
+                        elif depois_texto:
+                            embed.add_field(
+                                name="📊 DADOS",
+                                value=f"```yaml\n{depois_texto[:900]}\n```",
+                                inline=False
+                            )
+
+                    if detalhes:
+                        embed.add_field(
+                            name="📝 DETALHES",
+                            value=f"```yaml\n{detalhes[:500]}\n```",
+                            inline=False
+                        )
+
+                    embed.set_footer(
+                        text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y às %H:%M:%S')}",
+                        icon_url=bot.user.display_avatar.url if bot.user else None
+                    )
+
+                    await canal.send(embed=embed)
+            except Exception as e:
+                logger.error(f"❌ Erro ao enviar auditoria no canal: {e}")
+
+        return True
+    except Exception as e:
+        logger.error(f"❌ Erro crítico em registrar_auditoria: {e}")
+        return False
+
+
+# =========================================================
+# E.4 — FUNÇÃO: BUSCAR AUDITORIA
+# =========================================================
+async def buscar_auditoria(
+    user_id: str = None,
+    autor_id: str = None,
+    modulo: str = None,
+    acao: str = None,
+    item_id: str = None,
+    data_inicio: datetime = None,
+    data_fim: datetime = None,
+    termo: str = None,
+    limite: int = 100
+):
+    """
+    Busca registros de auditoria com filtros.
+    """
+    pool = await get_pool()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            query = "SELECT * FROM auditoria WHERE 1=1"
+            params = []
+            idx = 1
+
+            if user_id:
+                query += f" AND user_id = ${idx}"
+                params.append(str(user_id))
+                idx += 1
+
+            if autor_id:
+                query += f" AND user_id = ${idx}"
+                params.append(str(autor_id))
+                idx += 1
+
+            if modulo:
+                query += f" AND modulo = ${idx}"
+                params.append(modulo)
+                idx += 1
+
+            if acao:
+                query += f" AND acao = ${idx}"
+                params.append(acao)
+                idx += 1
+
+            if item_id:
+                query += f" AND item_id = ${idx}"
+                params.append(str(item_id))
+                idx += 1
+
+            if data_inicio:
+                query += f" AND data >= ${idx}"
+                params.append(para_db_naive(data_inicio))
+                idx += 1
+
+            if data_fim:
+                query += f" AND data <= ${idx}"
+                params.append(para_db_naive(data_fim))
+                idx += 1
+
+            if termo:
+                query += f" AND (detalhes ILIKE ${idx} OR item_nome ILIKE ${idx} OR acao ILIKE ${idx})"
+                params.append(f"%{termo}%")
+                idx += 1
+
+            query += f" ORDER BY data DESC LIMIT ${idx}"
+            params.append(limite)
+
+            rows = await conn.fetch(query, *params)
+            return rows
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar auditoria: {e}")
+        return []
+
+
+# =========================================================
+# E.5 — FUNÇÃO: ESTATÍSTICAS DE AUDITORIA
+# =========================================================
+async def estatisticas_auditoria(dias: int = 7):
+    """Retorna estatísticas gerais da auditoria."""
+    pool = await get_pool()
+    if not pool:
+        return {}
+    try:
+        async with pool.acquire() as conn:
+            inicio = agora() - timedelta(days=dias)
+            inicio_naive = para_db_naive(inicio)
+
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM auditoria WHERE data >= $1",
+                inicio_naive
+            )
+
+            por_modulo = await conn.fetch(
+                """SELECT modulo, COUNT(*) as qtd 
+                   FROM auditoria WHERE data >= $1 
+                   GROUP BY modulo ORDER BY qtd DESC""",
+                inicio_naive
+            )
+
+            top_autores = await conn.fetch(
+                """SELECT user_id, user_nome, COUNT(*) as qtd 
+                   FROM auditoria WHERE data >= $1 
+                   GROUP BY user_id, user_nome ORDER BY qtd DESC LIMIT 10""",
+                inicio_naive
+            )
+
+            top_acoes = await conn.fetch(
+                """SELECT acao, COUNT(*) as qtd 
+                   FROM auditoria WHERE data >= $1 
+                   GROUP BY acao ORDER BY qtd DESC LIMIT 10""",
+                inicio_naive
+            )
+
+            return {
+                "total": total or 0,
+                "por_modulo": [dict(r) for r in por_modulo],
+                "top_autores": [dict(r) for r in top_autores],
+                "top_acoes": [dict(r) for r in top_acoes],
+                "dias": dias
+            }
+    except Exception as e:
+        logger.error(f"❌ Erro ao gerar estatísticas: {e}")
+        return {}
 # =========================================================
 # ==================== PARTE 19: COMANDOS =================
 # =========================================================
@@ -13530,7 +14497,797 @@ async def cmd_listar_suspeitos(ctx):
             inline=False
         )
     await ctx.send(embed=embed)
+# =========================================================
+# ============== BLOCO E.6: COMANDOS DE AUDITORIA =========
+# =========================================================
+# Comandos para consultar a auditoria:
+# !auditoria_recente [qtd]
+# !auditoria_usuario @user [qtd]
+# !auditoria_modulo <modulo> [qtd]
+# !auditoria_stats [dias]
+# !auditoria_buscar <termo> [qtd]
+# =========================================================
 
+# =========================================================
+# COMANDO: !auditoria_recente
+# =========================================================
+@bot.command(name="auditoria_recente")
+async def cmd_auditoria_recente(ctx, quantidade: int = 20):
+    """Mostra as últimas N ações da auditoria (padrão: 20)."""
+    # Permissão: ADM + Gerentes
+    is_admin = ctx.author.guild_permissions.administrator
+    is_gerente = any(
+        r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+        for r in ctx.author.roles
+    )
+    if not is_admin and not is_gerente:
+        await ctx.send("❌ Apenas **ADM** ou **GERENTES** podem consultar a auditoria!")
+        return
+
+    if quantidade < 1:
+        quantidade = 1
+    if quantidade > 50:
+        quantidade = 50
+
+    registros = await buscar_auditoria(limite=quantidade)
+
+    if not registros:
+        await ctx.send("📭 Nenhum registro de auditoria encontrado.")
+        return
+
+    embed = discord.Embed(
+        title="📋 ── AUDITORIA RECENTE ── 📋",
+        description=f"Últimas **{len(registros)}** ações registradas",
+        color=0x9B59B6,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Auditoria",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    for r in registros:
+        emoji = _audit_emoji_acao(r["acao"])
+        nome_acao = _audit_nome_acao(r["acao"])
+        nome_modulo = _audit_nome_modulo(r["modulo"])
+        data_str = r["data"].strftime("%d/%m %H:%M") if r["data"] else "—"
+        item = r["item_nome"] or "—"
+
+        # Monta o texto
+        texto = f"**👤 {r['user_nome'] or r['user_id']}**\n"
+        texto += f"🎯 {nome_modulo}\n"
+        texto += f"🎬 {nome_acao}\n"
+        if item != "—":
+            texto += f"📌 {item[:50]}\n"
+        texto += f"🕐 {data_str}"
+
+        embed.add_field(
+            name=f"{emoji} #{r['id']}",
+            value=texto[:1024],
+            inline=True
+        )
+
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# COMANDO: !auditoria_usuario
+# =========================================================
+@bot.command(name="auditoria_usuario")
+async def cmd_auditoria_usuario(ctx, alvo: str = None, quantidade: int = 20):
+    """Mostra ações FEITAS POR um usuário OU SOBRE ele."""
+    is_admin = ctx.author.guild_permissions.administrator
+    is_gerente = any(
+        r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+        for r in ctx.author.roles
+    )
+    if not is_admin and not is_gerente:
+        await ctx.send("❌ Apenas **ADM** ou **GERENTES** podem consultar a auditoria!")
+        return
+
+    if not alvo:
+        await ctx.send("❌ Uso: `!auditoria_usuario @user [quantidade]`")
+        return
+
+    # Extrai ID
+    user_id = None
+    if alvo.isdigit():
+        user_id = int(alvo)
+    elif alvo.startswith("<@") and alvo.endswith(">"):
+        try:
+            user_id = int(alvo.replace("<@", "").replace(">", "").replace("!", ""))
+        except:
+            pass
+
+    if not user_id:
+        try:
+            member = await commands.MemberConverter().convert(ctx, alvo)
+            user_id = member.id
+        except:
+            pass
+
+    if not user_id:
+        await ctx.send("❌ Usuário não encontrado! Use @menção ou ID.")
+        return
+
+    if quantidade > 50:
+        quantidade = 50
+
+    # Busca ações FEITAS por esse user (autor)
+    feitas = await buscar_auditoria(autor_id=user_id, limite=quantidade)
+
+    if not feitas:
+        await ctx.send(f"📭 Nenhuma ação registrada para <@{user_id}>.")
+        return
+
+    nome_user = "Desconhecido"
+    try:
+        u = await bot.fetch_user(user_id)
+        if u:
+            nome_user = u.display_name or u.name
+    except:
+        pass
+
+    embed = discord.Embed(
+        title="📋 ── AUDITORIA DE USUÁRIO ── 📋",
+        description=f"👤 **{nome_user}**\n📊 Últimas **{len(feitas)}** ações feitas",
+        color=0x9B59B6,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Auditoria",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    for r in feitas:
+        emoji = _audit_emoji_acao(r["acao"])
+        nome_acao = _audit_nome_acao(r["acao"])
+        nome_modulo = _audit_nome_modulo(r["modulo"])
+        data_str = r["data"].strftime("%d/%m %H:%M") if r["data"] else "—"
+        item = r["item_nome"] or "—"
+
+        texto = f"🎯 {nome_modulo}\n"
+        texto += f"🎬 {nome_acao}\n"
+        if item != "—":
+            texto += f"📌 {item[:50]}\n"
+        texto += f"🕐 {data_str}"
+
+        embed.add_field(
+            name=f"{emoji} #{r['id']}",
+            value=texto[:1024],
+            inline=True
+        )
+
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# COMANDO: !auditoria_modulo
+# =========================================================
+@bot.command(name="auditoria_modulo")
+async def cmd_auditoria_modulo(ctx, modulo: str = None, quantidade: int = 20):
+    """Filtra auditoria por módulo (metas, vendas, estoque, etc)."""
+    is_admin = ctx.author.guild_permissions.administrator
+    is_gerente = any(
+        r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+        for r in ctx.author.roles
+    )
+    if not is_admin and not is_gerente:
+        await ctx.send("❌ Apenas **ADM** ou **GERENTES** podem consultar a auditoria!")
+        return
+
+    if not modulo:
+        await ctx.send(
+            "❌ Uso: `!auditoria_modulo <modulo> [quantidade]`\n\n"
+            "**Módulos disponíveis:**\n"
+            "`metas`, `horas`, `vendas`, `estoque`, `grupos`, `acoes`, `producao`"
+        )
+        return
+
+    modulo = modulo.lower().strip()
+    modulos_validos = ["metas", "horas", "vendas", "estoque", "grupos", "acoes", "producao"]
+    if modulo not in modulos_validos:
+        await ctx.send(f"❌ Módulo inválido! Use: {', '.join(modulos_validos)}")
+        return
+
+    if quantidade > 50:
+        quantidade = 50
+
+    registros = await buscar_auditoria(modulo=modulo, limite=quantidade)
+
+    if not registros:
+        await ctx.send(f"📭 Nenhum registro no módulo **{modulo}**.")
+        return
+
+    embed = discord.Embed(
+        title=f"📋 ── AUDITORIA • {_audit_nome_modulo(modulo)} ── 📋",
+        description=f"📊 Últimos **{len(registros)}** registros",
+        color=_audit_cor_modulo(modulo),
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Auditoria",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    for r in registros:
+        emoji = _audit_emoji_acao(r["acao"])
+        nome_acao = _audit_nome_acao(r["acao"])
+        data_str = r["data"].strftime("%d/%m %H:%M") if r["data"] else "—"
+        item = r["item_nome"] or "—"
+
+        texto = f"**👤 {r['user_nome'] or r['user_id']}**\n"
+        texto += f"🎬 {nome_acao}\n"
+        if item != "—":
+            texto += f"📌 {item[:50]}\n"
+        texto += f"🕐 {data_str}"
+
+        embed.add_field(
+            name=f"{emoji} #{r['id']}",
+            value=texto[:1024],
+            inline=True
+        )
+
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# COMANDO: !auditoria_stats
+# =========================================================
+@bot.command(name="auditoria_stats")
+async def cmd_auditoria_stats(ctx, dias: int = 7):
+    """Estatísticas gerais da auditoria nos últimos N dias."""
+    is_admin = ctx.author.guild_permissions.administrator
+    is_gerente = any(
+        r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+        for r in ctx.author.roles
+    )
+    if not is_admin and not is_gerente:
+        await ctx.send("❌ Apenas **ADM** ou **GERENTES** podem consultar a auditoria!")
+        return
+
+    if dias < 1:
+        dias = 1
+    if dias > 90:
+        dias = 90
+
+    stats = await estatisticas_auditoria(dias=dias)
+
+    if not stats or stats.get("total", 0) == 0:
+        await ctx.send(f"📭 Nenhum registro nos últimos {dias} dias.")
+        return
+
+    embed = discord.Embed(
+        title=f"📊 ── ESTATÍSTICAS DE AUDITORIA ── 📊",
+        description=f"📅 Últimos **{dias}** dias",
+        color=0x9B59B6,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Auditoria",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    embed.add_field(
+        name="📈 TOTAL DE AÇÕES",
+        value=f"```yaml\n{stats['total']}\n```",
+        inline=False
+    )
+
+    # Por módulo
+    texto_mod = ""
+    for item in stats.get("por_modulo", [])[:10]:
+        emoji = _audit_nome_modulo(item["modulo"])
+        texto_mod += f"{emoji}: **{item['qtd']}**\n"
+    if texto_mod:
+        embed.add_field(name="📊 POR MÓDULO", value=texto_mod, inline=True)
+
+    # Top autores
+    texto_autores = ""
+    for item in stats.get("top_autores", [])[:5]:
+        nome = item["user_nome"] or item["user_id"]
+        texto_autores += f"👤 **{nome}**: {item['qtd']}\n"
+    if texto_autores:
+        embed.add_field(name="🏆 TOP AUTORES", value=texto_autores, inline=True)
+
+    # Top ações
+    texto_acoes = ""
+    for item in stats.get("top_acoes", [])[:5]:
+        nome = _audit_nome_acao(item["acao"])
+        texto_acoes += f"🎬 {nome}: {item['qtd']}\n"
+    if texto_acoes:
+        embed.add_field(name="🎬 TOP AÇÕES", value=texto_acoes, inline=False)
+
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# COMANDO: !auditoria_buscar
+# =========================================================
+@bot.command(name="auditoria_buscar")
+async def cmd_auditoria_buscar(ctx, *, termo: str = None):
+    """Busca na auditoria por uma palavra (nome, ação, motivo)."""
+    is_admin = ctx.author.guild_permissions.administrator
+    is_gerente = any(
+        r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+        for r in ctx.author.roles
+    )
+    if not is_admin and not is_gerente:
+        await ctx.send("❌ Apenas **ADM** ou **GERENTES** podem consultar a auditoria!")
+        return
+
+    if not termo:
+        await ctx.send("❌ Uso: `!auditoria_buscar <termo>`")
+        return
+
+    registros = await buscar_auditoria(termo=termo, limite=30)
+
+    if not registros:
+        await ctx.send(f"📭 Nenhum resultado encontrado para **{termo}**.")
+        return
+
+    embed = discord.Embed(
+        title=f"📋 ── BUSCA: {termo} ── 📋",
+        description=f"🔍 **{len(registros)}** resultados encontrados",
+        color=0x9B59B6,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Auditoria",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    for r in registros[:20]:
+        emoji = _audit_emoji_acao(r["acao"])
+        nome_acao = _audit_nome_acao(r["acao"])
+        nome_modulo = _audit_nome_modulo(r["modulo"])
+        data_str = r["data"].strftime("%d/%m %H:%M") if r["data"] else "—"
+        item = r["item_nome"] or "—"
+
+        texto = f"**👤 {r['user_nome'] or r['user_id']}**\n"
+        texto += f"🎯 {nome_modulo}\n"
+        texto += f"🎬 {nome_acao}\n"
+        if item != "—":
+            texto += f"📌 {item[:50]}\n"
+        texto += f"🕐 {data_str}"
+
+        embed.add_field(
+            name=f"{emoji} #{r['id']}",
+            value=texto[:1024],
+            inline=True
+        )
+
+    if len(registros) > 20:
+        embed.set_footer(
+            text=f"⚠️ Mostrando 20 de {len(registros)} • Refine a busca",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    else:
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    await ctx.send(embed=embed)
+
+# =========================================================
+# BLOCO E.6: PAINEL DE AUDITORIA
+# =========================================================
+
+async def enviar_painel_auditoria():
+    """Envia o painel de auditoria no canal dedicado."""
+    canal = bot.get_channel(CANAL_AUDITORIA_ID)
+    if not canal:
+        logger.error(f"❌ Canal de auditoria não encontrado! ID: {CANAL_AUDITORIA_ID}")
+        return
+
+    embed = discord.Embed(
+        title="📋 ── PAINEL DE AUDITORIA ── 📋",
+        description=(
+            "🛡 Vida Rasa 442 • **Sistema de Auditoria**\n\n"
+            "📌 **Consultar histórico de ações:**\n"
+            "• 🔍 Últimas Ações — Tudo que aconteceu recentemente\n"
+            "• 👤 Por Usuário — Ações de um membro específico\n"
+            "• 🎯 Por Módulo — Metas, Vendas, Estoque, etc\n"
+            "• 📊 Estatísticas — Total por período\n"
+            "• 🔎 Buscar Termo — Procure por palavra\n\n"
+            "⚠️ **Apenas ADM e Gerentes** podem consultar.\n\n"
+            "📥 **O que é auditado:**\n"
+            "```yaml\n"
+            "📊 Metas        ⏰ Horas (Mecânica)\n"
+            "🛒 Vendas       📦 Estoque\n"
+            "👥 Grupos       ⚔️ Ações\n"
+            "🏭 Produção\n"
+            "```"
+        ),
+        color=0x9B59B6,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Auditoria",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+    embed.add_field(
+        name="📌 COMANDOS DISPONÍVEIS",
+        value=(
+            "```yaml\n"
+            "!auditoria_recente [qtd]\n"
+            "!auditoria_usuario @user [qtd]\n"
+            "!auditoria_modulo <metas|vendas|estoque|...>\n"
+            "!auditoria_stats [dias]\n"
+            "!auditoria_buscar <termo>\n"
+            "```"
+        ),
+        inline=False
+    )
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    view = PainelAuditoriaView()
+    await enviar_ou_atualizar_painel("painel_auditoria", CANAL_AUDITORIA_ID, embed, view)
+
+
+# =========================================================
+# VIEW: PAINEL DE AUDITORIA
+# =========================================================
+class PainelAuditoriaView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
+        """Verifica se o usuário pode consultar auditoria."""
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem consultar a auditoria!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(
+        label="🔍 Últimas Ações",
+        style=discord.ButtonStyle.primary,
+        custom_id="audit_btn_recente",
+        emoji="🔍",
+        row=0
+    )
+    async def btn_recente(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        registros = await buscar_auditoria(limite=20)
+        if not registros:
+            await interaction.followup.send("📭 Nenhum registro de auditoria.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🔍 ── ÚLTIMAS 20 AÇÕES ── 🔍",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+        for r in registros:
+            emoji = _audit_emoji_acao(r["acao"])
+            nome_acao = _audit_nome_acao(r["acao"])
+            nome_modulo = _audit_nome_modulo(r["modulo"])
+            data_str = r["data"].strftime("%d/%m %H:%M") if r["data"] else "—"
+            item = r["item_nome"] or "—"
+            texto = f"**👤 {r['user_nome'] or r['user_id']}**\n🎯 {nome_modulo}\n🎬 {nome_acao}\n"
+            if item != "—":
+                texto += f"📌 {item[:50]}\n"
+            texto += f"🕐 {data_str}"
+            embed.add_field(name=f"{emoji} #{r['id']}", value=texto[:1024], inline=True)
+
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(
+        label="👤 Por Usuário",
+        style=discord.ButtonStyle.primary,
+        custom_id="audit_btn_usuario",
+        emoji="👤",
+        row=0
+    )
+    async def btn_usuario(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        modal = AuditoriaUsuarioModal()
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(
+        label="🎯 Por Módulo",
+        style=discord.ButtonStyle.primary,
+        custom_id="audit_btn_modulo",
+        emoji="🎯",
+        row=0
+    )
+    async def btn_modulo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        view = EscolherModuloView()
+        await interaction.response.send_message(
+            "🎯 **Selecione o módulo para consultar:**",
+            view=view,
+            ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="📊 Estatísticas",
+        style=discord.ButtonStyle.success,
+        custom_id="audit_btn_stats",
+        emoji="📊",
+        row=1
+    )
+    async def btn_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        stats = await estatisticas_auditoria(dias=7)
+        if not stats or stats.get("total", 0) == 0:
+            await interaction.followup.send("📭 Nenhum registro nos últimos 7 dias.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📊 ── ESTATÍSTICAS • 7 DIAS ── 📊",
+            description=f"📈 Total de ações: **{stats['total']}**",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+        texto_mod = ""
+        for item in stats.get("por_modulo", [])[:10]:
+            nome = _audit_nome_modulo(item["modulo"])
+            texto_mod += f"{nome}: **{item['qtd']}**\n"
+        if texto_mod:
+            embed.add_field(name="📊 POR MÓDULO", value=texto_mod, inline=True)
+
+        texto_autores = ""
+        for item in stats.get("top_autores", [])[:5]:
+            nome = item["user_nome"] or item["user_id"]
+            texto_autores += f"👤 **{nome}**: {item['qtd']}\n"
+        if texto_autores:
+            embed.add_field(name="🏆 TOP AUTORES", value=texto_autores, inline=True)
+
+        texto_acoes = ""
+        for item in stats.get("top_acoes", [])[:5]:
+            nome = _audit_nome_acao(item["acao"])
+            texto_acoes += f"🎬 {nome}: {item['qtd']}\n"
+        if texto_acoes:
+            embed.add_field(name="🎬 TOP AÇÕES", value=texto_acoes, inline=False)
+
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(
+        label="🔎 Buscar",
+        style=discord.ButtonStyle.secondary,
+        custom_id="audit_btn_buscar",
+        emoji="🔎",
+        row=1
+    )
+    async def btn_buscar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        modal = AuditoriaBuscarModal()
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(
+        label="🔄 Atualizar",
+        style=discord.ButtonStyle.secondary,
+        custom_id="audit_btn_atualizar",
+        emoji="🔄",
+        row=1
+    )
+    async def btn_atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_auditoria()
+        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+
+
+# =========================================================
+# VIEW: ESCOLHER MÓDULO
+# =========================================================
+class EscolherModuloView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    async def _mostrar(self, interaction: discord.Interaction, modulo: str, nome: str):
+        await interaction.response.defer(ephemeral=True)
+        registros = await buscar_auditoria(modulo=modulo, limite=20)
+        if not registros:
+            await interaction.followup.send(f"📭 Nenhum registro no módulo **{nome}**.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title=f"{nome} • Últimas 20 ações",
+            color=_audit_cor_modulo(modulo),
+            timestamp=agora()
+        )
+        for r in registros:
+            emoji = _audit_emoji_acao(r["acao"])
+            nome_acao = _audit_nome_acao(r["acao"])
+            data_str = r["data"].strftime("%d/%m %H:%M") if r["data"] else "—"
+            item = r["item_nome"] or "—"
+            texto = f"**👤 {r['user_nome'] or r['user_id']}**\n🎬 {nome_acao}\n"
+            if item != "—":
+                texto += f"📌 {item[:50]}\n"
+            texto += f"🕐 {data_str}"
+            embed.add_field(name=f"{emoji} #{r['id']}", value=texto[:1024], inline=True)
+
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="📊 Metas", style=discord.ButtonStyle.primary, custom_id="audit_mod_metas", emoji="📊")
+    async def m_metas(self, interaction, button):
+        await self._mostrar(interaction, "metas", "📊 Metas")
+
+    @discord.ui.button(label="⏰ Horas", style=discord.ButtonStyle.primary, custom_id="audit_mod_horas", emoji="⏰")
+    async def m_horas(self, interaction, button):
+        await self._mostrar(interaction, "horas", "⏰ Horas (Mecânica)")
+
+    @discord.ui.button(label="🛒 Vendas", style=discord.ButtonStyle.primary, custom_id="audit_mod_vendas", emoji="🛒")
+    async def m_vendas(self, interaction, button):
+        await self._mostrar(interaction, "vendas", "🛒 Vendas")
+
+    @discord.ui.button(label="📦 Estoque", style=discord.ButtonStyle.primary, custom_id="audit_mod_estoque", emoji="📦")
+    async def m_estoque(self, interaction, button):
+        await self._mostrar(interaction, "estoque", "📦 Estoque")
+
+    @discord.ui.button(label="👥 Grupos", style=discord.ButtonStyle.primary, custom_id="audit_mod_grupos", emoji="👥")
+    async def m_grupos(self, interaction, button):
+        await self._mostrar(interaction, "grupos", "👥 Grupos")
+
+    @discord.ui.button(label="⚔️ Ações", style=discord.ButtonStyle.primary, custom_id="audit_mod_acoes", emoji="⚔️")
+    async def m_acoes(self, interaction, button):
+        await self._mostrar(interaction, "acoes", "⚔️ Ações")
+
+    @discord.ui.button(label="🏭 Produção", style=discord.ButtonStyle.primary, custom_id="audit_mod_producao", emoji="🏭")
+    async def m_producao(self, interaction, button):
+        await self._mostrar(interaction, "producao", "🏭 Produção")
+
+
+# =========================================================
+# MODAL: AUDITORIA POR USUÁRIO
+# =========================================================
+class AuditoriaUsuarioModal(discord.ui.Modal, title="👤 AUDITORIA POR USUÁRIO"):
+    alvo = discord.ui.TextInput(
+        label="👤 ID do usuário ou @menção",
+        placeholder="Ex: 123456789 ou @user",
+        required=True,
+        max_length=100
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        alvo_str = self.alvo.value.strip()
+
+        # Extrai ID
+        user_id = None
+        if alvo_str.isdigit():
+            user_id = int(alvo_str)
+        elif alvo_str.startswith("<@") and alvo_str.endswith(">"):
+            try:
+                user_id = int(alvo_str.replace("<@", "").replace(">", "").replace("!", ""))
+            except:
+                pass
+        else:
+            for m in interaction.guild.members:
+                if alvo_str.lower() in m.name.lower() or alvo_str.lower() in m.display_name.lower():
+                    user_id = m.id
+                    break
+
+        if not user_id:
+            await interaction.followup.send("❌ Usuário não encontrado!", ephemeral=True)
+            return
+
+        registros = await buscar_auditoria(autor_id=user_id, limite=20)
+        if not registros:
+            await interaction.followup.send(f"📭 Nenhuma ação registrada para <@{user_id}>.", ephemeral=True)
+            return
+
+        nome = "Desconhecido"
+        try:
+            u = await bot.fetch_user(user_id)
+            if u:
+                nome = u.display_name or u.name
+        except:
+            pass
+
+        embed = discord.Embed(
+            title="📋 ── AUDITORIA DE USUÁRIO ── 📋",
+            description=f"👤 **{nome}**\n📊 Últimas **{len(registros)}** ações",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+        for r in registros:
+            emoji = _audit_emoji_acao(r["acao"])
+            nome_acao = _audit_nome_acao(r["acao"])
+            nome_modulo = _audit_nome_modulo(r["modulo"])
+            data_str = r["data"].strftime("%d/%m %H:%M") if r["data"] else "—"
+            item = r["item_nome"] or "—"
+            texto = f"🎯 {nome_modulo}\n🎬 {nome_acao}\n"
+            if item != "—":
+                texto += f"📌 {item[:50]}\n"
+            texto += f"🕐 {data_str}"
+            embed.add_field(name=f"{emoji} #{r['id']}", value=texto[:1024], inline=True)
+
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+# =========================================================
+# MODAL: BUSCAR TERMO
+# =========================================================
+class AuditoriaBuscarModal(discord.ui.Modal, title="🔎 BUSCAR NA AUDITORIA"):
+    termo = discord.ui.TextInput(
+        label="🔍 Termo de busca",
+        placeholder="Ex: cancelar, joão, pedido 123",
+        required=True,
+        max_length=100
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        termo = self.termo.value.strip()
+
+        registros = await buscar_auditoria(termo=termo, limite=30)
+        if not registros:
+            await interaction.followup.send(f"📭 Nenhum resultado para **{termo}**.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title=f"🔎 ── BUSCA: {termo} ── 🔎",
+            description=f"📊 **{len(registros)}** resultados encontrados",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+        for r in registros[:20]:
+            emoji = _audit_emoji_acao(r["acao"])
+            nome_acao = _audit_nome_acao(r["acao"])
+            nome_modulo = _audit_nome_modulo(r["modulo"])
+            data_str = r["data"].strftime("%d/%m %H:%M") if r["data"] else "—"
+            item = r["item_nome"] or "—"
+            texto = f"**👤 {r['user_nome'] or r['user_id']}**\n🎯 {nome_modulo}\n🎬 {nome_acao}\n"
+            if item != "—":
+                texto += f"📌 {item[:50]}\n"
+            texto += f"🕐 {data_str}"
+            embed.add_field(name=f"{emoji} #{r['id']}", value=texto[:1024], inline=True)
+
+        if len(registros) > 20:
+            embed.set_footer(text=f"⚠️ Mostrando 20 de {len(registros)}")
+        else:
+            embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
 # =========================================================
 # ==================== PARTE 20: MAIN =====================
 # =========================================================
@@ -13682,6 +15439,7 @@ async def enviar_paineis_iniciais(guild):
             ("Avisos", enviar_painel_avisos),
             ("Grupos", enviar_painel_grupos),
             ("Mensagens", enviar_painel_mensagens),
+            ("Auditoria", enviar_painel_auditoria),
         ]
         for i, (nome, func) in enumerate(paineis):
             try:
