@@ -465,6 +465,21 @@ async def inicializar_tabelas(pool):
             )
         """)
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS estoque_polvora (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                quantidade INTEGER DEFAULT 0,
+                ultima_atualizacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            INSERT INTO estoque_polvora (id, quantidade)
+            VALUES (1, 0)
+            ON CONFLICT (id) DO NOTHING
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_estoque_polvora ON estoque_polvora(id)
+        """)
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS alugueis (
                 id SERIAL PRIMARY KEY,
                 galpao TEXT NOT NULL,
@@ -2957,30 +2972,61 @@ def is_arma(item_nome):
     return False
 
 async def criar_embed_bau_estoque():
-    embed = discord.Embed(
-        title="📦 ── ESTOQUE DO BAÚ ── 📦",
-        description="🔫 VDR 442 • Controle de Estoque Geral",
-        color=0x1a1a2e,
-        timestamp=agora()
-    )
-    embed.set_author(name="🛡 Vida Rasa 442 • Baú de Membros", icon_url=bot.user.display_avatar.url if bot.user else None)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
     estoque = await carregar_bau_estoque()
+
+    embed = embed_padrao(
+        titulo="ESTOQUE DO BAÚ",
+        descricao="🔫 Controle de Estoque Geral • VDR 442",
+        cor=CoresUX.BAU,
+        emoji=EmojisUX.BAU,
+        autor="Baú de Membros"
+    )
+
+    adicionar_separador(embed)
+
+    # =========================================================
+    # LISTA DE ITENS (exceto armas)
+    # =========================================================
     if estoque:
         texto_estoque = ""
         for item, qtd in estoque.items():
             if qtd > 0 and not is_arma(item):
                 texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
+
         if texto_estoque:
-            embed.add_field(name="📊 ITENS NO BAÚ", value=f"```\n{texto_estoque}\n```", inline=False)
+            adicionar_campo(
+                embed,
+                "ITENS NO BAÚ",
+                f"```\n{texto_estoque}\n```",
+                emoji=EmojisUX.ESTATISTICA,
+                inline=False
+            )
         else:
-            embed.add_field(name="📊 ITENS NO BAÚ", value="```\n📭 Baú vazio\n```", inline=False)
+            adicionar_campo(
+                embed,
+                "ITENS NO BAÚ",
+                "```\n📭 Baú vazio\n```",
+                emoji=EmojisUX.ESTATISTICA,
+                inline=False
+            )
     else:
-        embed.add_field(name="📊 ITENS NO BAÚ", value="```\n📭 Baú vazio\n```", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📋 COMO USAR",
-        value=(
+        adicionar_campo(
+            embed,
+            "ITENS NO BAÚ",
+            "```\n📭 Baú vazio\n```",
+            emoji=EmojisUX.ESTATISTICA,
+            inline=False
+        )
+
+    adicionar_separador(embed)
+
+    # =========================================================
+    # COMO USAR
+    # =========================================================
+    adicionar_campo(
+        embed,
+        "COMO USAR",
+        (
             "```yaml\n"
             "📥 ENTRADA: Clique em 'Registrar Entrada'\n"
             "📤 SAÍDA: Clique em 'Registrar Saída'\n"
@@ -2991,36 +3037,68 @@ async def criar_embed_bau_estoque():
             "kit medico: 5\n"
             "```"
         ),
+        emoji=EmojisUX.INFO,
         inline=False
     )
-    embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Baú", icon_url=bot.user.display_avatar.url if bot.user else None)
+
     return embed
 
 async def criar_embed_armas_estoque():
-    embed = discord.Embed(
-        title="🔫 ── ESTOQUE DE ARMAS ── 🔫",
-        description="🔫 VDR 442 • Controle de Armas",
-        color=0x1a1a2e,
-        timestamp=agora()
-    )
-    embed.set_author(name="🛡 Vida Rasa 442 • Arsenal", icon_url=bot.user.display_avatar.url if bot.user else None)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
     estoque = await carregar_bau_estoque()
+
+    embed = embed_padrao(
+        titulo="ESTOQUE DE ARMAS",
+        descricao="🔫 Controle de Armas • VDR 442",
+        cor=CoresUX.ARMAS,
+        emoji=EmojisUX.ARMAS,
+        autor="Arsenal"
+    )
+
+    adicionar_separador(embed)
+
+    # =========================================================
+    # LISTA DE ARMAS
+    # =========================================================
     if estoque:
         texto_estoque = ""
         for item, qtd in estoque.items():
             if qtd > 0 and is_arma(item):
                 texto_estoque += f"🔹 {item}: {qtd} unidade(s)\n"
+
         if texto_estoque:
-            embed.add_field(name="📊 ARMAS NO ESTOQUE", value=f"```\n{texto_estoque}\n```", inline=False)
+            adicionar_campo(
+                embed,
+                "ARMAS NO ESTOQUE",
+                f"```\n{texto_estoque}\n```",
+                emoji=EmojisUX.ESTATISTICA,
+                inline=False
+            )
         else:
-            embed.add_field(name="📊 ARMAS NO ESTOQUE", value="```\n📭 Nenhuma arma no estoque\n```", inline=False)
+            adicionar_campo(
+                embed,
+                "ARMAS NO ESTOQUE",
+                "```\n📭 Nenhuma arma no estoque\n```",
+                emoji=EmojisUX.ESTATISTICA,
+                inline=False
+            )
     else:
-        embed.add_field(name="📊 ARMAS NO ESTOQUE", value="```\n📭 Nenhuma arma no estoque\n```", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📋 COMO USAR",
-        value=(
+        adicionar_campo(
+            embed,
+            "ARMAS NO ESTOQUE",
+            "```\n📭 Nenhuma arma no estoque\n```",
+            emoji=EmojisUX.ESTATISTICA,
+            inline=False
+        )
+
+    adicionar_separador(embed)
+
+    # =========================================================
+    # COMO USAR
+    # =========================================================
+    adicionar_campo(
+        embed,
+        "COMO USAR",
+        (
             "```yaml\n"
             "🔫 ENTRADA: Clique em 'Registrar Armas Entrada'\n"
             "🔫 SAÍDA: Clique em 'Registrar Armas Saída'\n"
@@ -3032,9 +3110,10 @@ async def criar_embed_armas_estoque():
             "G3: 10\n"
             "```"
         ),
+        emoji=EmojisUX.INFO,
         inline=False
     )
-    embed.set_footer(text="🛡 Vida Rasa 442 • Arsenal", icon_url=bot.user.display_avatar.url if bot.user else None)
+
     return embed
 
 class BauModal(discord.ui.Modal):
@@ -6861,6 +6940,78 @@ async def atualizar_estoque(tipo, quantidade, operacao="adicionar"):
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar estoque: {e}")
 
+# =========================================================
+# FUNÇÕES: ESTOQUE DE PÓLVORA
+# =========================================================
+async def carregar_estoque_polvora():
+    """Retorna a quantidade atual de pólvora no estoque."""
+    pool = await get_pool()
+    if not pool:
+        return 0
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT quantidade FROM estoque_polvora WHERE id = 1")
+            return row["quantidade"] if row else 0
+    except Exception as e:
+        logger.error(f"❌ Erro ao carregar estoque de pólvora: {e}")
+        return 0
+
+
+async def atualizar_estoque_polvora(quantidade, operacao="adicionar"):
+    """Adiciona ou remove pólvora do estoque."""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            if operacao == "adicionar":
+                await conn.execute(
+                    "UPDATE estoque_polvora SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1",
+                    quantidade
+                )
+            else:
+                await conn.execute(
+                    "UPDATE estoque_polvora SET quantidade = quantidade - $1, ultima_atualizacao = NOW() WHERE id = 1 AND quantidade >= $1",
+                    quantidade
+                )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar estoque de pólvora: {e}")
+        return False
+
+
+async def registrar_entrada_polvora(quantidade, registrado_por, obs=""):
+    """Registra entrada de pólvora (compra ou manual)."""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) VALUES ($1, $2, $3, $4)",
+                "polvora", quantidade, str(registrado_por), obs
+            )
+            await conn.execute(
+                "UPDATE estoque_polvora SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1",
+                quantidade
+            )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao registrar entrada de pólvora: {e}")
+        return False
+
+
+async def verificar_polvora_suficiente(quantidade):
+    """Verifica se tem pólvora suficiente no estoque."""
+    estoque = await carregar_estoque_polvora()
+    return estoque >= quantidade
+
+
+async def consumir_polvora(quantidade):
+    """Remove pólvora do estoque (usado na produção)."""
+    return await atualizar_estoque_polvora(quantidade, "remover")
+
+
 async def carregar_estoque_insumos():
     pool = await get_pool()
     if not pool:
@@ -7186,6 +7337,18 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
         pid = f"{self.galpao}_{qtd}g_{interaction.id}_{int(time_module.time())}"
         inicio = agora()
         fim = inicio + timedelta(minutes=tempo_real)
+
+        # =========================================================
+        # VERIFICA PÓLVORA NO ESTOQUE (2B — avisa mas permite)
+        # =========================================================
+        estoque_polvora_atual = await carregar_estoque_polvora()
+        aviso_polvora = ""
+        if estoque_polvora_atual < polvora_total:
+            aviso_polvora = f"\n⚠️ **ATENÇÃO:** Estoque tem apenas {fmt_num(estoque_polvora_atual)} pólvoras. Produção vai ficar com estoque negativo!"
+
+        # =========================================================
+        # ENVIA MENSAGEM NO CANAL DE PRODUÇÃO
+        # =========================================================
         canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
         if not canal:
             await interaction.followup.send("❌ Canal de produção não encontrado.", ephemeral=True)
@@ -7198,6 +7361,10 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
         if not msg:
             await interaction.followup.send("❌ Erro ao enviar mensagem de produção!", ephemeral=True)
             return
+
+        # =========================================================
+        # SALVA PRODUÇÃO NO BANCO + CRIA TASK
+        # =========================================================
         dados = {
             "galpao": f"{self.galpao} ({qtd} galpões)",
             "autor": interaction.user.id,
@@ -7214,6 +7381,25 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
         if pid not in producoes_tasks:
             task = asyncio.create_task(acompanhar_producao(pid))
             producoes_tasks[pid] = task
+
+        # =========================================================
+        # CONSOME PÓLVORA DO ESTOQUE (1A — remove ao iniciar)
+        # =========================================================
+        try:
+            await consumir_polvora(polvora_total)
+            estoque_pos = await carregar_estoque_polvora()
+            logger.info(f"🧨 [PRODUÇÃO] Pólvora consumida: -{polvora_total} (Estoque: {estoque_pos})")
+        except Exception as e:
+            logger.error(f"❌ Erro ao consumir pólvora: {e}")
+            estoque_pos = estoque_polvora_atual
+
+        # =========================================================
+        # ATUALIZA PAINEL DE FABRICAÇÃO
+        # =========================================================
+        try:
+            await enviar_painel_fabricacao()
+        except Exception as e:
+            logger.error(f"❌ Erro ao atualizar painel: {e}")
 
         # =========================================================
         # AUDITORIA
@@ -7237,6 +7423,9 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
         except Exception as e:
             logger.error(f"❌ Erro ao auditar criação de produção: {e}")
 
+        # =========================================================
+        # RESPOSTA FINAL (ÚNICA!)
+        # =========================================================
         await interaction.followup.send(
             f"✅ **Produção iniciada com sucesso!**\n\n"
             f"🏭 **Galpão:** {self.galpao}\n"
@@ -7244,9 +7433,13 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
             f"💣 **Pólvora por galpão:** {fmt_num(polvora_por_galpao)}\n"
             f"💣 **Pólvora total:** {fmt_num(polvora_total)}\n"
             f"⏰ **Término previsto:** <t:{int(fim.timestamp())}:t>\n"
-            f"⏱️ **Duração:** {tempo_real} minutos",
+            f"⏱️ **Duração:** {tempo_real} minutos\n"
+            f"\n🧨 **Pólvora retirada do estoque:** -{fmt_num(polvora_total)}\n"
+            f"📦 **Estoque atual de pólvora:** {fmt_num(estoque_pos)} unidades"
+            f"{aviso_polvora}",
             ephemeral=True
         )
+        
 class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
     tipo_municao = discord.ui.TextInput(label="Tipo de munição", placeholder="Digite PT ou SUB", required=True, max_length=3)
     quantidade_pacotes = discord.ui.TextInput(label="Quantidade de PACOTES", placeholder="Ex: 100 (cada pacote = 50 munições)", required=True)
@@ -7476,6 +7669,21 @@ class FabricacaoView(discord.ui.View):
         modal.embalagens.placeholder = f"Atual: {fmt_num(insumos['embalagens'])} unidades"
         await interaction.response.send_modal(modal)
 
+    @discord.ui.button(label="🧨 Registrar Pólvora Manual", style=discord.ButtonStyle.primary, custom_id="registrar_polvora_manual_btn", emoji="🧨", row=3)
+    async def registrar_polvora_manual(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Botão para adicionar pólvora ao estoque manualmente."""
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem registrar pólvora manualmente!",
+                ephemeral=True
+            )
+            return
+        estoque_atual = await carregar_estoque_polvora()
+        modal = RegistrarPolvoraManualModal(estoque_atual)
+        await interaction.response.send_modal(modal)
+
 class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE COMPLETO"):
     def __init__(self):
         super().__init__(timeout=300)
@@ -7573,6 +7781,77 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
         except Exception as e:
             logger.error(f"❌ Erro ao editar estoque: {e}")
             await interaction.followup.send(f"❌ Erro ao editar estoque: {e}", ephemeral=True)
+
+class RegistrarPolvoraManualModal(discord.ui.Modal, title="🧨 Registrar Pólvora Manual"):
+    def __init__(self, estoque_atual=0):
+        super().__init__(timeout=300)
+        self.estoque_atual = estoque_atual
+
+    quantidade = discord.ui.TextInput(
+        label="🧨 Quantidade de pólvora",
+        placeholder="Ex: 100 (aceita números positivos)",
+        required=True,
+        max_length=10
+    )
+    observacao = discord.ui.TextInput(
+        label="📝 Observação (opcional)",
+        placeholder="Ex: Compra extra, ajuste manual, etc",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=200
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            quantidade = safe_int(self.quantidade.value)
+            if quantidade <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ Quantidade inválida! Digite um número positivo.", ephemeral=True)
+            return
+
+        # Adiciona ao estoque
+        sucesso = await registrar_entrada_polvora(
+            quantidade,
+            interaction.user.id,
+            self.observacao.value or "Registro manual pelo painel"
+        )
+
+        if not sucesso:
+            await interaction.followup.send("❌ Erro ao adicionar pólvora ao estoque!", ephemeral=True)
+            return
+
+        estoque_novo = await carregar_estoque_polvora()
+
+        # Log no canal de fabricação
+        try:
+            canal_log = bot.get_channel(CANAL_BAU_GALPAO_ID)
+            if canal_log:
+                embed_log = discord.Embed(title="🧨 ENTRADA DE PÓLVORA (MANUAL)", color=0xe67e22, timestamp=agora())
+                embed_log.add_field(name="📦 Quantidade", value=f"**{fmt_num(quantidade)}** unidades", inline=True)
+                embed_log.add_field(name="👤 Registrado por", value=interaction.user.mention, inline=True)
+                embed_log.add_field(name="📊 Estoque atual", value=f"**{fmt_num(estoque_novo)}** unidades", inline=True)
+                if self.observacao.value:
+                    embed_log.add_field(name="📝 Obs", value=self.observacao.value, inline=False)
+                embed_log.set_footer(text="🛡 Vida Rasa 442 • Estoque de Pólvora")
+                await canal_log.send(embed=embed_log)
+        except:
+            pass
+
+        # Atualiza painel
+        try:
+            await enviar_painel_fabricacao()
+        except Exception as e:
+            logger.error(f"❌ Erro ao atualizar painel: {e}")
+
+        await interaction.followup.send(
+            f"✅ **{fmt_num(quantidade)} pólvoras adicionadas!**\n\n"
+            f"📦 Estoque anterior: **{fmt_num(self.estoque_atual)}**\n"
+            f"📦 Estoque novo: **{fmt_num(estoque_novo)}**",
+            ephemeral=True
+        )
             
 class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
     quantidade = discord.ui.TextInput(label="Quantidade de Pólvora", placeholder="Digite apenas a quantidade (ex: 100)", required=True)
@@ -7586,7 +7865,29 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
             await interaction.response.send_message("❌ Quantidade inválida!", ephemeral=True)
             return
         valor = qtd * PRECO_POLVORA
+
+        # =========================================================
+        # SALVA NO HISTÓRICO DE COMPRAS
+        # =========================================================
         await salvar_polvora_db(interaction.user.id, qtd, valor)
+
+        # =========================================================
+        # ADICIONA AO ESTOQUE DE PÓLVORA
+        # =========================================================
+        try:
+            await registrar_entrada_polvora(
+                qtd,
+                interaction.user.id,
+                f"Compra registrada em {agora().strftime('%d/%m/%Y %H:%M')}"
+            )
+            estoque_atual = await carregar_estoque_polvora()
+            logger.info(f"📦 Pólvora adicionada ao estoque: +{qtd} unidades (Total: {estoque_atual})")
+        except Exception as e:
+            logger.error(f"❌ Erro ao adicionar pólvora no estoque: {e}")
+
+        # =========================================================
+        # ENVIA EMBED NO CANAL DE REGISTRO
+        # =========================================================
         canal = interaction.guild.get_channel(CANAL_REGISTRO_POLVORA_ID)
         if canal:
             valor_formatado = formatar_dinheiro(valor)
@@ -7594,9 +7895,25 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
             embed.add_field(name="Registrado por", value=interaction.user.mention, inline=False)
             embed.add_field(name="Quantidade", value=f"{fmt_num(qtd)} unidades", inline=True)
             embed.add_field(name="Valor total", value=f"**{valor_formatado}**", inline=True)
-            embed.set_footer(text=f"R$ {PRECO_POLVORA:.2f} por unidade")
+            embed.add_field(name="📦 Estoque atual", value=f"```yaml\n{fmt_num(estoque_atual)} unidades\n```", inline=True)
+            embed.set_footer(text=f"R$ {PRECO_POLVORA:.2f} por unidade • Adicionado ao estoque")
             await canal.send(embed=embed)
-        await interaction.response.send_message(f"✅ **Registro feito com sucesso!**\n\n📦 Quantidade: {fmt_num(qtd)} unidades\n💰 Valor: {formatar_dinheiro(valor)}", ephemeral=True)
+
+        # =========================================================
+        # ATUALIZA O PAINEL DE FABRICAÇÃO
+        # =========================================================
+        try:
+            await enviar_painel_fabricacao()
+        except Exception as e:
+            logger.error(f"❌ Erro ao atualizar painel de fabricação: {e}")
+
+        await interaction.response.send_message(
+            f"✅ **Registro feito com sucesso!**\n\n"
+            f"📦 Quantidade: {fmt_num(qtd)} unidades\n"
+            f"💰 Valor: {formatar_dinheiro(valor)}\n"
+            f"📊 **Adicionado ao estoque!** (Total agora: {fmt_num(estoque_atual)})",
+            ephemeral=True
+        )
 
 class PolvoraView(discord.ui.View):
     def __init__(self):
@@ -8185,6 +8502,7 @@ async def enviar_painel_fabricacao():
         return
     estoque_municoes = await carregar_estoque()
     estoque_insumos = await carregar_estoque_insumos()
+    estoque_polvora = await carregar_estoque_polvora()
     alugueis = await carregar_alugueis()
     embed = discord.Embed(title="🛢️ ── PAINEL DE FABRICAÇÃO ── 🛢️", description="🔫 Sistema de Produção • VDR 442", color=Cores.PRODUCAO, timestamp=agora())
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
@@ -8213,7 +8531,7 @@ async def enviar_painel_fabricacao():
     )
     embed.add_field(
         name="💊 ESTOQUE DE INSUMOS",
-        value=f"💊 Cápsulas     →  **{fmt_num(estoque_insumos['capsulas'])}** unidades\n📦 Embalagens   →  **{fmt_num(estoque_insumos['embalagens'])}** unidades",
+        value=f"💊 Cápsulas     →  **{fmt_num(estoque_insumos['capsulas'])}** unidades\n📦 Embalagens   →  **{fmt_num(estoque_insumos['embalagens'])}** unidades\n🧨 Pólvora      →  **{fmt_num(estoque_polvora)}** unidades",
         inline=True
     )
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -13446,6 +13764,494 @@ async def estatisticas_auditoria(dias: int = 7):
     except Exception as e:
         logger.error(f"❌ Erro ao gerar estatísticas: {e}")
         return {}
+
+# =========================================================
+# =========================================================
+# ================ BLOCO F: BIBLIOTECA UX =================
+# =========================================================
+# Ferramentas de UX (cores, emojis, paginação, helpers)
+# NÃO AFETA NENHUM PAINEL EXISTENTE
+# =========================================================
+# Como usar:
+#   embed = embed_padrao("Título", "Descrição", CoresUX.META, EmojisUX.META)
+#   paginacao = Paginacao(lista_de_embeds)
+#   await enviar_paginado(interaction, lista, "Título")
+# =========================================================
+
+# =========================================================
+# F.1 — PALETA DE CORES PADRONIZADA
+# =========================================================
+class CoresUX:
+    """Paleta oficial de cores do VDR Bot."""
+    # Cores principais
+    PRIMARIA     = 0x5865F2  # Azul Discord
+    SUCESSO      = 0x2ECC71  # Verde
+    AVISO        = 0xF1C40F  # Amarelo
+    ERRO         = 0xE74C3C  # Vermelho
+    INFO         = 0x3498DB  # Azul claro
+    NEUTRO       = 0x95A5A6  # Cinza
+
+    # Cores dos sistemas
+    META         = 0x9B59B6  # Roxo
+    VENDA        = 0x1ABC9C  # Turquesa
+    PRODUCAO     = 0xE67E22  # Laranja
+    ACAO         = 0xC0392B  # Vermelho escuro
+    GRUPO        = 0x34495E  # Azul escuro
+    LIVE         = 0x9146FF  # Roxo Twitch
+    AUSENCIA     = 0xD35400  # Laranja queimado
+    FINANCEIRO   = 0x27AE60  # Verde escuro
+    BAU          = 0x7F8C8D  # Cinza azulado
+    LOGS         = 0x2C3E50  # Azul noite
+    AUDITORIA    = 0x8E44AD  # Roxo escuro
+
+    # Cores especiais
+    PREMIUM      = 0xF9CA24  # Dourado
+    DESTAQUE     = 0xFF6B81  # Rosa
+    ESCURO       = 0x1A1A2E  # Escuro
+    CLARO        = 0xECF0F1  # Branco suave
+
+
+# =========================================================
+# F.2 — DICIONÁRIO DE EMOJIS EXPANDIDO
+# =========================================================
+class EmojisUX:
+    """Emojis padronizados para uso em embeds."""
+    # Sistemas
+    META        = "📊"
+    VENDA       = "🛒"
+    PRODUCAO    = "🏭"
+    ACAO        = "⚔️"
+    GRUPO       = "👥"
+    LIVE        = "🎥"
+    AUSENCIA    = "📋"
+    FINANCEIRO  = "💰"
+    BAU         = "📦"
+    ARMAS       = "🔫"
+    POLVORA     = "🧨"
+    LOGS        = "📜"
+    AUDITORIA   = "🔍"
+
+    # Status
+    SUCESSO     = "✅"
+    ERRO        = "❌"
+    AVISO       = "⚠️"
+    INFO        = "ℹ️"
+    DESTAQUE    = "⭐"
+    CARREGANDO  = "⏳"
+    BLOQUEADO   = "🔒"
+    LIBERADO    = "🔓"
+
+    # Navegação
+    ANTERIOR    = "⬅️"
+    PROXIMO     = "➡️"
+    INICIO      = "🏠"
+    FIM         = "⏭️"
+    ATUALIZAR   = "🔄"
+    FECHAR      = "❌"
+    CONFIRMAR   = "✅"
+
+    # Pessoas
+    USER        = "👤"
+    USERS       = "👥"
+    ADMIN       = "👑"
+    GERENTE     = "⭐"
+
+    # Recursos
+    DINHEIRO    = "💰"
+    TROFEU      = "🏆"
+    MEDALHA     = "🥇"
+    FOGO        = "🔥"
+    ESCUDO      = "🛡️"
+    CORACAO     = "❤️"
+    ESTRELA     = "⭐"
+    RAIO        = "⚡"
+    LAMPADA     = "💡"
+
+    # Tabelas
+    PASTA       = "📁"
+    ARQUIVO     = "📄"
+    CALENDARIO  = "📅"
+    RELOGIO     = "⏰"
+    LOCAL       = "📍"
+    LINK        = "🔗"
+    ESTATISTICA = "📈"
+    GRAFICO     = "📊"
+
+    # Divisores
+    DIVISOR     = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    DIVISOR_ALT = "═══════════════════════════════════"
+    DIVISOR_CURTO = "──────────────────"
+
+
+# =========================================================
+# F.3 — HELPER: EMBED PADRÃO
+# =========================================================
+def embed_padrao(
+    titulo: str,
+    descricao: str = "",
+    cor: int = None,
+    emoji: str = None,
+    autor: str = None,
+    thumbnail_bot: bool = True,
+    footer: str = None,
+    timestamp: bool = True
+) -> discord.Embed:
+    """
+    Cria um embed já padronizado com o estilo do VDR Bot.
+
+    Exemplo:
+        embed = embed_padrao(
+            titulo="Estoque",
+            descricao="Estoque atualizado",
+            cor=CoresUX.PRODUCAO,
+            emoji=EmojisUX.PRODUCAO
+        )
+    """
+    if emoji:
+        titulo = f"{emoji} {titulo}"
+
+    embed = discord.Embed(
+        title=titulo,
+        description=descricao,
+        color=cor or CoresUX.PRIMARIA,
+        timestamp=agora() if timestamp else None
+    )
+
+    if autor:
+        embed.set_author(
+            name=f"🛡 Vida Rasa 442 • {autor}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    elif thumbnail_bot:
+        embed.set_author(
+            name="🛡 Vida Rasa 442",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+    if thumbnail_bot and bot.user:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+
+    if footer:
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {footer}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    elif timestamp:
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y às %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+    return embed
+
+
+# =========================================================
+# F.4 — HELPER: ADICIONAR SEPARADOR
+# =========================================================
+def adicionar_separador(embed: discord.Embed, texto: str = ""):
+    """Adiciona um divisor visual no embed."""
+    embed.add_field(
+        name=EmojisUX.DIVISOR,
+        value=texto if texto else "\u200b",
+        inline=False
+    )
+    return embed
+
+
+# =========================================================
+# F.5 — HELPER: ADICIONAR CAMPO PADRONIZADO
+# =========================================================
+def adicionar_campo(embed: discord.Embed, nome: str, valor: str, emoji: str = None, inline: bool = True):
+    """Adiciona um campo já formatado com emoji."""
+    if emoji:
+        nome = f"{emoji} {nome}"
+    embed.add_field(name=nome, value=valor, inline=inline)
+    return embed
+
+
+# =========================================================
+# F.6 — CLASSE DE PAGINAÇÃO UNIVERSAL
+# =========================================================
+class Paginacao:
+    """
+    Classe reutilizável para paginar qualquer lista de embeds.
+
+    Uso:
+        paginacao = Paginacao(embeds, titulo="Relatório")
+        view = paginacao.view()
+        await interaction.followup.send(embed=paginacao.embeds[0], view=view)
+    """
+    def __init__(self, embeds: list, titulo: str = "Página", timeout: int = 180):
+        self.embeds = embeds
+        self.titulo = titulo
+        self.timeout = timeout
+        self.pagina_atual = 0
+        self.total_paginas = len(embeds)
+
+    def view(self):
+        return PaginacaoView(self)
+
+
+class PaginacaoView(discord.ui.View):
+    """View com botões de navegação para paginação."""
+    def __init__(self, paginacao: Paginacao):
+        super().__init__(timeout=paginacao.timeout)
+        self.paginacao = paginacao
+        self._atualizar_botoes()
+
+    def _atualizar_botoes(self):
+        self.clear_items()
+        p = self.paginacao
+
+        # Botão Início
+        btn_inicio = discord.ui.Button(
+            label="Início",
+            emoji=EmojisUX.INICIO,
+            style=discord.ButtonStyle.secondary,
+            disabled=(p.pagina_atual == 0),
+            row=0
+        )
+        btn_inicio.callback = self.ir_inicio
+        self.add_item(btn_inicio)
+
+        # Botão Anterior
+        btn_anterior = discord.ui.Button(
+            label="Anterior",
+            emoji=EmojisUX.ANTERIOR,
+            style=discord.ButtonStyle.primary,
+            disabled=(p.pagina_atual == 0),
+            row=0
+        )
+        btn_anterior.callback = self.ir_anterior
+        self.add_item(btn_anterior)
+
+        # Botão Indicador
+        btn_indicador = discord.ui.Button(
+            label=f"{p.pagina_atual + 1}/{p.total_paginas}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+            row=0
+        )
+        self.add_item(btn_indicador)
+
+        # Botão Próximo
+        btn_proximo = discord.ui.Button(
+            label="Próximo",
+            emoji=EmojisUX.PROXIMO,
+            style=discord.ButtonStyle.primary,
+            disabled=(p.pagina_atual >= p.total_paginas - 1),
+            row=0
+        )
+        btn_proximo.callback = self.ir_proximo
+        self.add_item(btn_proximo)
+
+        # Botão Fim
+        btn_fim = discord.ui.Button(
+            label="Fim",
+            emoji=EmojisUX.FIM,
+            style=discord.ButtonStyle.secondary,
+            disabled=(p.pagina_atual >= p.total_paginas - 1),
+            row=0
+        )
+        btn_fim.callback = self.ir_fim
+        self.add_item(btn_fim)
+
+        # Botão Fechar
+        btn_fechar = discord.ui.Button(
+            label="Fechar",
+            emoji=EmojisUX.FECHAR,
+            style=discord.ButtonStyle.danger,
+            row=1
+        )
+        btn_fechar.callback = self.fechar
+        self.add_item(btn_fechar)
+
+    async def ir_inicio(self, interaction: discord.Interaction):
+        self.paginacao.pagina_atual = 0
+        self._atualizar_botoes()
+        await interaction.response.edit_message(
+            embed=self.paginacao.embeds[0],
+            view=self
+        )
+
+    async def ir_anterior(self, interaction: discord.Interaction):
+        if self.paginacao.pagina_atual > 0:
+            self.paginacao.pagina_atual -= 1
+        self._atualizar_botoes()
+        await interaction.response.edit_message(
+            embed=self.paginacao.embeds[self.paginacao.pagina_atual],
+            view=self
+        )
+
+    async def ir_proximo(self, interaction: discord.Interaction):
+        if self.paginacao.pagina_atual < self.paginacao.total_paginas - 1:
+            self.paginacao.pagina_atual += 1
+        self._atualizar_botoes()
+        await interaction.response.edit_message(
+            embed=self.paginacao.embeds[self.paginacao.pagina_atual],
+            view=self
+        )
+
+    async def ir_fim(self, interaction: discord.Interaction):
+        self.paginacao.pagina_atual = self.paginacao.total_paginas - 1
+        self._atualizar_botoes()
+        await interaction.response.edit_message(
+            embed=self.paginacao.embeds[self.paginacao.pagina_atual],
+            view=self
+        )
+
+    async def fechar(self, interaction: discord.Interaction):
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+
+
+# =========================================================
+# F.7 — FUNÇÃO PARA ENVIAR EMBEDS PAGINADOS
+# =========================================================
+async def enviar_paginado(interaction: discord.Interaction, embeds: list, titulo: str = "Página", ephemeral: bool = True):
+    """
+    Envia uma lista de embeds com paginação.
+
+    Uso:
+        await enviar_paginado(interaction, lista_de_embeds, "Relatório de Vendas")
+    """
+    if not embeds:
+        await interaction.followup.send("📭 Nenhum dado para exibir.", ephemeral=ephemeral)
+        return
+
+    if len(embeds) == 1:
+        await interaction.followup.send(embed=embeds[0], ephemeral=ephemeral)
+        return
+
+    paginacao = Paginacao(embeds, titulo=titulo)
+    view = paginacao.view()
+    await interaction.followup.send(embed=embeds[0], view=view, ephemeral=ephemeral)
+
+
+# =========================================================
+# F.8 — FUNÇÃO PARA ADICIONAR RODAPÉ PADRÃO
+# =========================================================
+def com_rodape(embed: discord.Embed, texto: str = None):
+    """Adiciona rodapé padrão ao embed."""
+    if texto:
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {texto}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    else:
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y às %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    return embed
+
+
+# =========================================================
+# F.9 — FUNÇÃO PARA FORMATAR LISTA EM COLUNAS
+# =========================================================
+def formatar_lista_colunas(itens: list, titulo: str = "", largura: int = 2):
+    """
+    Formata uma lista em colunas para usar em embeds.
+
+    Exemplo:
+        formatar_lista_colunas(["item1", "item2", "item3", "item4"])
+        # Retorna: "1. item1          2. item2\n3. item3          4. item4"
+    """
+    if not itens:
+        return "Nenhum item."
+
+    resultado = ""
+    for i in range(0, len(itens), largura):
+        linha = itens[i:i+largura]
+        linha_texto = ""
+        for j, item in enumerate(linha):
+            numero = i + j + 1
+            linha_texto += f"**{numero}.** {item}"
+            if j < len(linha) - 1:
+                linha_texto += " " * 10
+        resultado += linha_texto + "\n"
+
+    return resultado
+
+
+# =========================================================
+# F.10 — BARRA DE PROGRESSO PADRONIZADA
+# =========================================================
+def barra_progresso_ux(pct: float, tamanho: int = 20) -> str:
+    """
+    Barra de progresso com cores:
+    🟢 < 50%  |  🟡 < 80%  |  🔴 >= 80%
+    """
+    pct = max(0, min(1, pct))
+    preenchido = int(pct * tamanho)
+    vazio = tamanho - preenchido
+
+    if pct < 0.5:
+        emoji = "🟢"
+    elif pct < 0.8:
+        emoji = "🟡"
+    else:
+        emoji = "🔴"
+
+    return f"{emoji} `{'█' * preenchido}{'░' * vazio}` **{int(pct * 100)}%**"
+
+
+# =========================================================
+# F.11 — FUNÇÃO AUXILIAR: EMBED DE SUCESSO
+# =========================================================
+def embed_sucesso(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
+    """Embed padrão de sucesso (verde com ✅)."""
+    return embed_padrao(
+        titulo=titulo,
+        descricao=descricao,
+        cor=CoresUX.SUCESSO,
+        emoji=EmojisUX.SUCESSO,
+        autor=autor
+    )
+
+
+# =========================================================
+# F.12 — FUNÇÃO AUXILIAR: EMBED DE ERRO
+# =========================================================
+def embed_erro(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
+    """Embed padrão de erro (vermelho com ❌)."""
+    return embed_padrao(
+        titulo=titulo,
+        descricao=descricao,
+        cor=CoresUX.ERRO,
+        emoji=EmojisUX.ERRO,
+        autor=autor
+    )
+
+
+# =========================================================
+# F.13 — FUNÇÃO AUXILIAR: EMBED DE AVISO
+# =========================================================
+def embed_aviso(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
+    """Embed padrão de aviso (amarelo com ⚠️)."""
+    return embed_padrao(
+        titulo=titulo,
+        descricao=descricao,
+        cor=CoresUX.AVISO,
+        emoji=EmojisUX.AVISO,
+        autor=autor
+    )
+
+
+# =========================================================
+# F.14 — FUNÇÃO AUXILIAR: EMBED DE INFO
+# =========================================================
+def embed_info(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
+    """Embed padrão de informação (azul com ℹ️)."""
+    return embed_padrao(
+        titulo=titulo,
+        descricao=descricao,
+        cor=CoresUX.INFO,
+        emoji=EmojisUX.INFO,
+        autor=autor
+    )
 # =========================================================
 # ==================== PARTE 19: COMANDOS =================
 # =========================================================
