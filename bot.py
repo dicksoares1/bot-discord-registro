@@ -740,16 +740,18 @@ async def inicializar_tabelas(pool):
             )
         """)
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS pontos_mecanica (
-                id SERIAL PRIMARY KEY,
-                user_id VARCHAR(30) NOT NULL,
-                entrada TIMESTAMP NOT NULL,
-                saida TIMESTAMP,
-                tempo_segundos BIGINT DEFAULT 0,
+            CREATE TABLE IF NOT EXISTS paineis_ultimos (
+                nome VARCHAR(50) PRIMARY KEY,
+                canal_id VARCHAR(30) NOT NULL,
+                mensagem_id VARCHAR(30) NOT NULL,
                 ativo BOOLEAN DEFAULT true,
-                data_criacao TIMESTAMP DEFAULT NOW()
+                data_atualizacao TIMESTAMP DEFAULT NOW()
             )
         """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_paineis_ultimos_canal ON paineis_ultimos(canal_id)
+        """)
+
                  
         # =========================================================
         # TABELA: HISTÓRICO DE HORAS (MECÂNICA)
@@ -13526,6 +13528,101 @@ async def setup_status():
     if not atualizar_status.is_running():
         atualizar_status.start()
 
+# =========================================================
+# SISTEMA GLOBAL: PAINEL SEMPRE POR ÚLTIMO
+# =========================================================
+# Toda vez que um painel é enviado, ele é registrado
+# como "painel a ser fixado no final" desse canal.
+# =========================================================
+
+async def registrar_painel_ultimo(nome, canal_id, mensagem_id):
+    """Registra um painel para ser sempre mantido no final do canal."""
+    pool = await get_pool()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO paineis_ultimos (nome, canal_id, mensagem_id, ativo, data_atualizacao)
+                   VALUES ($1, $2, $3, true, NOW())
+                   ON CONFLICT (nome) DO UPDATE SET
+                       canal_id = $2,
+                       mensagem_id = $3,
+                       ativo = true,
+                       data_atualizacao = NOW()""",
+                nome, str(canal_id), str(mensagem_id)
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao registrar painel último: {e}")
+
+
+async def buscar_paineis_do_canal(canal_id):
+    """Retorna todos os painéis ativos de um canal."""
+    pool = await get_pool()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT * FROM paineis_ultimos WHERE canal_id = $1 AND ativo = true",
+                str(canal_id)
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar painéis do canal: {e}")
+        return []
+
+
+async def mover_painel_para_final(nome, canal, mensagem_id_antiga):
+    """
+    Move um painel para o final do canal:
+    1. Deleta a mensagem antiga
+    2. Reenvia no final
+    3. Atualiza o ID no banco
+    """
+    try:
+        # 1. Busca a mensagem antiga
+        mensagem_antiga = None
+        try:
+            mensagem_antiga = await canal.fetch_message(int(mensagem_id_antiga))
+        except discord.NotFound:
+            pass
+        except Exception as e:
+            logger.error(f"❌ Erro ao buscar msg antiga do painel {nome}: {e}")
+
+        # 2. Salva o embed/view da mensagem antiga ANTES de deletar
+        embed_salvo = None
+        view_salva = None
+        if mensagem_antiga:
+            if mensagem_antiga.embeds:
+                embed_salvo = mensagem_antiga.embeds[0]
+            # View não dá pra salvar (custom_id), vamos recriar
+            # Vamos criar uma view neutra que será revalidada
+
+        # 3. Deleta a mensagem antiga
+        if mensagem_antiga:
+            try:
+                await mensagem_antiga.delete()
+            except Exception as e:
+                logger.error(f"❌ Erro ao deletar msg antiga do painel {nome}: {e}")
+
+        # 4. Se não conseguiu salvar o embed, avisa
+        if not embed_salvo:
+            logger.warning(f"⚠️ Não foi possível salvar o embed do painel {nome}")
+            return
+
+        # 5. Reenvia o painel no final
+        # Precisamos saber qual view usar — vamos tentar buscar pelo "tipo"
+        # Por padrão, reenvia só o embed. Views específicas precisam ser re-criadas.
+        nova_msg = await safe_request(canal.send, embed=embed_salvo)
+
+        # 6. Atualiza o ID no banco
+        if nova_msg:
+            await registrar_painel_ultimo(nome, canal.id, nova_msg.id)
+            logger.info(f"🔄 Painel '{nome}' movido para o final do canal {canal.name}")
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao mover painel {nome}: {e}")
+
 async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
     canal = bot.get_channel(canal_id)
     if not canal:
@@ -13536,20 +13633,42 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
         logger.error(f"❌ Banco de dados não disponível para painel: {nome}")
         return
     try:
+        # =========================================================
+        # BUSCAR PAINEL EXISTENTE
+        # =========================================================
         async with pool.acquire() as conn:
             row = await conn.fetchrow("SELECT mensagem_id, canal_id FROM paineis WHERE nome=$1", nome)
-            if row:
-                try:
-                    canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
-                    msg = await safe_fetch_message(canal_salvo, int(row["mensagem_id"]))
-                    if msg:
-                        await msg.edit(embed=embed, view=view)
-                        return
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao atualizar painel {nome}: {e}")
-            msg = await safe_request(canal.send, embed=embed, view=view)
-            if msg:
-                await conn.execute("INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ($1,$2,$3) ON CONFLICT (nome) DO UPDATE SET canal_id=$2, mensagem_id=$3", nome, str(canal_id), str(msg.id))
+
+        msg = None
+        if row:
+            try:
+                canal_salvo = bot.get_channel(int(row["canal_id"])) or canal
+                msg = await safe_fetch_message(canal_salvo, int(row["mensagem_id"]))
+            except Exception as e:
+                logger.warning(f"⚠️ Erro ao buscar painel {nome}: {e}")
+                msg = None
+
+        # =========================================================
+        # SE EXISTE, EDITA
+        # =========================================================
+        if msg:
+            await msg.edit(embed=embed, view=view)
+            # Registra como painel "fixo no final"
+            await registrar_painel_ultimo(nome, canal_id, msg.id)
+            return
+
+        # =========================================================
+        # SE NÃO EXISTE, CRIA
+        # =========================================================
+        msg = await safe_request(canal.send, embed=embed, view=view)
+        if msg:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ($1,$2,$3) ON CONFLICT (nome) DO UPDATE SET canal_id=$2, mensagem_id=$3",
+                    nome, str(canal_id), str(msg.id)
+                )
+            # Registra como painel "fixo no final"
+            await registrar_painel_ultimo(nome, canal_id, msg.id)
     except Exception as e:
         logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
 
@@ -16570,10 +16689,21 @@ async def enviar_paineis_iniciais(guild):
 
 @bot.event
 async def on_message(message: discord.Message):
+    # =========================================================
+    # IGNORAR XISpy
+    # =========================================================
     if message.author.id == 1100419913971150868:
         return
+
+    # =========================================================
+    # IGNORAR BOTS
+    # =========================================================
     if message.author.bot:
         return
+
+    # =========================================================
+    # SISTEMA DE METAS: fixar painel no final
+    # =========================================================
     canal = message.channel
     if isinstance(canal, discord.TextChannel):
         for uid, dados in list(metas_cache.items()):
@@ -16582,11 +16712,155 @@ async def on_message(message: discord.Message):
                     await asyncio.sleep(2)
                     await fixar_painel_meta_no_final(int(uid))
                 except Exception as e:
-                    logger.error(f"Erro ao fixar painel: {e}")
+                    logger.error(f"Erro ao fixar painel de meta: {e}")
                 break
+
+    # =========================================================
+    # SISTEMA GLOBAL: PAINEL SEMPRE POR ÚLTIMO
+    # Verifica se o canal tem painel(is) fixo(s) no final
+    # Se sim, move o painel pra depois da mensagem enviada
+    # =========================================================
+    if isinstance(canal, discord.TextChannel):
+        try:
+            await verificar_e_mover_paineis(canal)
+        except Exception as e:
+            logger.error(f"❌ Erro ao mover painéis do canal {canal.name}: {e}")
+
+    # =========================================================
+    # SISTEMA DE LAVAGEM
+    # =========================================================
     await on_message_lavagem(message)
+
+    # =========================================================
+    # PROCESSAR COMANDOS
+    # =========================================================
     await bot.process_commands(message)
 
+
+# =========================================================
+# FUNÇÃO: VERIFICAR E MOVER PAINÉIS
+# =========================================================
+async def verificar_e_mover_paineis(canal):
+    """
+    Verifica se o canal tem painéis fixos.
+    Se a última mensagem NÃO for o painel, move os painéis para o final.
+    """
+    paineis = await buscar_paineis_do_canal(canal.id)
+    if not paineis:
+        return
+
+    # Espera um pouco pra garantir que a mensagem foi processada
+    await asyncio.sleep(1.5)
+
+    # Pega a última mensagem do canal
+    ultima_msg = None
+    async for msg in canal.history(limit=1):
+        ultima_msg = msg
+        break
+
+    if not ultima_msg:
+        return
+
+    # Verifica se a última mensagem JÁ É um dos painéis
+    ids_paineis = [int(p["mensagem_id"]) for p in paineis]
+    if ultima_msg.id in ids_paineis:
+        # Já está no final, não faz nada
+        return
+
+    # =========================================================
+    # A ÚLTIMA MENSAGEM NÃO É UM PAINEL
+    # Então vamos mover os painéis para o final
+    # =========================================================
+    for painel in paineis:
+        nome = painel["nome"]
+        msg_id = int(painel["mensagem_id"])
+
+        try:
+            msg = await safe_fetch_message(canal, msg_id)
+            if not msg:
+                continue
+
+            # Salva o embed
+            embed_salvo = None
+            if msg.embeds:
+                embed_salvo = msg.embeds[0]
+
+            # Deleta a mensagem antiga
+            try:
+                await msg.delete()
+            except Exception as e:
+                logger.warning(f"⚠️ Erro ao deletar painel antigo {nome}: {e}")
+
+            # Reenvia (só embed — view tem custom_id fixo, será restaurada depois pelo restaurar_botoes)
+            if embed_salvo:
+                # Recria a view correta baseada no nome do painel
+                view_nova = criar_view_por_painel(nome)
+                nova_msg = await safe_request(canal.send, embed=embed_salvo, view=view_nova)
+
+                if nova_msg:
+                    # Atualiza ID no banco
+                    await registrar_painel_ultimo(nome, canal.id, nova_msg.id)
+                    # Atualiza também na tabela paineis
+                    pool = await get_pool()
+                    if pool:
+                        async with pool.acquire() as conn:
+                            await conn.execute(
+                                "UPDATE paineis SET mensagem_id = $1 WHERE nome = $2",
+                                str(nova_msg.id), nome
+                            )
+                    # Salva botão persistente se for o caso
+                    await BotaoPersistente.salvar_botao(nova_msg.id, canal.id, "painel", {"nome": nome})
+                    logger.info(f"🔄 Painel '{nome}' movido para o final")
+        except Exception as e:
+            logger.error(f"❌ Erro ao mover painel {nome}: {e}")
+
+
+def criar_view_por_painel(nome):
+    """Retorna a view correta baseada no nome do painel."""
+    if nome == "painel_registro":
+        return RegistroView()
+    elif nome == "painel_avisos":
+        return AvisosView()
+    elif nome == "painel_ausencia":
+        return AusenciaUnificadoView()
+    elif nome == "painel_lavagem":
+        return LavagemView()
+    elif nome == "painel_lives":
+        return PainelLivesUnicoView()
+    elif nome == "painel_polvora":
+        return PolvoraView()
+    elif nome == "painel_bau":
+        return BauView()
+    elif nome == "painel_armas":
+        return ArmasView()
+    elif nome == "painel_vendas":
+        return CalculadoraView()
+    elif nome == "painel_fabricacao":
+        return FabricacaoView()
+    elif nome == "painel_relatorio_financeiro":
+        return RelatorioFinanceiroView()
+    elif nome == "painel_auditoria":
+        return PainelAuditoriaView()
+    elif nome == "painel_mensagens":
+        return MenuMensagensView()
+    elif nome == "painel_solicitar_sala":
+        return SolicitarSalaView()
+    elif nome == "painel_registrar_compra":
+        return RegistrarCompraView()
+    elif nome == "painel_relatorio_metas":
+        # Painel de metas tem botões custom, criar view personalizada
+        view = discord.ui.View(timeout=None)
+        view.add_item(RelatorioMetasButton())
+        view.add_item(FecharMetasAutomaticoButton())
+        view.add_item(RelatorioHorasButton())
+        view.add_item(ResetarHorasSemanaButton())
+        return view
+    elif nome == "painel_grupos":
+        return None  # Grupos são recriados de outra forma
+    elif nome == "painel_acoes":
+        return PainelAcoesView()
+    return None
+    
 async def shutdown():
     logger.info("🔄 Iniciando shutdown gracioso...")
     global http_session
