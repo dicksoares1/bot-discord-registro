@@ -1324,21 +1324,19 @@ async def enviar_painel_registro():
         logger.error("❌ Canal registro não encontrado")
         return
 
-    embed = discord.Embed(
-        title="📋 ── REGISTRO VDR 442 ── 📋",
-        description="🛡 Sistema de Admissão • Vida Rasa",
-        color=0x1a1a2e,
-        timestamp=agora()
+    embed = embed_padrao(
+        titulo="REGISTRO VDR 442",
+        descricao="🛡 Sistema de Admissão • Vida Rasa",
+        cor=CoresUX.PRIMARIA,
+        emoji=EmojisUX.ESCUDO,
+        autor="Sistema de Registro"
     )
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    embed.set_author(
-        name="🛡 Vida Rasa 442 • Sistema de Registro",
-        icon_url=bot.user.display_avatar.url if bot.user else None
-    )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📌 ESCOLHA O TIPO DE ENTRADA",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "ESCOLHA O TIPO DE ENTRADA",
+        (
             "```yaml\n"
             "🕴️ AGREGADO  →  Para quem quer ser MEMBRO da facção\n"
             "              →  Terá acesso a todas as áreas\n"
@@ -1351,12 +1349,14 @@ async def enviar_painel_registro():
             "              →  Apenas para resenha e conversa\n"
             "```"
         ),
-        inline=False
+        emoji=EmojisUX.INFO, inline=False
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="⚠️ ATENÇÃO",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "ATENÇÃO",
+        (
             "🔴 **Agregado** - Você será um membro oficial da **Vida Rasa 442**\n"
             "   • Terá obrigações como metas semanais\n"
             "   • Participará de ações e produções\n"
@@ -1366,22 +1366,20 @@ async def enviar_painel_registro():
             "   • Sem obrigações de metas\n"
             "   • Pode ser promovido a Agregado depois"
         ),
-        inline=False
+        emoji=EmojisUX.AVISO, inline=False
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📋 COMO FUNCIONA",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "COMO FUNCIONA",
+        (
             "1️⃣ Clique em **'Fazer Registro'**\n"
             "2️⃣ Preencha seus dados (Passaporte, Nome, etc)\n"
             "3️⃣ Escolha entre **Agregado** ou **Amigo**\n"
             "4️⃣ Pronto! Você será liberado automaticamente"
         ),
-        inline=False
-    )
-    embed.set_footer(
-        text="🛡 Vida Rasa 442 • Sistema Automático de Registro",
-        icon_url=bot.user.display_avatar.url if bot.user else None
+        emoji=EmojisUX.INFO, inline=False
     )
 
     view = RegistroView()
@@ -1533,17 +1531,20 @@ async def enviar_painel_avisos():
     if not canal:
         logger.error(f"❌ Canal de criação de avisos não encontrado! ID: {CANAL_CRIAR_AVISOS_ID}")
         return
-    embed = discord.Embed(
-        title="🌟 ── SISTEMA DE AVISOS SUPREMO ── 🌟",
-        description="🔔 Crie avisos elegantes e profissionais para a facção",
-        color=0x1a1a2e,
-        timestamp=agora()
+
+    embed = embed_padrao(
+        titulo="SISTEMA DE AVISOS SUPREMO",
+        descricao="🔔 Crie avisos elegantes e profissionais para a facção",
+        cor=CoresUX.AVISO,
+        emoji=EmojisUX.AVISO,
+        autor="Sistema de Avisos"
     )
-    embed.set_author(name="🛡 Vida Rasa 442 • Sistema de Avisos", icon_url=bot.user.display_avatar.url if bot.user else None)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📋 COMO USAR",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "COMO USAR",
+        (
             "```yaml\n"
             "1️⃣ Selecione o canal no menu suspenso\n"
             "2️⃣ Preencha o título do aviso\n"
@@ -1558,20 +1559,22 @@ async def enviar_painel_avisos():
             "⚠️ APENAS: Gerentes, ADM, Cargo 01, Cargo 02\n"
             "```"
         ),
-        inline=False
+        emoji=EmojisUX.INFO, inline=False
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📌 CANAIS DISPONÍVEIS",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "CANAIS DISPONÍVEIS",
+        (
             "📢 **Vida Rasa** - Avisos gerais\n"
             "⚔️ **Ações** - Avisos de ações\n"
             "🛒 **Vendas** - Avisos de vendas\n"
             "🎯 **Metas** - Avisos de metas"
         ),
-        inline=False
+        emoji=EmojisUX.LOCAL, inline=False
     )
-    embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Avisos", icon_url=bot.user.display_avatar.url if bot.user else None)
+
     view = AvisosView()
     await enviar_ou_atualizar_painel("painel_avisos", CANAL_CRIAR_AVISOS_ID, embed, view)
 
@@ -1793,22 +1796,47 @@ async def enviar_painel_registrar_compra():
     if not canal:
         logger.error(f"❌ Canal de registrar compra não encontrado: {CANAL_REGISTRAR_COMPRA_ID}")
         return
-    embed = discord.Embed(
-        title="💰 REGISTRAR COMPRA",
-        description=(
-            "Clique no botão abaixo para registrar uma nova compra.\n\n"
-            "📋 **Informações necessárias:**\n"
-            "• 📦 Nome do produto\n"
-            "• 💰 Valor da compra\n\n"
-            "Após registrar, a compra aparecerá automaticamente no canal de registros."
-        ),
-        color=0x3498db
+
+    embed = embed_padrao(
+        titulo="REGISTRAR COMPRA",
+        descricao="💰 Registre as compras da facção • VDR 442",
+        cor=CoresUX.FINANCEIRO,
+        emoji=EmojisUX.DINHEIRO,
+        autor="Sistema Financeiro"
     )
-    embed.add_field(name="📌 EXEMPLO", value="**Produto:** Pólvora\n**Valor:** 50000", inline=False)
-    embed.set_footer(text="Todas as compras ficam salvas no banco de dados para relatórios futuros")
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "COMO USAR",
+        (
+            "```yaml\n"
+            "1️⃣ Clique em 'Registrar Nova Compra'\n"
+            "2️⃣ Informe o nome do produto\n"
+            "3️⃣ Informe o valor da compra\n"
+            "4️⃣ A compra é registrada no histórico\n"
+            "```"
+        ),
+        emoji=EmojisUX.INFO, inline=False
+    )
+
+    adicionar_campo(
+        embed, "EXEMPLO",
+        "**Produto:** Pólvora\n**Valor:** 50000",
+        emoji=EmojisUX.ARQUIVO, inline=False
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "OBSERVAÇÃO",
+        "Todas as compras ficam salvas no banco de dados para relatórios futuros.",
+        emoji=EmojisUX.AVISO, inline=False
+    )
+
     try:
         async for msg in canal.history(limit=10):
-            if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0 and msg.embeds[0].title == "💰 REGISTRAR COMPRA":
+            if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0 and "REGISTRAR COMPRA" in msg.embeds[0].title:
                 try:
                     await msg.delete()
                 except:
@@ -1822,29 +1850,59 @@ async def enviar_painel_relatorio_financeiro():
     if not canal:
         logger.error("❌ Canal de relatório financeiro não encontrado")
         return
-    embed = discord.Embed(
-        title="💰 RELATÓRIO FINANCEIRO",
-        description=(
-            "Clique no botão abaixo para gerar um relatório financeiro completo.\n\n"
-            "📋 **O relatório inclui:**\n"
-            "• 💣 Pólvora utilizada na produção\n"
-            "• 💰 Gasto total com pólvora\n"
-            "• 🛒 Total de vendas no período\n"
-            "• 📦 Gasto com embalagens (opcional)\n"
-            "• 📦 Outras compras registradas\n"
-            "• 📊 Saldo final (vendas - gastos)\n\n"
-            "📅 **Você pode escolher:**\n"
-            "• Data inicial e final\n"
-            "• Incluir ou não outras compras (SIM/NAO)"
+
+    embed = embed_padrao(
+        titulo="RELATÓRIO FINANCEIRO",
+        descricao="💰 Gere relatórios financeiros completos • VDR 442",
+        cor=CoresUX.FINANCEIRO,
+        emoji=EmojisUX.FINANCEIRO,
+        autor="Sistema Financeiro"
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "O RELATÓRIO INCLUI",
+        (
+            "💣 Pólvora utilizada na produção\n"
+            "💰 Gasto total com pólvora\n"
+            "🛒 Total de vendas no período\n"
+            "📦 Gasto com embalagens (opcional)\n"
+            "📦 Outras compras registradas\n"
+            "📊 Saldo final (vendas - gastos)"
         ),
-        color=0x1abc9c
+        emoji=EmojisUX.ESTATISTICA, inline=False
     )
-    embed.add_field(
-        name="📌 EXEMPLO DE PREENCHIMENTO",
-        value="**Data inicial:** `01/04/2026`\n**Data final:** `30/04/2026`\n**Incluir compras:** `SIM` (ou `NAO`)",
-        inline=False
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "VOCÊ PODE ESCOLHER",
+        (
+            "📅 Data inicial e final\n"
+            "📦 Incluir ou não outras compras (SIM/NAO)"
+        ),
+        emoji=EmojisUX.CALENDARIO, inline=False
     )
-    embed.set_footer(text="Os valores são calculados automaticamente com base no banco de dados")
+
+    adicionar_campo(
+        embed, "EXEMPLO DE PREENCHIMENTO",
+        (
+            "**Data inicial:** `01/04/2026`\n"
+            "**Data final:** `30/04/2026`\n"
+            "**Incluir compras:** `SIM` (ou `NAO`)"
+        ),
+        emoji=EmojisUX.ARQUIVO, inline=False
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "OBSERVAÇÃO",
+        "Os valores são calculados automaticamente com base no banco de dados.",
+        emoji=EmojisUX.AVISO, inline=False
+    )
+
     await enviar_ou_atualizar_painel("painel_relatorio_financeiro", CANAL_RELATORIO_FINANCEIRO_ID, embed, RelatorioFinanceiroView())
 
 # =========================================================
@@ -2053,18 +2111,20 @@ async def enviar_painel_ausencia():
     if not canal:
         logger.error(f"❌ Canal do botão NÃO ENCONTRADO! ID: {CANAL_BOTAO_AUSENCIA_ID}")
         return
-    embed = discord.Embed(
-        title="📋 ── SISTEMA DE AUSÊNCIA ── 📋",
-        description="🛡 VDR 442 • Gerenciamento de Ausências",
-        color=0xe67e22,
-        timestamp=agora()
+
+    embed = embed_padrao(
+        titulo="SISTEMA DE AUSÊNCIA",
+        descricao="🛡 Gerenciamento de Ausências • VDR 442",
+        cor=CoresUX.AUSENCIA,
+        emoji=EmojisUX.AUSENCIA,
+        autor="Sistema de Ausência"
     )
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    embed.set_author(name="🛡 Vida Rasa 442 • Sistema de Ausência", icon_url=bot.user.display_avatar.url if bot.user else None)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📝 SOLICITAR AUSÊNCIA",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "SOLICITAR AUSÊNCIA",
+        (
             "```yaml\n"
             "📌 Como usar:\n"
             "1️⃣ Digite seu nome completo\n"
@@ -2076,22 +2136,26 @@ async def enviar_painel_ausencia():
             "✅ Quando o período acabar, o cargo será removido\n"
             "```"
         ),
-        inline=False
+        emoji=EmojisUX.INFO, inline=False
     )
-    embed.add_field(
-        name="⚠️ AUSÊNCIAS PROLONGADAS",
-        value="🔴 **Ausências de 15 dias ou mais**\n   • Serão notificadas à gerência\n   • O membro deve ser removido do tablet",
-        inline=False
+
+    adicionar_campo(
+        embed, "AUSÊNCIAS PROLONGADAS",
+        "🔴 **Ausências de 15 dias ou mais**\n   • Serão notificadas à gerência\n   • O membro deve ser removido do tablet",
+        emoji=EmojisUX.AVISO, inline=False
     )
-    embed.add_field(
-        name="📅 EXEMPLO",
-        value="```yaml\n📌 Data INÍCIO: 10/04/2026\n📌 Data RETORNO: 15/04/2026\n(contando todos os dias entre 10 e 15)\n```",
-        inline=False
+
+    adicionar_campo(
+        embed, "EXEMPLO",
+        "```yaml\n📌 Data INÍCIO: 10/04/2026\n📌 Data RETORNO: 15/04/2026\n(contando todos os dias entre 10 e 15)\n```",
+        emoji=EmojisUX.CALENDARIO, inline=False
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="🔄 REMOVER AUSÊNCIA (RETORNO ANTECIPADO)",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "REMOVER AUSÊNCIA (RETORNO ANTECIPADO)",
+        (
             "```yaml\n"
             "📌 Clique no botão abaixo caso um membro tenha\n"
             "   retornado antes do previsto.\n"
@@ -2110,9 +2174,9 @@ async def enviar_painel_ausencia():
             "✅ O cargo 'Ausente' será removido imediatamente\n"
             "```"
         ),
-        inline=False
+        emoji=EmojisUX.INFO, inline=False
     )
-    embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Ausência", icon_url=bot.user.display_avatar.url if bot.user else None)
+
     view = AusenciaUnificadoView()
     await enviar_ou_atualizar_painel("painel_ausencia", CANAL_BOTAO_AUSENCIA_ID, embed, view)
     logger.info("✅ Painel de ausência unificado criado")
@@ -2372,22 +2436,25 @@ async def enviar_painel_lavagem():
     if not canal:
         logger.error("❌ Canal de lavagem não encontrado")
         return
+
     dados = await carregar_lavagens_db()
     total_lavagens = len(dados)
     total_repassado = sum(item["liquido"] for item in dados) if dados else 0
     total_sujo = sum(item["valor"] for item in dados) if dados else 0
-    embed = discord.Embed(
-        title="🧼 ── LAVAGEM DE DINHEIRO ── 🧼",
-        description="💰 Sistema Financeiro • VDR 442",
-        color=0x1a1a2e,
-        timestamp=agora()
+
+    embed = embed_padrao(
+        titulo="LAVAGEM DE DINHEIRO",
+        descricao="💰 Sistema Financeiro • VDR 442",
+        cor=CoresUX.FINANCEIRO,
+        emoji="🧼",
+        autor="Sistema de Lavagem"
     )
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    embed.set_author(name="🛡 Vida Rasa 442 • Sistema de Lavagem", icon_url=bot.user.display_avatar.url if bot.user else None)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📋 COMO FUNCIONA",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "COMO FUNCIONA",
+        (
             "```yaml\n"
             "1️⃣ Clique em 'Iniciar Lavagem'\n"
             "2️⃣ Informe o valor do dinheiro sujo\n"
@@ -2398,12 +2465,14 @@ async def enviar_painel_lavagem():
             "💵 RETORNO: 80% do valor informado\n"
             "```"
         ),
-        inline=False
+        emoji=EmojisUX.INFO, inline=False
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📊 ESTATÍSTICAS GERAIS",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "ESTATÍSTICAS GERAIS",
+        (
             f"```yaml\n"
             f"📋 Total de lavagens: {total_lavagens}\n"
             f"💰 Total de dinheiro sujo: {formatar_dinheiro(total_sujo)}\n"
@@ -2411,23 +2480,25 @@ async def enviar_painel_lavagem():
             f"📊 Taxa média: 20%\n"
             f"```"
         ),
-        inline=False
+        emoji=EmojisUX.ESTATISTICA, inline=False
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📌 OPÇÕES DISPONÍVEIS",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "OPÇÕES DISPONÍVEIS",
+        (
             "🧼 **Iniciar Lavagem** - Comece uma nova lavagem\n"
             "🧹 **Limpar Sala** - Remove todas as mensagens (ADM)\n"
             "📊 **Gerar Relatório** - Lista todas as lavagens\n"
             "📩 **Avisar DM** - Envia notificação para todos"
         ),
-        inline=False
+        emoji=EmojisUX.INFO, inline=False
     )
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+
     view = LavagemView()
     await enviar_ou_atualizar_painel("painel_lavagem", CANAL_INICIAR_LAVAGEM_ID, embed, view)
-
+    
 async def on_message_lavagem(message: discord.Message):
     if message.author.bot:
         return
@@ -2837,28 +2908,52 @@ async def enviar_painel_lives():
     if not canal:
         logger.error("❌ Canal cadastro live não encontrado")
         return
-    embed = discord.Embed(
-        title="🎥 SISTEMA DE LIVES",
-        description=(
-            "**Gerencie suas lives de forma simples e rápida!**\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🟣 **TWITCH - AUTOMÁTICO**\n"
-            "• Cadastre sua live **uma única vez**\n"
-            "• Quando entrar ao vivo, o bot **anuncia automaticamente**\n"
-            "• Você não precisa fazer mais nada!\n\n"
-            "🟢 **KICK / TIKTOK / YOUTUBE - MANUAL**\n"
-            "• **Toda vez** que for começar a live, publique manualmente\n"
-            "• Preencha as informações e clique em 'Publicar Live'\n"
-            "• O anúncio vai imediatamente para o canal de divulgação\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "📢 **Todas as lives vão para:** <#1243325102917943335>\n"
-            "⚠️ **Importante:** O link deve ser válido e acessível!"
-        ),
-        color=0x9146FF,
-        timestamp=agora()
+
+    embed = embed_padrao(
+        titulo="SISTEMA DE LIVES",
+        descricao="🎥 Gerencie suas lives de forma simples e rápida!",
+        cor=CoresUX.LIVE,
+        emoji=EmojisUX.LIVE,
+        autor="Sistema de Lives"
     )
-    embed.set_thumbnail(url="https://www.twitch.tv/favicon.ico")
-    embed.set_footer(text="Vida Rasa • Sistema de Lives")
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "TWITCH - AUTOMÁTICO",
+        (
+            "```yaml\n"
+            "• Cadastre sua live UMA ÚNICA VEZ\n"
+            "• Quando entrar ao vivo, o bot anuncia automaticamente\n"
+            "• Você não precisa fazer mais nada!\n"
+            "```"
+        ),
+        emoji="🟣", inline=False
+    )
+
+    adicionar_campo(
+        embed, "KICK / TIKTOK / YOUTUBE - MANUAL",
+        (
+            "```yaml\n"
+            "• TODA VEZ que for começar a live, publique manualmente\n"
+            "• Preencha as informações e clique em 'Publicar Live'\n"
+            "• O anúncio vai imediatamente para o canal de divulgação\n"
+            "```"
+        ),
+        emoji="🟢", inline=False
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "IMPORTANTE",
+        (
+            f"📢 **Todas as lives vão para:** <#{CANAL_DIVULGACAO_LIVE_ID}>\n"
+            "⚠️ **O link deve ser válido e acessível!**"
+        ),
+        emoji=EmojisUX.AVISO, inline=False
+    )
+
     try:
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
@@ -5061,14 +5156,20 @@ async def enviar_painel_acoes(guild):
     if not pool:
         return
 
+    # =========================================================
+    # BUSCAR DADOS (mesmo comportamento de antes)
+    # =========================================================
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT tipo, COUNT(*) as qtd FROM acoes_semana WHERE status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu') AND data > NOW() - INTERVAL '7 days' GROUP BY tipo")
     feitas = {r["tipo"]: r["qtd"] for r in rows}
 
-    descricao = "**📊 AÇÕES DA SEMANA - POR CATEGORIA**\n\n"
     total_geral_feitas = 0
     total_geral_meta = 0
+    texto_categorias = ""
 
+    # =========================================================
+    # BAHAMAS (ações específicas + grupo compartilhado)
+    # =========================================================
     texto_bahamas = ""
     for acao, limite in LIMITES_ACOES_ESPECIFICOS.items():
         if "Bahamas" in acao or "Museu" in acao:
@@ -5090,8 +5191,11 @@ async def enviar_painel_acoes(guild):
         total_geral_meta += limite
 
     if texto_bahamas:
-        descricao += f"**🏝️ BAHAMAS**\n{texto_bahamas}\n"
+        texto_categorias += f"**🏝️ BAHAMAS**\n{texto_bahamas}\n"
 
+    # =========================================================
+    # OUTRAS CATEGORIAS
+    # =========================================================
     for categoria, dados in CATEGORIAS_ACOES.items():
         if categoria == "Bahamas":
             continue
@@ -5101,21 +5205,48 @@ async def enviar_painel_acoes(guild):
         qtd_feita = sum(feitas.get(acao, 0) for acao in acoes)
         total_geral_feitas += qtd_feita
         if limite is None:
-            descricao += f"**{emoji} {categoria}:** {qtd_feita} realizadas (ILIMITADO)\n"
+            texto_categorias += f"**{emoji} {categoria}:** {qtd_feita} realizadas (ILIMITADO)\n"
         else:
             total_geral_meta += limite
             restante = max(0, limite - qtd_feita)
             status = "✅ COMPLETO" if qtd_feita >= limite else f"⏳ {restante} restantes"
-            descricao += f"**{emoji} {categoria}:** {qtd_feita}/{limite} - {status}\n"
+            texto_categorias += f"**{emoji} {categoria}:** {qtd_feita}/{limite} - {status}\n"
 
+    # =========================================================
+    # PROGRESSO GERAL
+    # =========================================================
+    texto_progresso = ""
     if total_geral_meta > 0:
         porcentagem = int((total_geral_feitas / total_geral_meta) * 100)
-        barra_progresso = "▓" * (porcentagem // 5) + "░" * (20 - (porcentagem // 5))
-        descricao += f"\n**📊 PROGRESSO GERAL:** {porcentagem}% {barra_progresso}"
-        descricao += f"\n{total_geral_feitas}/{total_geral_meta} ações realizadas"
+        barra = barra_progresso_ux(porcentagem / 100)
+        texto_progresso = f"\n{barra}\n{total_geral_feitas}/{total_geral_meta} ações realizadas"
 
-    embed = discord.Embed(title="📊 AÇÕES DA SEMANA", description=descricao, color=0x2ecc71, timestamp=agora())
-    embed.set_footer(text=f"Atualizado em {agora().strftime('%d/%m/%Y %H:%M')}")
+    # =========================================================
+    # CRIAR EMBED PADRONIZADO
+    # =========================================================
+    embed = embed_padrao(
+        titulo="AÇÕES DA SEMANA",
+        descricao="⚔️ Escalações e limite de ações • VDR 442",
+        cor=CoresUX.ACAO,
+        emoji=EmojisUX.ACAO,
+        autor="Sistema de Ações"
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "POR CATEGORIA",
+        f"{texto_categorias or 'Nenhuma ação registrada'}",
+        emoji=EmojisUX.ESTATISTICA, inline=False
+    )
+
+    if texto_progresso:
+        adicionar_separador(embed)
+        adicionar_campo(
+            embed, "PROGRESSO GERAL",
+            f"```yaml\n{texto_progresso}\n```",
+            emoji=EmojisUX.GRAFICO, inline=False
+        )
 
     view = PainelAcoesView()
     await enviar_ou_atualizar_painel("painel_acoes", CANAL_ESCALACOES_ID, embed, view)
@@ -6874,31 +7005,44 @@ async def enviar_painel_vendas():
     if not canal:
         logger.error("❌ Canal de vendas não encontrado")
         return
+
     estoque = await carregar_estoque()
-    embed = discord.Embed(
-        title="💀 ── PAINEL DE VENDAS ── 💀",
-        description="🛒 Sistema de Encomendas • VDR 442",
-        color=0x1a1a2e,
-        timestamp=agora()
+
+    embed = embed_padrao(
+        titulo="PAINEL DE VENDAS",
+        descricao="🛒 Sistema de Encomendas • VDR 442",
+        cor=CoresUX.VENDA,
+        emoji="💀",
+        autor="Sistema de Vendas"
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name="⚠️ ATENÇÃO", value="🔴 Antes de entregar um pedido, verifique o ESTOQUE disponível!", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📦 ESTOQUE DISPONÍVEL",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "ATENÇÃO",
+        "🔴 Antes de entregar um pedido, verifique o ESTOQUE disponível!",
+        emoji=EmojisUX.AVISO, inline=False
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "ESTOQUE DISPONÍVEL",
+        (
             f"🔫 PT   →  **{fmt_num(estoque['PT'])}** pacotes  ({fmt_num(estoque['PT'] * 50)} munições)\n"
             f"🔫 SUB  →  **{fmt_num(estoque['SUB'])}** pacotes  ({fmt_num(estoque['SUB'] * 50)} munições)"
         ),
-        inline=False
+        emoji="📦", inline=False
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📌 OPÇÕES DISPONÍVEIS",
-        value="[📝 Registrar Venda]\n[🔄 Atualizar Estoque]",
-        inline=False
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "OPÇÕES DISPONÍVEIS",
+        "[📝 Registrar Venda]\n[🔄 Atualizar Estoque]",
+        emoji=EmojisUX.INFO, inline=False
     )
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+
     view = CalculadoraView()
     await enviar_ou_atualizar_painel("painel_vendas", CANAL_VENDAS_ID, embed, view)
 
@@ -8500,14 +8644,31 @@ async def enviar_painel_fabricacao():
     if not canal:
         logger.error("❌ Canal de fabricação não encontrado")
         return
+
+    # =========================================================
+    # CARREGAR DADOS (mesmo comportamento de antes)
+    # =========================================================
     estoque_municoes = await carregar_estoque()
     estoque_insumos = await carregar_estoque_insumos()
     estoque_polvora = await carregar_estoque_polvora()
     alugueis = await carregar_alugueis()
-    embed = discord.Embed(title="🛢️ ── PAINEL DE FABRICAÇÃO ── 🛢️", description="🔫 Sistema de Produção • VDR 442", color=Cores.PRODUCAO, timestamp=agora())
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    embed.set_author(name="🛡 Vida Rasa 442 • Sistema de Produção", icon_url=bot.user.display_avatar.url if bot.user else None)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # =========================================================
+    # CRIAR EMBED PADRONIZADO
+    # =========================================================
+    embed = embed_padrao(
+        titulo="PAINEL DE FABRICAÇÃO",
+        descricao="🏭 Sistema de Produção • VDR 442",
+        cor=CoresUX.PRODUCAO,
+        emoji="🛢️",
+        autor="Sistema de Produção"
+    )
+
+    adicionar_separador(embed)
+
+    # =========================================================
+    # ALUGUEL DE GALPÕES
+    # =========================================================
     texto_alugueis = ""
     for galpao, dados in alugueis.items():
         dias = dados["dias"]
@@ -8522,25 +8683,60 @@ async def enviar_painel_fabricacao():
         else:
             status = "⚪ NÃO ALUGADO"
         texto_alugueis += f"🏭 {galpao}  →  {dias} dias  ({status})\n"
-    embed.add_field(name="📅 ALUGUEL DE GALPÕES", value=f"```yaml\n{texto_alugueis or 'Nenhum aluguel registrado'}\n```", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="🔫 ESTOQUE DE MUNIÇÕES",
-        value=f"🔫 PT   →  **{fmt_num(estoque_municoes['PT'])}** pacotes  ({fmt_num(estoque_municoes['PT'] * 50)} munições)\n🔫 SUB  →  **{fmt_num(estoque_municoes['SUB'])}** pacotes  ({fmt_num(estoque_municoes['SUB'] * 50)} munições)",
-        inline=True
+
+    adicionar_campo(
+        embed, "ALUGUEL DE GALPÕES",
+        f"```yaml\n{texto_alugueis or 'Nenhum aluguel registrado'}\n```",
+        emoji=EmojisUX.CALENDARIO, inline=False
     )
-    embed.add_field(
-        name="💊 ESTOQUE DE INSUMOS",
-        value=f"💊 Cápsulas     →  **{fmt_num(estoque_insumos['capsulas'])}** unidades\n📦 Embalagens   →  **{fmt_num(estoque_insumos['embalagens'])}** unidades\n🧨 Pólvora      →  **{fmt_num(estoque_polvora)}** unidades",
-        inline=True
+
+    adicionar_separador(embed)
+
+    # =========================================================
+    # ESTOQUE (2 colunas: Munições e Insumos)
+    # =========================================================
+    adicionar_campo(
+        embed, "ESTOQUE DE MUNIÇÕES",
+        (
+            f"🔫 PT   →  **{fmt_num(estoque_municoes['PT'])}** pacotes  ({fmt_num(estoque_municoes['PT'] * 50)} munições)\n"
+            f"🔫 SUB  →  **{fmt_num(estoque_municoes['SUB'])}** pacotes  ({fmt_num(estoque_municoes['SUB'] * 50)} munições)"
+        ),
+        emoji="🔫", inline=True
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="🏭 PRODUÇÃO DE CÁPSULAS",
-        value="```yaml\n🟢 GALPÕES NORTE  →  65 min (3 galpões)\n🟢 GALPÕES SUL    →  130 min (3 galpões)\n\n💡 INFORME:\n   • Quantos galpões (1, 2 ou 3)\n   • Pólvora por galpão\n```",
-        inline=False
+
+    adicionar_campo(
+        embed, "ESTOQUE DE INSUMOS",
+        (
+            f"💊 Cápsulas     →  **{fmt_num(estoque_insumos['capsulas'])}** unidades\n"
+            f"📦 Embalagens   →  **{fmt_num(estoque_insumos['embalagens'])}** unidades\n"
+            f"🧨 Pólvora      →  **{fmt_num(estoque_polvora)}** unidades"
+        ),
+        emoji="💊", inline=True
     )
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+    adicionar_separador(embed)
+
+    # =========================================================
+    # INFORMAÇÕES DE PRODUÇÃO
+    # =========================================================
+    adicionar_campo(
+        embed, "PRODUÇÃO DE CÁPSULAS",
+        (
+            "```yaml\n"
+            "🟢 GALPÕES NORTE  →  65 min (3 galpões)\n"
+            "🟢 GALPÕES SUL    →  130 min (3 galpões)\n"
+            "\n"
+            "💡 INFORME:\n"
+            "   • Quantos galpões (1, 2 ou 3)\n"
+            "   • Pólvora por galpão\n"
+            "```"
+        ),
+        emoji="🏭", inline=False
+    )
+
+    # =========================================================
+    # ENVIAR PAINEL
+    # =========================================================
     view = FabricacaoView()
     try:
         async for msg in canal.history(limit=20):
@@ -8553,20 +8749,55 @@ async def enviar_painel_fabricacao():
         await canal.send(embed=embed, view=view)
     except Exception as e:
         logger.error(f"❌ Erro ao enviar painel de fabricação: {e}")
-
+        
 async def enviar_painel_polvoras():
     canal = bot.get_channel(CANAL_CALCULO_POLVORA_ID)
     if not canal:
         logger.error("❌ Canal de pólvora não encontrado")
         return
-    embed = discord.Embed(
-        title="💣 Registro de Pólvora",
-        description=f"**Clique no botão abaixo para registrar a compra de pólvora.**\n\n📌 **Informe apenas a quantidade comprada.**\n💰 O valor será calculado automaticamente (R$ {PRECO_POLVORA:.2f} por unidade).",
-        color=0xe67e22
+
+    embed = embed_padrao(
+        titulo="REGISTRO DE PÓLVORA",
+        descricao="🧨 Registre a compra de pólvora • VDR 442",
+        cor=CoresUX.PRODUCAO,
+        emoji=EmojisUX.POLVORA,
+        autor="Sistema de Pólvora"
     )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "COMO REGISTRAR",
+        (
+            "```yaml\n"
+            "1️⃣ Clique em 'Registrar Compra de Pólvora'\n"
+            "2️⃣ Informe apenas a quantidade comprada\n"
+            "3️⃣ O valor é calculado automaticamente\n"
+            "4️⃣ A pólvora é adicionada ao estoque\n"
+            "```"
+        ),
+        emoji=EmojisUX.INFO, inline=False
+    )
+
+    adicionar_campo(
+        embed, "PREÇO POR UNIDADE",
+        f"```yaml\n💰 R$ {PRECO_POLVORA:.2f} por unidade\n```",
+        emoji=EmojisUX.DINHEIRO, inline=False
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "OPÇÕES DISPONÍVEIS",
+        (
+            "📝 **Registrar Compra** - Registra uma nova compra\n"
+            "💣 **Relatório Hoje** - Compras registradas hoje\n"
+            "📅 **Relatório por Data** - Filtra por período"
+        ),
+        emoji=EmojisUX.INFO, inline=False
+    )
+
     await enviar_ou_atualizar_painel("painel_polvora", CANAL_CALCULO_POLVORA_ID, embed, PolvoraView())
-
-
 # =========================================================
 # ============ SISTEMA DE HISTÓRICO DE HORAS (MECÂNICA) ===
 # =========================================================
@@ -10117,7 +10348,42 @@ async def enviar_painel_solicitar_sala():
     if not canal:
         logger.error("❌ Canal solicitar sala não encontrado")
         return
-    embed = discord.Embed(title="📂 Solicitar Sala", description="Clique no botão para criar sua sala.", color=0x2ecc71)
+
+    embed = embed_padrao(
+        titulo="SOLICITAR SALA",
+        descricao="📂 Crie salas de metas para os membros • VDR 442",
+        cor=CoresUX.META,
+        emoji=EmojisUX.PASTA,
+        autor="Sistema de Metas"
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "COMO USAR",
+        (
+            "```yaml\n"
+            "1️⃣ Clique em 'Criar Sala para Membro'\n"
+            "2️⃣ Informe o ID do membro no Discord\n"
+            "3️⃣ A sala será criada automaticamente\n"
+            "```"
+        ),
+        emoji=EmojisUX.INFO, inline=False
+    )
+
+    adicionar_campo(
+        embed, "PERMISSÕES",
+        (
+            "⚠️ **Apenas podem criar salas:**\n"
+            "• Gerentes\n"
+            "• Cargo 01\n"
+            "• Cargo 02\n"
+            "• Cargo 03\n"
+            "• ADM"
+        ),
+        emoji=EmojisUX.AVISO, inline=False
+    )
+
     await enviar_ou_atualizar_painel("painel_solicitar_sala", CANAL_SOLICITAR_SALA_ID, embed, SolicitarSalaView())
 
 async def enviar_painel_relatorio_metas():
@@ -11529,20 +11795,31 @@ async def enviar_painel_grupos():
         return
     try:
         grupos = await carregar_grupos_db()
-        embed = discord.Embed(title="👥 ── GERENCIAMENTO DE GRUPOS ── 👥", description="📋 VDR 442 • Organizações", color=0x1a1a2e, timestamp=agora())
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(
-            name="📌 TIPOS DE ORGANIZAÇÃO",
-            value=(
+
+        embed = embed_padrao(
+            titulo="GERENCIAMENTO DE GRUPOS",
+            descricao="👥 Organizações • VDR 442",
+            cor=CoresUX.GRUPO,
+            emoji=EmojisUX.GRUPO,
+            autor="Sistema de Grupos"
+        )
+
+        adicionar_separador(embed)
+
+        adicionar_campo(
+            embed, "TIPOS DE ORGANIZAÇÃO",
+            (
                 "📋 PISTA SEM PAINEL  →  APENAS PT\n"
                 "📱 PISTA COM PAINEL  →  PT E SUB\n"
                 "🤵 MAFIAS            →  PT E SUB\n"
                 "🏚️ FAVELAS           →  PT E SUB\n"
                 "🔧 MECÂNICA ILEGAL   →  PT E SUB"
             ),
-            inline=False
+            emoji=EmojisUX.INFO, inline=False
         )
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+        adicionar_separador(embed)
+
         if grupos:
             total_pt = 0
             total_sub = 0
@@ -11553,21 +11830,31 @@ async def enviar_painel_grupos():
                     total_sub += compras.get("SUB", {}).get("quantidade", 0)
                 except:
                     pass
-            embed.add_field(
-                name="📊 RESUMO",
-                value=f"👥 {len(grupos)} GRUPOS\n🔫 PT:  {fmt_num(total_pt)} pacotes\n🔫 SUB: {fmt_num(total_sub)} pacotes",
-                inline=False
+            adicionar_campo(
+                embed, "RESUMO",
+                f"👥 {len(grupos)} GRUPOS\n🔫 PT:  {fmt_num(total_pt)} pacotes\n🔫 SUB: {fmt_num(total_sub)} pacotes",
+                emoji=EmojisUX.ESTATISTICA, inline=False
             )
         else:
-            embed.add_field(name="📭 NENHUM GRUPO", value="CLIQUE EM **➕ NOVO GRUPO** PARA CADASTRAR.", inline=False)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(name="📋 SELECIONE UM GRUPO", value="👇 ESCOLHA UMA OPÇÃO NO DROPDOWN", inline=False)
-        embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Grupos", icon_url=bot.user.display_avatar.url if bot.user else None)
+            adicionar_campo(
+                embed, "NENHUM GRUPO",
+                "CLIQUE EM **➕ NOVO GRUPO** PARA CADASTRAR.",
+                emoji="📭", inline=False
+            )
+
+        adicionar_separador(embed)
+
+        adicionar_campo(
+            embed, "SELECIONE UM GRUPO",
+            "👇 ESCOLHA UMA OPÇÃO NO DROPDOWN",
+            emoji=EmojisUX.INFO, inline=False
+        )
+
         view = PainelGruposView(grupos)
         await canal.send(embed=embed, view=view)
     except Exception as e:
         logger.error(f"❌ ERRO AO ENVIAR PAINEL: {e}")
-
+        
 class PainelGruposView(discord.ui.View):
     def __init__(self, grupos, pagina_atual=0):
         super().__init__(timeout=None)
@@ -12543,18 +12830,20 @@ async def enviar_painel_mensagens():
     if not canal:
         logger.error("❌ Canal de textos vendas não encontrado")
         return
-    embed = discord.Embed(
-        title="📝 ── GERADOR DE MENSAGENS ── 📝",
-        description="🛒 Sistema de Mensagens • VDR 442",
-        color=0x1a1a2e,
-        timestamp=agora()
+
+    embed = embed_padrao(
+        titulo="GERADOR DE MENSAGENS",
+        descricao="🛒 Sistema de Mensagens • VDR 442",
+        cor=CoresUX.VENDA,
+        emoji="📝",
+        autor="Gerador de Mensagens"
     )
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    embed.set_author(name="🛡 Vida Rasa 442 • Gerador de Mensagens", icon_url=bot.user.display_avatar.url if bot.user else None)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📌 TIPOS DE MENSAGENS DISPONÍVEIS",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "TIPOS DE MENSAGENS DISPONÍVEIS",
+        (
             "```yaml\n"
             "📦 Pedido Pronto\n"
             "❌ Pedido Cancelado\n"
@@ -12566,21 +12855,23 @@ async def enviar_painel_mensagens():
             "🔔 Pendência com Próxima Entrega\n"
             "```"
         ),
-        inline=False
+        emoji=EmojisUX.ARQUIVO, inline=False
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📋 COMO USAR",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "COMO USAR",
+        (
             "1️⃣ Clique em **'Gerar Mensagem'**\n"
             "2️⃣ Selecione o tipo de mensagem\n"
             "3️⃣ Preencha os campos solicitados\n"
             "4️⃣ Copie a mensagem gerada\n"
             "5️⃣ Cole no canal desejado"
         ),
-        inline=False
+        emoji=EmojisUX.INFO, inline=False
     )
-    embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Mensagens", icon_url=bot.user.display_avatar.url if bot.user else None)
+
     view = MenuMensagensView()
     try:
         async for msg in canal.history(limit=20):
@@ -12594,7 +12885,6 @@ async def enviar_painel_mensagens():
         await canal.send(embed=embed, view=view)
     except Exception as e:
         logger.error(f"❌ Erro ao enviar painel de mensagens: {e}")
-
 # =========================================================
 # ==================== PARTE 17: SISTEMA DE LOGS (UNIFICADO BLOCO A) ======
 # =========================================================
@@ -13803,6 +14093,7 @@ class CoresUX:
     BAU          = 0x7F8C8D  # Cinza azulado
     LOGS         = 0x2C3E50  # Azul noite
     AUDITORIA    = 0x8E44AD  # Roxo escuro
+    ARMAS        = 0xB22222  # Vermelho escuro
 
     # Cores especiais
     PREMIUM      = 0xF9CA24  # Dourado
@@ -15702,18 +15993,39 @@ async def enviar_painel_auditoria():
         logger.error(f"❌ Canal de auditoria não encontrado! ID: {CANAL_AUDITORIA_ID}")
         return
 
-    embed = discord.Embed(
-        title="📋 ── PAINEL DE AUDITORIA ── 📋",
-        description=(
-            "🛡 Vida Rasa 442 • **Sistema de Auditoria**\n\n"
-            "📌 **Consultar histórico de ações:**\n"
-            "• 🔍 Últimas Ações — Tudo que aconteceu recentemente\n"
-            "• 👤 Por Usuário — Ações de um membro específico\n"
-            "• 🎯 Por Módulo — Metas, Vendas, Estoque, etc\n"
-            "• 📊 Estatísticas — Total por período\n"
-            "• 🔎 Buscar Termo — Procure por palavra\n\n"
-            "⚠️ **Apenas ADM e Gerentes** podem consultar.\n\n"
-            "📥 **O que é auditado:**\n"
+    embed = embed_padrao(
+        titulo="PAINEL DE AUDITORIA",
+        descricao="🔍 Sistema de Auditoria • VDR 442",
+        cor=CoresUX.AUDITORIA,
+        emoji=EmojisUX.AUDITORIA,
+        autor="Sistema de Auditoria"
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "CONSULTAR HISTÓRICO DE AÇÕES",
+        (
+            "🔍 **Últimas Ações** — Tudo que aconteceu recentemente\n"
+            "👤 **Por Usuário** — Ações de um membro específico\n"
+            "🎯 **Por Módulo** — Metas, Vendas, Estoque, etc\n"
+            "📊 **Estatísticas** — Total por período\n"
+            "🔎 **Buscar Termo** — Procure por palavra"
+        ),
+        emoji=EmojisUX.INFO, inline=False
+    )
+
+    adicionar_campo(
+        embed, "PERMISSÃO",
+        "⚠️ **Apenas ADM e Gerentes** podem consultar.",
+        emoji=EmojisUX.BLOQUEADO, inline=False
+    )
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "O QUE É AUDITADO",
+        (
             "```yaml\n"
             "📊 Metas        ⏰ Horas (Mecânica)\n"
             "🛒 Vendas       📦 Estoque\n"
@@ -15721,22 +16033,14 @@ async def enviar_painel_auditoria():
             "🏭 Produção\n"
             "```"
         ),
-        color=0x9B59B6,
-        timestamp=agora()
+        emoji=EmojisUX.ARQUIVO, inline=False
     )
-    embed.set_author(
-        name="🛡 Vida Rasa 442 • Auditoria",
-        icon_url=bot.user.display_avatar.url if bot.user else None
-    )
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    embed.add_field(
-        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        value="",
-        inline=False
-    )
-    embed.add_field(
-        name="📌 COMANDOS DISPONÍVEIS",
-        value=(
+
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "COMANDOS DISPONÍVEIS",
+        (
             "```yaml\n"
             "!auditoria_recente [qtd]\n"
             "!auditoria_usuario @user [qtd]\n"
@@ -15745,11 +16049,7 @@ async def enviar_painel_auditoria():
             "!auditoria_buscar <termo>\n"
             "```"
         ),
-        inline=False
-    )
-    embed.set_footer(
-        text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}",
-        icon_url=bot.user.display_avatar.url if bot.user else None
+        emoji=EmojisUX.INFO, inline=False
     )
 
     view = PainelAuditoriaView()
