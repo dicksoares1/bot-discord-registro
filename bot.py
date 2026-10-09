@@ -751,6 +751,73 @@ async def inicializar_tabelas(pool):
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_paineis_ultimos_canal ON paineis_ultimos(canal_id)
         """)
+        # =========================================================
+        # TABELA DE AUDITORIA (BLOCO E)
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS auditoria (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                user_nome VARCHAR(100),
+                acao VARCHAR(50) NOT NULL,
+                modulo VARCHAR(50) NOT NULL,
+                item_id VARCHAR(30),
+                item_nome VARCHAR(100),
+                dados_antes JSONB,
+                dados_depois JSONB,
+                detalhes TEXT,
+                data TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_user ON auditoria(user_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_data ON auditoria(data DESC)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_modulo ON auditoria(modulo)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_acao ON auditoria(acao)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_item ON auditoria(item_id)
+        """)
+
+        # =========================================================
+        # TABELAS DE MÉTRICAS E ERROS (BLOCO B - se quiser)
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS metricas_comandos (
+                id SERIAL PRIMARY KEY,
+                nome_comando VARCHAR(100) NOT NULL,
+                user_id VARCHAR(30),
+                guild_id VARCHAR(30),
+                canal_id VARCHAR(30),
+                sucesso BOOLEAN DEFAULT true,
+                tempo_execucao_ms INTEGER DEFAULT 0,
+                data TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_metricas_comando ON metricas_comandos(nome_comando)
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS erros_sistema (
+                id SERIAL PRIMARY KEY,
+                tipo VARCHAR(100),
+                mensagem TEXT,
+                traceback TEXT,
+                user_id VARCHAR(30),
+                canal_id VARCHAR(30),
+                comando VARCHAR(100),
+                data TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_erros_data ON erros_sistema(data DESC)
+        """)
 
                  
         # =========================================================
