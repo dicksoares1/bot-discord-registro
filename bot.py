@@ -5547,12 +5547,12 @@ async def enviar_embed_pedido_finalizado(
         )
         embed.add_field(
             name="🏷️ ORGANIZAÇÃO",
-            value=f"```yaml\n{organizacao}\n```",
+            value=f"**{organizacao}**",
             inline=True
         )
         embed.add_field(
             name="👤 VENDEDOR",
-            value=f"```yaml\n{vendedor_nome}\n```",
+            value=f"**{vendedor_nome}**",
             inline=True
         )
 
@@ -5654,9 +5654,7 @@ async def enviar_embed_pedido_finalizado(
 async def extrair_dados_pedido_do_embed(embed):
     """
     Extrai os dados relevantes de um embed de pedido para montar o finalizado.
-    Retorna dict com pt, sub, organizacao, vendedor, pago_por, pago_em,
-    entregue_por, entregue_em, transferido_para, transferido_por, transferido_em,
-    cancelado_por, cancelado_em, tipo.
+    Versão robusta: procura por múltiplos formatos de campo.
     """
     dados = {
         "pedido_numero": 0,
@@ -5671,6 +5669,9 @@ async def extrair_dados_pedido_do_embed(embed):
         "tipo": "finalizado"
     }
 
+    # =========================================================
+    # 1. EXTRAI NÚMERO DO PEDIDO (TÍTULO)
+    # =========================================================
     titulo = embed.title or ""
     if "#" in titulo:
         try:
@@ -5678,26 +5679,56 @@ async def extrair_dados_pedido_do_embed(embed):
         except:
             pass
 
+    # =========================================================
+    # 2. EXTRAI CAMPOS (NORMALIZA NOMES)
+    # =========================================================
     for field in embed.fields:
-        nome = field.name
+        nome = field.name.upper().strip()
         valor = field.value or ""
 
-        if nome == "🔫 PT":
+        # ----- VENDEDOR -----
+        if "VENDEDOR" in nome:
+            # Remove crases e blocos yaml
+            vendedor_limpo = valor.replace("```yaml", "").replace("```", "").strip()
+            # Pega só a primeira linha
+            vendedor_limpo = vendedor_limpo.split("\n")[0].strip()
+            dados["vendedor"] = vendedor_limpo or "Desconhecido"
+
+        # ----- ORGANIZAÇÃO -----
+        elif "ORGANIZA" in nome:
+            org_limpa = valor.replace("```yaml", "").replace("```", "").strip()
+            org_limpa = org_limpa.split("\n")[0].strip()
+            dados["organizacao"] = org_limpa or "Desconhecida"
+
+        # ----- PT -----
+        elif nome.startswith("🔫 PT") or nome == "PT":
             try:
                 dados["pt"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
             except:
-                pass
-        elif nome == "🔫 SUB":
+                # Tenta outro formato (pacotes)
+                try:
+                    import re as _re
+                    match = _re.search(r'([\d.]+)\s*muniç', valor)
+                    if match:
+                        dados["pt"] = int(match.group(1).replace(".", ""))
+                except:
+                    pass
+
+        # ----- SUB -----
+        elif nome.startswith("🔫 SUB") or nome == "SUB":
             try:
                 dados["sub"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
             except:
-                pass
-        elif nome == "🏷 Organização" or nome == "🏷️ ORGANIZAÇÃO":
-            dados["organizacao"] = valor.replace("🏷️", "").replace("🏷", "").strip()
-        elif nome == "👤 Vendedor" or nome == "👤 VENDEDOR":
-            dados["vendedor"] = valor.replace("👤", "").strip()
-        elif nome == "📌 STATUS DO PEDIDO" or nome == "📌 Status":
-            # Verifica cada linha do status
+                try:
+                    import re as _re
+                    match = _re.search(r'([\d.]+)\s*muniç', valor)
+                    if match:
+                        dados["sub"] = int(match.group(1).replace(".", ""))
+                except:
+                    pass
+
+        # ----- STATUS -----
+        elif "STATUS" in nome:
             linhas = valor.split("\n")
             for linha in linhas:
                 linha_clean = linha.strip()
@@ -5713,16 +5744,16 @@ async def extrair_dados_pedido_do_embed(embed):
                         dados["entregue_em"] = linha_clean.split("•")[-1].strip()
                     except:
                         pass
-                elif linha_clean.startswith("❌ Pedido cancelado"):
-                    dados["cancelado_por"] = linha_clean.replace("❌ Pedido cancelado por", "").replace("•", "|").split("|")[0].strip()
+                elif "cancelado" in linha_clean.lower() or linha_clean.startswith("❌"):
+                    dados["cancelado_por"] = linha_clean.replace("❌ Pedido cancelado por", "").replace("❌", "").replace("•", "|").split("|")[0].strip()
                     try:
                         dados["cancelado_em"] = linha_clean.split("•")[-1].strip()
                     except:
                         pass
                     dados["tipo"] = "cancelado"
 
-        # Transferência (procura em campos específicos)
-        elif nome == "💰 TRANSFERÊNCIA REALIZADA":
+        # ----- TRANSFERÊNCIA -----
+        elif "TRANSFER" in nome:
             linhas = valor.split("\n")
             for linha in linhas:
                 linha_clean = linha.strip()
@@ -5731,8 +5762,33 @@ async def extrair_dados_pedido_do_embed(embed):
                 elif "Confirmado por:" in linha_clean:
                     dados["transferido_por"] = linha_clean.split("Confirmado por:")[1].strip()
 
-    return dados
+    # =========================================================
+    # 3. FALLBACK: SE PEDIDO_NUMERO = 0, TENTA DE NOVO
+    # =========================================================
+    if dados["pedido_numero"] == 0 and "#" in titulo:
+        try:
+            import re as _re
+            match = _re.search(r'#(\d+)', titulo)
+            if match:
+                dados["pedido_numero"] = int(match.group(1))
+        except:
+            pass
 
+    # =========================================================
+    # 4. FALLBACK: SE VENDEDOR = "Desconhecido", TENTA EXTRAIR DO AUTOR
+    # =========================================================
+    if dados["vendedor"] == "Desconhecido" and embed.author and embed.author.name:
+        # Tenta extrair do author
+        nome_author = embed.author.name
+        if "•" in nome_author:
+            partes = nome_author.split("•")
+            if len(partes) > 1:
+                dados["vendedor"] = partes[1].strip()
+        elif "Vendedor" in nome_author:
+            dados["vendedor"] = nome_author.replace("Vendedor", "").replace(":", "").strip()
+
+    return dados
+    
 async def salvar_entrega_parcelada(pedido_original, total_entregas, pt_por_entrega, sub_por_entrega, vendedor_id, organizacao, observacoes, canal_id):
     pool = await get_pool()
     if not pool:
