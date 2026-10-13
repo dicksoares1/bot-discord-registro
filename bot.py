@@ -500,7 +500,8 @@ async def inicializar_tabelas(pool):
                 finalizado BOOLEAN DEFAULT false,
                 cancelado BOOLEAN DEFAULT false,
                 finalizado_em TIMESTAMP,
-                tipo_finalizacao VARCHAR(20)
+                tipo_finalizacao VARCHAR(20),
+                migrado BOOLEAN DEFAULT false
             )
         """)
         # Adiciona colunas se a tabela já existia (migração suave)
@@ -515,6 +516,9 @@ async def inicializar_tabelas(pool):
         """)
         await conn.execute("""
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS tipo_finalizacao VARCHAR(20)
+        """)
+        await conn.execute("""
+            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS migrado BOOLEAN DEFAULT false
         """)
         
         await conn.execute("""
@@ -16419,8 +16423,12 @@ async def cmd_atualizar_vendas_antigas(ctx):
 @commands.has_permissions(administrator=True)
 async def cmd_migrar_pedidos_finalizados(ctx):
     """
-    Varre o canal de encomendas, identifica pedidos JÁ FINALIZADOS/CANCELADOS
-    e move para o canal de Pedidos Finalizados.
+    Varre o canal Encomendas, identifica pedidos finalizados/cancelados
+    (consultando o BANCO DE DADOS, não só o embed) e migra para Finalizados.
+    
+    - Pedidos já migrados (migrado=true) → DELETA do canal Encomendas
+    - Pedidos finalizados/cancelados não migrados → MIGRA + DELETA
+    - Pedidos em aberto → IGNORA (conta)
     """
     await ctx.send("🔄 **Iniciando migração de pedidos finalizados...**\n⏳ Isso pode demorar um pouco.")
 
@@ -16429,11 +16437,18 @@ async def cmd_migrar_pedidos_finalizados(ctx):
         await ctx.send("❌ Canal de encomendas não encontrado!")
         return
 
+    pool = await get_pool()
+    if not pool:
+        await ctx.send("❌ Banco de dados indisponível!")
+        return
+
     migrados_finalizados = 0
     migrados_cancelados = 0
     ignorados = 0
+    deletados_sem_contar = 0  # Pedidos já migrados que foram deletados
 
-    async for msg in canal.history(limit=1000):
+    async for msg in canal.history(limit=2000):
+        # Só processa mensagens do bot
         if msg.author != bot.user:
             continue
         if not msg.embeds:
@@ -16442,74 +16457,110 @@ async def cmd_migrar_pedidos_finalizados(ctx):
         embed = msg.embeds[0]
         titulo = embed.title or ""
 
+        # Verifica se é um pedido
         if "ENTREGA" not in titulo.upper() and "ENCOMENDA" not in titulo.upper() and "VENDA" not in titulo.upper():
             continue
 
-        # Detecta status
-        pago = False
-        entregue = False
-        cancelado = False
-        concluida = False
-        transferencia_confirmada = False
+        # =========================================================
+        # EXTRAI NÚMERO DO PEDIDO
+        # =========================================================
+        pedido_numero = 0
+        if "#" in titulo:
+            try:
+                pedido_numero = safe_int(titulo.split("#")[1].split(" ")[0].strip())
+            except:
+                pass
 
-        if "VENDA CONCLUÍDA" in titulo.upper():
-            concluida = True
-            pago = True
-            entregue = True
+        # Se não conseguiu extrair, tenta pelo footer
+        if pedido_numero == 0 and embed.footer and embed.footer.text:
+            try:
+                import re as _re
+                match = _re.search(r'#(\d+)', embed.footer.text)
+                if match:
+                    pedido_numero = int(match.group(1))
+            except:
+                pass
 
-        for field in embed.fields:
-            if field.name == "📌 STATUS DO PEDIDO" or field.name == "📌 Status":
-                valor = field.value
-                if "TRANSFERÊNCIA CONFIRMADA" in valor:
-                    transferencia_confirmada = True
-                if "💰" in valor or "Pago" in valor:
-                    pago = True
-                if "✅" in valor or "Entregue" in valor:
-                    entregue = True
-                if "❌" in valor or "cancelado" in valor.lower():
-                    cancelado = True
-                break
-
-        # Só migra finalizados ou cancelados
-        if not (cancelado or concluida or transferencia_confirmada):
+        # Se ainda é 0, ignora (mensagem corrompida)
+        if pedido_numero == 0:
             ignorados += 1
             continue
 
+        # =========================================================
+        # CONSULTA O BANCO DE DADOS
+        # =========================================================
         try:
-            # Extrai dados do embed
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT finalizado, cancelado, migrado FROM vendas WHERE pedido_numero = $1",
+                    pedido_numero
+                )
+        except Exception as e:
+            logger.error(f"❌ Erro ao consultar banco pra pedido #{pedido_numero}: {e}")
+            ignorados += 1
+            continue
+
+        # Se não achou no banco, ignora
+        if not row:
+            ignorados += 1
+            continue
+
+        finalizado = row["finalizado"] or False
+        cancelado = row["cancelado"] or False
+        ja_migrado = row["migrado"] or False
+
+        # =========================================================
+        # DECISÃO
+        # =========================================================
+        if not (finalizado or cancelado):
+            # Pedido em aberto → ignora
+            ignorados += 1
+            continue
+
+        # Se já foi migrado → só DELETA (sem contar)
+        if ja_migrado:
+            try:
+                await msg.delete()
+                deletados_sem_contar += 1
+                logger.info(f"🗑️ Pedido #{pedido_numero:04d} (já migrado) deletado do canal Encomendas")
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"⚠️ Não foi possível deletar #{pedido_numero:04d}: {e}")
+            continue
+
+        # =========================================================
+        # MIGRAR (finalizado ou cancelado, não migrado ainda)
+        # =========================================================
+        try:
+            # Extrai dados do embed original
             dados = await extrair_dados_pedido_do_embed(embed)
 
-            # Extrai pedido_numero
-            pedido_numero = dados.get("pedido_numero", 0)
-            if not pedido_numero and "#" in titulo:
-                try:
-                    pedido_numero = safe_int(titulo.split("#")[1].split(" ")[0].strip())
-                except:
-                    pass
+            # Sobrescreve com o número correto
+            dados["pedido_numero"] = pedido_numero
 
-            if not pedido_numero:
-                ignorados += 1
-                continue
-
+            # Se pt/sub zerados no embed, tenta pegar do banco pelo valor
             pt = dados.get("pt", 0)
             sub = dados.get("sub", 0)
 
-            # Se o embed não tem as quantidades, tenta extrair dos campos PT/SUB
-            for field in embed.fields:
-                if field.name == "🔫 PT" and pt == 0:
-                    try:
-                        pt = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
-                    except:
-                        pass
-                if field.name == "🔫 SUB" and sub == 0:
-                    try:
-                        sub = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
-                    except:
-                        pass
+            # Se ainda zerou, tenta extrair direto dos campos PT/SUB
+            if pt == 0:
+                for field in embed.fields:
+                    if field.name in ("🔫 PT", "🔫 PT "):
+                        try:
+                            pt = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                        except:
+                            pass
+            if sub == 0:
+                for field in embed.fields:
+                    if field.name in ("🔫 SUB", "🔫 SUB "):
+                        try:
+                            sub = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                        except:
+                            pass
 
             tipo = "cancelado" if cancelado else "finalizado"
 
-            # Envia embed para o canal de finalizados
+            # Envia o embed novo pro canal de Finalizados
             await enviar_embed_pedido_finalizado(
                 pedido_numero=pedido_numero,
                 pt=pt,
@@ -16528,26 +16579,41 @@ async def cmd_migrar_pedidos_finalizados(ctx):
                 tipo=tipo
             )
 
-            # Marca no banco
-            await marcar_pedido_finalizado(pedido_numero, tipo=tipo)
+            # Marca como migrado no banco
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE vendas SET migrado = true WHERE pedido_numero = $1",
+                    pedido_numero
+                )
 
-            # Deleta a mensagem original
+            # Deleta a mensagem original do canal Encomendas
             try:
                 await msg.delete()
-                logger.info(f"🗑️ Mensagem antiga deletada (Pedido #{pedido_numero:04d})")
+                logger.info(f"🗑️ Pedido #{pedido_numero:04d} ({tipo}) migrado e deletado")
             except Exception as e:
-                logger.warning(f"⚠️ Não foi possível deletar: {e}")
+                logger.warning(f"⚠️ Não foi possível deletar #{pedido_numero:04d}: {e}")
 
+            # Contadores
             if tipo == "cancelado":
                 migrados_cancelados += 1
             else:
                 migrados_finalizados += 1
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.7)
 
         except Exception as e:
-            logger.error(f"❌ Erro ao migrar pedido: {e}")
+            logger.error(f"❌ Erro ao migrar pedido #{pedido_numero:04d}: {e}")
             ignorados += 1
+
+    # =========================================================
+    # EMBED FINAL (com contador de ignorados)
+    # =========================================================
+    logger.info(
+        f"📦 [MIGRAÇÃO] Finalizados: {migrados_finalizados} | "
+        f"Cancelados: {migrados_cancelados} | "
+        f"Ignorados: {ignorados} | "
+        f"Já migrados (deletados sem contar): {deletados_sem_contar}"
+    )
 
     embed = discord.Embed(
         title="✅ ── MIGRAÇÃO CONCLUÍDA ── ✅",
@@ -16558,8 +16624,192 @@ async def cmd_migrar_pedidos_finalizados(ctx):
     embed.add_field(name="🎉 Finalizados", value=f"```yaml\n{migrados_finalizados}\n```", inline=True)
     embed.add_field(name="❌ Cancelados", value=f"```yaml\n{migrados_cancelados}\n```", inline=True)
     embed.add_field(name="⏭️ Ignorados", value=f"```yaml\n{ignorados}\n```", inline=True)
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+
+    if deletados_sem_contar > 0:
+        embed.add_field(
+            name="🗑️ Já Migrados (deletados)",
+            value=f"```yaml\n{deletados_sem_contar}\n```",
+            inline=False
+        )
+
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
     await ctx.send(embed=embed)
+
+# =========================================================
+# COMANDO: CHECAR BANCO
+# =========================================================
+@bot.command(name="checar_banco")
+@commands.has_permissions(administrator=True)
+async def cmd_checar_banco(ctx):
+    """
+    Mostra um relatório do banco de dados sobre os pedidos.
+    Útil pra debugar antes/depois de rodar a migração.
+    """
+    await ctx.send("🔍 **Analisando banco de dados...**")
+
+    pool = await get_pool()
+    if not pool:
+        await ctx.send("❌ Banco de dados indisponível!")
+        return
+
+    try:
+        async with pool.acquire() as conn:
+            # Total de pedidos
+            total = await conn.fetchval("SELECT COUNT(*) FROM vendas") or 0
+
+            # Finalizados (não cancelados)
+            finalizados = await conn.fetchval(
+                "SELECT COUNT(*) FROM vendas WHERE finalizado = true AND cancelado = false"
+            ) or 0
+
+            # Cancelados
+            cancelados = await conn.fetchval(
+                "SELECT COUNT(*) FROM vendas WHERE cancelado = true"
+            ) or 0
+
+            # Em aberto
+            em_aberto = await conn.fetchval(
+                "SELECT COUNT(*) FROM vendas WHERE finalizado = false AND cancelado = false"
+            ) or 0
+
+            # Migrados
+            migrados = await conn.fetchval(
+                "SELECT COUNT(*) FROM vendas WHERE migrado = true"
+            ) or 0
+
+            # Pendentes de migração (concluídos mas NÃO migrados)
+            pendentes_migracao = await conn.fetchval(
+                "SELECT COUNT(*) FROM vendas WHERE (finalizado = true OR cancelado = true) AND migrado = false"
+            ) or 0
+
+            # Valor total finalizado
+            valor_finalizado = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE finalizado = true AND cancelado = false"
+            ) or 0
+
+            # Valor total cancelado
+            valor_cancelado = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE cancelado = true"
+            ) or 0
+
+        # =========================================================
+        # EMBED DE RESULTADO
+        # =========================================================
+        embed = discord.Embed(
+            title="📊 ── RELATÓRIO DO BANCO DE DADOS ── 📊",
+            description="📦 Status atual dos pedidos no banco",
+            color=0x3498DB,
+            timestamp=agora()
+        )
+        embed.set_author(
+            name="🛡 Vida Rasa 442 • Checagem de Banco",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        # Contadores principais
+        embed.add_field(
+            name="📦 Total de Pedidos",
+            value=f"```yaml\n{total}\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="✅ Finalizados",
+            value=f"```yaml\n{finalizados}\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="❌ Cancelados",
+            value=f"```yaml\n{cancelados}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        # Status de migração
+        embed.add_field(
+            name="🔄 Em Aberto",
+            value=f"```yaml\n{em_aberto}\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="📤 Migrados",
+            value=f"```yaml\n{migrados}\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="⏳ Pendentes de Migração",
+            value=f"```yaml\n{pendentes_migracao}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        # Valores
+        embed.add_field(
+            name="💰 Valor Total Finalizado",
+            value=f"```yaml\n{formatar_dinheiro(valor_finalizado)}\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="💸 Valor Total Cancelado",
+            value=f"```yaml\n{formatar_dinheiro(valor_cancelado)}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        # Alerta
+        if pendentes_migracao > 0:
+            embed.add_field(
+                name="⚠️ ATENÇÃO",
+                value=(
+                    f"```diff\n"
+                    f"- Existem {pendentes_migracao} pedido(s) concluído(s)\n"
+                    f"- que ainda NÃO foram migrados!\n"
+                    f"- Rode: !migrar_pedidos_finalizados\n"
+                    f"```"
+                ),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="✅ TUDO OK",
+                value="```diff\n+ Todos os pedidos concluídos já foram migrados!\n```",
+                inline=False
+            )
+
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        await ctx.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"❌ Erro em cmd_checar_banco: {e}")
+        await ctx.send(f"❌ Erro ao checar banco: `{str(e)[:150]}`")
 # =========================================================
 # ==================== COMANDO DE ENVIAR BAÚ ==============
 # =========================================================
