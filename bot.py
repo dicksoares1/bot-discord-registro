@@ -203,6 +203,7 @@ CANAL_CALCULADORA_ID = 1460984821458272347
 CANAL_ENCOMENDAS_ID = 1460980984811098294
 CANAL_VENDAS_ID = 1460984821458272347
 CANAL_TEXTOS_VENDAS_ID = 1499045083994001500
+CANAL_PEDIDOS_FINALIZADOS_ID = 1559544027597250631
 CANAL_ESCALACOES_ID = 1241406819545514064
 CANAL_RELATORIO_ACOES_ID = 1477308788531921019
 CANAL_INICIAR_LAVAGEM_ID = 1467152989499293768
@@ -495,9 +496,27 @@ async def inicializar_tabelas(pool):
                 user_id VARCHAR(30),
                 valor INTEGER,
                 data VARCHAR(20),
-                pedido_numero INTEGER
+                pedido_numero INTEGER,
+                finalizado BOOLEAN DEFAULT false,
+                cancelado BOOLEAN DEFAULT false,
+                finalizado_em TIMESTAMP,
+                tipo_finalizacao VARCHAR(20)
             )
         """)
+        # Adiciona colunas se a tabela já existia (migração suave)
+        await conn.execute("""
+            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS finalizado BOOLEAN DEFAULT false
+        """)
+        await conn.execute("""
+            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cancelado BOOLEAN DEFAULT false
+        """)
+        await conn.execute("""
+            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS finalizado_em TIMESTAMP
+        """)
+        await conn.execute("""
+            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS tipo_finalizacao VARCHAR(20)
+        """)
+        
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS pedidos (
                 id INTEGER PRIMARY KEY DEFAULT 1,
@@ -5405,6 +5424,315 @@ async def carregar_vendas_db():
         logger.error(f"❌ Erro ao carregar vendas: {e}")
         return []
 
+# =========================================================
+# SISTEMA DE PEDIDOS FINALIZADOS
+# =========================================================
+
+async def marcar_pedido_finalizado(pedido_numero, tipo="finalizado"):
+    """
+    Marca um pedido como finalizado (ou cancelado).
+    tipo: "finalizado" ou "cancelado"
+    """
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            if tipo == "cancelado":
+                await conn.execute(
+                    """UPDATE vendas 
+                       SET cancelado = true, 
+                           finalizado_em = NOW(), 
+                           tipo_finalizacao = 'cancelado' 
+                       WHERE pedido_numero = $1""",
+                    pedido_numero
+                )
+            else:
+                await conn.execute(
+                    """UPDATE vendas 
+                       SET finalizado = true, 
+                           finalizado_em = NOW(), 
+                           tipo_finalizacao = 'finalizado' 
+                       WHERE pedido_numero = $1""",
+                    pedido_numero
+                )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao marcar pedido como {tipo}: {e}")
+        return False
+
+
+async def verificar_pedido_finalizado(pedido_numero):
+    """Retorna True se o pedido já foi finalizado ou cancelado."""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT finalizado, cancelado FROM vendas WHERE pedido_numero = $1",
+                pedido_numero
+            )
+            if not row:
+                return False
+            return bool(row["finalizado"] or row["cancelado"])
+    except Exception as e:
+        logger.error(f"❌ Erro ao verificar pedido finalizado: {e}")
+        return False
+
+
+async def enviar_embed_pedido_finalizado(
+    pedido_numero,
+    pt,
+    sub,
+    organizacao,
+    vendedor_nome,
+    pago_por,
+    pago_em,
+    entregue_por,
+    entregue_em,
+    transferido_para,
+    transferido_por,
+    transferido_em,
+    cancelado_por=None,
+    cancelado_em=None,
+    tipo="finalizado"
+):
+    """
+    Envia o embed bonito no canal de Pedidos Finalizados.
+    tipo: "finalizado" ou "cancelado"
+    """
+    try:
+        canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
+        if not canal:
+            logger.error(f"❌ Canal de pedidos finalizados não encontrado: {CANAL_PEDIDOS_FINALIZADOS_ID}")
+            return False
+
+        valor_total = (pt * 50) + (sub * 90)
+
+        if tipo == "cancelado":
+            cor = 0xE74C3C
+            emoji = "❌"
+            titulo = "PEDIDO CANCELADO"
+        else:
+            cor = 0x2ECC71
+            emoji = "🎉"
+            titulo = "PEDIDO FINALIZADO"
+
+        embed = discord.Embed(
+            title=f"{emoji} ── {titulo} ── {emoji}",
+            description=f"📅 **VDR 442** • Pedido **#{pedido_numero:04d}**",
+            color=cor,
+            timestamp=agora()
+        )
+        embed.set_author(
+            name="🛡 Vida Rasa 442 • Sistema de Pedidos",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        # =========================================================
+        # INFORMAÇÕES DO PEDIDO
+        # =========================================================
+        embed.add_field(
+            name="📦 PEDIDO",
+            value=f"```yaml\n#{pedido_numero:04d}\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="🏷️ ORGANIZAÇÃO",
+            value=f"```yaml\n{organizacao}\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="👤 VENDEDOR",
+            value=f"```yaml\n{vendedor_nome}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        # =========================================================
+        # QUANTIDADES
+        # =========================================================
+        embed.add_field(
+            name="🔫 PT",
+            value=f"```yaml\n{fmt_num(pt)} munições\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="🔫 SUB",
+            value=f"```yaml\n{fmt_num(sub)} munições\n```",
+            inline=True
+        )
+        embed.add_field(
+            name="💰 VALOR TOTAL",
+            value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        # =========================================================
+        # HISTÓRICO DE AÇÕES
+        # =========================================================
+        if tipo == "cancelado":
+            embed.add_field(
+                name="❌ CANCELADO POR",
+                value=f"```yaml\n{cancelado_por or 'Desconhecido'}\n📅 {cancelado_em or '—'}\n```",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="✅ PAGO POR",
+                value=f"```yaml\n{pago_por or '—'}\n📅 {pago_em or '—'}\n```",
+                inline=True
+            )
+            embed.add_field(
+                name="📦 ENTREGUE POR",
+                value=f"```yaml\n{entregue_por or '—'}\n📅 {entregue_em or '—'}\n```",
+                inline=True
+            )
+
+            transferido_info = f"📤 **TRANSFERIDO PARA:** {transferido_para or '—'}\n"
+            transferido_info += f"👤 **CONFIRMADO POR:** {transferido_por or '—'}\n"
+            transferido_info += f"📅 **DATA:** {transferido_em or '—'}"
+
+            embed.add_field(
+                name="📤 TRANSFERÊNCIA",
+                value=f"```yaml\n{transferido_info}\n```",
+                inline=False
+            )
+
+        embed.add_field(
+            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            value="",
+            inline=False
+        )
+
+        if tipo == "cancelado":
+            embed.add_field(
+                name="❌ STATUS FINAL",
+                value="```diff\n- PEDIDO CANCELADO\n```",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="🎉 STATUS FINAL",
+                value="```diff\n+ PEDIDO ENCERRADO COM SUCESSO\n```",
+                inline=False
+            )
+
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • Encerrado em {agora().strftime('%d/%m/%Y às %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        await safe_request(canal.send, embed=embed)
+        logger.info(f"✅ Embed de pedido #{pedido_numero:04d} ({tipo}) enviado para o canal de finalizados")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar embed de pedido finalizado: {e}")
+        return False
+
+
+async def extrair_dados_pedido_do_embed(embed):
+    """
+    Extrai os dados relevantes de um embed de pedido para montar o finalizado.
+    Retorna dict com pt, sub, organizacao, vendedor, pago_por, pago_em,
+    entregue_por, entregue_em, transferido_para, transferido_por, transferido_em,
+    cancelado_por, cancelado_em, tipo.
+    """
+    dados = {
+        "pedido_numero": 0,
+        "pt": 0,
+        "sub": 0,
+        "organizacao": "Desconhecida",
+        "vendedor": "Desconhecido",
+        "pago_por": None, "pago_em": None,
+        "entregue_por": None, "entregue_em": None,
+        "transferido_para": None, "transferido_por": None, "transferido_em": None,
+        "cancelado_por": None, "cancelado_em": None,
+        "tipo": "finalizado"
+    }
+
+    titulo = embed.title or ""
+    if "#" in titulo:
+        try:
+            dados["pedido_numero"] = safe_int(titulo.split("#")[1].split(" ")[0].strip())
+        except:
+            pass
+
+    for field in embed.fields:
+        nome = field.name
+        valor = field.value or ""
+
+        if nome == "🔫 PT":
+            try:
+                dados["pt"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
+            except:
+                pass
+        elif nome == "🔫 SUB":
+            try:
+                dados["sub"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
+            except:
+                pass
+        elif nome == "🏷 Organização" or nome == "🏷️ ORGANIZAÇÃO":
+            dados["organizacao"] = valor.replace("🏷️", "").replace("🏷", "").strip()
+        elif nome == "👤 Vendedor" or nome == "👤 VENDEDOR":
+            dados["vendedor"] = valor.replace("👤", "").strip()
+        elif nome == "📌 STATUS DO PEDIDO" or nome == "📌 Status":
+            # Verifica cada linha do status
+            linhas = valor.split("\n")
+            for linha in linhas:
+                linha_clean = linha.strip()
+                if linha_clean.startswith("💰 Pago"):
+                    dados["pago_por"] = linha_clean.replace("💰 Pago • Recebido por", "").replace("•", "|").split("|")[0].strip()
+                    try:
+                        dados["pago_em"] = linha_clean.split("•")[-1].strip()
+                    except:
+                        pass
+                elif linha_clean.startswith("✅ Entregue"):
+                    dados["entregue_por"] = linha_clean.replace("✅ Entregue por", "").replace("•", "|").split("|")[0].strip()
+                    try:
+                        dados["entregue_em"] = linha_clean.split("•")[-1].strip()
+                    except:
+                        pass
+                elif linha_clean.startswith("❌ Pedido cancelado"):
+                    dados["cancelado_por"] = linha_clean.replace("❌ Pedido cancelado por", "").replace("•", "|").split("|")[0].strip()
+                    try:
+                        dados["cancelado_em"] = linha_clean.split("•")[-1].strip()
+                    except:
+                        pass
+                    dados["tipo"] = "cancelado"
+
+        # Transferência (procura em campos específicos)
+        elif nome == "💰 TRANSFERÊNCIA REALIZADA":
+            linhas = valor.split("\n")
+            for linha in linhas:
+                linha_clean = linha.strip()
+                if "Pagamento enviado para:" in linha_clean:
+                    dados["transferido_para"] = linha_clean.split("Pagamento enviado para:")[1].strip()
+                elif "Confirmado por:" in linha_clean:
+                    dados["transferido_por"] = linha_clean.split("Confirmado por:")[1].strip()
+
+    return dados
+
 async def salvar_entrega_parcelada(pedido_original, total_entregas, pt_por_entrega, sub_por_entrega, vendedor_id, organizacao, observacoes, canal_id):
     pool = await get_pool()
     if not pool:
@@ -5561,6 +5889,9 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
 
             await self.mensagem_original.edit(embed=embed, view=view)
 
+            # =========================================================
+            # LOG NO CANAL GERAL
+            # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_LOGS_GERAIS_ID)
             if canal_log:
                 embed_log = discord.Embed(
@@ -5577,19 +5908,31 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                 embed_log.set_footer(text=f"Transferência confirmada em {agora().strftime('%d/%m/%Y %H:%M')}")
                 await canal_log.send(embed=embed_log)
 
+            # =========================================================
+            # ✅ FINALIZAR PEDIDO: DELETAR DO CANAL E ENVIAR PARA FINALIZADOS
+            # =========================================================
+            await finalizar_e_mover_pedido(
+                interaction=interaction,
+                mensagem_original=self.mensagem_original,
+                pedido_numero=self.pedido_numero,
+                pt=self.pt,
+                sub=self.sub,
+                transferido_para=transferido_para
+            )
+
             await interaction.followup.send(
                 f"✅ **Transferência confirmada com sucesso!**\n"
                 f"📤 Transferido para: **{transferido_para}**\n"
                 f"👤 Confirmado por: **{interaction.user.display_name}**\n"
                 f"💰 Valor: {formatar_dinheiro(self.valor_total)}\n"
-                f"📦 Pedido #{self.pedido_numero:04d}",
+                f"📦 Pedido #{self.pedido_numero:04d} finalizado!",
                 ephemeral=True
             )
 
         except Exception as e:
             logger.error(f"❌ Erro ao confirmar transferência: {e}")
             await interaction.followup.send(f"❌ **Erro ao confirmar transferência:** {str(e)[:100]}", ephemeral=True)
-
+            
 async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_entregas, pt, sub, org_nome, config, observacoes, entrega_id=None, vendedor_id=None, grupo=None, entregas_lista=None):
     canal = interaction.guild.get_channel(CANAL_ENCOMENDAS_ID)
     if not canal:
@@ -5998,7 +6341,7 @@ class StatusView(discord.ui.View):
         await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
         
     async def entregue(self, interaction: discord.Interaction, button):
-        """Marca como entregue + cria a próxima entrega (se tiver)."""
+        """Marca como entregue + finaliza se for a última entrega."""
         if self.entrega_ja_entregue:
             await interaction.followup.send("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
             return
@@ -6074,7 +6417,7 @@ class StatusView(discord.ui.View):
         embed = self.set_status(embed, idx, linhas)
 
         # =========================================================
-        # AUDITORIA — NOVO
+        # AUDITORIA
         # =========================================================
         try:
             await registrar_auditoria(
@@ -6095,6 +6438,9 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao auditar entrega: {e}")
 
+        # =========================================================
+        # SAÍDA DO BAÚ
+        # =========================================================
         if pacotes_pt > 0 or pacotes_sub > 0:
             canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
             if canal_bau:
@@ -6166,6 +6512,30 @@ class StatusView(discord.ui.View):
             await enviar_painel_fabricacao()
             return
 
+        await interaction.message.edit(embed=embed, view=StatusView(
+            disabled=False,
+            entrega_id=self.entrega_id,
+            total_entregas=self.total_entregas,
+            entrega_atual=self.entrega_atual,
+            pago_ja_clicado=pago_foi_clicado,
+            mensagem_original=interaction.message,
+            transferencia_confirmada=False,
+            valor_total=self.valor_total,
+            pt=self.pt,
+            sub=self.sub,
+            pedido_numero=self.pedido_numero,
+            entregue_ja_clicado=True
+        ))
+
+        await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
+
+        if self.entrega_atual < self.total_entregas:
+            await self.criar_proxima_entrega(interaction, embed, pedido_numero)
+
+        await enviar_painel_vendas()
+        await enviar_painel_fabricacao()
+            return
+            
         await interaction.message.edit(embed=embed, view=StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
@@ -6303,6 +6673,19 @@ class StatusView(discord.ui.View):
             )
         except Exception as e:
             logger.error(f"❌ Erro ao auditar cancelamento de venda: {e}")
+
+        # =========================================================
+        # ✅ CANCELAR: DELETAR DO CANAL E ENVIAR PARA FINALIZADOS
+        # =========================================================
+        await finalizar_e_mover_pedido(
+            interaction=interaction,
+            mensagem_original=interaction.message,
+            pedido_numero=pedido_numero,
+            pt=self.pt,
+            sub=self.sub,
+            transferido_para=None,
+            tipo="cancelado"
+        )
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
@@ -6902,16 +7285,121 @@ class RelatorioVendasModal(discord.ui.Modal, title="📅 RELATÓRIO DE VENDAS"):
 
         await interaction.followup.send(embed=embed, ephemeral=False)
 
+# =========================================================
+# FINALIZAR PEDIDO: DELETA DO CANAL E ENVIA PARA FINALIZADOS
+# =========================================================
+async def finalizar_e_mover_pedido(
+    interaction: discord.Interaction,
+    mensagem_original: discord.Message,
+    pedido_numero: int,
+    pt: int,
+    sub: int,
+    transferido_para: str = None,
+    tipo: str = "finalizado"
+):
+    """
+    Finaliza um pedido:
+    - Extrai dados do embed original
+    - Marca no banco como finalizado/cancelado
+    - DELETA a mensagem original
+    - ENVIA embed novo (sem botões) no canal de Pedidos Finalizados
+    """
+    try:
+        # =========================================================
+        # 1. EXTRAIR DADOS DO EMBED ORIGINAL
+        # =========================================================
+        embed_original = mensagem_original.embeds[0]
+        dados = await extrair_dados_pedido_do_embed(embed_original)
+
+        # Sobrescreve com dados mais confiáveis
+        if pedido_numero:
+            dados["pedido_numero"] = pedido_numero
+        if pt:
+            dados["pt"] = pt
+        if sub:
+            dados["sub"] = sub
+        if transferido_para:
+            dados["transferido_para"] = transferido_para
+
+        # =========================================================
+        # 2. MARCAR NO BANCO
+        # =========================================================
+        if tipo == "cancelado":
+            await marcar_pedido_finalizado(dados["pedido_numero"], tipo="cancelado")
+        else:
+            await marcar_pedido_finalizado(dados["pedido_numero"], tipo="finalizado")
+
+        # =========================================================
+        # 3. ENVIAR EMBED NOVO NO CANAL DE FINALIZADOS
+        # =========================================================
+        await enviar_embed_pedido_finalizado(
+            pedido_numero=dados["pedido_numero"],
+            pt=dados["pt"],
+            sub=dados["sub"],
+            organizacao=dados["organizacao"],
+            vendedor_nome=dados["vendedor"],
+            pago_por=dados["pago_por"],
+            pago_em=dados["pago_em"],
+            entregue_por=dados["entregue_por"],
+            entregue_em=dados["entregue_em"],
+            transferido_para=dados["transferido_para"],
+            transferido_por=dados["transferido_por"],
+            transferido_em=dados["transferido_em"],
+            cancelado_por=dados["cancelado_por"],
+            cancelado_em=dados["cancelado_em"],
+            tipo=tipo
+        )
+
+        # =========================================================
+        # 4. DELETAR MENSAGEM ORIGINAL
+        # =========================================================
+        try:
+            await mensagem_original.delete()
+            logger.info(f"🗑️ Pedido #{dados['pedido_numero']:04d} removido do canal de encomendas")
+        except Exception as e:
+            logger.warning(f"⚠️ Não foi possível deletar mensagem original: {e}")
+
+        # =========================================================
+        # 5. REMOVER BOTÕES PERSISTENTES DO BANCO
+        # =========================================================
+        try:
+            pool = await get_pool()
+            if pool:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM botoes_persistentes WHERE mensagem_id = $1",
+                        str(mensagem_original.id)
+                    )
+        except Exception as e:
+            logger.error(f"❌ Erro ao limpar botões persistentes: {e}")
+
+        # =========================================================
+        # 6. ATUALIZAR PAINÉIS
+        # =========================================================
+        try:
+            await enviar_painel_vendas()
+            await enviar_painel_fabricacao()
+        except Exception as e:
+            logger.error(f"❌ Erro ao atualizar painéis: {e}")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Erro em finalizar_e_mover_pedido: {e}")
+        return False
+
 async def restaurar_botoes_vendas():
+    """
+    Restaura os botões de pedidos EM ABERTO.
+    Ignora pedidos já finalizados/cancelados (que foram movidos para o canal de finalizados).
+    """
     try:
         canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
         if not canal:
             logger.error("❌ Canal de encomendas não encontrado!")
             return
-        contador_desabilitados = 0
-        contador_concluidos = 0
-        contador_cancelados = 0
-        contador_pendentes = 0
+        contador_ativos = 0
+        contador_ignorados = 0
         async for msg in canal.history(limit=500):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
                 titulo = msg.embeds[0].title if msg.embeds[0].title else ""
@@ -6938,30 +7426,12 @@ async def restaurar_botoes_vendas():
                             if "❌" in valor or "cancelado" in valor.lower():
                                 cancelado = True
                             break
-                    if cancelado:
-                        disabled = True
-                        pago_ja_clicado = True
-                        contador_cancelados += 1
-                    elif concluida or (pago and entregue):
-                        disabled = True
-                        pago_ja_clicado = True
-                        contador_concluidos += 1
-                    elif transferencia_confirmada:
-                        disabled = True
-                        pago_ja_clicado = True
-                        contador_concluidos += 1
-                    elif pago:
-                        disabled = False
-                        pago_ja_clicado = True
-                        contador_pendentes += 1
-                    elif entregue:
-                        disabled = False
-                        pago_ja_clicado = False
-                        contador_pendentes += 1
-                    else:
-                        disabled = False
-                        pago_ja_clicado = False
-                        contador_pendentes += 1
+
+                    # ✅ IGNORAR pedidos já finalizados/cancelados (NÃO restaurar botões)
+                    if cancelado or concluida or transferencia_confirmada:
+                        contador_ignorados += 1
+                        continue
+
                     entrega_id = None
                     if embed.footer:
                         texto_footer = embed.footer.text
@@ -7006,22 +7476,24 @@ async def restaurar_botoes_vendas():
                             except:
                                 pass
                     view = StatusView(
-                        disabled=disabled,
+                        disabled=False,
                         entrega_id=entrega_id,
                         total_entregas=total_entregas,
                         entrega_atual=entrega_atual,
-                        pago_ja_clicado=pago_ja_clicado,
+                        pago_ja_clicado=pago,
                         mensagem_original=msg,
-                        transferencia_confirmada=transferencia_confirmada,
+                        transferencia_confirmada=False,
                         valor_total=valor_total,
                         pt=pt,
                         sub=sub,
                         pedido_numero=pedido_numero
                     )
                     await safe_request(msg.edit, view=view)
-                    contador_desabilitados += 1
+                    contador_ativos += 1
                     await asyncio.sleep(0.5)
-        logger.info(f"✅ {contador_desabilitados} mensagens de venda processadas!")
+
+        logger.info(f"✅ {contador_ativos} pedidos EM ABERTO com botões restaurados")
+        logger.info(f"⏭️ {contador_ignorados} pedidos FINALIZADOS/CANCELADOS ignorados")
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar botões de vendas: {e}")
 
@@ -7102,44 +7574,111 @@ async def enviar_painel_vendas():
 
     estoque = await carregar_estoque()
 
-    embed = embed_padrao(
-        titulo="PAINEL DE VENDAS",
-        descricao="🛒 Sistema de Encomendas • VDR 442",
-        cor=CoresUX.VENDA,
-        emoji="💀",
-        autor="Sistema de Vendas"
+    # =========================================================
+    # EMBED PRINCIPAL
+    # =========================================================
+    embed = discord.Embed(
+        title="🛒 ── PAINEL DE VENDAS ── 🛒",
+        description="**Sistema de Encomendas • VDR 442**",
+        color=CoresUX.VENDA,
+        timestamp=agora()
     )
-
-    adicionar_separador(embed)
-
-    adicionar_campo(
-        embed, "ATENÇÃO",
-        "🔴 Antes de entregar um pedido, verifique o ESTOQUE disponível!",
-        emoji=EmojisUX.AVISO, inline=False
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Sistema de Vendas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
     )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
 
-    adicionar_separador(embed)
-
-    adicionar_campo(
-        embed, "ESTOQUE DISPONÍVEL",
-        (
-            f"🔫 PT   →  **{fmt_num(estoque['PT'])}** pacotes  ({fmt_num(estoque['PT'] * 50)} munições)\n"
-            f"🔫 SUB  →  **{fmt_num(estoque['SUB'])}** pacotes  ({fmt_num(estoque['SUB'] * 50)} munições)"
+    # =========================================================
+    # LINHA 1 — 3 COLUNAS (Estoque PT | Estoque SUB | Preços)
+    # =========================================================
+    embed.add_field(
+        name="📦 ESTOQUE PT",
+        value=(
+            f"```yaml\n"
+            f"{fmt_num(estoque['PT'])} pacotes\n"
+            f"{fmt_num(estoque['PT'] * 50)} munições\n"
+            f"```"
         ),
-        emoji="📦", inline=False
+        inline=True
     )
 
-    adicionar_separador(embed)
+    embed.add_field(
+        name="📦 ESTOQUE SUB",
+        value=(
+            f"```yaml\n"
+            f"{fmt_num(estoque['SUB'])} pacotes\n"
+            f"{fmt_num(estoque['SUB'] * 50)} munições\n"
+            f"```"
+        ),
+        inline=True
+    )
 
-    adicionar_campo(
-        embed, "OPÇÕES DISPONÍVEIS",
-        "[📝 Registrar Venda]\n[🔄 Atualizar Estoque]",
-        emoji=EmojisUX.INFO, inline=False
+    embed.add_field(
+        name="💰 PREÇOS",
+        value=(
+            f"```yaml\n"
+            f"PT:  R$ 50,00\n"
+            f"SUB: R$ 90,00\n"
+            f"```"
+        ),
+        inline=True
+    )
+
+    # =========================================================
+    # LINHA 2 — COMO FUNCIONA (Full Width)
+    # =========================================================
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+
+    embed.add_field(
+        name="📖 COMO FUNCIONA",
+        value=(
+            "```yaml\n"
+            "1️⃣ Clique em 'Registrar Venda' e preencha os dados\n"
+            "2️⃣ O pedido aparece no canal de Encomendas\n"
+            "3️⃣ Marque como Pago → Entregue → Confirme a Transferência\n"
+            "4️⃣ Só finaliza quando as 3 etapas estiverem completas\n"
+            "```"
+        ),
+        inline=False
+    )
+
+    # =========================================================
+    # LINHA 3 — ENTREGAS PARCELADAS (Full Width)
+    # =========================================================
+    embed.add_field(
+        name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        value="",
+        inline=False
+    )
+
+    embed.add_field(
+        name="📦 ENTREGAS PARCELADAS",
+        value=(
+            "```yaml\n"
+            "Pedidos acima de 8.000 munições são divididos automaticamente.\n"
+            "Cada entrega precisa ser Paga + Entregue.\n"
+            "O pedido só finaliza na ÚLTIMA entrega.\n"
+            "```"
+        ),
+        inline=False
+    )
+
+    # =========================================================
+    # RODAPÉ
+    # =========================================================
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
     )
 
     view = CalculadoraView()
     await enviar_ou_atualizar_painel("painel_vendas", CANAL_VENDAS_ID, embed, view)
-
+    
 # =========================================================
 # ==================== PARTE 13: SISTEMA DE PRODUÇÃO ======
 # =========================================================
@@ -15766,6 +16305,154 @@ async def cmd_atualizar_vendas_antigas(ctx):
         f"❌ {contador_ignoradas} erros"
     )
 
+# =========================================================
+# COMANDO: MIGRAR PEDIDOS FINALIZADOS
+# =========================================================
+@bot.command(name="migrar_pedidos_finalizados")
+@commands.has_permissions(administrator=True)
+async def cmd_migrar_pedidos_finalizados(ctx):
+    """
+    Varre o canal de encomendas, identifica pedidos JÁ FINALIZADOS/CANCELADOS
+    e move para o canal de Pedidos Finalizados.
+    """
+    await ctx.send("🔄 **Iniciando migração de pedidos finalizados...**\n⏳ Isso pode demorar um pouco.")
+
+    canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
+    if not canal:
+        await ctx.send("❌ Canal de encomendas não encontrado!")
+        return
+
+    migrados_finalizados = 0
+    migrados_cancelados = 0
+    ignorados = 0
+
+    async for msg in canal.history(limit=1000):
+        if msg.author != bot.user:
+            continue
+        if not msg.embeds:
+            continue
+
+        embed = msg.embeds[0]
+        titulo = embed.title or ""
+
+        if "ENTREGA" not in titulo.upper() and "ENCOMENDA" not in titulo.upper() and "VENDA" not in titulo.upper():
+            continue
+
+        # Detecta status
+        pago = False
+        entregue = False
+        cancelado = False
+        concluida = False
+        transferencia_confirmada = False
+
+        if "VENDA CONCLUÍDA" in titulo.upper():
+            concluida = True
+            pago = True
+            entregue = True
+
+        for field in embed.fields:
+            if field.name == "📌 STATUS DO PEDIDO" or field.name == "📌 Status":
+                valor = field.value
+                if "TRANSFERÊNCIA CONFIRMADA" in valor:
+                    transferencia_confirmada = True
+                if "💰" in valor or "Pago" in valor:
+                    pago = True
+                if "✅" in valor or "Entregue" in valor:
+                    entregue = True
+                if "❌" in valor or "cancelado" in valor.lower():
+                    cancelado = True
+                break
+
+        # Só migra finalizados ou cancelados
+        if not (cancelado or concluida or transferencia_confirmada):
+            ignorados += 1
+            continue
+
+        try:
+            # Extrai dados do embed
+            dados = await extrair_dados_pedido_do_embed(embed)
+
+            # Extrai pedido_numero
+            pedido_numero = dados.get("pedido_numero", 0)
+            if not pedido_numero and "#" in titulo:
+                try:
+                    pedido_numero = safe_int(titulo.split("#")[1].split(" ")[0].strip())
+                except:
+                    pass
+
+            if not pedido_numero:
+                ignorados += 1
+                continue
+
+            pt = dados.get("pt", 0)
+            sub = dados.get("sub", 0)
+
+            # Se o embed não tem as quantidades, tenta extrair dos campos PT/SUB
+            for field in embed.fields:
+                if field.name == "🔫 PT" and pt == 0:
+                    try:
+                        pt = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                    except:
+                        pass
+                if field.name == "🔫 SUB" and sub == 0:
+                    try:
+                        sub = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                    except:
+                        pass
+
+            tipo = "cancelado" if cancelado else "finalizado"
+
+            # Envia embed para o canal de finalizados
+            await enviar_embed_pedido_finalizado(
+                pedido_numero=pedido_numero,
+                pt=pt,
+                sub=sub,
+                organizacao=dados.get("organizacao", "Desconhecida"),
+                vendedor_nome=dados.get("vendedor", "Desconhecido"),
+                pago_por=dados.get("pago_por"),
+                pago_em=dados.get("pago_em"),
+                entregue_por=dados.get("entregue_por"),
+                entregue_em=dados.get("entregue_em"),
+                transferido_para=dados.get("transferido_para"),
+                transferido_por=dados.get("transferido_por"),
+                transferido_em=dados.get("transferido_em"),
+                cancelado_por=dados.get("cancelado_por"),
+                cancelado_em=dados.get("cancelado_em"),
+                tipo=tipo
+            )
+
+            # Marca no banco
+            await marcar_pedido_finalizado(pedido_numero, tipo=tipo)
+
+            # Deleta a mensagem original
+            try:
+                await msg.delete()
+                logger.info(f"🗑️ Mensagem antiga deletada (Pedido #{pedido_numero:04d})")
+            except Exception as e:
+                logger.warning(f"⚠️ Não foi possível deletar: {e}")
+
+            if tipo == "cancelado":
+                migrados_cancelados += 1
+            else:
+                migrados_finalizados += 1
+
+            await asyncio.sleep(0.5)
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao migrar pedido: {e}")
+            ignorados += 1
+
+    embed = discord.Embed(
+        title="✅ ── MIGRAÇÃO CONCLUÍDA ── ✅",
+        description="📦 Pedidos migrados do canal Encomendas para Pedidos Finalizados",
+        color=0x2ECC71,
+        timestamp=agora()
+    )
+    embed.add_field(name="🎉 Finalizados", value=f"```yaml\n{migrados_finalizados}\n```", inline=True)
+    embed.add_field(name="❌ Cancelados", value=f"```yaml\n{migrados_cancelados}\n```", inline=True)
+    embed.add_field(name="⏭️ Ignorados", value=f"```yaml\n{ignorados}\n```", inline=True)
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+    await ctx.send(embed=embed)
 # =========================================================
 # ==================== COMANDO DE ENVIAR BAÚ ==============
 # =========================================================
