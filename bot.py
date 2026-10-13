@@ -840,9 +840,34 @@ async def inicializar_tabelas(pool):
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_horas_hist_fechamento ON horas_historico(data_fechamento DESC)
         """)
+        # =========================================================
+        # TABELA: DÍVIDAS DE META (META DOBRADA)
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS metas_dividas (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                valor_divida BIGINT NOT NULL,
+                valor_original BIGINT NOT NULL,
+                semana_fechamento VARCHAR(50) NOT NULL,
+                data_criacao TIMESTAMP DEFAULT NOW(),
+                pago BOOLEAN DEFAULT false,
+                data_pagamento TIMESTAMP
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dividas_user ON metas_dividas(user_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dividas_pago ON metas_dividas(pago)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dividas_semana ON metas_dividas(semana_fechamento)
+        """)
 
     logger.info("✅ Todas as tabelas criadas/verificadas com sucesso!")
     logger.info("✅ Tabela horas_historico pronta!")
+    logger.info("✅ Tabela metas_dividas pronta!")
 
 # =========================================================
 # ==================== PARTE 3: UTILITÁRIOS ===============
@@ -9235,6 +9260,106 @@ async def definir_valor_meta_por_cargo(member: discord.Member):
         return 300000
     return 300000
 
+# =========================================================
+# SISTEMA DE DÍVIDAS DE META (META DOBRADA)
+# =========================================================
+
+async def buscar_divida_ativa(user_id):
+    """Retorna a dívida ativa (não paga) de um usuário, ou None."""
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM metas_dividas WHERE user_id = $1 AND pago = false ORDER BY data_criacao DESC LIMIT 1",
+                str(user_id)
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar dívida ativa: {e}")
+        return None
+
+
+async def criar_divida_meta(user_id, valor_original, semana_fechamento):
+    """
+    Cria uma dívida de meta (dobrada) para o usuário.
+    valor_divida = valor_original * 2
+    """
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            # Evita duplicar dívida na mesma semana
+            existente = await conn.fetchval(
+                "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND semana_fechamento = $2 AND pago = false",
+                str(user_id), semana_fechamento
+            )
+            if existente:
+                return False
+
+            valor_divida = valor_original * 2
+
+            await conn.execute(
+                """INSERT INTO metas_dividas 
+                   (user_id, valor_divida, valor_original, semana_fechamento) 
+                   VALUES ($1, $2, $3, $4)""",
+                str(user_id), valor_divida, valor_original, semana_fechamento
+            )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao criar dívida de meta: {e}")
+        return False
+
+
+async def quitar_dividas(user_id):
+    """Marca todas as dívidas ativas do usuário como pagas."""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE user_id = $1 AND pago = false",
+                str(user_id)
+            )
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao quitar dívidas: {e}")
+        return False
+
+
+async def calcular_total_dividas(user_id):
+    """Retorna o valor total de dívidas ativas do usuário."""
+    pool = await get_pool()
+    if not pool:
+        return 0
+    try:
+        async with pool.acquire() as conn:
+            valor = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor_divida), 0) FROM metas_dividas WHERE user_id = $1 AND pago = false",
+                str(user_id)
+            )
+            return valor or 0
+    except Exception as e:
+        logger.error(f"❌ Erro ao calcular total de dívidas: {e}")
+        return 0
+
+
+async def listar_dividas_ativas():
+    """Retorna todas as dívidas ativas (não pagas)."""
+    pool = await get_pool()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT * FROM metas_dividas WHERE pago = false ORDER BY data_criacao DESC"
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao listar dívidas: {e}")
+        return []
+
 async def buscar_ponto_ativo(user_id):
     pool = await get_pool()
     if not pool:
@@ -9647,6 +9772,13 @@ async def atualizar_embed_meta(user_id):
         acao = meta.get("acao") or "Nenhuma"
         meta_total = await definir_valor_meta_por_id(user_id)
 
+        # =========================================================
+        # BUSCAR DÍVIDA ATIVA (META DOBRADA)
+        # =========================================================
+        divida_ativa = await buscar_divida_ativa(user_id)
+        valor_divida = divida_ativa["valor_divida"] if divida_ativa else 0
+        meta_efetiva = meta_total + valor_divida
+
         embed = discord.Embed(title=f"💀 ── META SEMANAL ── 💀", description=f"👤 {nome.upper()} • VDR 442", color=Cores.META, timestamp=agora())
         if member:
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -9659,17 +9791,33 @@ async def atualizar_embed_meta(user_id):
             embed.add_field(name="📦 SALDO EXCEDENTE", value=f"```yaml\n{formatar_dinheiro(saldo_excedente)}\n```", inline=False)
 
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+        # ✅ AVISO DE META DOBRADA (se tiver)
+        if valor_divida > 0:
+            embed.add_field(
+                name="🚨 META DOBRADA PENDENTE 🚨",
+                value=(
+                    f"```diff\n"
+                    f"- VOCÊ TEM UMA DÍVIDA ATIVA!\n"
+                    f"- VALOR: {formatar_dinheiro(valor_divida)}\n"
+                    f"- AJUSTE LOGO SUA META!\n"
+                    f"```"
+                ),
+                inline=False
+            )
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
         if is_soldado:
             valor_progresso = dinheiro_acoes
         else:
             valor_progresso = dinheiro_meta
-        if meta_total > 0:
-            progresso = min(valor_progresso / meta_total, 1.0)
+        if meta_efetiva > 0:
+            progresso = min(valor_progresso / meta_efetiva, 1.0)
         else:
             progresso = 1.0
         barra_progresso = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
         porcentagem = int(progresso * 100)
-        if meta_total == 0:
+        if meta_efetiva == 0:
             status_meta = "🟢 META ISENTA"
         elif progresso >= 1:
             status_meta = "✅ META CONCLUÍDA! 🎉"
@@ -9681,12 +9829,14 @@ async def atualizar_embed_meta(user_id):
             status_meta = "🟠 Começando..."
         else:
             status_meta = "🔴 Comece já!"
-        if meta_total > 0:
-            meta_texto = f"{formatar_dinheiro(valor_progresso)} / {formatar_dinheiro(meta_total)}"
+        if meta_efetiva > 0:
+            meta_texto = f"{formatar_dinheiro(valor_progresso)} / {formatar_dinheiro(meta_efetiva)}"
+            if valor_divida > 0:
+                meta_texto += f"\n(Inclui dívida: {formatar_dinheiro(valor_divida)})"
         else:
             meta_texto = "ISENTO"
         embed.add_field(name=f"📊 PROGRESSO • {porcentagem}%", value=f"```prolog\n{barra_progresso}\n{meta_texto}\n\n{status_meta}\n```", inline=False)
-
+        
         is_mecanico = CARGO_MECANICO_ID in [r.id for r in member.roles] if member else False
         if is_mecanico:
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -9748,6 +9898,111 @@ async def atualizar_embed_meta(user_id):
         await verificar_meta_concluida(user_id, valor_progresso)
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
+
+# =========================================================
+# AVISO DE META NÃO BATIDA (VERMELHO + MAIÚSCULO)
+# =========================================================
+
+async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, motivo="NAO_BATEU"):
+    """
+    Envia aviso em MAIÚSCULO e VERMELHO no canal de meta do membro.
+    
+    motivo:
+    - "NAO_BATEU": primeira vez que não bateu → meta dobrada
+    - "NAO_BATEU_DOBRADA": não bateu nem a dobrada → perde set
+    """
+    try:
+        if str(user_id) not in metas_cache:
+            return False
+
+        canal_id = metas_cache[str(user_id)]["canal_id"]
+        canal = bot.get_channel(canal_id)
+        if not canal:
+            logger.warning(f"⚠️ Canal de meta não encontrado para {user_id}")
+            return False
+
+        guild = bot.get_guild(GUILD_ID)
+        member = guild.get_member(int(user_id)) if guild else None
+        nome = member.display_name if member else f"ID: {user_id}"
+
+        if motivo == "NAO_BATEU":
+            embed = discord.Embed(
+                title="🚨 ATENÇÃO! META NÃO BATIDA! 🚨",
+                description=(
+                    f"```diff\n"
+                    f"- VOCÊ NÃO BATEU A META DA SEMANA ANTERIOR!\n"
+                    f"```\n"
+                    f"**{nome.upper()}**\n\n"
+                    f"```yaml\n"
+                    f"📊 META ORIGINAL: {formatar_dinheiro(valor_original)}\n"
+                    f"💰 SUA META AGORA: {formatar_dinheiro(valor_divida)} (DOBRADA)\n"
+                    f"```\n\n"
+                    f"🔴 **ATENÇÃO:**\n"
+                    f"```diff\n"
+                    f"- SUA META FOI DOBRADA PARA A PRÓXIMA SEMANA!\n"
+                    f"- SE VOCÊ NÃO BATER A META DOBRADA,\n"
+                    f"- VOCÊ PERDERÁ O SET DO TABLET!\n"
+                    f"```\n\n"
+                    f"💪 **CORRA ATRÁS DO PREJUÍZO!**"
+                ),
+                color=0xE74C3C,
+                timestamp=agora()
+            )
+            embed.set_author(
+                name="🛡 VIDA RASA 442 • SISTEMA DE METAS",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+            if member and member.display_avatar:
+                embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_footer(
+                text=f"⚠️ AVISO AUTOMÁTICO • {agora().strftime('%d/%m/%Y %H:%M')}",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
+        else:  # NAO_BATEU_DOBRADA
+            embed = discord.Embed(
+                title="💀 VOCÊ PERDEU O SET! 💀",
+                description=(
+                    f"```diff\n"
+                    f"- VOCÊ NÃO BATEU NEM A META DOBRADA!\n"
+                    f"```\n"
+                    f"**{nome.upper()}**\n\n"
+                    f"```yaml\n"
+                    f"📊 META ORIGINAL: {formatar_dinheiro(valor_original)}\n"
+                    f"💰 META DOBRADA: {formatar_dinheiro(valor_divida)}\n"
+                    f"```\n\n"
+                    f"🔴 **CONSEQUÊNCIA:**\n"
+                    f"```diff\n"
+                    f"- VOCÊ PERDEU O SET DO TABLET!\n"
+                    f"- PROCURE A GERÊNCIA PARA MAIS INFORMAÇÕES.\n"
+                    f"```\n\n"
+                    f"⚠️ **AVISO ENVIADO À GERÊNCIA.**"
+                ),
+                color=0x8B0000,
+                timestamp=agora()
+            )
+            embed.set_author(
+                name="🛡 VIDA RASA 442 • SISTEMA DE METAS",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+            if member and member.display_avatar:
+                embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_footer(
+                text=f"⚠️ AVISO AUTOMÁTICO • {agora().strftime('%d/%m/%Y %H:%M')}",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
+        await canal.send(
+            content=f"🔔 {member.mention if member else ''} **AVISO IMPORTANTE!**",
+            embed=embed
+        )
+
+        logger.info(f"📢 Aviso de meta não batida enviado para {nome} (motivo: {motivo})")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar aviso de meta não batida: {e}")
+        return False
 
 async def atualizar_categoria_meta(member):
     """
@@ -11194,41 +11449,184 @@ async def carregar_metas_cache():
         return False
 
 async def fechar_todas_metas(data_inicio, data_fim):
+    """
+    Fecha todas as metas da semana.
+    
+    NOVO FLUXO:
+    1. Verifica quem tinha dívida (meta dobrada) da semana anterior
+       - Se bateu a dobrada → quita a dívida ✅
+       - Se NÃO bateu → envia aviso NAO_BATEU_DOBRADA (perde o set)
+    2. Verifica quem NÃO bateu a meta normal
+       - Cria dívida (meta dobrada)
+       - Envia aviso NAO_BATEU
+    3. Salva no histórico normalmente
+    """
     pool = await get_pool()
     if not pool:
         logger.error("❌ Pool do banco indisponível em fechar_todas_metas")
         return None, []
+
     try:
         async with pool.acquire() as conn:
             metas = await conn.fetch("SELECT * FROM metas")
             if not metas:
                 logger.warning("📭 Nenhuma meta encontrada para fechar")
                 return None, []
+
             data_inicio_naive = data_inicio.replace(tzinfo=None) if hasattr(data_inicio, 'replace') else data_inicio
             data_fim_naive = data_fim.replace(tzinfo=None) if hasattr(data_fim, 'replace') else data_fim
             data_fechamento = agora_db()
+            semana_str = f"{data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
+
             relatorio = []
             guild = bot.get_guild(GUILD_ID)
             salvos = 0
+
+            # =========================================================
+            # 1. VERIFICA QUEM TINHA DÍVIDA (META DOBRADA)
+            # =========================================================
+            dividas_ativas = await conn.fetch(
+                "SELECT * FROM metas_dividas WHERE pago = false"
+            )
+
+            for divida in dividas_ativas:
+                user_id = divida["user_id"]
+                valor_divida = divida["valor_divida"]
+                valor_original = divida["valor_original"]
+
+                member = guild.get_member(int(user_id)) if guild else None
+                status = membro_deve_ter_meta(member) if member else None
+                if status is None:
+                    # Isento → quita automaticamente
+                    await conn.execute(
+                        "UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1",
+                        divida["id"]
+                    )
+                    continue
+
+                # Pega a meta atual do membro
+                meta = await conn.fetchrow(
+                    "SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1",
+                    user_id
+                )
+                if not meta:
+                    continue
+
+                dinheiro = meta["dinheiro"] or 0
+                dinheiro_acoes = meta["dinheiro_acoes"] or 0
+                total_pago = max(dinheiro, dinheiro_acoes)
+
+                if total_pago >= valor_divida:
+                    # ✅ BATEU A DOBRADA → quita a dívida
+                    await conn.execute(
+                        "UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1",
+                        divida["id"]
+                    )
+                    logger.info(f"✅ {user_id} quitou a dívida (pagou {formatar_dinheiro(total_pago)})")
+                else:
+                    # ❌ NÃO BATEU A DOBRADA → envia aviso (perde set)
+                    logger.warning(f"💀 {user_id} NÃO bateu a dobrada! Enviando aviso...")
+                    await enviar_aviso_meta_nao_batida(
+                        user_id, valor_original, valor_divida, motivo="NAO_BATEU_DOBRADA"
+                    )
+
+                    # Avisa a gerência no canal de logs
+                    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
+                    if canal_log:
+                        embed_log = discord.Embed(
+                            title="💀 MEMBRO PERDEU O SET (META DOBRADA NÃO BATIDA)",
+                            description=f"👤 <@{user_id}>",
+                            color=0x8B0000,
+                            timestamp=agora()
+                        )
+                        embed_log.add_field(
+                            name="📊 Meta Original",
+                            value=formatar_dinheiro(valor_original),
+                            inline=True
+                        )
+                        embed_log.add_field(
+                            name="💰 Meta Dobrada",
+                            value=formatar_dinheiro(valor_divida),
+                            inline=True
+                        )
+                        embed_log.add_field(
+                            name="💵 Total Pago",
+                            value=formatar_dinheiro(total_pago),
+                            inline=True
+                        )
+                        embed_log.add_field(
+                            name="⚠️ Ação Necessária",
+                            value="**REMOVER O SET DO TABLET MANUALMENTE PELA GERÊNCIA**",
+                            inline=False
+                        )
+                        embed_log.set_footer(text=f"🛡 Vida Rasa 442 • Semana {semana_str}")
+                        await canal_log.send(embed=embed_log)
+
+            # =========================================================
+            # 2. SALVA HISTÓRICO + VERIFICA QUEM NÃO BATEU (META NORMAL)
+            # =========================================================
             for meta in metas:
                 user_id = meta["user_id"]
                 member = guild.get_member(int(user_id)) if guild else None
                 status = membro_deve_ter_meta(member) if member else None
                 if status is None:
                     continue
+
                 dinheiro = meta["dinheiro"] or 0
                 acao = meta["acao"] or "N/A"
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+
                 meta_limite = await definir_valor_meta_por_id(user_id)
+
+                # ✅ Verifica se bateu a meta normal
+                if meta_limite > 0 and dinheiro < meta_limite:
+                    # ❌ NÃO BATEU → cria dívida (meta dobrada)
+                    ja_tem = await conn.fetchval(
+                        "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND pago = false",
+                        user_id
+                    )
+                    if not ja_tem:
+                        await criar_divida_meta(user_id, meta_limite, semana_str)
+                        await enviar_aviso_meta_nao_batida(
+                            user_id, meta_limite, meta_limite * 2, motivo="NAO_BATEU"
+                        )
+                        logger.info(f"📢 Dívida criada para {user_id}: {formatar_dinheiro(meta_limite * 2)}")
+
+                # Salva no histórico
                 try:
-                    await conn.execute("INSERT INTO metas_historico (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento) VALUES ($1, $2, $3, $4, $5, $6, $7)", user_id, min(dinheiro, meta_limite), acao, dinheiro_acoes, data_inicio_naive, data_fim_naive, data_fechamento)
+                    await conn.execute(
+                        """INSERT INTO metas_historico 
+                           (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento) 
+                           VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                        user_id, min(dinheiro, meta_limite), acao, dinheiro_acoes,
+                        data_inicio_naive, data_fim_naive, data_fechamento
+                    )
                     salvos += 1
                 except Exception as e:
                     logger.error(f"❌ Erro ao salvar meta de {user_id} no histórico: {e}")
-                relatorio.append({"user_id": user_id, "dinheiro": min(dinheiro, meta_limite), "acao": acao, "dinheiro_acoes": dinheiro_acoes, "total_meta": min(dinheiro, meta_limite), "status": status})
+
+                relatorio.append({
+                    "user_id": user_id,
+                    "dinheiro": min(dinheiro, meta_limite),
+                    "acao": acao,
+                    "dinheiro_acoes": dinheiro_acoes,
+                    "total_meta": min(dinheiro, meta_limite),
+                    "status": status
+                })
+
+            # =========================================================
+            # 3. MEMBROS SEM META (não têm registro no banco)
+            # =========================================================
             membros_sem_meta = []
             if guild:
-                cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID, CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID, CARGO_MECANICO_ID, CARGO_MORADOR_ID]
+                cargos_meta = [
+                    CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
+                    CARGO_01_ID, CARGO_02_ID, CARGO_03_ID,
+                    CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID,
+                    CARGO_RESP_PRODUCAO_ID, CARGO_RESP_AGREGADOS_ID,
+                    CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
+                    CARGO_MECANICO_ID, CARGO_MORADOR_ID
+                ]
                 for member in guild.members:
                     if member.bot:
                         continue
@@ -11236,8 +11634,15 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     if tem_cargo:
                         tem_meta = any(m["user_id"] == str(member.id) for m in metas)
                         if not tem_meta:
-                            membros_sem_meta.append({"user_id": str(member.id), "nome": member.display_name, "menção": member.mention})
+                            membros_sem_meta.append({
+                                "user_id": str(member.id),
+                                "nome": member.display_name,
+                                "menção": member.mention
+                            })
+
+            logger.info(f"✅ {salvos} metas salvas no histórico")
             return relatorio, membros_sem_meta
+
     except Exception as e:
         logger.error(f"❌ Erro ao fechar todas as metas: {e}")
         return None, []
@@ -15042,6 +15447,125 @@ async def cmd_recriar_meta(ctx, member: discord.Member):
     except Exception as e:
         logger.error(f"❌ Erro ao recriar meta de {member.id}: {e}")
         await ctx.send(f"❌ Erro ao recriar meta: {e}")
+
+# =========================================================
+# COMANDO: LISTAR DÍVIDAS
+# =========================================================
+@bot.command(name="listar_dividas")
+@commands.has_permissions(administrator=True)
+async def cmd_listar_dividas(ctx):
+    """Lista todas as dívidas ativas (metas dobradas pendentes)."""
+    dividas = await listar_dividas_ativas()
+    if not dividas:
+        await ctx.send("✅ **Nenhuma dívida ativa no momento!**")
+        return
+
+    embed = discord.Embed(
+        title="🚨 ── DÍVIDAS ATIVAS (META DOBRADA) ── 🚨",
+        description=f"📊 Total: **{len(dividas)}** membro(s) em dívida",
+        color=0xE74C3C,
+        timestamp=agora()
+    )
+
+    guild = ctx.guild
+    texto = ""
+    for i, d in enumerate(dividas[:25], 1):
+        member = guild.get_member(int(d["user_id"]))
+        nome = member.display_name if member else f"ID: {d['user_id']}"
+        texto += f"**{i}.** {nome}\n"
+        texto += f"   💰 Dívida: **{formatar_dinheiro(d['valor_divida'])}**\n"
+        texto += f"   📅 Semana: {d['semana_fechamento']}\n\n"
+
+    if len(dividas) > 25:
+        texto += f"\n*... e mais {len(dividas) - 25} dívidas*"
+
+    embed.add_field(name="👥 MEMBROS EM DÍVIDA", value=texto[:1024], inline=False)
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# COMANDO: QUITAR DÍVIDA
+# =========================================================
+@bot.command(name="quitar_divida")
+@commands.has_permissions(administrator=True)
+async def cmd_quitar_divida(ctx, member: discord.Member):
+    """Quita manualmente a dívida de um membro."""
+    divida = await buscar_divida_ativa(member.id)
+    if not divida:
+        await ctx.send(f"✅ {member.mention} **não tem dívida ativa!**")
+        return
+
+    await quitar_dividas(member.id)
+    await atualizar_embed_meta(member.id)
+
+    embed = discord.Embed(
+        title="✅ DÍVIDA QUITADA MANUALMENTE",
+        description=f"👤 {member.mention}",
+        color=0x2ECC71,
+        timestamp=agora()
+    )
+    embed.add_field(
+        name="💰 Valor Quitado",
+        value=formatar_dinheiro(divida["valor_divida"]),
+        inline=True
+    )
+    embed.add_field(
+        name="👤 Por",
+        value=ctx.author.mention,
+        inline=True
+    )
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# COMANDO: VER DÍVIDA DE UM MEMBRO
+# =========================================================
+@bot.command(name="ver_divida")
+async def cmd_ver_divida(ctx, member: discord.Member = None):
+    """Mostra a dívida de um membro."""
+    if member is None:
+        member = ctx.author
+
+    if member.id != ctx.author.id:
+        is_admin = ctx.author.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+            for r in ctx.author.roles
+        )
+        if not is_admin and not is_gerente:
+            await ctx.send("❌ Apenas ADM ou Gerentes podem ver dívidas de outros!")
+            return
+
+    divida = await buscar_divida_ativa(member.id)
+    if not divida:
+        await ctx.send(f"✅ {member.mention} **não tem dívida ativa!**")
+        return
+
+    embed = discord.Embed(
+        title="🚨 ── DÍVIDA ATIVA ── 🚨",
+        description=f"👤 {member.mention}",
+        color=0xE74C3C,
+        timestamp=agora()
+    )
+    embed.add_field(
+        name="💰 Valor da Dívida",
+        value=formatar_dinheiro(divida["valor_divida"]),
+        inline=True
+    )
+    embed.add_field(
+        name="📊 Meta Original",
+        value=formatar_dinheiro(divida["valor_original"]),
+        inline=True
+    )
+    embed.add_field(
+        name="📅 Semana",
+        value=divida["semana_fechamento"],
+        inline=False
+    )
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+    await ctx.send(embed=embed)
 
 # =========================================================
 # ==================== COMANDO DE ATUALIZAR ACESSO RESP ===
