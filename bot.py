@@ -5499,8 +5499,8 @@ async def enviar_embed_pedido_finalizado(
     tipo="finalizado"
 ):
     """
-    Envia o embed bonito no canal de Pedidos Finalizados.
-    tipo: "finalizado" ou "cancelado"
+    Envia o embed de pedido finalizado/cancelado no canal de Pedidos Finalizados.
+    Formato IDÊNTICO ao embed do canal Encomendas, mas sem botões.
     """
     try:
         canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
@@ -5509,36 +5509,39 @@ async def enviar_embed_pedido_finalizado(
             return False
 
         valor_total = (pt * 50) + (sub * 90)
+        pacotes_pt = pt // 50
+        pacotes_sub = sub // 50
 
+        # =========================================================
+        # CONFIGURAÇÃO DE COR E EMOJI POR TIPO
+        # =========================================================
         if tipo == "cancelado":
-            cor = 0xE74C3C
-            emoji = "❌"
-            titulo = "PEDIDO CANCELADO"
+            cor = 0xE74C3C  # Vermelho
+            titulo = "❌ ── PEDIDO CANCELADO ── ❌"
         else:
-            cor = 0x2ECC71
-            emoji = "🎉"
-            titulo = "PEDIDO FINALIZADO"
+            cor = 0x2ECC71  # Verde
+            titulo = "🎉 ── PEDIDO FINALIZADO ── 🎉"
 
+        # =========================================================
+        # EMBED PRINCIPAL
+        # =========================================================
         embed = discord.Embed(
-            title=f"{emoji} ── {titulo} ── {emoji}",
-            description=f"📅 **VDR 442** • Pedido **#{pedido_numero:04d}**",
+            title=titulo,
             color=cor,
             timestamp=agora()
         )
+
+        # Author com nome da organização
         embed.set_author(
-            name="🛡 Vida Rasa 442 • Sistema de Pedidos",
+            name=f"🏷️ {organizacao} • Sistema de Encomendas",
             icon_url=bot.user.display_avatar.url if bot.user else None
         )
+
+        # Thumbnail (logo VDR)
         embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
 
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
-        )
-
         # =========================================================
-        # INFORMAÇÕES DO PEDIDO
+        # LINHA 1 — PEDIDO / ORGANIZAÇÃO / VENDEDOR
         # =========================================================
         embed.add_field(
             name="📦 PEDIDO",
@@ -5547,32 +5550,31 @@ async def enviar_embed_pedido_finalizado(
         )
         embed.add_field(
             name="🏷️ ORGANIZAÇÃO",
-            value=f"**{organizacao}**",
+            value=f"```yaml\n{organizacao}\n```",
             inline=True
         )
         embed.add_field(
             name="👤 VENDEDOR",
-            value=f"**{vendedor_nome}**",
+            value=f"```yaml\n{vendedor_nome}\n```",
             inline=True
         )
 
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
-        )
+        # =========================================================
+        # SEPARADOR
+        # =========================================================
+        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
         # =========================================================
-        # QUANTIDADES
+        # LINHA 2 — PT / SUB / VALOR
         # =========================================================
         embed.add_field(
             name="🔫 PT",
-            value=f"```yaml\n{fmt_num(pt)} munições\n```",
+            value=f"```yaml\n{fmt_num(pt)} munições\n📦 {fmt_num(pacotes_pt)} pacotes\n```",
             inline=True
         )
         embed.add_field(
             name="🔫 SUB",
-            value=f"```yaml\n{fmt_num(sub)} munições\n```",
+            value=f"```yaml\n{fmt_num(sub)} munições\n📦 {fmt_num(pacotes_sub)} pacotes\n```",
             inline=True
         )
         embed.add_field(
@@ -5581,49 +5583,58 @@ async def enviar_embed_pedido_finalizado(
             inline=True
         )
 
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
-        )
+        # =========================================================
+        # SEPARADOR
+        # =========================================================
+        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
         # =========================================================
-        # HISTÓRICO DE AÇÕES
+        # LINHA 3 — HISTÓRICO (PAGO / ENTREGUE / TRANSFERIDO / CANCELADO)
         # =========================================================
         if tipo == "cancelado":
+            cancelado_info = f"{cancelado_por or 'Desconhecido'}\n📅 {cancelado_em or '—'}"
             embed.add_field(
                 name="❌ CANCELADO POR",
-                value=f"```yaml\n{cancelado_por or 'Desconhecido'}\n📅 {cancelado_em or '—'}\n```",
+                value=f"```yaml\n{cancelado_info}\n```",
                 inline=False
             )
         else:
+            # PAGO POR
+            pago_info = f"{pago_por or '—'}\n📅 {pago_em or '—'}"
             embed.add_field(
                 name="✅ PAGO POR",
-                value=f"```yaml\n{pago_por or '—'}\n📅 {pago_em or '—'}\n```",
+                value=f"```yaml\n{pago_info}\n```",
                 inline=True
             )
+
+            # ENTREGUE POR
+            entregue_info = f"{entregue_por or '—'}\n📅 {entregue_em or '—'}"
             embed.add_field(
                 name="📦 ENTREGUE POR",
-                value=f"```yaml\n{entregue_por or '—'}\n📅 {entregue_em or '—'}\n```",
+                value=f"```yaml\n{entregue_info}\n```",
                 inline=True
             )
 
-            transferido_info = f"📤 **TRANSFERIDO PARA:** {transferido_para or '—'}\n"
-            transferido_info += f"👤 **CONFIRMADO POR:** {transferido_por or '—'}\n"
-            transferido_info += f"📅 **DATA:** {transferido_em or '—'}"
-
+            # TRANSFERÊNCIA (linha inteira)
+            transferencia_texto = (
+                f"📤 **Transferido para:** {transferido_para or '—'}\n"
+                f"👤 **Confirmado por:** {transferido_por or '—'}\n"
+                f"📅 **Data:** {transferido_em or '—'}"
+            )
             embed.add_field(
                 name="📤 TRANSFERÊNCIA",
-                value=f"```yaml\n{transferido_info}\n```",
+                value=transferencia_texto,
                 inline=False
             )
 
-        embed.add_field(
-            name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            value="",
-            inline=False
-        )
+        # =========================================================
+        # SEPARADOR
+        # =========================================================
+        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
+        # =========================================================
+        # STATUS FINAL
+        # =========================================================
         if tipo == "cancelado":
             embed.add_field(
                 name="❌ STATUS FINAL",
@@ -5637,11 +5648,24 @@ async def enviar_embed_pedido_finalizado(
                 inline=False
             )
 
+        # =========================================================
+        # FOOTER COM TIMESTAMP DINÂMICO
+        # =========================================================
         embed.set_footer(
-            text=f"🛡 Vida Rasa 442 • Encerrado em {agora().strftime('%d/%m/%Y às %H:%M')}",
+            text=f"🛡 Vida Rasa 442 • Encerrado em",
             icon_url=bot.user.display_avatar.url if bot.user else None
         )
 
+        # Adiciona timestamp dinâmico ao final do footer
+        timestamp_unix = int(agora().timestamp())
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • Encerrado em <t:{timestamp_unix}:F>",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        # =========================================================
+        # ENVIA O EMBED
+        # =========================================================
         await safe_request(canal.send, embed=embed)
         logger.info(f"✅ Embed de pedido #{pedido_numero:04d} ({tipo}) enviado para o canal de finalizados")
         return True
