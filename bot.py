@@ -6534,31 +6534,6 @@ class StatusView(discord.ui.View):
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
-            return
-            
-        await interaction.message.edit(embed=embed, view=StatusView(
-            disabled=False,
-            entrega_id=self.entrega_id,
-            total_entregas=self.total_entregas,
-            entrega_atual=self.entrega_atual,
-            pago_ja_clicado=pago_foi_clicado,
-            mensagem_original=interaction.message,
-            transferencia_confirmada=False,
-            valor_total=self.valor_total,
-            pt=self.pt,
-            sub=self.sub,
-            pedido_numero=self.pedido_numero,
-            entregue_ja_clicado=True
-        ))
-
-        await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
-
-        # ✅ ESTE TRECHO VOLTOU (estava no seu original!)
-        if self.entrega_atual < self.total_entregas:
-            await self.criar_proxima_entrega(interaction, embed, pedido_numero)
-
-        await enviar_painel_vendas()
-        await enviar_painel_fabricacao()
 
     async def editar_venda(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
@@ -10260,6 +10235,58 @@ async def ajustar_permissoes_sala(canal, member, is_mecanico):
 
     except Exception as e:
         logger.error(f"❌ Erro ao ajustar permissões da sala: {e}")
+
+
+# =========================================================
+# ATUALIZAR ACESSO DOS RESPONSÁVEIS
+# =========================================================
+async def atualizar_acesso_responsaveis():
+    """
+    Atualiza o acesso de TODOS os responsáveis (cargo Resp. Metas) 
+    a TODAS as salas de meta existentes.
+    """
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            logger.error("❌ Guild não encontrada em atualizar_acesso_responsaveis")
+            return
+
+        cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+        if not cargo_resp:
+            logger.error("❌ Cargo de Responsável de Metas não encontrado")
+            return
+
+        # Pega todos os membros que têm o cargo de responsável
+        responsaveis = [m for m in guild.members if cargo_resp in m.roles]
+        if not responsaveis:
+            logger.info("ℹ️ Nenhum responsável encontrado")
+            return
+
+        # Carrega todas as metas do banco
+        rows = await carregar_metas_db()
+        if not rows:
+            logger.info("ℹ️ Nenhuma sala de meta para atualizar")
+            return
+
+        contador = 0
+        for meta in rows:
+            canal_id = int(meta["canal_id"])
+            canal = guild.get_channel(canal_id)
+            if not canal:
+                continue
+
+            for resp in responsaveis:
+                try:
+                    await canal.set_permissions(resp, view_channel=True, send_messages=True)
+                    contador += 1
+                except Exception as e:
+                    logger.error(f"❌ Erro ao dar acesso a {resp.display_name} em {canal.name}: {e}")
+
+            await asyncio.sleep(0.2)
+
+        logger.info(f"✅ {contador} permissões atualizadas para {len(responsaveis)} responsáveis")
+    except Exception as e:
+        logger.error(f"❌ Erro em atualizar_acesso_responsaveis: {e}")
 
 async def atualizar_embed_meta(user_id):
     try:
