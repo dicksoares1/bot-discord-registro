@@ -11138,17 +11138,17 @@ async def enviar_painel_emprestimos():
 # =========================================================
 
 class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo (a Receber)"):
-    passaporte = discord.ui.TextInput(
-        label="🆔 Passaporte",
-        placeholder="Ex: 820",
-        required=True,
-        max_length=50
-    )
     nome_faccao = discord.ui.TextInput(
         label="🏢 Nome da Facção/Organização",
         placeholder="Ex: FALCATRUA, LEON, MAFIA",
         required=True,
         max_length=100
+    )
+    passaporte = discord.ui.TextInput(
+        label="🆔 Passaporte",
+        placeholder="Ex: 820",
+        required=True,
+        max_length=50
     )
     telefone = discord.ui.TextInput(
         label="📱 Telefone",
@@ -11162,23 +11162,17 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo 
         required=True,
         max_length=15
     )
+    parcelamento = discord.ui.TextInput(
+        label="📊 Parcelas e Frequência",
+        placeholder="Ex: 4 parcelas mensal (ou semanal, quinzenal)",
+        required=True,
+        max_length=60
+    )
     juros = discord.ui.TextInput(
         label="📈 Juros (%)",
         placeholder="Ex: 20",
         required=True,
         max_length=5
-    )
-    parcelas = discord.ui.TextInput(
-        label="🔢 Número de Parcelas",
-        placeholder="Ex: 4",
-        required=True,
-        max_length=3
-    )
-    frequencia = discord.ui.TextInput(
-        label="⏰ Frequência (semanal / quinzenal / mensal)",
-        placeholder="Ex: mensal",
-        required=True,
-        max_length=20
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -11200,17 +11194,38 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo 
             await interaction.followup.send("❌ **Juros inválidos!**", ephemeral=True)
             return
 
-        try:
-            parcelas = safe_int(self.parcelas.value)
-            if parcelas <= 0:
-                raise ValueError
-        except:
-            await interaction.followup.send("❌ **Número de parcelas inválido!**", ephemeral=True)
+        # =========================================================
+        # PARSE DO PARCELAMENTO
+        # Aceita formatos: "4 parcelas mensal", "4 mensal", "4 parcelas semanais", etc
+        # =========================================================
+        parcelamento_str = self.parcelamento.value.strip().lower()
+        import re
+        # Extrai o número
+        numeros = re.findall(r'\d+', parcelamento_str)
+        if not numeros:
+            await interaction.followup.send(
+                "❌ **Formato inválido!** Use algo como `4 parcelas mensal`.",
+                ephemeral=True
+            )
             return
 
-        frequencia = self.frequencia.value.strip().lower()
-        if frequencia not in ("semanal", "quinzenal", "mensal"):
-            await interaction.followup.send("❌ **Frequência inválida!** Use `semanal`, `quinzenal` ou `mensal`.", ephemeral=True)
+        parcelas = int(numeros[0])
+        if parcelas <= 0 or parcelas > 100:
+            await interaction.followup.send("❌ **Número de parcelas inválido!** (1 a 100)", ephemeral=True)
+            return
+
+        # Extrai a frequência
+        if "semanal" in parcelamento_str or "semana" in parcelamento_str:
+            frequencia = "semanal"
+        elif "quinzenal" in parcelamento_str or "quinzena" in parcelamento_str:
+            frequencia = "quinzenal"
+        elif "mensal" in parcelamento_str or "mes" in parcelamento_str or "mês" in parcelamento_str:
+            frequencia = "mensal"
+        else:
+            await interaction.followup.send(
+                "❌ **Frequência não detectada!** Use `semanal`, `quinzenal` ou `mensal`.",
+                ephemeral=True
+            )
             return
 
         emprestimo_id = await criar_emprestimo(
@@ -11251,7 +11266,6 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo 
         embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id:04d}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-
 class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a Pagar)"):
     nome_faccao = discord.ui.TextInput(
         label="🏢 Quem Emprestou",
@@ -11271,29 +11285,17 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a
         required=True,
         max_length=15
     )
-    parcelas = discord.ui.TextInput(
-        label="🔢 Número de Parcelas",
-        placeholder="Ex: 6",
+    parcelamento = discord.ui.TextInput(
+        label="📊 Parcelas e Frequência",
+        placeholder="Ex: 6 parcelas mensal (ou semanal, quinzenal)",
         required=True,
-        max_length=3
-    )
-    frequencia = discord.ui.TextInput(
-        label="⏰ Frequência (semanal / quinzenal / mensal)",
-        placeholder="Ex: mensal",
-        required=True,
-        max_length=20
+        max_length=60
     )
     telefone = discord.ui.TextInput(
         label="📱 Telefone (opcional)",
         placeholder="Ex: (11) 88888-8888",
         required=False,
         max_length=50
-    )
-    observacoes = discord.ui.TextInput(
-        label="📝 Observações (opcional)",
-        placeholder="Ex: Pagamento via PIX",
-        required=False,
-        max_length=200
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -11315,20 +11317,38 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a
             await interaction.followup.send("❌ **Valor total inválido!**", ephemeral=True)
             return
 
-        try:
-            parcelas = safe_int(self.parcelas.value)
-            if parcelas <= 0:
-                raise ValueError
-        except:
-            await interaction.followup.send("❌ **Número de parcelas inválido!**", ephemeral=True)
+        # =========================================================
+        # PARSE DO PARCELAMENTO
+        # =========================================================
+        parcelamento_str = self.parcelamento.value.strip().lower()
+        import re
+        numeros = re.findall(r'\d+', parcelamento_str)
+        if not numeros:
+            await interaction.followup.send(
+                "❌ **Formato inválido!** Use algo como `4 parcelas mensal`.",
+                ephemeral=True
+            )
             return
 
-        frequencia = self.frequencia.value.strip().lower()
-        if frequencia not in ("semanal", "quinzenal", "mensal"):
-            await interaction.followup.send("❌ **Frequência inválida!** Use `semanal`, `quinzenal` ou `mensal`.", ephemeral=True)
+        parcelas = int(numeros[0])
+        if parcelas <= 0 or parcelas > 100:
+            await interaction.followup.send("❌ **Número de parcelas inválido!** (1 a 100)", ephemeral=True)
             return
 
-        # Calcula juros efetivos (pra ficar compatível)
+        if "semanal" in parcelamento_str or "semana" in parcelamento_str:
+            frequencia = "semanal"
+        elif "quinzenal" in parcelamento_str or "quinzena" in parcelamento_str:
+            frequencia = "quinzenal"
+        elif "mensal" in parcelamento_str or "mes" in parcelamento_str or "mês" in parcelamento_str:
+            frequencia = "mensal"
+        else:
+            await interaction.followup.send(
+                "❌ **Frequência não detectada!** Use `semanal`, `quinzenal` ou `mensal`.",
+                ephemeral=True
+            )
+            return
+
+        # Calcula juros efetivos
         juros_calculado = int(((valor_total / valor_recebido) - 1) * 100)
 
         emprestimo_id = await criar_emprestimo(
@@ -11339,7 +11359,6 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a
             frequencia=frequencia,
             nome_faccao=self.nome_faccao.value.strip().upper(),
             telefone=self.telefone.value.strip() if self.telefone.value else None,
-            observacoes=self.observacoes.value.strip() if self.observacoes.value else None,
             autor=interaction.user.id
         )
 
@@ -11362,11 +11381,8 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a
         embed.add_field(name="💵 Valor total", value=formatar_dinheiro(valor_total), inline=True)
         embed.add_field(name="🔢 Parcelas", value=f"{parcelas}x de {formatar_dinheiro(valor_parcela)}", inline=True)
         embed.add_field(name="⏰ Frequência", value=frequencia.capitalize(), inline=True)
-        if self.observacoes.value:
-            embed.add_field(name="📝 Obs", value=self.observacoes.value.strip(), inline=False)
         embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id:04d}")
         await interaction.followup.send(embed=embed, ephemeral=True)
-
 
 # =========================================================
 # VIEW: MARCAR PARCELA COMO PAGA
