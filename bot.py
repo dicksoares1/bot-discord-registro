@@ -919,11 +919,105 @@ async def inicializar_tabelas(pool):
             VALUES (1, 'dinheiro')
             ON CONFLICT (id) DO NOTHING
         """)
+        # =========================================================
+        # TABELA: CAIXA DA FACÇÃO
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS caixa (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                valor_atual BIGINT DEFAULT 0,
+                ultima_atualizacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            INSERT INTO caixa (id, valor_atual)
+            VALUES (1, 0)
+            ON CONFLICT (id) DO NOTHING
+        """)
+
+        # =========================================================
+        # TABELA: MOVIMENTAÇÕES DO CAIXA
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS caixa_movimentacoes (
+                id SERIAL PRIMARY KEY,
+                tipo VARCHAR(20) NOT NULL,
+                valor BIGINT NOT NULL,
+                motivo TEXT,
+                autor VARCHAR(30),
+                data TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_caixa_mov_data ON caixa_movimentacoes(data DESC)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_caixa_mov_tipo ON caixa_movimentacoes(tipo)
+        """)
+
+        # =========================================================
+        # TABELA: EMPRÉSTIMOS
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS emprestimos (
+                id SERIAL PRIMARY KEY,
+                tipo VARCHAR(20) NOT NULL,
+                passaporte VARCHAR(50),
+                nome_faccao VARCHAR(100),
+                telefone VARCHAR(50),
+                valor_emprestado BIGINT NOT NULL,
+                juros_percent INTEGER DEFAULT 0,
+                valor_total BIGINT NOT NULL,
+                total_parcelas INTEGER NOT NULL,
+                parcelas_pagas INTEGER DEFAULT 0,
+                valor_parcela BIGINT NOT NULL,
+                frequencia VARCHAR(20) NOT NULL,
+                observacoes TEXT,
+                criado_por VARCHAR(30),
+                data_criacao TIMESTAMP DEFAULT NOW(),
+                ativo BOOLEAN DEFAULT true
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_emprestimos_ativo ON emprestimos(ativo)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_emprestimos_tipo ON emprestimos(tipo)
+        """)
+
+        # =========================================================
+        # TABELA: PARCELAS DOS EMPRÉSTIMOS
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS emprestimos_parcelas (
+                id SERIAL PRIMARY KEY,
+                emprestimo_id INTEGER NOT NULL,
+                numero_parcela INTEGER NOT NULL,
+                valor BIGINT NOT NULL,
+                data_vencimento TIMESTAMP NOT NULL,
+                pago BOOLEAN DEFAULT false,
+                data_pagamento TIMESTAMP,
+                avisada BOOLEAN DEFAULT false
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_parcelas_emprestimo ON emprestimos_parcelas(emprestimo_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_parcelas_vencimento ON emprestimos_parcelas(data_vencimento)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_parcelas_pago ON emprestimos_parcelas(pago)
+        """)
 
     logger.info("✅ Todas as tabelas criadas/verificadas com sucesso!")
     logger.info("✅ Tabela horas_historico pronta!")
     logger.info("✅ Tabela metas_dividas pronta!")
     logger.info("✅ Tabela config_meta_semana pronta!")
+    logger.info("✅ Tabela caixa pronta!")
+    logger.info("✅ Tabela caixa_movimentacoes pronta!")
+    logger.info("✅ Tabela emprestimos pronta!")
+    logger.info("✅ Tabela emprestimos_parcelas pronta!")
 
 # =========================================================
 # ==================== PARTE 3: UTILITÁRIOS ===============
@@ -1742,6 +1836,23 @@ async def salvar_compra_db(produto, valor, comprado_por):
                 "INSERT INTO compras (produto, valor, comprado_por, data) VALUES ($1, $2, $3, $4)",
                 produto, valor, str(comprado_por), agora_db()
             )
+
+        # ✅ Integração com o caixa: subtrai o valor da compra
+        try:
+            await movimentar_caixa(
+                tipo="compra",
+                valor=valor,
+                motivo=f"Compra: {produto}",
+                autor=comprado_por
+            )
+            # Atualiza o painel do caixa
+            try:
+                await enviar_painel_caixa()
+            except:
+                pass
+        except Exception as e:
+            logger.error(f"⚠️ Erro ao movimentar caixa pela compra: {e}")
+
     except Exception as e:
         logger.error(f"❌ Erro ao salvar compra: {e}")
 
@@ -5998,6 +6109,21 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                 embed_log.add_field(name="🔫 SUB", value=f"{fmt_num(self.sub)} munições", inline=True)
                 embed_log.set_footer(text=f"Transferência confirmada em {agora().strftime('%d/%m/%Y %H:%M')}")
                 await canal_log.send(embed=embed_log)
+                    
+            # =========================================================
+            # ✅ INTEGRAÇÃO COM O CAIXA: soma o valor da venda
+            # =========================================================
+            try:
+                await movimentar_caixa(
+                    tipo="venda",
+                    valor=self.valor_total,
+                    motivo=f"Venda #{self.pedido_numero:04d}",
+                    autor=interaction.user.id
+                )
+                logger.info(f"💰 Caixa: +{formatar_dinheiro(self.valor_total)} (Venda #{self.pedido_numero:04d})")
+            except Exception as e:
+                logger.error(f"⚠️ Erro ao somar venda no caixa: {e}")
+
 
             # =========================================================
             # ✅ FINALIZAR PEDIDO: DELETAR DO CANAL E ENVIAR PARA FINALIZADOS
@@ -7445,6 +7571,7 @@ async def finalizar_e_mover_pedido(
         try:
             await enviar_painel_vendas()
             await enviar_painel_fabricacao()
+            await enviar_painel_caixa()
         except Exception as e:
             logger.error(f"❌ Erro ao atualizar painéis: {e}")
 
@@ -9976,6 +10103,1533 @@ async def listar_dividas_ativas():
         logger.error(f"❌ Erro ao listar dívidas: {e}")
         return []
 
+
+# =========================================================
+# SISTEMA DE CAIXA DA FACÇÃO
+# =========================================================
+
+async def buscar_caixa():
+    """
+    Retorna o valor atual do caixa.
+    """
+    pool = await get_pool()
+    if not pool:
+        return 0
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT valor_atual FROM caixa WHERE id = 1")
+            return row["valor_atual"] if row else 0
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar caixa: {e}")
+        return 0
+
+
+async def movimentar_caixa(tipo, valor, motivo, autor):
+    """
+    Movimenta o caixa.
+    tipo: 'venda', 'compra', 'ajuste_mais', 'ajuste_menos', 'lavagem', 'parcela_receber', 'parcela_pagar'
+    valor: valor da movimentação (positivo)
+    motivo: descrição
+    autor: user_id
+    """
+    pool = await get_pool()
+    if not pool:
+        return False
+
+    try:
+        async with pool.acquire() as conn:
+            # 1. Pega o valor atual
+            row = await conn.fetchrow("SELECT valor_atual FROM caixa WHERE id = 1")
+            valor_atual = row["valor_atual"] if row else 0
+
+            # 2. Calcula o novo valor
+            if tipo in ("ajuste_mais", "venda", "lavagem", "parcela_receber"):
+                novo_valor = valor_atual + valor
+                # Garante que não fique negativo (por segurança)
+                if novo_valor < 0:
+                    novo_valor = 0
+            else:
+                # ajuste_menos, compra, parcela_pagar
+                novo_valor = valor_atual - valor
+                if novo_valor < 0:
+                    novo_valor = 0
+
+            # 3. Atualiza o caixa
+            await conn.execute(
+                "UPDATE caixa SET valor_atual = $1, ultima_atualizacao = NOW() WHERE id = 1",
+                novo_valor
+            )
+
+            # 4. Registra movimentação
+            await conn.execute("""
+                INSERT INTO caixa_movimentacoes (tipo, valor, motivo, autor, data)
+                VALUES ($1, $2, $3, $4, NOW())
+            """, tipo, valor, motivo, str(autor))
+
+            return True
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao movimentar caixa: {e}")
+        return False
+
+
+async def buscar_movimentacoes_caixa(limite=5):
+    """
+    Retorna as últimas movimentações do caixa.
+    """
+    pool = await get_pool()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT * FROM caixa_movimentacoes ORDER BY data DESC LIMIT $1",
+                limite
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar movimentações: {e}")
+        return []
+
+
+async def gerar_embed_caixa():
+    """
+    Monta o embed do painel do caixa.
+    """
+    valor_caixa = await buscar_caixa()
+    movimentacoes = await buscar_movimentacoes_caixa(5)
+
+    embed = discord.Embed(
+        title="💰 ── CAIXA DA FACÇÃO ── 💰",
+        description="📅 **VDR 442**",
+        color=0x2ECC71,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Sistema Financeiro",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # Saldo
+    embed.add_field(
+        name="💵 SALDO ATUAL",
+        value=f"```yaml\n{formatar_dinheiro(valor_caixa)}\n```",
+        inline=False
+    )
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # Últimas movimentações
+    if movimentacoes:
+        texto_movs = ""
+        for mov in movimentacoes:
+            tipo = mov["tipo"]
+            valor = mov["valor"]
+            motivo = mov["motivo"] or "Sem motivo"
+            autor_id = mov["autor"]
+            data = mov["data"]
+            if data.tzinfo is None:
+                data = data.replace(tzinfo=BRASIL)
+
+            # Emoji e sinal por tipo
+            if tipo in ("ajuste_mais", "venda", "lavagem", "parcela_receber"):
+                emoji_tipo = "➕"
+                sinal = "+"
+            else:
+                emoji_tipo = "➖"
+                sinal = "-"
+
+            # Nome do autor
+            try:
+                guild = bot.get_guild(GUILD_ID)
+                member = guild.get_member(int(autor_id)) if guild else None
+                nome_autor = member.display_name if member else f"ID: {autor_id}"
+            except:
+                nome_autor = f"ID: {autor_id}"
+
+            texto_movs += f"{emoji_tipo} **{motivo}** • {sinal}{formatar_dinheiro(valor)}\n"
+            texto_movs += f"   👤 {nome_autor} • {data.strftime('%d/%m %H:%M')}\n\n"
+
+        embed.add_field(
+            name="📊 ÚLTIMAS 5 MOVIMENTAÇÕES",
+            value=texto_movs[:1024],
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="📊 ÚLTIMAS 5 MOVIMENTAÇÕES",
+            value="```yaml\nNenhuma movimentação registrada\n```",
+            inline=False
+        )
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    return embed
+
+
+# =========================================================
+# MODAIS DO CAIXA
+# =========================================================
+
+class AdicionarCaixaModal(discord.ui.Modal, title="➕ Adicionar Dinheiro ao Caixa"):
+    valor = discord.ui.TextInput(
+        label="💰 Valor a adicionar (R$)",
+        placeholder="Ex: 50000",
+        required=True,
+        max_length=15
+    )
+    motivo = discord.ui.TextInput(
+        label="📝 Motivo (obrigatório)",
+        placeholder="Ex: Doação, entrada extra, ajuste com tablet...",
+        required=True,
+        max_length=200
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            valor = safe_int(self.valor.value)
+            if valor <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Valor inválido!**", ephemeral=True)
+            return
+
+        motivo = self.motivo.value.strip()
+        if not motivo:
+            await interaction.followup.send("❌ **Motivo é obrigatório!**", ephemeral=True)
+            return
+
+        # Adiciona ao caixa
+        sucesso = await movimentar_caixa(
+            tipo="ajuste_mais",
+            valor=valor,
+            motivo=f"Ajuste Manual: {motivo}",
+            autor=interaction.user.id
+        )
+
+        if not sucesso:
+            await interaction.followup.send("❌ Erro ao adicionar no caixa!", ephemeral=True)
+            return
+
+        # Atualiza painel
+        await enviar_painel_caixa()
+
+        embed = discord.Embed(
+            title="✅ DINHEIRO ADICIONADO",
+            description=f"```yaml\n+{formatar_dinheiro(valor)}\n```",
+            color=0x2ECC71,
+            timestamp=agora()
+        )
+        embed.add_field(name="📝 Motivo", value=motivo, inline=False)
+        embed.add_field(name="👤 Autor", value=interaction.user.mention, inline=True)
+        embed.add_field(name="💰 Novo saldo", value=formatar_dinheiro(await buscar_caixa()), inline=True)
+        embed.set_footer(text="🛡 Vida Rasa 442 • Caixa")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class RemoverCaixaModal(discord.ui.Modal, title="➖ Remover Dinheiro do Caixa"):
+    valor = discord.ui.TextInput(
+        label="💰 Valor a remover (R$)",
+        placeholder="Ex: 30000",
+        required=True,
+        max_length=15
+    )
+    motivo = discord.ui.TextInput(
+        label="📝 Motivo (obrigatório)",
+        placeholder="Ex: Compra extra, pagamento, ajuste com tablet...",
+        required=True,
+        max_length=200
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            valor = safe_int(self.valor.value)
+            if valor <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Valor inválido!**", ephemeral=True)
+            return
+
+        motivo = self.motivo.value.strip()
+        if not motivo:
+            await interaction.followup.send("❌ **Motivo é obrigatório!**", ephemeral=True)
+            return
+
+        # Verifica se tem saldo
+        saldo_atual = await buscar_caixa()
+        if saldo_atual < valor:
+            await interaction.followup.send(
+                f"❌ **Saldo insuficiente!**\n\n"
+                f"💰 Caixa atual: {formatar_dinheiro(saldo_atual)}\n"
+                f"💸 Tentativa de remoção: {formatar_dinheiro(valor)}",
+                ephemeral=True
+            )
+            return
+
+        sucesso = await movimentar_caixa(
+            tipo="ajuste_menos",
+            valor=valor,
+            motivo=f"Ajuste Manual: {motivo}",
+            autor=interaction.user.id
+        )
+
+        if not sucesso:
+            await interaction.followup.send("❌ Erro ao remover do caixa!", ephemeral=True)
+            return
+
+        await enviar_painel_caixa()
+
+        embed = discord.Embed(
+            title="✅ DINHEIRO REMOVIDO",
+            description=f"```yaml\n-{formatar_dinheiro(valor)}\n```",
+            color=0xE74C3C,
+            timestamp=agora()
+        )
+        embed.add_field(name="📝 Motivo", value=motivo, inline=False)
+        embed.add_field(name="👤 Autor", value=interaction.user.mention, inline=True)
+        embed.add_field(name="💰 Novo saldo", value=formatar_dinheiro(await buscar_caixa()), inline=True)
+        embed.set_footer(text="🛡 Vida Rasa 442 • Caixa")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class AdicionarLavadoModal(discord.ui.Modal, title="💸 Adicionar Dinheiro Lavado"):
+    valor = discord.ui.TextInput(
+        label="💰 Valor lavado (R$)",
+        placeholder="Ex: 500000",
+        required=True,
+        max_length=15
+    )
+    origem = discord.ui.TextInput(
+        label="📝 Origem / Observação",
+        placeholder="Ex: Lavagem da facção, dinheiro do baú, etc",
+        required=True,
+        max_length=200
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            valor = safe_int(self.valor.value)
+            if valor <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Valor inválido!**", ephemeral=True)
+            return
+
+        origem = self.origem.value.strip()
+
+        sucesso = await movimentar_caixa(
+            tipo="lavagem",
+            valor=valor,
+            motivo=f"Lavagem: {origem}",
+            autor=interaction.user.id
+        )
+
+        if not sucesso:
+            await interaction.followup.send("❌ Erro ao adicionar lavagem!", ephemeral=True)
+            return
+
+        await enviar_painel_caixa()
+
+        embed = discord.Embed(
+            title="💸 DINHEIRO LAVADO ADICIONADO",
+            description=f"```yaml\n+{formatar_dinheiro(valor)}\n```",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+        embed.add_field(name="📝 Origem", value=origem, inline=False)
+        embed.add_field(name="👤 Autor", value=interaction.user.mention, inline=True)
+        embed.add_field(name="💰 Novo saldo", value=formatar_dinheiro(await buscar_caixa()), inline=True)
+        embed.set_footer(text="🛡 Vida Rasa 442 • Caixa")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class RelatorioCaixaModal(discord.ui.Modal, title="📈 Relatório do Caixa"):
+    data_inicio = discord.ui.TextInput(
+        label="📅 Data INÍCIO (DD/MM/AAAA)",
+        placeholder="Ex: 01/10/2026",
+        required=True,
+        max_length=10
+    )
+    data_fim = discord.ui.TextInput(
+        label="📅 Data FIM (DD/MM/AAAA)",
+        placeholder="Ex: 31/10/2026",
+        required=True,
+        max_length=10
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            inicio = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
+            inicio_dt = inicio.replace(hour=0, minute=0, second=0)
+            fim_dt = fim.replace(hour=23, minute=59, second=59)
+        except:
+            await interaction.followup.send("❌ **Formato de data inválido!** Use DD/MM/AAAA", ephemeral=True)
+            return
+
+        if fim < inicio:
+            await interaction.followup.send("❌ **Data FIM deve ser depois da INÍCIO!**", ephemeral=True)
+            return
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        try:
+            async with pool.acquire() as conn:
+                # Soma por tipo
+                entradas = await conn.fetchval(
+                    """SELECT COALESCE(SUM(valor), 0) FROM caixa_movimentacoes 
+                       WHERE tipo IN ('venda', 'lavagem', 'ajuste_mais', 'parcela_receber') 
+                       AND data >= $1 AND data <= $2""",
+                    inicio_dt, fim_dt
+                )
+                saidas = await conn.fetchval(
+                    """SELECT COALESCE(SUM(valor), 0) FROM caixa_movimentacoes 
+                       WHERE tipo IN ('compra', 'ajuste_menos', 'parcela_pagar') 
+                       AND data >= $1 AND data <= $2""",
+                    inicio_dt, fim_dt
+                )
+                total_movs = await conn.fetchval(
+                    "SELECT COUNT(*) FROM caixa_movimentacoes WHERE data >= $1 AND data <= $2",
+                    inicio_dt, fim_dt
+                )
+
+                # Movimentações detalhadas
+                movs = await conn.fetch(
+                    "SELECT * FROM caixa_movimentacoes WHERE data >= $1 AND data <= $2 ORDER BY data DESC LIMIT 20",
+                    inicio_dt, fim_dt
+                )
+
+            saldo = entradas - saidas
+
+            embed = discord.Embed(
+                title="📈 ── RELATÓRIO DO CAIXA ── 📈",
+                description=f"📅 **Período:** {self.data_inicio.value} a {self.data_fim.value}",
+                color=0x3498DB,
+                timestamp=agora()
+            )
+            embed.set_author(
+                name="🛡 Vida Rasa 442 • Sistema Financeiro",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
+            embed.add_field(
+                name="➕ ENTRADAS",
+                value=f"```yaml\n{formatar_dinheiro(entradas)}\n```",
+                inline=True
+            )
+            embed.add_field(
+                name="➖ SAÍDAS",
+                value=f"```yaml\n{formatar_dinheiro(saidas)}\n```",
+                inline=True
+            )
+            embed.add_field(
+                name="💰 SALDO",
+                value=f"```yaml\n{formatar_dinheiro(saldo)}\n```",
+                inline=True
+            )
+
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+            # Lista movs
+            if movs:
+                texto = ""
+                for mov in movs[:15]:
+                    tipo = mov["tipo"]
+                    valor = mov["valor"]
+                    motivo = mov["motivo"] or "Sem motivo"
+                    data = mov["data"]
+                    if data.tzinfo is None:
+                        data = data.replace(tzinfo=BRASIL)
+
+                    if tipo in ("ajuste_mais", "venda", "lavagem", "parcela_receber"):
+                        emoji_tipo = "➕"
+                        sinal = "+"
+                    else:
+                        emoji_tipo = "➖"
+                        sinal = "-"
+
+                    texto += f"{emoji_tipo} {data.strftime('%d/%m')} • {sinal}{formatar_dinheiro(valor)} • {motivo[:40]}\n"
+
+                embed.add_field(name="📋 MOVIMENTAÇÕES", value=f"```yaml\n{texto}\n```", inline=False)
+
+            embed.add_field(
+                name="📊 TOTAL DE MOVIMENTAÇÕES",
+                value=f"```yaml\n{total_movs}\n```",
+                inline=False
+            )
+
+            embed.set_footer(
+                text=f"🛡 Vida Rasa 442 • Gerado em {agora().strftime('%d/%m/%Y às %H:%M')}",
+                icon_url=bot.user.display_avatar.url if bot.user else None
+            )
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"❌ Erro no relatório do caixa: {e}")
+            await interaction.followup.send(f"❌ Erro: `{str(e)[:150]}`", ephemeral=True)
+
+
+# =========================================================
+# VIEW DO CAIXA
+# =========================================================
+
+class CaixaView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem mexer no caixa!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="➕ Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="caixa_adicionar", emoji="➕", row=0)
+    async def adicionar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(AdicionarCaixaModal())
+
+    @discord.ui.button(label="➖ Remover Dinheiro", style=discord.ButtonStyle.danger, custom_id="caixa_remover", emoji="➖", row=0)
+    async def remover(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(RemoverCaixaModal())
+
+    @discord.ui.button(label="💸 Adicionar Lavado", style=discord.ButtonStyle.primary, custom_id="caixa_lavado", emoji="💸", row=0)
+    async def lavado(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(AdicionarLavadoModal())
+
+    @discord.ui.button(label="📊 Histórico Completo", style=discord.ButtonStyle.secondary, custom_id="caixa_historico", emoji="📊", row=1)
+    async def historico(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            movs = await conn.fetch("SELECT * FROM caixa_movimentacoes ORDER BY data DESC LIMIT 50")
+
+        if not movs:
+            await interaction.followup.send("📭 Nenhuma movimentação registrada.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📊 ── HISTÓRICO DO CAIXA ── 📊",
+            description=f"📋 Últimas **{len(movs)}** movimentações",
+            color=0x3498DB,
+            timestamp=agora()
+        )
+
+        texto = ""
+        for mov in movs:
+            tipo = mov["tipo"]
+            valor = mov["valor"]
+            motivo = mov["motivo"] or "Sem motivo"
+            data = mov["data"]
+            if data.tzinfo is None:
+                data = data.replace(tzinfo=BRASIL)
+
+            if tipo in ("ajuste_mais", "venda", "lavagem", "parcela_receber"):
+                emoji_tipo = "➕"
+                sinal = "+"
+            else:
+                emoji_tipo = "➖"
+                sinal = "-"
+
+            linha = f"{emoji_tipo} {data.strftime('%d/%m %H:%M')} • {sinal}{formatar_dinheiro(valor)}\n   📝 {motivo[:50]}\n"
+            if len(texto) + len(linha) > 1000:
+                embed.add_field(name="📋 MOVIMENTAÇÕES", value=f"```yaml\n{texto}\n```", inline=False)
+                texto = ""
+            texto += linha
+
+        if texto:
+            embed.add_field(name="📋 MOVIMENTAÇÕES", value=f"```yaml\n{texto}\n```", inline=False)
+
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y às %H:%M')}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="📈 Relatório por Período", style=discord.ButtonStyle.secondary, custom_id="caixa_relatorio", emoji="📈", row=1)
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(RelatorioCaixaModal())
+
+    @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="caixa_atualizar", emoji="🔄", row=1)
+    async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_caixa()
+        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+
+
+# =========================================================
+# ENVIAR PAINEL DO CAIXA
+# =========================================================
+
+async def enviar_painel_caixa():
+    canal_id = 1559914499014660128
+    canal = bot.get_channel(canal_id)
+    if not canal:
+        logger.error(f"❌ Canal do caixa não encontrado: {canal_id}")
+        return
+
+    try:
+        embed = await gerar_embed_caixa()
+        view = CaixaView()
+        await enviar_ou_atualizar_painel("painel_caixa", canal_id, embed, view)
+        logger.info("✅ Painel do caixa atualizado")
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar painel do caixa: {e}")
+
+
+# =========================================================
+# SISTEMA DE EMPRÉSTIMOS
+# =========================================================
+
+async def proximo_id_emprestimo():
+    """Retorna o próximo ID disponível para empréstimo (baseado no último)."""
+    pool = await get_pool()
+    if not pool:
+        return 1
+    try:
+        async with pool.acquire() as conn:
+            ultimo = await conn.fetchval("SELECT COALESCE(MAX(id), 0) FROM emprestimos")
+            return (ultimo or 0) + 1
+    except Exception as e:
+        logger.error(f"❌ Erro ao gerar próximo ID: {e}")
+        return 1
+
+
+async def criar_emprestimo(
+    tipo,
+    valor_emprestado,
+    juros_percent,
+    total_parcelas,
+    frequencia,
+    passaporte=None,
+    nome_faccao=None,
+    telefone=None,
+    observacoes=None,
+    autor=None
+):
+    """
+    Cria um empréstimo + gera automaticamente as parcelas.
+
+    tipo: 'receber' ou 'pagar'
+    frequencia: 'semanal', 'quinzenal' ou 'mensal'
+    """
+    pool = await get_pool()
+    if not pool:
+        return None
+
+    try:
+        # Calcula valor total
+        valor_total = int(valor_emprestado * (1 + juros_percent / 100))
+        valor_parcela = valor_total // total_parcelas
+
+        # Diferença por arredondamento vai pra última parcela
+        diferenca = valor_total - (valor_parcela * total_parcelas)
+
+        async with pool.acquire() as conn:
+            # Insere empréstimo
+            emprestimo_id = await conn.fetchval("""
+                INSERT INTO emprestimos 
+                (tipo, passaporte, nome_faccao, telefone, valor_emprestado, juros_percent, 
+                 valor_total, total_parcelas, valor_parcela, frequencia, observacoes, criado_por)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                RETURNING id
+            """,
+                tipo,
+                passaporte,
+                nome_faccao,
+                telefone,
+                valor_emprestado,
+                juros_percent,
+                valor_total,
+                total_parcelas,
+                valor_parcela,
+                frequencia,
+                observacoes,
+                str(autor) if autor else None
+            )
+
+            # Define dias de intervalo por frequência
+            if frequencia == "semanal":
+                dias_intervalo = 7
+            elif frequencia == "quinzenal":
+                dias_intervalo = 15
+            else:  # mensal
+                dias_intervalo = 30
+
+            data_base = agora()
+
+            # Cria as parcelas
+            for i in range(1, total_parcelas + 1):
+                # Última parcela recebe a diferença
+                valor_parcela_i = valor_parcela
+                if i == total_parcelas:
+                    valor_parcela_i = valor_parcela + diferenca
+
+                data_vencimento = data_base + timedelta(days=dias_intervalo * i)
+
+                await conn.execute("""
+                    INSERT INTO emprestimos_parcelas 
+                    (emprestimo_id, numero_parcela, valor, data_vencimento, pago, avisada)
+                    VALUES ($1, $2, $3, $4, false, false)
+                """,
+                    emprestimo_id,
+                    i,
+                    valor_parcela_i,
+                    para_db_naive(data_vencimento)
+                )
+
+            return emprestimo_id
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao criar empréstimo: {e}")
+        return None
+
+
+async def listar_emprestimos_ativos():
+    """
+    Retorna todos os empréstimos ativos (não quitados).
+    """
+    pool = await get_pool()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT * FROM emprestimos WHERE ativo = true ORDER BY data_criacao DESC"
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao listar empréstimos: {e}")
+        return []
+
+
+async def listar_emprestimos_quitados():
+    """
+    Retorna todos os empréstimos já quitados (histórico).
+    """
+    pool = await get_pool()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT * FROM emprestimos WHERE ativo = false ORDER BY data_criacao DESC LIMIT 50"
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao listar empréstimos quitados: {e}")
+        return []
+
+
+async def buscar_parcelas_emprestimo(emprestimo_id):
+    """
+    Retorna todas as parcelas de um empréstimo.
+    """
+    pool = await get_pool()
+    if not pool:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT * FROM emprestimos_parcelas WHERE emprestimo_id = $1 ORDER BY numero_parcela ASC",
+                emprestimo_id
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar parcelas: {e}")
+        return []
+
+
+async def marcar_parcela_paga(parcela_id):
+    """
+    Marca uma parcela como paga e atualiza o empréstimo.
+    Se for a última parcela, marca o empréstimo como quitado.
+    """
+    pool = await get_pool()
+    if not pool:
+        return False
+
+    try:
+        async with pool.acquire() as conn:
+            # 1. Pega a parcela
+            parcela = await conn.fetchrow(
+                "SELECT * FROM emprestimos_parcelas WHERE id = $1",
+                parcela_id
+            )
+            if not parcela:
+                return False
+
+            if parcela["pago"]:
+                return False  # Já foi paga
+
+            # 2. Marca como paga
+            await conn.execute(
+                "UPDATE emprestimos_parcelas SET pago = true, data_pagamento = NOW() WHERE id = $1",
+                parcela_id
+            )
+
+            emprestimo_id = parcela["emprestimo_id"]
+
+            # 3. Atualiza contador no empréstimo
+            await conn.execute(
+                "UPDATE emprestimos SET parcelas_pagas = parcelas_pagas + 1 WHERE id = $1",
+                emprestimo_id
+            )
+
+            # 4. Verifica se todas as parcelas foram pagas
+            emprestimo = await conn.fetchrow(
+                "SELECT * FROM emprestimos WHERE id = $1",
+                emprestimo_id
+            )
+            if emprestimo and emprestimo["parcelas_pagas"] >= emprestimo["total_parcelas"]:
+                await conn.execute(
+                    "UPDATE emprestimos SET ativo = false WHERE id = $1",
+                    emprestimo_id
+                )
+                logger.info(f"✅ Empréstimo #{emprestimo_id} quitado!")
+
+            return True
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao marcar parcela como paga: {e}")
+        return False
+
+
+async def verificar_parcelas_vencendo():
+    """
+    Verifica as parcelas que vencem HOJE e ainda não foram avisadas.
+    Envia avisos no canal de gerência.
+    """
+    pool = await get_pool()
+    if not pool:
+        return
+
+    canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
+    if not canal_gerencia:
+        logger.error(f"❌ Canal de gerência não encontrado: {CANAL_GERENCIA_ID}")
+        return
+
+    try:
+        hoje = agora()
+        hoje_inicio = hoje.replace(hour=0, minute=0, second=0, microsecond=0)
+        hoje_fim = hoje.replace(hour=23, minute=59, second=59, microsecond=0)
+
+        async with pool.acquire() as conn:
+            # Busca parcelas que vencem hoje e não foram avisadas e não foram pagas
+            parcelas = await conn.fetch("""
+                SELECT p.*, e.tipo, e.passaporte, e.nome_faccao, e.telefone, 
+                       e.valor_total, e.total_parcelas, e.observacoes
+                FROM emprestimos_parcelas p
+                JOIN emprestimos e ON e.id = p.emprestimo_id
+                WHERE p.data_vencimento >= $1 
+                  AND p.data_vencimento <= $2
+                  AND p.pago = false
+                  AND p.avisada = false
+                  AND e.ativo = true
+            """, para_db_naive(hoje_inicio), para_db_naive(hoje_fim))
+
+        if not parcelas:
+            logger.info("📭 Nenhuma parcela vencendo hoje.")
+            return
+
+        for parcela in parcelas:
+            try:
+                emprestimo_id = parcela["emprestimo_id"]
+                numero_parcela = parcela["numero_parcela"]
+                total_parcelas = parcela["total_parcelas"]
+                valor = parcela["valor"]
+                tipo = parcela["tipo"]
+                valor_total = parcela["valor_total"]
+                nome_faccao = parcela["nome_faccao"]
+                passaporte = parcela["passaporte"]
+                telefone = parcela["telefone"]
+                observacoes = parcela["observacoes"]
+                parcela_id = parcela["id"]
+
+                if tipo == "receber":
+                    # Facção cobra
+                    embed = discord.Embed(
+                        title="🚨 ── PARCELA A RECEBER ── 🚨",
+                        description=f"📅 Vence hoje: {hoje.strftime('%d/%m/%Y')}",
+                        color=0xE74C3C,
+                        timestamp=agora()
+                    )
+                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+                    embed.add_field(name="🏢 COBRAR DE", value=f"```yaml\n{nome_faccao or '—'}\n```", inline=True)
+                    embed.add_field(name="🆔 Passaporte", value=f"```yaml\n{passaporte or '—'}\n```", inline=True)
+                    embed.add_field(name="📱 Telefone", value=f"```yaml\n{telefone or '—'}\n```", inline=True)
+                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+                    embed.add_field(name="💵 Valor da parcela", value=f"```yaml\n{formatar_dinheiro(valor)}\n```", inline=True)
+                    embed.add_field(name="📊 Parcela", value=f"```yaml\n{numero_parcela}/{total_parcelas}\n```", inline=True)
+                    embed.add_field(name="💰 Total do empréstimo", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=True)
+                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+                    embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id}")
+                else:
+                    # Facção paga
+                    embed = discord.Embed(
+                        title="🚨 ── PARCELA A PAGAR ── 🚨",
+                        description=f"📅 Vence hoje: {hoje.strftime('%d/%m/%Y')}",
+                        color=0xE67E22,
+                        timestamp=agora()
+                    )
+                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+                    embed.add_field(name="📤 PAGAR PARA", value=f"```yaml\n{nome_faccao or '—'}\n```", inline=True)
+                    embed.add_field(name="📱 Telefone", value=f"```yaml\n{telefone or '—'}\n```", inline=True)
+                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+                    embed.add_field(name="💵 Valor da parcela", value=f"```yaml\n{formatar_dinheiro(valor)}\n```", inline=True)
+                    embed.add_field(name="📊 Parcela", value=f"```yaml\n{numero_parcela}/{total_parcelas}\n```", inline=True)
+                    embed.add_field(name="💰 Total do empréstimo", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=True)
+                    if observacoes:
+                        embed.add_field(name="📝 Obs", value=f"```yaml\n{observacoes[:200]}\n```", inline=False)
+                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+                    embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id}")
+
+                # Botão de marcar como paga
+                view = MarcarParcelaPagaView(parcela_id, tipo)
+
+                await canal_gerencia.send(embed=embed, view=view)
+
+                # Marca como avisada (pra não mandar 2x)
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE emprestimos_parcelas SET avisada = true WHERE id = $1",
+                        parcela_id
+                    )
+
+                await asyncio.sleep(1)
+
+            except Exception as e:
+                logger.error(f"❌ Erro ao processar parcela {parcela['id']}: {e}")
+
+        logger.info(f"✅ {len(parcelas)} avisos de parcela enviados.")
+    except Exception as e:
+        logger.error(f"❌ Erro ao verificar parcelas vencendo: {e}")
+
+
+async def gerar_embed_emprestimos():
+    """
+    Monta o embed do painel de empréstimos.
+    """
+    ativos = await listar_emprestimos_ativos()
+
+    embed = discord.Embed(
+        title="🤝 ── EMPRÉSTIMOS ── 🤝",
+        description=f"📅 **VDR 442**",
+        color=0x9B59B6,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Sistema de Empréstimos",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # Separa por tipo
+    receber = [e for e in ativos if e["tipo"] == "receber"]
+    pagar = [e for e in ativos if e["tipo"] == "pagar"]
+
+    total_receber = sum(e["valor_total"] - (e["valor_parcela"] * e["parcelas_pagas"]) for e in receber)
+    total_pagar = sum(e["valor_total"] - (e["valor_parcela"] * e["parcelas_pagas"]) for e in pagar)
+
+    # Seção RECEBER
+    if receber:
+        texto = ""
+        for e in receber[:8]:
+            texto += f"🔹 **#{e['id']:04d} - {e['nome_faccao'] or '—'}**\n"
+            texto += f"   💰 R$ {fmt_num(e['valor_total'])} | 📆 {e['parcelas_pagas']}/{e['total_parcelas']}\n"
+            texto += f"   ⏰ {e['frequencia'].capitalize()}\n\n"
+        if len(receber) > 8:
+            texto += f"*... e mais {len(receber) - 8}*"
+        embed.add_field(name="📥 A RECEBER (facção emprestou)", value=texto[:1024] or "Nenhum", inline=False)
+    else:
+        embed.add_field(name="📥 A RECEBER (facção emprestou)", value="```yaml\nNenhum empréstimo ativo\n```", inline=False)
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # Seção PAGAR
+    if pagar:
+        texto = ""
+        for e in pagar[:8]:
+            texto += f"🔹 **#{e['id']:04d} - {e['nome_faccao'] or '—'}**\n"
+            texto += f"   💰 R$ {fmt_num(e['valor_total'])} | 📆 {e['parcelas_pagas']}/{e['total_parcelas']}\n"
+            texto += f"   ⏰ {e['frequencia'].capitalize()}\n\n"
+        if len(pagar) > 8:
+            texto += f"*... e mais {len(pagar) - 8}*"
+        embed.add_field(name="📤 A PAGAR (facção pegou)", value=texto[:1024] or "Nenhum", inline=False)
+    else:
+        embed.add_field(name="📤 A PAGAR (facção pegou)", value="```yaml\nNenhum empréstimo ativo\n```", inline=False)
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # Resumo
+    resumo = (
+        f"📥 **Total a Receber:** {formatar_dinheiro(total_receber)}\n"
+        f"📤 **Total a Pagar:** {formatar_dinheiro(total_pagar)}\n"
+    )
+    embed.add_field(name="📊 RESUMO", value=resumo, inline=False)
+
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    return embed
+
+
+async def enviar_painel_emprestimos():
+    """
+    Envia/atualiza o painel de empréstimos no canal.
+    """
+    canal_id = 1458241230512066560
+    canal = bot.get_channel(canal_id)
+    if not canal:
+        logger.error(f"❌ Canal de empréstimos não encontrado: {canal_id}")
+        return
+
+    try:
+        embed = await gerar_embed_emprestimos()
+        view = EmprestimosView()
+        await enviar_ou_atualizar_painel("painel_emprestimos", canal_id, embed, view)
+        logger.info("✅ Painel de empréstimos atualizado")
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar painel de empréstimos: {e}")
+
+
+# =========================================================
+# MODAIS DE EMPRÉSTIMO
+# =========================================================
+
+class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo (a Receber)"):
+    passaporte = discord.ui.TextInput(
+        label="🆔 Passaporte",
+        placeholder="Ex: 820",
+        required=True,
+        max_length=50
+    )
+    nome_faccao = discord.ui.TextInput(
+        label="🏢 Nome da Facção/Organização",
+        placeholder="Ex: FALCATRUA, LEON, MAFIA",
+        required=True,
+        max_length=100
+    )
+    telefone = discord.ui.TextInput(
+        label="📱 Telefone",
+        placeholder="Ex: (11) 99999-9999",
+        required=True,
+        max_length=50
+    )
+    valor = discord.ui.TextInput(
+        label="💰 Valor Emprestado (R$)",
+        placeholder="Ex: 500000",
+        required=True,
+        max_length=15
+    )
+    juros = discord.ui.TextInput(
+        label="📈 Juros (%)",
+        placeholder="Ex: 20",
+        required=True,
+        max_length=5
+    )
+    parcelas = discord.ui.TextInput(
+        label="🔢 Número de Parcelas",
+        placeholder="Ex: 4",
+        required=True,
+        max_length=3
+    )
+    frequencia = discord.ui.TextInput(
+        label="⏰ Frequência (semanal / quinzenal / mensal)",
+        placeholder="Ex: mensal",
+        required=True,
+        max_length=20
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            valor = safe_int(self.valor.value)
+            if valor <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Valor inválido!**", ephemeral=True)
+            return
+
+        try:
+            juros = safe_int(self.juros.value)
+            if juros < 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Juros inválidos!**", ephemeral=True)
+            return
+
+        try:
+            parcelas = safe_int(self.parcelas.value)
+            if parcelas <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Número de parcelas inválido!**", ephemeral=True)
+            return
+
+        frequencia = self.frequencia.value.strip().lower()
+        if frequencia not in ("semanal", "quinzenal", "mensal"):
+            await interaction.followup.send("❌ **Frequência inválida!** Use `semanal`, `quinzenal` ou `mensal`.", ephemeral=True)
+            return
+
+        emprestimo_id = await criar_emprestimo(
+            tipo="receber",
+            valor_emprestado=valor,
+            juros_percent=juros,
+            total_parcelas=parcelas,
+            frequencia=frequencia,
+            passaporte=self.passaporte.value.strip(),
+            nome_faccao=self.nome_faccao.value.strip().upper(),
+            telefone=self.telefone.value.strip(),
+            autor=interaction.user.id
+        )
+
+        if not emprestimo_id:
+            await interaction.followup.send("❌ **Erro ao criar empréstimo!**", ephemeral=True)
+            return
+
+        valor_total = int(valor * (1 + juros / 100))
+        valor_parcela = valor_total // parcelas
+
+        await enviar_painel_emprestimos()
+
+        embed = discord.Embed(
+            title="✅ EMPRÉSTIMO (A RECEBER) CRIADO",
+            description=f"📋 **Empréstimo #{emprestimo_id:04d}**",
+            color=0x2ECC71,
+            timestamp=agora()
+        )
+        embed.add_field(name="🏢 Facção", value=self.nome_faccao.value.strip().upper(), inline=True)
+        embed.add_field(name="🆔 Passaporte", value=self.passaporte.value.strip(), inline=True)
+        embed.add_field(name="📱 Telefone", value=self.telefone.value.strip(), inline=True)
+        embed.add_field(name="💰 Valor emprestado", value=formatar_dinheiro(valor), inline=True)
+        embed.add_field(name="📈 Juros", value=f"{juros}%", inline=True)
+        embed.add_field(name="💵 Valor total", value=formatar_dinheiro(valor_total), inline=True)
+        embed.add_field(name="🔢 Parcelas", value=f"{parcelas}x de {formatar_dinheiro(valor_parcela)}", inline=True)
+        embed.add_field(name="⏰ Frequência", value=frequencia.capitalize(), inline=True)
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id:04d}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a Pagar)"):
+    nome_faccao = discord.ui.TextInput(
+        label="🏢 Quem Emprestou",
+        placeholder="Ex: MAFIA, LEON, Banco",
+        required=True,
+        max_length=100
+    )
+    valor_recebido = discord.ui.TextInput(
+        label="💰 Valor Recebido (R$)",
+        placeholder="Ex: 800000",
+        required=True,
+        max_length=15
+    )
+    valor_total = discord.ui.TextInput(
+        label="💵 Valor Total a Pagar (R$)",
+        placeholder="Ex: 960000",
+        required=True,
+        max_length=15
+    )
+    parcelas = discord.ui.TextInput(
+        label="🔢 Número de Parcelas",
+        placeholder="Ex: 6",
+        required=True,
+        max_length=3
+    )
+    frequencia = discord.ui.TextInput(
+        label="⏰ Frequência (semanal / quinzenal / mensal)",
+        placeholder="Ex: mensal",
+        required=True,
+        max_length=20
+    )
+    telefone = discord.ui.TextInput(
+        label="📱 Telefone (opcional)",
+        placeholder="Ex: (11) 88888-8888",
+        required=False,
+        max_length=50
+    )
+    observacoes = discord.ui.TextInput(
+        label="📝 Observações (opcional)",
+        placeholder="Ex: Pagamento via PIX",
+        required=False,
+        max_length=200
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            valor_recebido = safe_int(self.valor_recebido.value)
+            if valor_recebido <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Valor recebido inválido!**", ephemeral=True)
+            return
+
+        try:
+            valor_total = safe_int(self.valor_total.value)
+            if valor_total <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Valor total inválido!**", ephemeral=True)
+            return
+
+        try:
+            parcelas = safe_int(self.parcelas.value)
+            if parcelas <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Número de parcelas inválido!**", ephemeral=True)
+            return
+
+        frequencia = self.frequencia.value.strip().lower()
+        if frequencia not in ("semanal", "quinzenal", "mensal"):
+            await interaction.followup.send("❌ **Frequência inválida!** Use `semanal`, `quinzenal` ou `mensal`.", ephemeral=True)
+            return
+
+        # Calcula juros efetivos (pra ficar compatível)
+        juros_calculado = int(((valor_total / valor_recebido) - 1) * 100)
+
+        emprestimo_id = await criar_emprestimo(
+            tipo="pagar",
+            valor_emprestado=valor_recebido,
+            juros_percent=juros_calculado,
+            total_parcelas=parcelas,
+            frequencia=frequencia,
+            nome_faccao=self.nome_faccao.value.strip().upper(),
+            telefone=self.telefone.value.strip() if self.telefone.value else None,
+            observacoes=self.observacoes.value.strip() if self.observacoes.value else None,
+            autor=interaction.user.id
+        )
+
+        if not emprestimo_id:
+            await interaction.followup.send("❌ **Erro ao criar empréstimo!**", ephemeral=True)
+            return
+
+        valor_parcela = valor_total // parcelas
+
+        await enviar_painel_emprestimos()
+
+        embed = discord.Embed(
+            title="✅ EMPRÉSTIMO (A PAGAR) CRIADO",
+            description=f"📋 **Empréstimo #{emprestimo_id:04d}**",
+            color=0xE67E22,
+            timestamp=agora()
+        )
+        embed.add_field(name="🏢 Quem emprestou", value=self.nome_faccao.value.strip().upper(), inline=True)
+        embed.add_field(name="💰 Valor recebido", value=formatar_dinheiro(valor_recebido), inline=True)
+        embed.add_field(name="💵 Valor total", value=formatar_dinheiro(valor_total), inline=True)
+        embed.add_field(name="🔢 Parcelas", value=f"{parcelas}x de {formatar_dinheiro(valor_parcela)}", inline=True)
+        embed.add_field(name="⏰ Frequência", value=frequencia.capitalize(), inline=True)
+        if self.observacoes.value:
+            embed.add_field(name="📝 Obs", value=self.observacoes.value.strip(), inline=False)
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id:04d}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+# =========================================================
+# VIEW: MARCAR PARCELA COMO PAGA
+# =========================================================
+
+class MarcarParcelaPagaView(discord.ui.View):
+    def __init__(self, parcela_id, tipo):
+        super().__init__(timeout=None)
+        self.parcela_id = parcela_id
+        self.tipo = tipo
+
+    @discord.ui.button(label="✅ Marcar como Paga", style=discord.ButtonStyle.success, custom_id="marcar_parcela_paga", emoji="✅")
+    async def marcar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Permissão: admin ou gerente
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem marcar parcelas como pagas!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Pega dados da parcela ANTES de marcar
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            parcela = await conn.fetchrow(
+                "SELECT * FROM emprestimos_parcelas WHERE id = $1",
+                self.parcela_id
+            )
+            if not parcela:
+                await interaction.followup.send("❌ Parcela não encontrada!", ephemeral=True)
+                return
+            if parcela["pago"]:
+                await interaction.followup.send("⚠️ Esta parcela já foi paga!", ephemeral=True)
+                return
+
+            emprestimo = await conn.fetchrow(
+                "SELECT * FROM emprestimos WHERE id = $1",
+                parcela["emprestimo_id"]
+            )
+
+        # Marca como paga
+        sucesso = await marcar_parcela_paga(self.parcela_id)
+        if not sucesso:
+            await interaction.followup.send("❌ Erro ao marcar parcela como paga!", ephemeral=True)
+            return
+
+        # =========================================================
+        # INTEGRAÇÃO COM O CAIXA
+        # =========================================================
+        try:
+            if self.tipo == "receber":
+                # Facção recebeu → soma no caixa
+                await movimentar_caixa(
+                    tipo="parcela_receber",
+                    valor=parcela["valor"],
+                    motivo=f"Parcela {parcela['numero_parcela']}/{emprestimo['total_parcelas']} - Empréstimo #{emprestimo['id']:04d} ({emprestimo['nome_faccao']})",
+                    autor=interaction.user.id
+                )
+                logger.info(f"💰 Caixa: +{formatar_dinheiro(parcela['valor'])} (Parcela recebida)")
+            else:
+                # Facção pagou → subtrai do caixa
+                await movimentar_caixa(
+                    tipo="parcela_pagar",
+                    valor=parcela["valor"],
+                    motivo=f"Parcela {parcela['numero_parcela']}/{emprestimo['total_parcelas']} - Empréstimo #{emprestimo['id']:04d} ({emprestimo['nome_faccao']})",
+                    autor=interaction.user.id
+                )
+                logger.info(f"💸 Caixa: -{formatar_dinheiro(parcela['valor'])} (Parcela paga)")
+        except Exception as e:
+            logger.error(f"⚠️ Erro ao movimentar caixa pela parcela: {e}")
+
+        # Atualiza painéis
+        await enviar_painel_emprestimos()
+        await enviar_painel_caixa()
+
+        # Edita a mensagem (desabilita o botão)
+        embed = interaction.message.embeds[0]
+        embed.color = 0x2ECC71
+        embed.title = f"✅ {embed.title.replace('🚨', '').replace('──', '').strip()}"
+
+        for i, field in enumerate(embed.fields):
+            if field.name == "🎯 STATUS":
+                embed.set_field_at(i, name="🎯 STATUS", value="✅ **PAGA**", inline=False)
+                break
+
+        embed.add_field(
+            name="✅ PAGO POR",
+            value=f"```yaml\n{interaction.user.display_name}\n📅 {agora().strftime('%d/%m/%Y %H:%M')}\n```",
+            inline=False
+        )
+        embed.set_footer(text=f"✅ Parcela paga em {agora().strftime('%d/%m/%Y às %H:%M')}")
+
+        # Nova view sem o botão
+        nova_view = discord.ui.View(timeout=None)
+        await interaction.message.edit(embed=embed, view=nova_view)
+
+        # Mensagem de confirmação
+        tipo_msg = "recebida" if self.tipo == "receber" else "paga"
+        sinal = "+" if self.tipo == "receber" else "-"
+        embed_confirm = discord.Embed(
+            title=f"✅ PARCELA {tipo_msg.upper()}",
+            description=f"```yaml\n{sinal}{formatar_dinheiro(parcela['valor'])}\n```",
+            color=0x2ECC71,
+            timestamp=agora()
+        )
+        embed_confirm.add_field(name="📋 Empréstimo", value=f"#{emprestimo['id']:04d}", inline=True)
+        embed_confirm.add_field(name="📊 Parcela", value=f"{parcela['numero_parcela']}/{emprestimo['total_parcelas']}", inline=True)
+        embed_confirm.add_field(name="👤 Marcado por", value=interaction.user.mention, inline=True)
+        embed_confirm.set_footer(text="🛡 Vida Rasa 442 • Empréstimos")
+        await interaction.followup.send(embed=embed_confirm, ephemeral=True)
+
+
+# =========================================================
+# VIEW: PAINEL DE EMPRÉSTIMOS
+# =========================================================
+
+class EmprestimosView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem mexer nos empréstimos!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="📥 Novo (a Receber)", style=discord.ButtonStyle.success, custom_id="emprestimo_novo_receber", emoji="📥", row=0)
+    async def novo_receber(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(NovoEmprestimoReceberModal())
+
+    @discord.ui.button(label="📤 Novo (a Pagar)", style=discord.ButtonStyle.danger, custom_id="emprestimo_novo_pagar", emoji="📤", row=0)
+    async def novo_pagar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(NovoEmprestimoPagarModal())
+
+    @discord.ui.button(label="📊 Listar Todos", style=discord.ButtonStyle.primary, custom_id="emprestimo_listar", emoji="📊", row=1)
+    async def listar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        ativos = await listar_emprestimos_ativos()
+        if not ativos:
+            await interaction.followup.send("📭 Nenhum empréstimo ativo.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📊 ── EMPRÉSTIMOS ATIVOS ── 📊",
+            description=f"📋 Total: **{len(ativos)}**",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+
+        for e in ativos[:10]:
+            parcelas_pagas = e["parcelas_pagas"]
+            total_parcelas = e["total_parcelas"]
+            restante = e["valor_total"] - (e["valor_parcela"] * parcelas_pagas)
+            tipo_emoji = "📥" if e["tipo"] == "receber" else "📤"
+
+            texto = f"🏢 **{e['nome_faccao']}**\n"
+            texto += f"💰 Total: {formatar_dinheiro(e['valor_total'])}\n"
+            texto += f"📆 Parcelas: {parcelas_pagas}/{total_parcelas}\n"
+            texto += f"💵 Restante: {formatar_dinheiro(restante)}\n"
+            texto += f"⏰ {e['frequencia'].capitalize()}\n"
+
+            embed.add_field(
+                name=f"{tipo_emoji} Empréstimo #{e['id']:04d}",
+                value=texto,
+                inline=False
+            )
+
+        if len(ativos) > 10:
+            embed.set_footer(text=f"Mostrando 10 de {len(ativos)}")
+        else:
+            embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="📜 Histórico", style=discord.ButtonStyle.secondary, custom_id="emprestimo_historico", emoji="📜", row=1)
+    async def historico(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        quitados = await listar_emprestimos_quitados()
+        if not quitados:
+            await interaction.followup.send("📭 Nenhum empréstimo quitado ainda.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📜 ── HISTÓRICO DE EMPRÉSTIMOS ── 📜",
+            description=f"📋 Últimos **{len(quitados)}** quitados",
+            color=0x95A5A6,
+            timestamp=agora()
+        )
+
+        for e in quitados[:10]:
+            tipo_emoji = "📥" if e["tipo"] == "receber" else "📤"
+            data = e["data_criacao"]
+            if data.tzinfo is None:
+                data = data.replace(tzinfo=BRASIL)
+
+            texto = f"🏢 **{e['nome_faccao']}**\n"
+            texto += f"💰 Total: {formatar_dinheiro(e['valor_total'])}\n"
+            texto += f"📅 Criado em: {data.strftime('%d/%m/%Y')}\n"
+
+            embed.add_field(
+                name=f"{tipo_emoji} Empréstimo #{e['id']:04d}",
+                value=texto,
+                inline=False
+            )
+
+        if len(quitados) > 10:
+            embed.set_footer(text=f"Mostrando 10 de {len(quitados)}")
+        else:
+            embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="emprestimo_atualizar", emoji="🔄", row=1)
+    async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_emprestimos()
+        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+
+
+# =========================================================
+# LOOP DIÁRIO — VERIFICA PARCELAS VENCENDO
+# =========================================================
+
+@tasks.loop(hours=24)
+async def verificar_parcelas_diario():
+    """
+    Loop diário que verifica parcelas vencendo.
+    """
+    try:
+        await verificar_parcelas_vencendo()
+    except Exception as e:
+        logger.error(f"❌ Erro no loop de verificação de parcelas: {e}")
 
 # =========================================================
 # SISTEMA DE META SEMANAL (DINHEIRO OU PÓLVORA)
@@ -15753,6 +17407,12 @@ async def iniciar_tarefas_background():
     except Exception as e:
         logger.error(f"Erro loop cache lives: {e}")
 
+    try:
+        if not verificar_parcelas_diario.is_running():
+            verificar_parcelas_diario.start()
+    except Exception as e:
+        logger.error(f"Erro loop parcelas: {e}")
+
 async def heartbeat_producao_loop():
     while True:
         try:
@@ -15822,7 +17482,8 @@ async def health_check_avancado():
                 ("verificar_avisos_meta", verificar_avisos_meta),
                 ("limpar_lavagens_pendentes", limpar_lavagens_pendentes),
                 ("limpar_cache_lives", limpar_cache_lives),
-                ("relatorio_semanal_polvoras", relatorio_semanal_polvoras)
+                ("relatorio_semanal_polvoras", relatorio_semanal_polvoras),
+                ("verificar_parcelas_diario", verificar_parcelas_diario)
             ]
             for nome, task in tasks_ativas:
                 if hasattr(task, 'is_running') and not task.is_running():
@@ -17423,6 +19084,13 @@ async def cmd_ver_dividas(ctx):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="painel_caixa")
+@commands.has_permissions(administrator=True)
+async def cmd_painel_caixa(ctx):
+    await enviar_painel_caixa()
+    await ctx.send("✅ Painel do caixa enviado!")
+
+
 # =========================================================
 # COMANDO: RELATÓRIO DE BONIFICAÇÃO MANUAL
 # =========================================================
@@ -18233,6 +19901,238 @@ async def cmd_checar_banco(ctx):
     except Exception as e:
         logger.error(f"❌ Erro em cmd_checar_banco: {e}")
         await ctx.send(f"❌ Erro ao checar banco: `{str(e)[:150]}`")
+
+
+# =========================================================
+# COMANDO: PAINEL DO CAIXA (FORÇAR ENVIO)
+# =========================================================
+@bot.command(name="painel_caixa")
+@commands.has_permissions(administrator=True)
+async def cmd_painel_caixa(ctx):
+    """Força o envio/atualização do painel do caixa."""
+    await ctx.send("🔄 Enviando painel do caixa...")
+    try:
+        await enviar_painel_caixa()
+        await ctx.send("✅ Painel do caixa enviado!")
+    except Exception as e:
+        logger.error(f"❌ Erro: {e}")
+        await ctx.send(f"❌ Erro: `{str(e)[:150]}`")
+
+
+# =========================================================
+# COMANDO: PAINEL DE EMPRÉSTIMOS (FORÇAR ENVIO)
+# =========================================================
+@bot.command(name="painel_emprestimos")
+@commands.has_permissions(administrator=True)
+async def cmd_painel_emprestimos(ctx):
+    """Força o envio/atualização do painel de empréstimos."""
+    await ctx.send("🔄 Enviando painel de empréstimos...")
+    try:
+        await enviar_painel_emprestimos()
+        await ctx.send("✅ Painel de empréstimos enviado!")
+    except Exception as e:
+        logger.error(f"❌ Erro: {e}")
+        await ctx.send(f"❌ Erro: `{str(e)[:150]}`")
+
+
+# =========================================================
+# COMANDO: VER EMPRÉSTIMOS ATIVOS
+# =========================================================
+@bot.command(name="ver_emprestimos")
+@commands.has_permissions(administrator=True)
+async def cmd_ver_emprestimos(ctx):
+    """Mostra todos os empréstimos ativos."""
+    await ctx.send("🔍 **Buscando empréstimos...**")
+
+    ativos = await listar_emprestimos_ativos()
+    if not ativos:
+        await ctx.send("📭 Nenhum empréstimo ativo.")
+        return
+
+    embed = discord.Embed(
+        title="📊 ── EMPRÉSTIMOS ATIVOS ── 📊",
+        description=f"📋 Total: **{len(ativos)}**",
+        color=0x9B59B6,
+        timestamp=agora()
+    )
+
+    for e in ativos[:10]:
+        parcelas_pagas = e["parcelas_pagas"]
+        total_parcelas = e["total_parcelas"]
+        restante = e["valor_total"] - (e["valor_parcela"] * parcelas_pagas)
+        tipo_emoji = "📥" if e["tipo"] == "receber" else "📤"
+
+        texto = f"🏢 **{e['nome_faccao']}**\n"
+        texto += f"💰 Total: {formatar_dinheiro(e['valor_total'])}\n"
+        texto += f"📆 Parcelas: {parcelas_pagas}/{total_parcelas}\n"
+        texto += f"💵 Restante: {formatar_dinheiro(restante)}\n"
+        texto += f"⏰ {e['frequencia'].capitalize()}\n"
+
+        embed.add_field(name=f"{tipo_emoji} Empréstimo #{e['id']:04d}", value=texto, inline=False)
+
+    if len(ativos) > 10:
+        embed.set_footer(text=f"Mostrando 10 de {len(ativos)}")
+    else:
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# COMANDO: VER PARCELAS VENCENDO HOJE
+# =========================================================
+@bot.command(name="ver_parcelas_hoje")
+@commands.has_permissions(administrator=True)
+async def cmd_ver_parcelas_hoje(ctx):
+    """Mostra as parcelas que vencem hoje."""
+    pool = await get_pool()
+    if not pool:
+        await ctx.send("❌ Banco indisponível!")
+        return
+
+    try:
+        hoje = agora()
+        hoje_inicio = hoje.replace(hour=0, minute=0, second=0, microsecond=0)
+        hoje_fim = hoje.replace(hour=23, minute=59, second=59, microsecond=0)
+
+        async with pool.acquire() as conn:
+            parcelas = await conn.fetch("""
+                SELECT p.*, e.tipo, e.nome_faccao, e.total_parcelas
+                FROM emprestimos_parcelas p
+                JOIN emprestimos e ON e.id = p.emprestimo_id
+                WHERE p.data_vencimento >= $1 
+                  AND p.data_vencimento <= $2
+                  AND p.pago = false
+                  AND e.ativo = true
+            """, para_db_naive(hoje_inicio), para_db_naive(hoje_fim))
+
+        if not parcelas:
+            await ctx.send("📭 Nenhuma parcela vencendo hoje.")
+            return
+
+        embed = discord.Embed(
+            title="🚨 ── PARCELAS VENCENDO HOJE ── 🚨",
+            description=f"📅 **{hoje.strftime('%d/%m/%Y')}**",
+            color=0xE74C3C,
+            timestamp=agora()
+        )
+
+        for p in parcelas:
+            tipo_emoji = "📥" if p["tipo"] == "receber" else "📤"
+            tipo_nome = "RECEBER DE" if p["tipo"] == "receber" else "PAGAR PARA"
+            texto = f"{tipo_nome}: **{p['nome_faccao']}**\n"
+            texto += f"💵 Valor: {formatar_dinheiro(p['valor'])}\n"
+            texto += f"📊 Parcela: {p['numero_parcela']}/{p['total_parcelas']}\n"
+
+            embed.add_field(
+                name=f"{tipo_emoji} Empréstimo #{p['emprestimo_id']:04d}",
+                value=texto,
+                inline=False
+            )
+
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+        await ctx.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"❌ Erro: {e}")
+        await ctx.send(f"❌ Erro: `{str(e)[:150]}`")
+
+
+# =========================================================
+# COMANDO: TESTAR PARCELAS VENCENDO (FORÇAR LOOP)
+# =========================================================
+@bot.command(name="testar_parcelas")
+@commands.has_permissions(administrator=True)
+async def cmd_testar_parcelas(ctx):
+    """Força a verificação de parcelas vencendo agora (ignora o horário)."""
+    await ctx.send("🔄 **Forçando verificação de parcelas vencendo...**")
+
+    pool = await get_pool()
+    if not pool:
+        await ctx.send("❌ Banco indisponível!")
+        return
+
+    canal_gerencia = ctx.guild.get_channel(CANAL_GERENCIA_ID)
+    if not canal_gerencia:
+        await ctx.send(f"❌ Canal de gerência não encontrado: `{CANAL_GERENCIA_ID}`")
+        return
+
+    try:
+        # Pega TODAS as parcelas não pagas que ainda não foram avisadas
+        async with pool.acquire() as conn:
+            parcelas = await conn.fetch("""
+                SELECT p.*, e.tipo, e.passaporte, e.nome_faccao, e.telefone, 
+                       e.valor_total, e.total_parcelas, e.observacoes
+                FROM emprestimos_parcelas p
+                JOIN emprestimos e ON e.id = p.emprestimo_id
+                WHERE p.pago = false
+                  AND e.ativo = true
+                ORDER BY p.data_vencimento ASC
+                LIMIT 10
+            """)
+
+        if not parcelas:
+            await ctx.send("📭 Nenhuma parcela pendente pra testar.")
+            return
+
+        contador = 0
+        for parcela in parcelas:
+            try:
+                emprestimo_id = parcela["emprestimo_id"]
+                numero_parcela = parcela["numero_parcela"]
+                total_parcelas = parcela["total_parcelas"]
+                valor = parcela["valor"]
+                tipo = parcela["tipo"]
+                valor_total = parcela["valor_total"]
+                nome_faccao = parcela["nome_faccao"]
+                passaporte = parcela["passaporte"]
+                telefone = parcela["telefone"]
+                observacoes = parcela["observacoes"]
+                parcela_id = parcela["id"]
+
+                if tipo == "receber":
+                    embed = discord.Embed(
+                        title="🚨 ── [TESTE] PARCELA A RECEBER ── 🚨",
+                        description=f"📅 Vence: {parcela['data_vencimento'].strftime('%d/%m/%Y')}",
+                        color=0xE74C3C,
+                        timestamp=agora()
+                    )
+                    embed.add_field(name="🏢 COBRAR DE", value=f"```yaml\n{nome_faccao or '—'}\n```", inline=True)
+                    embed.add_field(name="🆔 Passaporte", value=f"```yaml\n{passaporte or '—'}\n```", inline=True)
+                    embed.add_field(name="📱 Telefone", value=f"```yaml\n{telefone or '—'}\n```", inline=True)
+                    embed.add_field(name="💵 Valor da parcela", value=f"```yaml\n{formatar_dinheiro(valor)}\n```", inline=True)
+                    embed.add_field(name="📊 Parcela", value=f"```yaml\n{numero_parcela}/{total_parcelas}\n```", inline=True)
+                    embed.add_field(name="💰 Total", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=True)
+                    embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id} • TESTE")
+                else:
+                    embed = discord.Embed(
+                        title="🚨 ── [TESTE] PARCELA A PAGAR ── 🚨",
+                        description=f"📅 Vence: {parcela['data_vencimento'].strftime('%d/%m/%Y')}",
+                        color=0xE67E22,
+                        timestamp=agora()
+                    )
+                    embed.add_field(name="📤 PAGAR PARA", value=f"```yaml\n{nome_faccao or '—'}\n```", inline=True)
+                    embed.add_field(name="📱 Telefone", value=f"```yaml\n{telefone or '—'}\n```", inline=True)
+                    embed.add_field(name="💵 Valor da parcela", value=f"```yaml\n{formatar_dinheiro(valor)}\n```", inline=True)
+                    embed.add_field(name="📊 Parcela", value=f"```yaml\n{numero_parcela}/{total_parcelas}\n```", inline=True)
+                    embed.add_field(name="💰 Total", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=True)
+                    if observacoes:
+                        embed.add_field(name="📝 Obs", value=f"```yaml\n{observacoes[:200]}\n```", inline=False)
+                    embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id} • TESTE")
+
+                view = MarcarParcelaPagaView(parcela_id, tipo)
+                await canal_gerencia.send(embed=embed, view=view)
+                contador += 1
+                await asyncio.sleep(0.5)
+
+            except Exception as e:
+                logger.error(f"❌ Erro ao processar parcela {parcela['id']}: {e}")
+
+        await ctx.send(f"✅ **{contador} avisos enviados** no canal de gerência (modo teste).")
+
+    except Exception as e:
+        logger.error(f"❌ Erro: {e}")
+        await ctx.send(f"❌ Erro: `{str(e)[:150]}`")
 # =========================================================
 # ==================== COMANDO DE ENVIAR BAÚ ==============
 # =========================================================
@@ -19723,6 +21623,8 @@ async def enviar_paineis_iniciais(guild):
             ("Grupos", enviar_painel_grupos),
             ("Mensagens", enviar_painel_mensagens),
             ("Auditoria", enviar_painel_auditoria),
+            ("Caixa", enviar_painel_caixa),
+            ("Empréstimos", enviar_painel_emprestimos),
         ]
         for i, (nome, func) in enumerate(paineis):
             try:
@@ -19919,6 +21821,10 @@ def criar_view_por_painel(nome):
         return None  # Grupos são recriados de outra forma
     elif nome == "painel_acoes":
         return PainelAcoesView()
+    elif nome == "painel_caixa":
+        return CaixaView()
+    elif nome == "painel_emprestimos":
+        return EmprestimosView()    
     return None
     
 async def shutdown():
