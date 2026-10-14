@@ -347,8 +347,16 @@ async def inicializar_tabelas(pool):
                 acao TEXT,
                 dinheiro_acoes BIGINT DEFAULT 0,
                 saldo_excedente BIGINT DEFAULT 0,
-                valor_meta_personalizado BIGINT DEFAULT NULL
+                valor_meta_personalizado BIGINT DEFAULT NULL,
+                polvora_atual BIGINT DEFAULT 0,
+                polvora_total_semana BIGINT DEFAULT 0
             )
+        """)
+        await conn.execute("""
+            ALTER TABLE metas ADD COLUMN IF NOT EXISTS polvora_atual BIGINT DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE metas ADD COLUMN IF NOT EXISTS polvora_total_semana BIGINT DEFAULT 0
         """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS metas_historico (
@@ -359,8 +367,16 @@ async def inicializar_tabelas(pool):
                 dinheiro_acoes BIGINT,
                 data_inicio TIMESTAMP,
                 data_fim TIMESTAMP,
-                data_fechamento TIMESTAMP
+                data_fechamento TIMESTAMP,
+                polvora BIGINT DEFAULT 0,
+                tipo_meta VARCHAR(20) DEFAULT 'dinheiro'
             )
+        """)
+        await conn.execute("""
+            ALTER TABLE metas_historico ADD COLUMN IF NOT EXISTS polvora BIGINT DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE metas_historico ADD COLUMN IF NOT EXISTS tipo_meta VARCHAR(20) DEFAULT 'dinheiro'
         """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS metas_avisos (
@@ -863,9 +879,6 @@ async def inicializar_tabelas(pool):
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_horas_hist_fechamento ON horas_historico(data_fechamento DESC)
         """)
-        # =========================================================
-        # TABELA: DÍVIDAS DE META (META DOBRADA)
-        # =========================================================
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS metas_dividas (
                 id SERIAL PRIMARY KEY,
@@ -875,8 +888,12 @@ async def inicializar_tabelas(pool):
                 semana_fechamento VARCHAR(50) NOT NULL,
                 data_criacao TIMESTAMP DEFAULT NOW(),
                 pago BOOLEAN DEFAULT false,
-                data_pagamento TIMESTAMP
+                data_pagamento TIMESTAMP,
+                tipo VARCHAR(20) DEFAULT 'dinheiro'
             )
+        """)
+        await conn.execute("""
+            ALTER TABLE metas_dividas ADD COLUMN IF NOT EXISTS tipo VARCHAR(20) DEFAULT 'dinheiro'
         """)
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_dividas_user ON metas_dividas(user_id)
@@ -887,10 +904,26 @@ async def inicializar_tabelas(pool):
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_dividas_semana ON metas_dividas(semana_fechamento)
         """)
+        # =========================================================
+        # TABELA: CONFIG META SEMANA (tipo atual: dinheiro/polvora)
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS config_meta_semana (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                tipo_meta_atual VARCHAR(20) DEFAULT 'dinheiro',
+                data_atualizacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            INSERT INTO config_meta_semana (id, tipo_meta_atual)
+            VALUES (1, 'dinheiro')
+            ON CONFLICT (id) DO NOTHING
+        """)
 
     logger.info("✅ Todas as tabelas criadas/verificadas com sucesso!")
     logger.info("✅ Tabela horas_historico pronta!")
     logger.info("✅ Tabela metas_dividas pronta!")
+    logger.info("✅ Tabela config_meta_semana pronta!")
 
 # =========================================================
 # ==================== PARTE 3: UTILITÁRIOS ===============
@@ -5517,13 +5550,13 @@ async def enviar_embed_pedido_finalizado(
         pacotes_sub = sub // 50
 
         # =========================================================
-        # CONFIGURAÇÃO DE COR E EMOJI POR TIPO
+        # CONFIGURAÇÃO DE COR E TÍTULO POR TIPO
         # =========================================================
         if tipo == "cancelado":
-            cor = 0xE74C3C  # Vermelho
+            cor = 0xE74C3C
             titulo = "❌ ── PEDIDO CANCELADO ── ❌"
         else:
-            cor = 0x2ECC71  # Verde
+            cor = 0x2ECC71
             titulo = "🎉 ── PEDIDO FINALIZADO ── 🎉"
 
         # =========================================================
@@ -5535,13 +5568,10 @@ async def enviar_embed_pedido_finalizado(
             timestamp=agora()
         )
 
-        # Author com nome da organização
         embed.set_author(
             name=f"🏷️ {organizacao} • Sistema de Encomendas",
             icon_url=bot.user.display_avatar.url if bot.user else None
         )
-
-        # Thumbnail (logo VDR)
         embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
 
         # =========================================================
@@ -5563,9 +5593,6 @@ async def enviar_embed_pedido_finalizado(
             inline=True
         )
 
-        # =========================================================
-        # SEPARADOR
-        # =========================================================
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
         # =========================================================
@@ -5587,13 +5614,10 @@ async def enviar_embed_pedido_finalizado(
             inline=True
         )
 
-        # =========================================================
-        # SEPARADOR
-        # =========================================================
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
         # =========================================================
-        # LINHA 3 — HISTÓRICO (PAGO / ENTREGUE / TRANSFERIDO / CANCELADO)
+        # LINHA 3 — HISTÓRICO
         # =========================================================
         if tipo == "cancelado":
             cancelado_info = f"{cancelado_por or 'Desconhecido'}\n📅 {cancelado_em or '—'}"
@@ -5603,23 +5627,18 @@ async def enviar_embed_pedido_finalizado(
                 inline=False
             )
         else:
-            # PAGO POR
             pago_info = f"{pago_por or '—'}\n📅 {pago_em or '—'}"
             embed.add_field(
                 name="✅ PAGO POR",
                 value=f"```yaml\n{pago_info}\n```",
                 inline=True
             )
-
-            # ENTREGUE POR
             entregue_info = f"{entregue_por or '—'}\n📅 {entregue_em or '—'}"
             embed.add_field(
                 name="📦 ENTREGUE POR",
                 value=f"```yaml\n{entregue_info}\n```",
                 inline=True
             )
-
-            # TRANSFERÊNCIA (linha inteira)
             transferencia_texto = (
                 f"📤 **Transferido para:** {transferido_para or '—'}\n"
                 f"👤 **Confirmado por:** {transferido_por or '—'}\n"
@@ -5631,9 +5650,6 @@ async def enviar_embed_pedido_finalizado(
                 inline=False
             )
 
-        # =========================================================
-        # SEPARADOR
-        # =========================================================
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
         # =========================================================
@@ -5655,21 +5671,12 @@ async def enviar_embed_pedido_finalizado(
         # =========================================================
         # FOOTER COM TIMESTAMP DINÂMICO
         # =========================================================
-        embed.set_footer(
-            text=f"🛡 Vida Rasa 442 • Encerrado em",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
-
-        # Adiciona timestamp dinâmico ao final do footer
         timestamp_unix = int(agora().timestamp())
         embed.set_footer(
             text=f"🛡 Vida Rasa 442 • Encerrado em <t:{timestamp_unix}:F>",
             icon_url=bot.user.display_avatar.url if bot.user else None
         )
 
-        # =========================================================
-        # ENVIA O EMBED
-        # =========================================================
         await safe_request(canal.send, embed=embed)
         logger.info(f"✅ Embed de pedido #{pedido_numero:04d} ({tipo}) enviado para o canal de finalizados")
         return True
@@ -9730,7 +9737,12 @@ async def carregar_metas_db():
         return []
     try:
         async with pool.acquire() as conn:
-            return await conn.fetch("SELECT user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente, valor_meta_personalizado FROM metas")
+            return await conn.fetch(
+                """SELECT user_id, canal_id, dinheiro, acao, dinheiro_acoes, 
+                          saldo_excedente, valor_meta_personalizado, 
+                          polvora_atual, polvora_total_semana 
+                   FROM metas"""
+            )
     except Exception as e:
         logger.error(f"❌ Erro ao carregar metas: {e}")
         return []
@@ -9743,7 +9755,13 @@ async def salvar_meta_db(user_id, canal_id, dinheiro, acao):
         async with pool.acquire() as conn:
             if acao is not None:
                 acao = str(acao)
-            await conn.execute("INSERT INTO metas (user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente, valor_meta_personalizado) VALUES ($1,$2,$3,$4,0,0,NULL) ON CONFLICT (user_id) DO UPDATE SET canal_id=$2, dinheiro=$3, acao=$4", str(user_id), str(canal_id), dinheiro, acao)
+            await conn.execute(
+                """INSERT INTO metas 
+                   (user_id, canal_id, dinheiro, acao, dinheiro_acoes, saldo_excedente, valor_meta_personalizado, polvora_atual, polvora_total_semana) 
+                   VALUES ($1, $2, $3, $4, 0, 0, NULL, 0, 0) 
+                   ON CONFLICT (user_id) DO UPDATE SET canal_id = $2, dinheiro = $3, acao = $4""",
+                str(user_id), str(canal_id), dinheiro, acao
+            )
     except Exception as e:
         logger.error(f"❌ Erro ao salvar meta: {e}")
 
@@ -9957,6 +9975,316 @@ async def listar_dividas_ativas():
     except Exception as e:
         logger.error(f"❌ Erro ao listar dívidas: {e}")
         return []
+
+
+# =========================================================
+# SISTEMA DE META SEMANAL (DINHEIRO OU PÓLVORA)
+# =========================================================
+
+async def buscar_tipo_meta_semana():
+    """
+    Retorna o tipo da semana atual: 'dinheiro' ou 'polvora'.
+    """
+    pool = await get_pool()
+    if not pool:
+        return "dinheiro"
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT tipo_meta_atual FROM config_meta_semana WHERE id = 1")
+            if row and row["tipo_meta_atual"]:
+                return row["tipo_meta_atual"]
+            # Se não existir, cria
+            await conn.execute("""
+                INSERT INTO config_meta_semana (id, tipo_meta_atual)
+                VALUES (1, 'dinheiro')
+                ON CONFLICT (id) DO NOTHING
+            """)
+            return "dinheiro"
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar tipo da meta: {e}")
+        return "dinheiro"
+
+
+async def definir_tipo_meta_semana(tipo):
+    """
+    Define o tipo da meta da semana.
+    tipo: 'dinheiro' ou 'polvora'
+    """
+    if tipo not in ("dinheiro", "polvora"):
+        return False
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO config_meta_semana (id, tipo_meta_atual, data_atualizacao)
+                VALUES (1, $1, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    tipo_meta_atual = $1,
+                    data_atualizacao = NOW()
+            """, tipo)
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao definir tipo da meta: {e}")
+        return False
+
+
+async def definir_valor_meta_polvora(user_id):
+    """
+    Retorna o valor da meta de pólvora baseado no cargo do membro.
+    - Membros/Soldados/Moradores/Agregados: 3000
+    - Responsáveis/Mecânicos: 2000
+    - Isentos: 0
+    """
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return 3000
+
+    member = guild.get_member(int(user_id))
+    if not member:
+        return 3000
+
+    roles = [r.id for r in member.roles]
+
+    # Isentos
+    if any(r in roles for r in CARGOS_ISENTOS_META):
+        return 0
+
+    # Responsáveis e Mecânicos: 2000
+    cargos_resp_mec = [
+        CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID,
+        CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID,
+        CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
+        CARGO_MECANICO_ID
+    ]
+    if any(r in roles for r in cargos_resp_mec):
+        return 2000
+
+    # Membros em geral: 3000
+    return 3000
+
+
+async def adicionar_polvora_meta(user_id, valor):
+    """
+    Adiciona pólvora na meta do usuário.
+    - Se o membro tem dívida de pólvora → paga primeiro
+    - O resto vai pra meta (polvora_atual)
+    - O VALOR TOTAL vai pro estoque (trazido de fora)
+    - Soma no polvora_total_semana (pra bonificação)
+    """
+    pool = await get_pool()
+    if not pool:
+        return {"sucesso": False, "erro": "Banco indisponível"}
+
+    try:
+        async with pool.acquire() as conn:
+            # 1. Verifica se tem dívida de pólvora ativa
+            divida = await conn.fetchrow(
+                "SELECT * FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'polvora' ORDER BY data_criacao ASC LIMIT 1",
+                str(user_id)
+            )
+
+            valor_restante = valor
+            quitou_divida = False
+            valor_divida_paga = 0
+
+            # 2. Paga dívida primeiro (se tiver)
+            if divida:
+                if valor_restante >= divida["valor_divida"]:
+                    # Quita a dívida
+                    await conn.execute(
+                        "UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1",
+                        divida["id"]
+                    )
+                    valor_divida_paga = divida["valor_divida"]
+                    valor_restante -= divida["valor_divida"]
+                    quitou_divida = True
+                else:
+                    # Paga parcial
+                    novo_valor_divida = divida["valor_divida"] - valor_restante
+                    await conn.execute(
+                        "UPDATE metas_dividas SET valor_divida = $1 WHERE id = $2",
+                        novo_valor_divida, divida["id"]
+                    )
+                    valor_divida_paga = valor_restante
+                    valor_restante = 0
+
+            # 3. O resto vai pra meta (polvora_atual)
+            valor_meta = valor_restante
+
+            # 4. Atualiza polvora_atual E polvora_total_semana
+            await conn.execute("""
+                UPDATE metas 
+                SET polvora_atual = polvora_atual + $1,
+                    polvora_total_semana = polvora_total_semana + $2
+                WHERE user_id = $3
+            """, valor_meta, valor, str(user_id))
+
+            # 5. Adiciona o VALOR TOTAL ao estoque geral
+            await atualizar_estoque_polvora(valor, "adicionar")
+
+            return {
+                "sucesso": True,
+                "valor_total": valor,
+                "valor_divida_paga": valor_divida_paga,
+                "valor_meta": valor_meta,
+                "quitou_divida": quitou_divida,
+                "divida_restante": (divida["valor_divida"] - valor_divida_paga) if divida and not quitou_divida else 0
+            }
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao adicionar pólvora na meta: {e}")
+        return {"sucesso": False, "erro": str(e)}
+
+
+async def editar_polvora_meta(user_id, novo_valor):
+    """
+    Edita o valor de pólvora da meta de um usuário.
+    Ajusta o estoque pela DIFERENÇA.
+    """
+    pool = await get_pool()
+    if not pool:
+        return False
+
+    try:
+        async with pool.acquire() as conn:
+            # Pega valor atual
+            row = await conn.fetchrow(
+                "SELECT polvora_atual FROM metas WHERE user_id = $1",
+                str(user_id)
+            )
+            if not row:
+                return False
+
+            valor_antigo = row["polvora_atual"] or 0
+            diferenca = novo_valor - valor_antigo
+
+            # Atualiza o valor
+            await conn.execute(
+                "UPDATE metas SET polvora_atual = $1 WHERE user_id = $2",
+                novo_valor, str(user_id)
+            )
+
+            # Ajusta o estoque pela diferença
+            if diferenca != 0:
+                if diferenca > 0:
+                    await atualizar_estoque_polvora(diferenca, "adicionar")
+                else:
+                    await atualizar_estoque_polvora(abs(diferenca), "remover")
+
+            return True
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao editar pólvora da meta: {e}")
+        return False
+
+
+async def criar_divida_polvora(user_id, valor_original, semana_fechamento):
+    """
+    Cria uma dívida de pólvora para o usuário.
+    valor_divida = valor_original (NÃO dobra)
+    """
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            # Evita duplicar dívida na mesma semana
+            existente = await conn.fetchval(
+                "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND semana_fechamento = $2 AND pago = false AND tipo = 'polvora'",
+                str(user_id), semana_fechamento
+            )
+            if existente:
+                return False
+
+            await conn.execute("""
+                INSERT INTO metas_dividas 
+                (user_id, valor_divida, valor_original, semana_fechamento, tipo) 
+                VALUES ($1, $2, $3, $4, 'polvora')
+            """, str(user_id), valor_original, valor_original, semana_fechamento)
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao criar dívida de pólvora: {e}")
+        return False
+
+
+async def buscar_dividas_usuario(user_id):
+    """
+    Retorna TODAS as dívidas ativas (dinheiro + pólvora) do usuário.
+    """
+    pool = await get_pool()
+    if not pool:
+        return {"dinheiro": 0, "polvora": 0, "detalhes_dinheiro": [], "detalhes_polvora": []}
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM metas_dividas WHERE user_id = $1 AND pago = false ORDER BY data_criacao ASC",
+                str(user_id)
+            )
+
+            total_dinheiro = 0
+            total_polvora = 0
+            detalhes_dinheiro = []
+            detalhes_polvora = []
+
+            for r in rows:
+                tipo = r["tipo"] or "dinheiro"
+                if tipo == "polvora":
+                    total_polvora += r["valor_divida"]
+                    detalhes_polvora.append({
+                        "valor": r["valor_divida"],
+                        "semana": r["semana_fechamento"],
+                        "data": r["data_criacao"]
+                    })
+                else:
+                    total_dinheiro += r["valor_divida"]
+                    detalhes_dinheiro.append({
+                        "valor": r["valor_divida"],
+                        "semana": r["semana_fechamento"],
+                        "data": r["data_criacao"]
+                    })
+
+            return {
+                "dinheiro": total_dinheiro,
+                "polvora": total_polvora,
+                "detalhes_dinheiro": detalhes_dinheiro,
+                "detalhes_polvora": detalhes_polvora
+            }
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar dívidas do usuário: {e}")
+        return {"dinheiro": 0, "polvora": 0, "detalhes_dinheiro": [], "detalhes_polvora": []}
+
+
+async def calcular_bonificacao_polvora(user_id):
+    """
+    Retorna o valor da bonificação de pólvora do usuário.
+    - Só vale se passou de 5000 no total da semana
+    - R$ 80 por pólvora
+    """
+    pool = await get_pool()
+    if not pool:
+        return {"elegivel": False, "total": 0, "valor": 0}
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT polvora_total_semana FROM metas WHERE user_id = $1",
+                str(user_id)
+            )
+            if not row:
+                return {"elegivel": False, "total": 0, "valor": 0}
+
+            total = row["polvora_total_semana"] or 0
+            if total > 5000:
+                return {
+                    "elegivel": True,
+                    "total": total,
+                    "valor": total * 80
+                }
+            return {"elegivel": False, "total": total, "valor": 0}
+    except Exception as e:
+        logger.error(f"❌ Erro ao calcular bonificação: {e}")
+        return {"elegivel": False, "total": 0, "valor": 0}
 
 async def buscar_ponto_ativo(user_id):
     pool = await get_pool()
@@ -10383,6 +10711,7 @@ async def atualizar_embed_meta(user_id):
                     await criar_sala_meta(member)
                     await carregar_metas_cache()
                 return
+
         dados = metas_cache[str(user_id)]
         canal = bot.get_channel(dados["canal_id"])
         if not canal:
@@ -10393,9 +10722,11 @@ async def atualizar_embed_meta(user_id):
                 async with pool.acquire() as conn:
                     await conn.execute("DELETE FROM metas WHERE user_id = $1", str(user_id))
             return
+
         pool = await get_pool()
         if not pool:
             return
+
         async with pool.acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
         if not meta:
@@ -10406,88 +10737,235 @@ async def atualizar_embed_meta(user_id):
             metas_cache[str(user_id)] = {
                 "canal_id": canal.id, "dinheiro": 0, "acao": None,
                 "dinheiro_acoes": 0, "saldo_excedente": 0,
-                "valor_meta_personalizado": None
+                "valor_meta_personalizado": None,
+                "polvora_atual": 0, "polvora_total_semana": 0
             }
+
         guild = bot.get_guild(GUILD_ID)
         member = guild.get_member(int(user_id))
         if member:
             nome = member.display_name
             is_soldado = CARGO_SOLDADO_ID in [r.id for r in member.roles]
+            is_mecanico = CARGO_MECANICO_ID in [r.id for r in member.roles]
         else:
             nome = str(user_id)
             is_soldado = False
+            is_mecanico = False
+
+        # =========================================================
+        # DADOS DO BANCO
+        # =========================================================
         dinheiro_meta = meta["dinheiro"] or 0
         dinheiro_acoes = meta.get("dinheiro_acoes") or 0
         saldo_excedente = meta.get("saldo_excedente") or 0
         acao = meta.get("acao") or "Nenhuma"
-        meta_total = await definir_valor_meta_por_id(user_id)
+        polvora_atual = meta.get("polvora_atual") or 0
+        polvora_total_semana = meta.get("polvora_total_semana") or 0
+
+        meta_dinheiro = await definir_valor_meta_por_id(user_id)
+        meta_polvora = await definir_valor_meta_polvora(user_id)
 
         # =========================================================
-        # BUSCAR DÍVIDA ATIVA (META DOBRADA)
+        # TIPO DA SEMANA ATUAL
         # =========================================================
-        divida_ativa = await buscar_divida_ativa(user_id)
-        valor_divida = divida_ativa["valor_divida"] if divida_ativa else 0
-        meta_efetiva = meta_total + valor_divida
+        tipo_semana = await buscar_tipo_meta_semana()
 
-        embed = discord.Embed(title=f"💀 ── META SEMANAL ── 💀", description=f"👤 {nome.upper()} • VDR 442", color=Cores.META, timestamp=agora())
+        # =========================================================
+        # DÍVIDAS (dinheiro + pólvora)
+        # =========================================================
+        dividas = await buscar_dividas_usuario(user_id)
+        divida_dinheiro = dividas["dinheiro"]
+        divida_polvora = dividas["polvora"]
+
+        # =========================================================
+        # BONIFICAÇÃO (só vale em semana de pólvora)
+        # =========================================================
+        bonificacao = {"elegivel": False, "total": 0, "valor": 0}
+        if tipo_semana == "polvora":
+            bonificacao = await calcular_bonificacao_polvora(user_id)
+
+        # =========================================================
+        # CRIA EMBED
+        # =========================================================
+        embed = discord.Embed(
+            title=f"💀 ── META SEMANAL ── 💀",
+            description=f"👤 {nome.upper()} • VDR 442",
+            color=Cores.META,
+            timestamp=agora()
+        )
         if member:
             embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_author(name="🛡 Vida Rasa 442 • Sistema de Metas", icon_url=bot.user.display_avatar.url if bot.user else None)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(name="💰 DINHEIRO SUJO (META)", value=f"```yaml\n{formatar_dinheiro(dinheiro_meta)}\n```", inline=False)
-        if is_soldado:
-            embed.add_field(name="🎯 DINHEIRO DE AÇÕES", value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)}\n```", inline=False)
-        if saldo_excedente > 0:
-            embed.add_field(name="📦 SALDO EXCEDENTE", value=f"```yaml\n{formatar_dinheiro(saldo_excedente)}\n```", inline=False)
 
+        # =========================================================
+        # CAMPO 1 — TIPO DA SEMANA
+        # =========================================================
+        if tipo_semana == "polvora":
+            tipo_emoji = "🧨"
+            tipo_nome = "PÓLVORA"
+        else:
+            tipo_emoji = "💰"
+            tipo_nome = "DINHEIRO SUJO"
+
+        embed.add_field(
+            name=f"🎯 TIPO DA SEMANA: {tipo_emoji} {tipo_nome}",
+            value="\u200b",
+            inline=False
+        )
+
+        # =========================================================
+        # SEPARADOR
+        # =========================================================
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
-        # ✅ AVISO DE META DOBRADA (se tiver)
-        if valor_divida > 0:
+        # =========================================================
+        # CAMPO 2 — PROGRESSO (do tipo da semana)
+        # =========================================================
+        if tipo_semana == "polvora":
+            # META DE PÓLVORA
+            valor_progresso = polvora_atual
+            meta_atual = meta_polvora
+            unidade = "unidades"
+
+            if meta_atual > 0:
+                progresso = min(valor_progresso / meta_atual, 1.0)
+            else:
+                progresso = 1.0
+
+            barra_progresso = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
+            porcentagem = int(progresso * 100)
+
+            if meta_atual == 0:
+                status_meta = "🟢 META ISENTA"
+            elif progresso >= 1:
+                status_meta = "✅ META CONCLUÍDA! 🎉"
+            elif progresso >= 0.7:
+                status_meta = "🟢 Quase lá!"
+            elif progresso >= 0.4:
+                status_meta = "🟡 Vamos acelerar!"
+            elif progresso >= 0.1:
+                status_meta = "🟠 Começando..."
+            else:
+                status_meta = "🔴 Comece já!"
+
+            if meta_atual > 0:
+                meta_texto = f"{fmt_num(valor_progresso)} / {fmt_num(meta_atual)} {unidade}"
+            else:
+                meta_texto = "ISENTO"
+
             embed.add_field(
-                name="🚨 META DOBRADA PENDENTE 🚨",
-                value=(
-                    f"```diff\n"
-                    f"- VOCÊ TEM UMA DÍVIDA ATIVA!\n"
-                    f"- VALOR: {formatar_dinheiro(valor_divida)}\n"
-                    f"- AJUSTE LOGO SUA META!\n"
-                    f"```"
-                ),
+                name="🧨 PÓLVORA (META)",
+                value=f"```yaml\n{meta_texto}\n```",
                 inline=False
             )
+            embed.add_field(
+                name=f"📊 PROGRESSO • {porcentagem}%",
+                value=f"```prolog\n{barra_progresso}\n{status_meta}\n```",
+                inline=False
+            )
+
+            # Total depositado na semana (pra bonificação)
+            embed.add_field(
+                name="🎁 TOTAL DEPOSITADO NA SEMANA",
+                value=f"```yaml\n{fmt_num(polvora_total_semana)} unidades\n```",
+                inline=False
+            )
+
+            # Bonificação
+            if bonificacao["elegivel"]:
+                embed.add_field(
+                    name="🎁 BONIFICAÇÃO ATIVA",
+                    value=f"```diff\n+ Elegível! ({fmt_num(bonificacao['total'])} × R$ 80)\n+ Valor: {formatar_dinheiro(bonificacao['valor'])}\n```",
+                    inline=False
+                )
+            elif polvora_total_semana > 0:
+                restante = 5000 - polvora_total_semana
+                if restante > 0:
+                    embed.add_field(
+                        name="🎁 BONIFICAÇÃO",
+                        value=f"```yaml\nFaltam {fmt_num(restante)} pólvoras\npara ganhar bonificação\n```",
+                        inline=False
+                    )
+
+        else:
+            # META DE DINHEIRO
+            if is_soldado:
+                valor_progresso = dinheiro_acoes
+            else:
+                valor_progresso = dinheiro_meta
+            meta_atual = meta_dinheiro
+
+            if meta_atual > 0:
+                progresso = min(valor_progresso / meta_atual, 1.0)
+            else:
+                progresso = 1.0
+
+            barra_progresso = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
+            porcentagem = int(progresso * 100)
+
+            if meta_atual == 0:
+                status_meta = "🟢 META ISENTA"
+            elif progresso >= 1:
+                status_meta = "✅ META CONCLUÍDA! 🎉"
+            elif progresso >= 0.7:
+                status_meta = "🟢 Quase lá!"
+            elif progresso >= 0.4:
+                status_meta = "🟡 Vamos acelerar!"
+            elif progresso >= 0.1:
+                status_meta = "🟠 Começando..."
+            else:
+                status_meta = "🔴 Comece já!"
+
+            if meta_atual > 0:
+                meta_texto = f"{formatar_dinheiro(valor_progresso)} / {formatar_dinheiro(meta_atual)}"
+            else:
+                meta_texto = "ISENTO"
+
+            embed.add_field(
+                name="💰 DINHEIRO SUJO (META)",
+                value=f"```yaml\n{formatar_dinheiro(dinheiro_meta)}\n```",
+                inline=False
+            )
+            if is_soldado:
+                embed.add_field(
+                    name="🎯 DINHEIRO DE AÇÕES",
+                    value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)}\n```",
+                    inline=False
+                )
+            if saldo_excedente > 0:
+                embed.add_field(
+                    name="📦 SALDO EXCEDENTE",
+                    value=f"```yaml\n{formatar_dinheiro(saldo_excedente)}\n```",
+                    inline=False
+                )
+
+            embed.add_field(
+                name=f"📊 PROGRESSO • {porcentagem}%",
+                value=f"```prolog\n{barra_progresso}\n{meta_texto}\n\n{status_meta}\n```",
+                inline=False
+            )
+
+        # =========================================================
+        # CAMPO 3 — DÍVIDAS PENDENTES (só se tiver)
+        # =========================================================
+        if divida_dinheiro > 0 or divida_polvora > 0:
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
-        if is_soldado:
-            valor_progresso = dinheiro_acoes
-        else:
-            valor_progresso = dinheiro_meta
-        if meta_efetiva > 0:
-            progresso = min(valor_progresso / meta_efetiva, 1.0)
-        else:
-            progresso = 1.0
-        barra_progresso = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
-        porcentagem = int(progresso * 100)
-        if meta_efetiva == 0:
-            status_meta = "🟢 META ISENTA"
-        elif progresso >= 1:
-            status_meta = "✅ META CONCLUÍDA! 🎉"
-        elif progresso >= 0.7:
-            status_meta = "🟢 Quase lá!"
-        elif progresso >= 0.4:
-            status_meta = "🟡 Vamos acelerar!"
-        elif progresso >= 0.1:
-            status_meta = "🟠 Começando..."
-        else:
-            status_meta = "🔴 Comece já!"
-        if meta_efetiva > 0:
-            meta_texto = f"{formatar_dinheiro(valor_progresso)} / {formatar_dinheiro(meta_efetiva)}"
-            if valor_divida > 0:
-                meta_texto += f"\n(Inclui dívida: {formatar_dinheiro(valor_divida)})"
-        else:
-            meta_texto = "ISENTO"
-        embed.add_field(name=f"📊 PROGRESSO • {porcentagem}%", value=f"```prolog\n{barra_progresso}\n{meta_texto}\n\n{status_meta}\n```", inline=False)
-        
-        is_mecanico = CARGO_MECANICO_ID in [r.id for r in member.roles] if member else False
+            texto_dividas = ""
+            if divida_dinheiro > 0:
+                texto_dividas += f"💰 Dinheiro: {formatar_dinheiro(divida_dinheiro)}\n"
+            if divida_polvora > 0:
+                texto_dividas += f"🧨 Pólvora: {fmt_num(divida_polvora)} unidades\n"
+
+            embed.add_field(
+                name="🚨 DÍVIDAS PENDENTES",
+                value=f"```diff\n- {texto_dividas.strip().replace(chr(10), chr(10) + '- ')}\n```",
+                inline=False
+            )
+
+        # =========================================================
+        # CAMPO 4 — MECÂNICO (se for)
+        # =========================================================
         if is_mecanico:
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             segundos_semana = await calcular_horas_semana(user_id)
@@ -10495,6 +10973,7 @@ async def atualizar_embed_meta(user_id):
             progresso_horas = min(segundos_semana / META_HORAS_SEMANA, 1.0) if META_HORAS_SEMANA > 0 else 0
             porcentagem_horas = int(progresso_horas * 100)
             barra_horas = "▓" * int(progresso_horas * 20) + "░" * (20 - int(progresso_horas * 20))
+
             if segundos_semana >= META_HORAS_SEMANA:
                 status_horas = "✅ META DE HORAS CONCLUÍDA!"
             elif progresso_horas >= 0.7:
@@ -10503,22 +10982,33 @@ async def atualizar_embed_meta(user_id):
                 status_horas = "🟡 Vamos acelerar!"
             else:
                 status_horas = "🔴 Comece já!"
+
             ponto_ativo = await buscar_ponto_ativo(user_id)
             status_ponto = "🟢 **PONTO ABERTO**" if ponto_ativo else "⚪ **PONTO FECHADO**"
-            embed.add_field(name="⏰ META DE HORAS (MECÂNICA)", value=f"```yaml\nMeta semanal: 6h\nTempo total: {formatar_horas(segundos_semana)}\nStatus: {status_horas}\n```", inline=False)
-            embed.add_field(name=f"📊 PROGRESSO DE HORAS • {porcentagem_horas}%", value=f"```prolog\n{barra_horas}\n{formatar_horas(segundos_semana)} / 6h\n```", inline=False)
+
+            embed.add_field(
+                name="⏰ META DE HORAS (MECÂNICA)",
+                value=f"```yaml\nMeta semanal: 6h\nTempo total: {formatar_horas(segundos_semana)}\nStatus: {status_horas}\n```",
+                inline=False
+            )
+            embed.add_field(
+                name=f"📊 PROGRESSO DE HORAS • {porcentagem_horas}%",
+                value=f"```prolog\n{barra_horas}\n{formatar_horas(segundos_semana)} / 6h\n```",
+                inline=False
+            )
             embed.add_field(name="📍 STATUS DO PONTO", value=status_ponto, inline=False)
 
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        if is_soldado:
-            texto_acao = "**🎯 Participar de Ações** - Sua meta é paga com ações realizadas\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro extra"
-        elif is_mecanico:
-            texto_acao = "**⏰ Bater Ponto** - Abra/fecha o ponto na mecânica\n**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta"
-        else:
-            texto_acao = "**💰 Adicionar Dinheiro Sujo** - Registre dinheiro da meta"
-        embed.add_field(name="⚙️ COMO USAR", value=texto_acao, inline=False)
-        embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}", icon_url=bot.user.display_avatar.url if bot.user else None)
+        # =========================================================
+        # RODAPÉ
+        # =========================================================
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
 
+        # =========================================================
+        # DELETA MENSAGENS ANTIGAS DO CANAL
+        # =========================================================
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
                 try:
@@ -10527,6 +11017,9 @@ async def atualizar_embed_meta(user_id):
                 except:
                     pass
 
+        # =========================================================
+        # MONTA A VIEW (botões)
+        # =========================================================
         if is_mecanico:
             ponto_ativo = await buscar_ponto_ativo(user_id)
             view_final = MecanicoView(user_id)
@@ -10546,6 +11039,7 @@ async def atualizar_embed_meta(user_id):
         msg = await canal.send(embed=embed, view=view_final)
         await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
         await verificar_meta_concluida(user_id, valor_progresso)
+
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
 
@@ -10553,13 +11047,15 @@ async def atualizar_embed_meta(user_id):
 # AVISO DE META NÃO BATIDA (VERMELHO + MAIÚSCULO)
 # =========================================================
 
-async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, motivo="NAO_BATEU"):
+async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, motivo="NAO_BATEU", tipo="dinheiro"):
     """
     Envia aviso em MAIÚSCULO e VERMELHO no canal de meta do membro.
-    
+
     motivo:
-    - "NAO_BATEU": primeira vez que não bateu → meta dobrada
-    - "NAO_BATEU_DOBRADA": não bateu nem a dobrada → perde set
+    - "NAO_BATEU": não bateu a meta → dívida
+    - "NAO_BATEU_DOBRADA": não bateu dívida prolongada
+
+    tipo: "dinheiro" ou "polvora"
     """
     try:
         if str(user_id) not in metas_cache:
@@ -10575,23 +11071,35 @@ async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, mo
         member = guild.get_member(int(user_id)) if guild else None
         nome = member.display_name if member else f"ID: {user_id}"
 
+        # Formata os valores conforme o tipo
+        if tipo == "polvora":
+            valor_original_str = f"{fmt_num(valor_original)} PÓLVORAS"
+            valor_divida_str = f"{fmt_num(valor_divida)} PÓLVORAS"
+            emoji_tipo = "🧨"
+            nome_tipo = "PÓLVORA"
+        else:
+            valor_original_str = formatar_dinheiro(valor_original)
+            valor_divida_str = formatar_dinheiro(valor_divida)
+            emoji_tipo = "💰"
+            nome_tipo = "DINHEIRO SUJO"
+
         if motivo == "NAO_BATEU":
             embed = discord.Embed(
-                title="🚨 ATENÇÃO! META NÃO BATIDA! 🚨",
+                title=f"🚨 ATENÇÃO! META DE {nome_tipo} NÃO BATIDA! 🚨",
                 description=(
                     f"```diff\n"
                     f"- VOCÊ NÃO BATEU A META DA SEMANA ANTERIOR!\n"
                     f"```\n"
                     f"**{nome.upper()}**\n\n"
                     f"```yaml\n"
-                    f"📊 META ORIGINAL: {formatar_dinheiro(valor_original)}\n"
-                    f"💰 SUA META AGORA: {formatar_dinheiro(valor_divida)} (DOBRADA)\n"
+                    f"{emoji_tipo} META ORIGINAL: {valor_original_str}\n"
+                    f"{emoji_tipo} SUA DÍVIDA AGORA: {valor_divida_str}\n"
                     f"```\n\n"
                     f"🔴 **ATENÇÃO:**\n"
                     f"```diff\n"
-                    f"- SUA META FOI DOBRADA PARA A PRÓXIMA SEMANA!\n"
-                    f"- SE VOCÊ NÃO BATER A META DOBRADA,\n"
-                    f"- VOCÊ PERDERÁ O SET DO TABLET!\n"
+                    f"- VOCÊ FICOU DEVENDO ESSA META!\n"
+                    f"- PAGUE PARA LIMPAR SEU NOME!\n"
+                    f"- SE NÃO PAGAR, PODE PERDER O SET!\n"
                     f"```\n\n"
                     f"💪 **CORRA ATRÁS DO PREJUÍZO!**"
                 ),
@@ -10614,12 +11122,12 @@ async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, mo
                 title="💀 VOCÊ PERDEU O SET! 💀",
                 description=(
                     f"```diff\n"
-                    f"- VOCÊ NÃO BATEU NEM A META DOBRADA!\n"
+                    f"- VOCÊ NÃO PAGOU SUA DÍVIDA!\n"
                     f"```\n"
                     f"**{nome.upper()}**\n\n"
                     f"```yaml\n"
-                    f"📊 META ORIGINAL: {formatar_dinheiro(valor_original)}\n"
-                    f"💰 META DOBRADA: {formatar_dinheiro(valor_divida)}\n"
+                    f"{emoji_tipo} META ORIGINAL: {valor_original_str}\n"
+                    f"{emoji_tipo} DÍVIDA: {valor_divida_str}\n"
                     f"```\n\n"
                     f"🔴 **CONSEQUÊNCIA:**\n"
                     f"```diff\n"
@@ -10647,7 +11155,7 @@ async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, mo
             embed=embed
         )
 
-        logger.info(f"📢 Aviso de meta não batida enviado para {nome} (motivo: {motivo})")
+        logger.info(f"📢 Aviso de meta não batida ({tipo}) enviado para {nome} (motivo: {motivo})")
         return True
 
     except Exception as e:
@@ -10727,7 +11235,7 @@ class MetaView(discord.ui.View):
         super().__init__(timeout=None)
         self.user_id = user_id
 
-    @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰")
+    @discord.ui.button(label="💰 Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰", row=0)
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             pool = await get_pool()
@@ -10756,7 +11264,36 @@ class MetaView(discord.ui.View):
             except:
                 pass
 
-    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️")
+    @discord.ui.button(label="🧨 Adicionar Pólvora", style=discord.ButtonStyle.success, custom_id="meta_adicionar_polvora_fixo", emoji="🧨", row=0)
+    async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+                return
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            if not meta:
+                guild = interaction.guild
+                member = guild.get_member(int(self.user_id))
+                if member:
+                    await criar_sala_meta(member)
+                    await asyncio.sleep(1)
+                    await carregar_metas_cache()
+                    await interaction.response.send_message("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
+                    return
+                else:
+                    await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                    return
+            await interaction.response.send_modal(AdicionarPolvoraModal(self.user_id))
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Adicionar Pólvora: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️", row=1)
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             is_dono = str(interaction.user.id) == str(self.user_id)
@@ -10786,7 +11323,33 @@ class MetaView(discord.ui.View):
             except:
                 pass
 
-    @discord.ui.button(label="⚙️ Editar Valor da Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_valor_fixo", emoji="⚙️", row=1)
+    @discord.ui.button(label="🧨 Editar Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_editar_polvora_fixo", emoji="🧨", row=1)
+    async def editar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
+            if not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM** podem editar a pólvora da meta!", ephemeral=True)
+                return
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+                return
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            if not meta:
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                return
+            valor_atual = meta.get("polvora_atual") or 0
+            await interaction.response.send_modal(EditarPolvoraModal(self.user_id, valor_atual))
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Pólvora: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    @discord.ui.button(label="⚙️ Editar Valor da Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_valor_fixo", emoji="⚙️", row=2)
     async def editar_valor_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
@@ -10841,7 +11404,7 @@ class MecanicoView(discord.ui.View):
                 ephemeral=True
             )
 
-    @discord.ui.button(label="💰 Adicionar Dinheiro Sujo", style=discord.ButtonStyle.success, custom_id="mecanico_adicionar_dinheiro", emoji="💰", row=1)
+    @discord.ui.button(label="💰 Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="mecanico_adicionar_dinheiro", emoji="💰", row=1)
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             pool = await get_pool()
@@ -10861,7 +11424,27 @@ class MecanicoView(discord.ui.View):
             except:
                 pass
 
-    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_meta", emoji="✏️", row=1)
+    @discord.ui.button(label="🧨 Adicionar Pólvora", style=discord.ButtonStyle.success, custom_id="mecanico_adicionar_polvora", emoji="🧨", row=1)
+    async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+                return
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            if not meta:
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                return
+            await interaction.response.send_modal(AdicionarPolvoraModal(self.user_id))
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Adicionar Pólvora: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_meta", emoji="✏️", row=2)
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             is_dono = str(interaction.user.id) == str(self.user_id)
@@ -10888,7 +11471,33 @@ class MecanicoView(discord.ui.View):
             except:
                 pass
 
-    @discord.ui.button(label="⚙️ Editar Valor da Meta", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_valor", emoji="⚙️", row=2)
+    @discord.ui.button(label="🧨 Editar Pólvora", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_polvora", emoji="🧨", row=2)
+    async def editar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
+            if not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM** podem editar a pólvora!", ephemeral=True)
+                return
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+                return
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            if not meta:
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                return
+            valor_atual = meta.get("polvora_atual") or 0
+            await interaction.response.send_modal(EditarPolvoraModal(self.user_id, valor_atual))
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Pólvora: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    @discord.ui.button(label="⚙️ Editar Valor da Meta", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_valor", emoji="⚙️", row=3)
     async def editar_valor_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
@@ -10906,7 +11515,7 @@ class MecanicoView(discord.ui.View):
             except:
                 pass
 
-    @discord.ui.button(label="✏️ Editar Horas", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_horas", emoji="⏰", row=2)
+    @discord.ui.button(label="✏️ Editar Horas", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_horas", emoji="⏰", row=3)
     async def editar_horas(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             is_dono = str(interaction.user.id) == str(self.user_id)
@@ -10915,9 +11524,7 @@ class MecanicoView(discord.ui.View):
             if not is_dono and not is_gerente and not is_admin:
                 await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar as horas!", ephemeral=True)
                 return
-            # Pega horas atuais da semana
             segundos_atuais = await calcular_horas_semana(self.user_id)
-            horas_texto = formatar_horas(segundos_atuais)
             modal = EditarHorasModal(self.user_id, segundos_atuais)
             await interaction.response.send_modal(modal)
         except Exception as e:
@@ -10967,6 +11574,140 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
         await carregar_metas_cache()
         await atualizar_embed_meta(self.user_id)
         await interaction.response.send_message(f"✅ **{formatar_dinheiro(valor)} adicionado à meta!**", ephemeral=True)
+
+class AdicionarPolvoraModal(discord.ui.Modal, title="🧨 Adicionar Pólvora"):
+    quantidade = discord.ui.TextInput(
+        label="Quantidade de Pólvora",
+        placeholder="Digite a quantidade (ex: 500)",
+        required=True,
+        max_length=10
+    )
+
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = user_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            valor = safe_int(self.quantidade.value)
+            if valor <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Quantidade inválida!**", ephemeral=True)
+            return
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+
+        if not meta:
+            guild = interaction.guild
+            member = guild.get_member(int(self.user_id))
+            if member:
+                await criar_sala_meta(member)
+                await asyncio.sleep(1)
+                await carregar_metas_cache()
+                await interaction.followup.send("✅ **Meta criada automaticamente!**\n💡 Tente novamente agora.", ephemeral=True)
+                return
+            else:
+                await interaction.followup.send("❌ **Meta não encontrada!**", ephemeral=True)
+                return
+
+        # Chama a função que faz tudo (paga dívida + meta + estoque)
+        resultado = await adicionar_polvora_meta(self.user_id, valor)
+
+        if not resultado.get("sucesso"):
+            await interaction.followup.send(f"❌ **Erro:** {resultado.get('erro', 'Desconhecido')}", ephemeral=True)
+            return
+
+        await carregar_metas_cache()
+        await atualizar_embed_meta(self.user_id)
+        await enviar_painel_fabricacao()
+
+        # Monta mensagem de confirmação
+        msg = f"✅ **{fmt_num(valor)} pólvoras adicionadas!**\n\n"
+
+        if resultado.get("valor_divida_paga", 0) > 0:
+            msg += f"🚨 **Dívida paga:** {fmt_num(resultado['valor_divida_paga'])} pólvoras\n"
+            if resultado.get("quitou_divida"):
+                msg += f"✅ **Dívida quitada com sucesso!**\n"
+            else:
+                msg += f"⚠️ **Dívida restante:** {fmt_num(resultado.get('divida_restante', 0))} pólvoras\n"
+
+        if resultado.get("valor_meta", 0) > 0:
+            msg += f"🎯 **Adicionado na meta:** {fmt_num(resultado['valor_meta'])} pólvoras\n"
+
+        msg += f"📦 **Estoque atualizado:** +{fmt_num(valor)} pólvoras"
+
+        await interaction.followup.send(msg, ephemeral=True)
+
+class EditarPolvoraModal(discord.ui.Modal, title="✏️ Editar Pólvora da Meta"):
+    def __init__(self, user_id, valor_atual):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.valor_atual = valor_atual
+
+        self.novo_valor = discord.ui.TextInput(
+            label="🧨 NOVA QUANTIDADE DE PÓLVORA",
+            placeholder=f"Valor atual: {fmt_num(valor_atual)}",
+            required=True,
+            max_length=10
+        )
+        self.add_item(self.novo_valor)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            novo_valor = safe_int(self.novo_valor.value)
+            if novo_valor < 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Valor inválido!**", ephemeral=True)
+            return
+
+        # Calcula diferença (pro log)
+        diferenca = novo_valor - self.valor_atual
+
+        sucesso = await editar_polvora_meta(self.user_id, novo_valor)
+        if not sucesso:
+            await interaction.followup.send("❌ **Erro ao editar pólvora!**", ephemeral=True)
+            return
+
+        await carregar_metas_cache()
+        await atualizar_embed_meta(self.user_id)
+        await enviar_painel_fabricacao()
+
+        # Monta mensagem
+        if diferenca > 0:
+            msg_estoque = f"📦 Estoque: +{fmt_num(diferenca)} pólvoras"
+        elif diferenca < 0:
+            msg_estoque = f"📦 Estoque: {fmt_num(diferenca)} pólvoras"
+        else:
+            msg_estoque = "📦 Estoque: sem alteração"
+
+        embed = discord.Embed(
+            title="✅ PÓLVORA DA META ATUALIZADA!",
+            description=f"**👤 <@{self.user_id}>**",
+            color=0x2ECC71,
+            timestamp=agora()
+        )
+        embed.add_field(
+            name="🧨 PÓLVORA",
+            value=f"```yaml\nAntes: {fmt_num(self.valor_atual)}\nAgora: {fmt_num(novo_valor)}\nDiferença: {fmt_num(diferenca)}\n```",
+            inline=False
+        )
+        embed.add_field(name="📦 ESTOQUE", value=f"```yaml\n{msg_estoque}\n```", inline=False)
+        embed.add_field(name="👤 Editado por", value=interaction.user.mention, inline=False)
+        embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Metas")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
     def __init__(self, user_id, dados_atuais):
@@ -11423,7 +12164,9 @@ async def enviar_painel_relatorio_metas():
     view.add_item(FecharMetasAutomaticoButton())
     view.add_item(RelatorioHorasButton())
     view.add_item(ResetarHorasSemanaButton())
-    await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495685092999279, embed, view)
+    view.add_item(TrocarTipoMetaButton())
+    view.add_item(VerDividasButton())
+    await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495695092999279, embed, view)
 
 class RelatorioMetasButton(discord.ui.Button):
     def __init__(self):
@@ -11478,6 +12221,235 @@ class FecharMetasAutomaticoButton(discord.ui.Button):
             color=0xe67e22
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class TrocarTipoMetaSelect(discord.ui.Select):
+    def __init__(self, tipo_atual):
+        options = [
+            discord.SelectOption(
+                label="💰 Dinheiro Sujo",
+                description="Meta contada em dinheiro sujo (R$)",
+                value="dinheiro",
+                emoji="💰",
+                default=(tipo_atual == "dinheiro")
+            ),
+            discord.SelectOption(
+                label="🧨 Pólvora",
+                description="Meta contada em pólvora (unidades)",
+                value="polvora",
+                emoji="🧨",
+                default=(tipo_atual == "polvora")
+            ),
+        ]
+        super().__init__(
+            placeholder="🎯 Escolha o tipo da semana...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        novo_tipo = self.values[0]
+        tipo_atual = await buscar_tipo_meta_semana()
+
+        if novo_tipo == tipo_atual:
+            await interaction.response.send_message(
+                f"⚠️ O tipo da semana **já é** {novo_tipo.upper()}.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Troca no banco
+        sucesso = await definir_tipo_meta_semana(novo_tipo)
+        if not sucesso:
+            await interaction.followup.send("❌ Erro ao trocar o tipo da meta!", ephemeral=True)
+            return
+
+        # Avisa no canal de gerência
+        canal_gerencia = interaction.guild.get_channel(CANAL_GERENCIA_ID)
+        if canal_gerencia:
+            emoji = "🧨" if novo_tipo == "polvora" else "💰"
+            nome = "PÓLVORA" if novo_tipo == "polvora" else "DINHEIRO SUJO"
+            embed_aviso = discord.Embed(
+                title=f"{emoji} ── TIPO DE META ALTERADO ── {emoji}",
+                description=f"📅 **Tipo da semana agora:** {emoji} **{nome}**",
+                color=0x9B59B6,
+                timestamp=agora()
+            )
+            embed_aviso.add_field(name="👤 Alterado por", value=interaction.user.mention, inline=True)
+            embed_aviso.add_field(name="📌 Novo tipo", value=f"{emoji} {nome}", inline=True)
+            embed_aviso.set_footer(text="🛡 Vida Rasa 442 • Sistema de Metas")
+            try:
+                await canal_gerencia.send(embed=embed_aviso)
+            except:
+                pass
+
+        # Atualiza TODOS os painéis de meta
+        await carregar_metas_cache()
+        contador = 0
+        for uid in list(metas_cache.keys()):
+            try:
+                await atualizar_embed_meta(int(uid))
+                contador += 1
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"❌ Erro ao atualizar meta {uid}: {e}")
+
+        emoji = "🧨" if novo_tipo == "polvora" else "💰"
+        nome = "PÓLVORA" if novo_tipo == "polvora" else "DINHEIRO SUJO"
+        await interaction.followup.send(
+            f"✅ **Tipo da meta alterado!**\n\n"
+            f"{emoji} **Novo tipo:** {nome}\n"
+            f"📊 **{contador} painéis atualizados**\n"
+            f"📢 Aviso enviado no canal de gerência.",
+            ephemeral=True
+        )
+
+
+class TrocarTipoMetaView(discord.ui.View):
+    def __init__(self, tipo_atual):
+        super().__init__(timeout=60)
+        self.add_item(TrocarTipoMetaSelect(tipo_atual))
+
+
+class TrocarTipoMetaButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="🔄 Trocar Tipo de Meta",
+            style=discord.ButtonStyle.primary,
+            custom_id="trocar_tipo_meta_btn",
+            emoji="🔄",
+            row=1
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem trocar o tipo da meta!",
+                ephemeral=True
+            )
+            return
+
+        tipo_atual = await buscar_tipo_meta_semana()
+        emoji_atual = "🧨" if tipo_atual == "polvora" else "💰"
+        nome_atual = "PÓLVORA" if tipo_atual == "polvora" else "DINHEIRO SUJO"
+
+        embed = discord.Embed(
+            title="🎯 ── TROCAR TIPO DE META ── 🎯",
+            description=(
+                f"**Tipo atual:** {emoji_atual} **{nome_atual}**\n\n"
+                f"Selecione o novo tipo da semana abaixo:"
+            ),
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+        embed.add_field(
+            name="⚠️ IMPORTANTE",
+            value=(
+                "```yaml\n"
+                "• Ao trocar, TODOS os painéis são atualizados\n"
+                "• Dívidas NÃO são afetadas\n"
+                "• Membros continuam podendo pagar o outro tipo\n"
+                "```"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Metas")
+
+        view = TrocarTipoMetaView(tipo_atual)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+# =========================================================
+# BOTÃO: VER DÍVIDAS
+# =========================================================
+class VerDividasButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="📋 Ver Dívidas",
+            style=discord.ButtonStyle.success,
+            custom_id="ver_dividas_btn",
+            emoji="📋",
+            row=1
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem ver as dívidas!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        dividas = await listar_dividas_ativas()
+
+        if not dividas:
+            await interaction.followup.send("✅ **Nenhuma dívida ativa no momento!**", ephemeral=True)
+            return
+
+        # Agrupa por usuário
+        por_usuario = {}
+        for d in dividas:
+            uid = d["user_id"]
+            tipo = d["tipo"] or "dinheiro"
+            if uid not in por_usuario:
+                por_usuario[uid] = {"dinheiro": 0, "polvora": 0, "total_dinheiro": 0, "total_polvora": 0}
+            if tipo == "polvora":
+                por_usuario[uid]["polvora"] += d["valor_divida"]
+                por_usuario[uid]["total_polvora"] += 1
+            else:
+                por_usuario[uid]["dinheiro"] += d["valor_divida"]
+                por_usuario[uid]["total_dinheiro"] += 1
+
+        # Monta embed
+        embed = discord.Embed(
+            title="📋 ── DÍVIDAS ATIVAS ── 📋",
+            description=f"📊 Total: **{len(dividas)}** dívida(s) | **{len(por_usuario)}** membro(s)",
+            color=0xE74C3C,
+            timestamp=agora()
+        )
+
+        # Ordena por quem deve mais (soma dos dois tipos)
+        ordenado = sorted(
+            por_usuario.items(),
+            key=lambda x: (x[1]["dinheiro"] + x[1]["polvora"] * 100),
+            reverse=True
+        )
+
+        texto = ""
+        for uid, dados in ordenado[:30]:
+            member = interaction.guild.get_member(int(uid))
+            nome = member.display_name if member else f"ID: {uid}"
+            texto += f"**{nome}**\n"
+            if dados["dinheiro"] > 0:
+                texto += f"   💰 Dinheiro: {formatar_dinheiro(dados['dinheiro'])}\n"
+            if dados["polvora"] > 0:
+                texto += f"   🧨 Pólvora: {fmt_num(dados['polvora'])} unidades\n"
+            texto += "\n"
+
+        if len(por_usuario) > 30:
+            texto += f"\n*... e mais {len(por_usuario) - 30} membros*"
+
+        embed.add_field(name="👥 MEMBROS EM DÍVIDA", value=texto[:1024], inline=False)
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 class RelatorioHorasButton(discord.ui.Button):
     def __init__(self):
@@ -12091,25 +13063,181 @@ async def carregar_metas_cache():
                 "acao": r["acao"],
                 "dinheiro_acoes": r.get("dinheiro_acoes") or 0,
                 "saldo_excedente": r.get("saldo_excedente") or 0,
-                "valor_meta_personalizado": r.get("valor_meta_personalizado")
+                "valor_meta_personalizado": r.get("valor_meta_personalizado"),
+                "polvora_atual": r.get("polvora_atual") or 0,
+                "polvora_total_semana": r.get("polvora_total_semana") or 0
             }
         return True
     except Exception as e:
         logger.error(f"❌ Erro ao recarregar cache de metas: {e}")
         return False
 
+# =========================================================
+# FUNÇÕES AUXILIARES DE FECHAMENTO
+# =========================================================
+
+async def gerar_relatorio_bonificacao(membros_com_bonificacao, semana_str, canal_destino):
+    """
+    Gera e envia o relatório de bonificação de pólvora.
+    Só é chamada se a semana foi de PÓLVORA.
+    """
+    if not membros_com_bonificacao:
+        return False
+
+    try:
+        embed = discord.Embed(
+            title="🎁 ── BONIFICAÇÃO DE PÓLVORA ── 🎁",
+            description=f"📅 **Semana:** {semana_str}\n📊 **Mínimo:** 5.000 pólvoras\n💰 **Valor:** R$ 80,00 por pólvora",
+            color=0xF9CA24,
+            timestamp=agora()
+        )
+
+        texto = ""
+        total_geral = 0
+        for m in membros_com_bonificacao:
+            nome = m["nome"]
+            total = m["total"]
+            valor = m["valor"]
+            total_geral += valor
+            texto += f"👤 **{nome}**\n"
+            texto += f"   🧨 {fmt_num(total)} pólvoras\n"
+            texto += f"   💰 {formatar_dinheiro(valor)}\n\n"
+
+        # Se texto muito grande, divide em partes
+        if len(texto) > 1000:
+            # Múltiplos embeds
+            partes = []
+            parte_atual = ""
+            for m in membros_com_bonificacao:
+                linha = f"👤 **{m['nome']}**\n"
+                linha += f"   🧨 {fmt_num(m['total'])} pólvoras\n"
+                linha += f"   💰 {formatar_dinheiro(m['valor'])}\n\n"
+                if len(parte_atual) + len(linha) > 1000:
+                    partes.append(parte_atual)
+                    parte_atual = linha
+                else:
+                    parte_atual += linha
+            if parte_atual:
+                partes.append(parte_atual)
+
+            for i, parte in enumerate(partes):
+                embed_i = discord.Embed(
+                    title=f"🎁 ── BONIFICAÇÃO DE PÓLVORA ({i+1}/{len(partes)}) ── 🎁" if i > 0 else "🎁 ── BONIFICAÇÃO DE PÓLVORA ── 🎁",
+                    description=f"📅 **Semana:** {semana_str}" if i == 0 else "",
+                    color=0xF9CA24,
+                    timestamp=agora() if i == 0 else None
+                )
+                embed_i.add_field(name="👥 MEMBROS ELEGÍVEIS", value=parte, inline=False)
+                await canal_destino.send(embed=embed_i)
+                await asyncio.sleep(0.5)
+        else:
+            embed.add_field(name="👥 MEMBROS ELEGÍVEIS", value=texto, inline=False)
+
+        # Resumo
+        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+        embed.add_field(name="📊 RESUMO", value=f"👥 Membros: **{len(membros_com_bonificacao)}**\n💰 **TOTAL A PAGAR:** {formatar_dinheiro(total_geral)}", inline=False)
+
+        if len(texto) <= 1000:
+            embed.set_footer(text=f"🛡 Vida Rasa 442 • Gerado em {agora().strftime('%d/%m/%Y às %H:%M')}")
+
+        if len(texto) <= 1000:
+            await canal_destino.send(embed=embed)
+
+        logger.info(f"✅ Relatório de bonificação enviado ({len(membros_com_bonificacao)} membros)")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao gerar relatório de bonificação: {e}")
+        return False
+
+
+async def verificar_dividas_prolongadas():
+    """
+    Verifica membros com dívidas ativas há 2+ semanas.
+    Envia aviso no canal de gerência.
+    """
+    pool = await get_pool()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            # Pega todas as dívidas ativas
+            rows = await conn.fetch(
+                """SELECT user_id, tipo, valor_divida, semana_fechamento, data_criacao 
+                   FROM metas_dividas 
+                   WHERE pago = false AND data_criacao <= NOW() - INTERVAL '14 days'
+                   ORDER BY user_id, data_criacao ASC"""
+            )
+
+        if not rows:
+            return
+
+        # Agrupa por usuário
+        por_usuario = {}
+        for r in rows:
+            uid = r["user_id"]
+            if uid not in por_usuario:
+                por_usuario[uid] = []
+            por_usuario[uid].append(r)
+
+        canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
+        if not canal_gerencia:
+            logger.error(f"❌ Canal de gerência não encontrado: {CANAL_GERENCIA_ID}")
+            return
+
+        guild = bot.get_guild(GUILD_ID)
+
+        for uid, dividas in por_usuario.items():
+            member = guild.get_member(int(uid)) if guild else None
+            nome = member.display_name if member else f"ID: {uid}"
+            mencao = member.mention if member else f"<@{uid}>"
+
+            embed = discord.Embed(
+                title="🚨 ── DÍVIDA PROLONGADA ── 🚨",
+                description=f"👤 {mencao}\n**{nome}** está devendo há **2 semanas ou mais**.",
+                color=0x8B0000,
+                timestamp=agora()
+            )
+
+            texto = ""
+            for d in dividas:
+                tipo = d["tipo"] or "dinheiro"
+                if tipo == "polvora":
+                    texto += f"🧨 Pólvora: {fmt_num(d['valor_divida'])} (semana {d['semana_fechamento']})\n"
+                else:
+                    texto += f"💰 Dinheiro: {formatar_dinheiro(d['valor_divida'])} (semana {d['semana_fechamento']})\n"
+
+            embed.add_field(name="📊 DÍVIDAS ATIVAS", value=texto[:1024], inline=False)
+            embed.add_field(
+                name="⚠️ AÇÃO NECESSÁRIA",
+                value="```diff\n- Avaliar PD / remoção da facção\n- Membro não está em colaboração com o projeto\n```",
+                inline=False
+            )
+            embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Metas")
+
+            try:
+                await canal_gerencia.send(embed=embed)
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"❌ Erro ao enviar aviso de dívida prolongada: {e}")
+
+        logger.info(f"✅ {len(por_usuario)} avisos de dívida prolongada enviados")
+    except Exception as e:
+        logger.error(f"❌ Erro em verificar_dividas_prolongadas: {e}")
+        
 async def fechar_todas_metas(data_inicio, data_fim):
     """
     Fecha todas as metas da semana.
-    
-    NOVO FLUXO:
-    1. Verifica quem tinha dívida (meta dobrada) da semana anterior
-       - Se bateu a dobrada → quita a dívida ✅
-       - Se NÃO bateu → envia aviso NAO_BATEU_DOBRADA (perde o set)
-    2. Verifica quem NÃO bateu a meta normal
-       - Cria dívida (meta dobrada)
-       - Envia aviso NAO_BATEU
-    3. Salva no histórico normalmente
+
+    FLUXO NOVO:
+    1. Pega o tipo da semana atual (dinheiro ou pólvora)
+    2. Verifica dívidas antigas (quita se pagou)
+    3. Para cada membro:
+       - Se semana = DINHEIRO: verifica se bateu dinheiro
+       - Se semana = PÓLVORA: verifica se bateu pólvora
+       - Se não bateu: cria dívida do tipo + envia aviso
+    4. Se semana foi de PÓLVORA: gera relatório de bonificação
+    5. Salva histórico
+    6. Verifica dívidas prolongadas (2+ semanas)
     """
     pool = await get_pool()
     if not pool:
@@ -12128,12 +13256,17 @@ async def fechar_todas_metas(data_inicio, data_fim):
             data_fechamento = agora_db()
             semana_str = f"{data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
 
+            # Pega o tipo da semana
+            tipo_semana = await buscar_tipo_meta_semana()
+            logger.info(f"📊 Fechando metas — Tipo: {tipo_semana.upper()}")
+
             relatorio = []
+            membros_com_bonificacao = []
             guild = bot.get_guild(GUILD_ID)
             salvos = 0
 
             # =========================================================
-            # 1. VERIFICA QUEM TINHA DÍVIDA (META DOBRADA)
+            # 1. VERIFICA DÍVIDAS ANTIGAS (quita se pagou)
             # =========================================================
             dividas_ativas = await conn.fetch(
                 "SELECT * FROM metas_dividas WHERE pago = false"
@@ -12141,79 +13274,45 @@ async def fechar_todas_metas(data_inicio, data_fim):
 
             for divida in dividas_ativas:
                 user_id = divida["user_id"]
+                tipo_divida = divida["tipo"] or "dinheiro"
                 valor_divida = divida["valor_divida"]
-                valor_original = divida["valor_original"]
 
                 member = guild.get_member(int(user_id)) if guild else None
-                status = membro_deve_ter_meta(member) if member else None
-                if status is None:
-                    # Isento → quita automaticamente
-                    await conn.execute(
-                        "UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1",
-                        divida["id"]
-                    )
+                if not member:
                     continue
 
-                # Pega a meta atual do membro
+                # Busca meta do membro
                 meta = await conn.fetchrow(
-                    "SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1",
+                    "SELECT dinheiro, dinheiro_acoes, polvora_atual FROM metas WHERE user_id = $1",
                     user_id
                 )
                 if not meta:
                     continue
 
                 dinheiro = meta["dinheiro"] or 0
+                polvora = meta["polvora_atual"] or 0
                 dinheiro_acoes = meta["dinheiro_acoes"] or 0
-                total_pago = max(dinheiro, dinheiro_acoes)
 
-                if total_pago >= valor_divida:
-                    # ✅ BATEU A DOBRADA → quita a dívida
-                    await conn.execute(
-                        "UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1",
-                        divida["id"]
-                    )
-                    logger.info(f"✅ {user_id} quitou a dívida (pagou {formatar_dinheiro(total_pago)})")
+                # Verifica se pagou
+                if tipo_divida == "polvora":
+                    if polvora >= valor_divida:
+                        await conn.execute(
+                            "UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1",
+                            divida["id"]
+                        )
+                        logger.info(f"✅ {user_id} quitou dívida de pólvora ({valor_divida})")
                 else:
-                    # ❌ NÃO BATEU A DOBRADA → envia aviso (perde set)
-                    logger.warning(f"💀 {user_id} NÃO bateu a dobrada! Enviando aviso...")
-                    await enviar_aviso_meta_nao_batida(
-                        user_id, valor_original, valor_divida, motivo="NAO_BATEU_DOBRADA"
-                    )
-
-                    # Avisa a gerência no canal de logs
-                    canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
-                    if canal_log:
-                        embed_log = discord.Embed(
-                            title="💀 MEMBRO PERDEU O SET (META DOBRADA NÃO BATIDA)",
-                            description=f"👤 <@{user_id}>",
-                            color=0x8B0000,
-                            timestamp=agora()
+                    # Dinheiro: considera o maior entre dinheiro e ações
+                    total_pago = max(dinheiro, dinheiro_acoes)
+                    if total_pago >= valor_divida:
+                        await conn.execute(
+                            "UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1",
+                            divida["id"]
                         )
-                        embed_log.add_field(
-                            name="📊 Meta Original",
-                            value=formatar_dinheiro(valor_original),
-                            inline=True
-                        )
-                        embed_log.add_field(
-                            name="💰 Meta Dobrada",
-                            value=formatar_dinheiro(valor_divida),
-                            inline=True
-                        )
-                        embed_log.add_field(
-                            name="💵 Total Pago",
-                            value=formatar_dinheiro(total_pago),
-                            inline=True
-                        )
-                        embed_log.add_field(
-                            name="⚠️ Ação Necessária",
-                            value="**REMOVER O SET DO TABLET MANUALMENTE PELA GERÊNCIA**",
-                            inline=False
-                        )
-                        embed_log.set_footer(text=f"🛡 Vida Rasa 442 • Semana {semana_str}")
-                        await canal_log.send(embed=embed_log)
+                        logger.info(f"✅ {user_id} quitou dívida de dinheiro ({valor_divida})")
 
             # =========================================================
-            # 2. SALVA HISTÓRICO + VERIFICA QUEM NÃO BATEU (META NORMAL)
+            # 2. VERIFICA CADA MEMBRO
             # =========================================================
             for meta in metas:
                 user_id = meta["user_id"]
@@ -12223,49 +13322,101 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     continue
 
                 dinheiro = meta["dinheiro"] or 0
-                acao = meta["acao"] or "N/A"
+                polvora = meta.get("polvora_atual") or 0
+                polvora_total_semana = meta.get("polvora_total_semana") or 0
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+                acao = meta.get("acao") or "N/A"
 
-                meta_limite = await definir_valor_meta_por_id(user_id)
+                meta_dinheiro = await definir_valor_meta_por_id(user_id)
+                meta_polvora = await definir_valor_meta_polvora(user_id)
 
-                # ✅ Verifica se bateu a meta normal
-                if meta_limite > 0 and dinheiro < meta_limite:
-                    # ❌ NÃO BATEU → cria dívida (meta dobrada)
-                    ja_tem = await conn.fetchval(
-                        "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND pago = false",
-                        user_id
-                    )
-                    if not ja_tem:
-                        await criar_divida_meta(user_id, meta_limite, semana_str)
-                        await enviar_aviso_meta_nao_batida(
-                            user_id, meta_limite, meta_limite * 2, motivo="NAO_BATEU"
+                # =========================================================
+                # VERIFICA META DO TIPO DA SEMANA
+                # =========================================================
+                if tipo_semana == "polvora":
+                    # META DE PÓLVORA
+                    if meta_polvora > 0 and polvora < meta_polvora:
+                        # ❌ Não bateu
+                        ja_tem = await conn.fetchval(
+                            "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'polvora'",
+                            user_id
                         )
-                        logger.info(f"📢 Dívida criada para {user_id}: {formatar_dinheiro(meta_limite * 2)}")
+                        if not ja_tem:
+                            await criar_divida_polvora(user_id, meta_polvora, semana_str)
+                            logger.info(f"📢 Dívida de pólvora criada para {user_id}: {meta_polvora}")
+                            # ✅ Envia aviso personalizado de PÓLVORA
+                            await enviar_aviso_meta_nao_batida(
+                                user_id, meta_polvora, meta_polvora,
+                                motivo="NAO_BATEU", tipo="polvora"
+                            )
 
-                # Salva no histórico
+                    # Verifica bonificação (só se bateu e passou de 5000)
+                    if polvora_total_semana > 5000:
+                        member_nome = member.display_name if member else str(user_id)
+                        membros_com_bonificacao.append({
+                            "user_id": user_id,
+                            "nome": member_nome,
+                            "total": polvora_total_semana,
+                            "valor": polvora_total_semana * 80
+                        })
+
+                else:
+                    # META DE DINHEIRO
+                    if meta_dinheiro > 0 and dinheiro < meta_dinheiro:
+                        ja_tem = await conn.fetchval(
+                            "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro'",
+                            user_id
+                        )
+                        if not ja_tem:
+                            await criar_divida_meta(user_id, meta_dinheiro, semana_str)
+                            logger.info(f"📢 Dívida de dinheiro criada para {user_id}: {meta_dinheiro * 2}")
+                            # ✅ Envia aviso personalizado de DINHEIRO
+                            await enviar_aviso_meta_nao_batida(
+                                user_id, meta_dinheiro, meta_dinheiro * 2,
+                                motivo="NAO_BATEU", tipo="dinheiro"
+                            )
+
+                # =========================================================
+                # SALVA NO HISTÓRICO
+                # =========================================================
                 try:
-                    await conn.execute(
-                        """INSERT INTO metas_historico 
-                           (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento) 
-                           VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                        user_id, min(dinheiro, meta_limite), acao, dinheiro_acoes,
-                        data_inicio_naive, data_fim_naive, data_fechamento
-                    )
+                    await conn.execute("""
+                        INSERT INTO metas_historico 
+                        (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento, polvora, tipo_meta) 
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    """, user_id, min(dinheiro, meta_dinheiro), acao, dinheiro_acoes,
+                        data_inicio_naive, data_fim_naive, data_fechamento,
+                        polvora, tipo_semana)
                     salvos += 1
                 except Exception as e:
                     logger.error(f"❌ Erro ao salvar meta de {user_id} no histórico: {e}")
 
-                relatorio.append({
-                    "user_id": user_id,
-                    "dinheiro": min(dinheiro, meta_limite),
-                    "acao": acao,
-                    "dinheiro_acoes": dinheiro_acoes,
-                    "total_meta": min(dinheiro, meta_limite),
-                    "status": status
-                })
+                # Adiciona ao relatório
+                if tipo_semana == "polvora":
+                    relatorio.append({
+                        "user_id": user_id,
+                        "dinheiro": dinheiro,
+                        "acao": acao,
+                        "dinheiro_acoes": dinheiro_acoes,
+                        "polvora": polvora,
+                        "total_meta": polvora,
+                        "status": status,
+                        "tipo": "polvora"
+                    })
+                else:
+                    relatorio.append({
+                        "user_id": user_id,
+                        "dinheiro": min(dinheiro, meta_dinheiro),
+                        "acao": acao,
+                        "dinheiro_acoes": dinheiro_acoes,
+                        "polvora": polvora,
+                        "total_meta": min(dinheiro, meta_dinheiro),
+                        "status": status,
+                        "tipo": "dinheiro"
+                    })
 
             # =========================================================
-            # 3. MEMBROS SEM META (não têm registro no banco)
+            # 3. MEMBROS SEM META
             # =========================================================
             membros_sem_meta = []
             if guild:
@@ -12290,13 +13441,26 @@ async def fechar_todas_metas(data_inicio, data_fim):
                                 "menção": member.mention
                             })
 
-            logger.info(f"✅ {salvos} metas salvas no histórico")
+            # =========================================================
+            # 4. ENVIA RELATÓRIO DE BONIFICAÇÃO (só se foi semana de pólvora)
+            # =========================================================
+            if tipo_semana == "polvora" and membros_com_bonificacao:
+                canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
+                if canal_gerencia:
+                    await gerar_relatorio_bonificacao(membros_com_bonificacao, semana_str, canal_gerencia)
+
+            # =========================================================
+            # 5. VERIFICA DÍVIDAS PROLONGADAS
+            # =========================================================
+            await verificar_dividas_prolongadas()
+
+            logger.info(f"✅ {salvos} metas salvas no histórico | Tipo: {tipo_semana}")
             return relatorio, membros_sem_meta
 
     except Exception as e:
         logger.error(f"❌ Erro ao fechar todas as metas: {e}")
         return None, []
-
+        
 async def zerar_exibicao_metas():
     """
     Zera a exibição das metas no Discord (e salva no histórico antes).
@@ -12334,9 +13498,16 @@ async def zerar_exibicao_metas():
             logger.error(f"❌ Erro ao capturar estado das metas antes de zerar: {e}")
 
         async with pool.acquire() as conn:
-            await conn.execute("UPDATE metas SET dinheiro = 0, dinheiro_acoes = 0, saldo_excedente = 0, acao = NULL")
-            logger.info("⚠️ METAS ZERADAS PARA A NOVA SEMANA!")
-
+            await conn.execute("""
+                UPDATE metas 
+                SET dinheiro = 0, 
+                    dinheiro_acoes = 0, 
+                    saldo_excedente = 0, 
+                    acao = NULL,
+                    polvora_atual = 0,
+                    polvora_total_semana = 0
+            """)
+            logger.info("⚠️ METAS ZERADAS PARA A NOVA SEMANA! (dinheiro + pólvora)")
             # Salva horas no histórico ANTES de resetar (correção do bug)
             try:
                 semana_ini, semana_fim = calcular_semana_anterior()
@@ -12393,6 +13564,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             return
 
         total_dinheiro = sum(r["dinheiro"] for r in historico)
+        total_polvora = sum(r.get("polvora", 0) for r in historico)
         total_geral = total_dinheiro
 
         guild = interaction.guild
@@ -12419,10 +13591,11 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             item_dict["total_meta"] = total_meta
             item_dict["nome"] = member.display_name
             item_dict["is_mecanico"] = CARGO_MECANICO_ID in [r.id for r in member.roles]
+            item_dict["polvora"] = item.get("polvora", 0)
+            item_dict["tipo_meta"] = item.get("tipo_meta", "dinheiro")
 
             cargo_encontrado = False
             for grupo_key, grupo_data in grupos.items():
-                # Pular grupo "outros" (não tem cargos)
                 if "cargos" not in grupo_data:
                     continue
                 if any(role.id in grupo_data["cargos"] for role in member.roles):
@@ -12434,7 +13607,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                 if "outros" not in grupos:
                     grupos["outros"] = {"nome": "📌 OUTROS", "cor": 0x808080, "itens": [], "is_isento": False}
                 grupos["outros"]["itens"].append(item_dict)
-                
+
         canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
         if not canal_resultados:
             canal_resultados = interaction.channel
@@ -12456,6 +13629,7 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
 
         resumo_texto = (
             f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
+            f"🧨 **Pólvora:** {fmt_num(total_polvora)} unidades\n"
             f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
             f"👥 **Total de metas fechadas:** {len(historico)}\n"
             f"🟡 **Isentos:** {total_isentos}\n"
@@ -12468,13 +13642,14 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
             if grupo_data["itens"]:
                 qtd = len(grupo_data["itens"])
                 total_grupo = sum(item["total_meta"] for item in grupo_data["itens"])
+                total_polvora_grupo = sum(item.get("polvora", 0) for item in grupo_data["itens"])
                 if grupo_data.get("is_isento", False):
                     resumo_grupos += f"{grupo_data['nome']}: {qtd} membros (ISENTOS)\n"
                 else:
-                    resumo_grupos += f"{grupo_data['nome']}: {qtd} membros | {formatar_dinheiro(total_grupo)}\n"
+                    resumo_grupos += f"{grupo_data['nome']}: {qtd} membros | {formatar_dinheiro(total_grupo)} | 🧨 {fmt_num(total_polvora_grupo)}\n"
 
         if resumo_grupos:
-            embed_resumo.add_field(name="📊 RESUMO POR CARGO", value=resumo_grupos, inline=False)
+            embed_resumo.add_field(name="📊 RESUMO POR CARGO", value=resumo_grupos[:1024], inline=False)
 
         embed_resumo.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
         await canal_resultados.send(embed=embed_resumo)
@@ -12509,6 +13684,8 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
                     for idx, item in enumerate(grupo, i + 1):
                         texto += f"**{idx}.** {item['nome']}\n"
                         texto += f"   💰 Meta: {formatar_dinheiro(item['total_meta'])}\n"
+                        if item.get("polvora", 0) > 0:
+                            texto += f"   🧨 Pólvora: {fmt_num(item['polvora'])} unidades\n"
                         if item.get("is_mecanico"):
                             segundos = await calcular_horas_semana(item["user_id"])
                             texto += f"   ⏰ Horas Mecânica: {formatar_horas(segundos)}\n"
@@ -12604,18 +13781,26 @@ async def verificar_meta_concluida(user_id, valor_total):
     return False
 
 async def verificar_avisos_quarta():
+    """
+    Toda quarta-feira, avisa quem ainda não depositou NADA na meta do tipo da semana.
+    """
     hoje = agora()
     if hoje.weekday() != 2:
         return
+
     pool = await get_pool()
     if not pool:
         logger.error("❌ Banco de dados indisponível!")
         return
+
     try:
         guild = bot.get_guild(GUILD_ID)
         if not guild:
             logger.error("❌ Guild não encontrada!")
             return
+
+        tipo_semana = await buscar_tipo_meta_semana()
+
         cargos_obrigados = [
             CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
             CARGO_01_ID, CARGO_02_ID, CARGO_03_ID, CARGO_RESP_METAS_ID, CARGO_RESP_P1_ID,
@@ -12623,8 +13808,10 @@ async def verificar_avisos_quarta():
             CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
             CARGO_MECANICO_ID, CARGO_MORADOR_ID
         ]
+
         async with pool.acquire() as conn:
             avisos_enviados = 0
+
             for member in guild.members:
                 if member.bot:
                     continue
@@ -12633,57 +13820,74 @@ async def verificar_avisos_quarta():
                     continue
                 if CARGO_SEM_META_ID in [r.id for r in member.roles]:
                     continue
+
                 user_id = str(member.id)
-                meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
+                meta = await conn.fetchrow(
+                    "SELECT dinheiro, dinheiro_acoes, polvora_atual FROM metas WHERE user_id = $1",
+                    user_id
+                )
                 if not meta:
-                    canal_existente = None
-                    for canal in guild.text_channels:
-                        if member.display_name.lower() in canal.name.lower() and "📁" in canal.name:
-                            canal_existente = canal
-                            break
-                    if canal_existente:
-                        await salvar_meta_db(member.id, canal_existente.id, 0, 0)
-                    else:
-                        await criar_sala_meta(member)
-                    meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
-                    if not meta:
-                        continue
+                    continue
+
                 dinheiro = meta["dinheiro"] or 0
-                dinheiro_acoes = meta.get("dinheiro_acoes") or 0
-                total = dinheiro + dinheiro_acoes
+                dinheiro_acoes = meta["dinheiro_acoes"] or 0
+                polvora = meta["polvora_atual"] or 0
+
+                # Verifica conforme o tipo da semana
+                if tipo_semana == "polvora":
+                    total = polvora
+                    emoji_tipo = "🧨"
+                    nome_tipo = "PÓLVORA"
+                else:
+                    total = dinheiro + dinheiro_acoes
+                    emoji_tipo = "💰"
+                    nome_tipo = "DINHEIRO SUJO"
+
                 if total == 0:
-                    ja_avisado = await conn.fetchval("SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'quarta' AND data::date = $2", user_id, hoje.date())
+                    ja_avisado = await conn.fetchval(
+                        "SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'quarta' AND data::date = $2",
+                        user_id, hoje.date()
+                    )
                     if not ja_avisado:
-                        await conn.execute("INSERT INTO metas_avisos (user_id, tipo, data) VALUES ($1, 'quarta', $2)", user_id, agora_db())
+                        await conn.execute(
+                            "INSERT INTO metas_avisos (user_id, tipo, data) VALUES ($1, 'quarta', $2)",
+                            user_id, agora_db()
+                        )
                         canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", user_id)
                         if canal_id:
                             canal = bot.get_channel(int(canal_id))
                             if canal:
                                 embed = discord.Embed(
-                                    title="⚠️ AVISO DE META SEMANAL",
+                                    title=f"⚠️ AVISO DE META SEMANAL ({nome_tipo})",
                                     description=f"{member.mention} **atenção!**",
                                     color=0xe74c3c
                                 )
                                 embed.add_field(
-                                    name="📌 Você ainda NÃO fez nenhum depósito na sua meta esta semana!",
+                                    name=f"📌 Você ainda NÃO fez nenhum depósito na meta de {nome_tipo}!",
                                     value=(
-                                        "⏰ **Você tem até domingo para completar sua meta!**\n\n"
-                                        "⚠️ **Consequências:**\n"
-                                        "• Se NÃO fechar a meta: **REBAIXAMENTO** na facção\n"
-                                        "• Se atrasar 2 vezes: **REMOÇÃO** da facção\n\n"
-                                        "💪 **Corra atrás do prejuízo!**"
+                                        f"⏰ **Você tem até domingo para completar sua meta!**\n\n"
+                                        f"⚠️ **Consequências:**\n"
+                                        f"• Se NÃO fechar a meta: **DÍVIDA**\n"
+                                        f"• Dívida prolongada: **PD/REMOÇÃO** da facção\n\n"
+                                        f"{emoji_tipo} **Corra atrás do prejuízo!**"
                                     ),
                                     inline=False
                                 )
-                                embed.set_footer(text="Meta semanal • Vida Rasa")
+                                embed.set_footer(text=f"Meta semanal • VDR 442 • Tipo: {nome_tipo}")
                                 await canal.send(embed=embed)
                                 avisos_enviados += 1
+
+        logger.info(f"✅ Avisos de quarta enviados: {avisos_enviados}")
         return True
     except Exception as e:
         logger.error(f"❌ Erro ao verificar avisos de quarta: {e}")
         return False
 
 async def verificar_avisos_quarta_forcado():
+    """
+    Versão de TESTE forçado do aviso de quarta-feira.
+    Considera o tipo da semana atual (dinheiro ou pólvora).
+    """
     logger.info("📨 TESTE FORÇADO: Verificando avisos de quarta-feira...")
     pool = await get_pool()
     if not pool:
@@ -12695,6 +13899,10 @@ async def verificar_avisos_quarta_forcado():
         if not guild:
             logger.error("❌ Guild não encontrada!")
             return False
+
+        # Pega o tipo da semana atual
+        tipo_semana = await buscar_tipo_meta_semana()
+
         cargos_obrigados = [
             CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
             CARGO_01_ID, CARGO_02_ID, CARGO_03_ID, CARGO_RESP_P1_ID, CARGO_RESP_METAS_ID,
@@ -12702,6 +13910,7 @@ async def verificar_avisos_quarta_forcado():
             CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
             CARGO_MECANICO_ID, CARGO_MORADOR_ID
         ]
+
         async with pool.acquire() as conn:
             avisos_enviados = 0
             for member in guild.members:
@@ -12712,38 +13921,55 @@ async def verificar_avisos_quarta_forcado():
                     continue
                 if CARGO_SEM_META_ID in [r.id for r in member.roles]:
                     continue
+
                 user_id = str(member.id)
-                meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes FROM metas WHERE user_id = $1", user_id)
+                meta = await conn.fetchrow(
+                    "SELECT dinheiro, dinheiro_acoes, polvora_atual FROM metas WHERE user_id = $1",
+                    user_id
+                )
                 if not meta:
                     continue
+
                 dinheiro = meta["dinheiro"] or 0
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
-                total = dinheiro + dinheiro_acoes
+                polvora = meta.get("polvora_atual") or 0
+
+                # Verifica conforme o tipo da semana
+                if tipo_semana == "polvora":
+                    total = polvora
+                    emoji_tipo = "🧨"
+                    nome_tipo = "PÓLVORA"
+                else:
+                    total = dinheiro + dinheiro_acoes
+                    emoji_tipo = "💰"
+                    nome_tipo = "DINHEIRO SUJO"
+
                 if total == 0:
                     canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", user_id)
                     if canal_id:
                         canal = bot.get_channel(int(canal_id))
                         if canal:
                             embed = discord.Embed(
-                                title="⚠️ [TESTE] AVISO DE META SEMANAL",
+                                title=f"⚠️ [TESTE] AVISO DE META SEMANAL ({nome_tipo})",
                                 description=f"{member.mention} **atenção!**",
                                 color=0xe74c3c
                             )
                             embed.add_field(
-                                name="📌 Você ainda NÃO fez nenhum depósito na sua meta esta semana!",
+                                name=f"📌 Você ainda NÃO fez nenhum depósito na meta de {nome_tipo}!",
                                 value=(
-                                    "⏰ **Você tem até domingo para completar sua meta!**\n\n"
-                                    "⚠️ **Consequências:**\n"
-                                    "• Se NÃO fechar a meta: **REBAIXAMENTO** na facção\n"
-                                    "• Se atrasar 2 vezes: **REMOÇÃO** da facção\n\n"
-                                    "💪 **Corra atrás do prejuízo!**\n\n"
+                                    f"⏰ **Você tem até domingo para completar sua meta!**\n\n"
+                                    f"⚠️ **Consequências:**\n"
+                                    f"• Se NÃO fechar a meta: **DÍVIDA**\n"
+                                    f"• Dívida prolongada: **PD/REMOÇÃO** da facção\n\n"
+                                    f"{emoji_tipo} **Corra atrás do prejuízo!**\n\n"
                                 ),
                                 inline=False
                             )
-                            embed.set_footer(text="Meta semanal • Vida Rasa • TESTE")
+                            embed.set_footer(text=f"Meta semanal • VDR 442 • Tipo: {nome_tipo} • TESTE")
                             await canal.send(embed=embed)
                             avisos_enviados += 1
-        logger.info(f"✅ [TESTE] Avisos enviados: {avisos_enviados} membros")
+
+        logger.info(f"✅ [TESTE] Avisos enviados: {avisos_enviados} membros (tipo: {tipo_semana.upper()})")
         return True
     except Exception as e:
         logger.error(f"❌ Erro no teste de aviso: {e}")
@@ -16063,6 +17289,203 @@ async def cmd_atualizar_metas(ctx):
         await ctx.send(f"❌ Erro: {e}")
 
 # =========================================================
+# COMANDO: DEFINIR TIPO DE META
+# =========================================================
+@bot.command(name="definir_meta")
+@commands.has_permissions(administrator=True)
+async def cmd_definir_meta(ctx, tipo: str = None):
+    """
+    Define o tipo da meta da semana.
+    Uso: !definir_meta dinheiro | !definir_meta polvora
+    """
+    if not tipo:
+        await ctx.send("❌ Uso: `!definir_meta dinheiro` ou `!definir_meta polvora`")
+        return
+
+    tipo = tipo.lower().strip()
+    if tipo not in ("dinheiro", "polvora"):
+        await ctx.send("❌ Tipo inválido! Use `dinheiro` ou `polvora`.")
+        return
+
+    tipo_atual = await buscar_tipo_meta_semana()
+    if tipo == tipo_atual:
+        await ctx.send(f"⚠️ O tipo da semana já é **{tipo.upper()}**.")
+        return
+
+    sucesso = await definir_tipo_meta_semana(tipo)
+    if not sucesso:
+        await ctx.send("❌ Erro ao trocar o tipo da meta!")
+        return
+
+    emoji = "🧨" if tipo == "polvora" else "💰"
+    nome = "PÓLVORA" if tipo == "polvora" else "DINHEIRO SUJO"
+
+    # Atualiza todos os painéis
+    await carregar_metas_cache()
+    contador = 0
+    for uid in list(metas_cache.keys()):
+        try:
+            await atualizar_embed_meta(int(uid))
+            contador += 1
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"❌ Erro ao atualizar meta {uid}: {e}")
+
+    # Avisa canal de gerência
+    canal_gerencia = ctx.guild.get_channel(CANAL_GERENCIA_ID)
+    if canal_gerencia:
+        embed_aviso = discord.Embed(
+            title=f"{emoji} ── TIPO DE META ALTERADO ── {emoji}",
+            description=f"📅 **Tipo da semana agora:** {emoji} **{nome}**",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+        embed_aviso.add_field(name="👤 Alterado por", value=ctx.author.mention, inline=True)
+        embed_aviso.add_field(name="📌 Novo tipo", value=f"{emoji} {nome}", inline=True)
+        embed_aviso.set_footer(text="🛡 Vida Rasa 442 • Sistema de Metas")
+        try:
+            await canal_gerencia.send(embed=embed_aviso)
+        except:
+            pass
+
+    embed = discord.Embed(
+        title="✅ TIPO DE META ALTERADO",
+        description=f"{emoji} **Novo tipo:** {nome}\n📊 **{contador} painéis atualizados**",
+        color=0x2ECC71,
+        timestamp=agora()
+    )
+    embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Metas")
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# COMANDO: VER DÍVIDAS
+# =========================================================
+@bot.command(name="ver_dividas")
+@commands.has_permissions(administrator=True)
+async def cmd_ver_dividas(ctx):
+    """
+    Mostra todas as dívidas ativas (dinheiro + pólvora).
+    """
+    await ctx.send("🔍 **Analisando dívidas...**")
+
+    dividas = await listar_dividas_ativas()
+
+    if not dividas:
+        await ctx.send("✅ **Nenhuma dívida ativa no momento!**")
+        return
+
+    # Agrupa por usuário
+    por_usuario = {}
+    for d in dividas:
+        uid = d["user_id"]
+        tipo = d["tipo"] or "dinheiro"
+        if uid not in por_usuario:
+            por_usuario[uid] = {"dinheiro": 0, "polvora": 0}
+        if tipo == "polvora":
+            por_usuario[uid]["polvora"] += d["valor_divida"]
+        else:
+            por_usuario[uid]["dinheiro"] += d["valor_divida"]
+
+    embed = discord.Embed(
+        title="📋 ── DÍVIDAS ATIVAS ── 📋",
+        description=f"📊 **{len(dividas)}** dívida(s) | **{len(por_usuario)}** membro(s)",
+        color=0xE74C3C,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Sistema de Metas",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    ordenado = sorted(
+        por_usuario.items(),
+        key=lambda x: (x[1]["dinheiro"] + x[1]["polvora"] * 100),
+        reverse=True
+    )
+
+    texto = ""
+    for uid, dados in ordenado[:20]:
+        member = ctx.guild.get_member(int(uid))
+        nome = member.display_name if member else f"ID: {uid}"
+        texto += f"**{nome}**\n"
+        if dados["dinheiro"] > 0:
+            texto += f"   💰 Dinheiro: {formatar_dinheiro(dados['dinheiro'])}\n"
+        if dados["polvora"] > 0:
+            texto += f"   🧨 Pólvora: {fmt_num(dados['polvora'])} unid.\n"
+        texto += "\n"
+
+    if len(por_usuario) > 20:
+        texto += f"\n*... e mais {len(por_usuario) - 20} membros*"
+
+    embed.add_field(name="👥 MEMBROS EM DÍVIDA", value=texto[:1024] or "Nenhum", inline=False)
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+    await ctx.send(embed=embed)
+
+
+# =========================================================
+# COMANDO: RELATÓRIO DE BONIFICAÇÃO MANUAL
+# =========================================================
+@bot.command(name="relatorio_bonificacao")
+@commands.has_permissions(administrator=True)
+async def cmd_relatorio_bonificacao(ctx):
+    """
+    Gera manualmente o relatório de bonificação de pólvora
+    da semana atual.
+    """
+    await ctx.send("🎁 **Gerando relatório de bonificação...**")
+
+    pool = await get_pool()
+    if not pool:
+        await ctx.send("❌ Banco de dados indisponível!")
+        return
+
+    tipo_semana = await buscar_tipo_meta_semana()
+    if tipo_semana != "polvora":
+        await ctx.send(f"⚠️ A semana atual é de **{tipo_semana.upper()}**. O relatório de bonificação só funciona em semanas de PÓLVORA.")
+        return
+
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT user_id, polvora_total_semana FROM metas WHERE polvora_total_semana > 5000"
+            )
+
+        if not rows:
+            await ctx.send("📭 Nenhum membro passou de 5.000 pólvoras nesta semana.")
+            return
+
+        guild = ctx.guild
+        membros = []
+        for r in rows:
+            uid = r["user_id"]
+            total = r["polvora_total_semana"]
+            member = guild.get_member(int(uid))
+            nome = member.display_name if member else f"ID: {uid}"
+            membros.append({
+                "user_id": uid,
+                "nome": nome,
+                "total": total,
+                "valor": total * 80
+            })
+
+        # Ordena por total
+        membros.sort(key=lambda x: x["total"], reverse=True)
+
+        semana_str = f"{agora().strftime('%d/%m/%Y')} (semana atual)"
+
+        canal_gerencia = ctx.guild.get_channel(CANAL_GERENCIA_ID)
+        if canal_gerencia:
+            await gerar_relatorio_bonificacao(membros, semana_str, canal_gerencia)
+            await ctx.send(f"✅ Relatório enviado em {canal_gerencia.mention} ({len(membros)} membros).")
+        else:
+            await ctx.send(f"❌ Canal de gerência não encontrado ({CANAL_GERENCIA_ID}).")
+
+    except Exception as e:
+        logger.error(f"❌ Erro no comando relatorio_bonificacao: {e}")
+        await ctx.send(f"❌ Erro: `{str(e)[:150]}`")
+
+# =========================================================
 # ==================== COMANDO DE RECRIAR METAS ===========
 # =========================================================
 @bot.command(name="recriar_metas")
@@ -18489,6 +19912,8 @@ def criar_view_por_painel(nome):
         view.add_item(FecharMetasAutomaticoButton())
         view.add_item(RelatorioHorasButton())
         view.add_item(ResetarHorasSemanaButton())
+        view.add_item(TrocarTipoMetaButton())
+        view.add_item(VerDividasButton())
         return view
     elif nome == "painel_grupos":
         return None  # Grupos são recriados de outra forma
