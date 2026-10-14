@@ -19083,14 +19083,6 @@ async def cmd_ver_dividas(ctx):
     embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
     await ctx.send(embed=embed)
 
-
-@bot.command(name="painel_caixa")
-@commands.has_permissions(administrator=True)
-async def cmd_painel_caixa(ctx):
-    await enviar_painel_caixa()
-    await ctx.send("✅ Painel do caixa enviado!")
-
-
 # =========================================================
 # COMANDO: RELATÓRIO DE BONIFICAÇÃO MANUAL
 # =========================================================
