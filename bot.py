@@ -11144,17 +11144,11 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo 
         required=True,
         max_length=100
     )
-    passaporte = discord.ui.TextInput(
-        label="🆔 Passaporte",
-        placeholder="Ex: 820",
+    passaporte_telefone = discord.ui.TextInput(
+        label="🆔 Passaporte / 📱 Telefone",
+        placeholder="Ex: 820 / (11) 99999-9999",
         required=True,
-        max_length=50
-    )
-    telefone = discord.ui.TextInput(
-        label="📱 Telefone",
-        placeholder="Ex: (11) 99999-9999",
-        required=True,
-        max_length=50
+        max_length=100
     )
     valor = discord.ui.TextInput(
         label="💰 Valor Emprestado (R$)",
@@ -11195,12 +11189,27 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo 
             return
 
         # =========================================================
+        # PARSE DO PASSAPORTE / TELEFONE
+        # Aceita formatos: "820 / (11) 99999-9999" ou "820 - (11)..."
+        # =========================================================
+        passaporte = "—"
+        telefone = "—"
+        texto_pass_tel = self.passaporte_telefone.value.strip()
+        for separador in (" / ", " - ", " | ", "/"):
+            if separador in texto_pass_tel:
+                partes = texto_pass_tel.split(separador, 1)
+                passaporte = partes[0].strip()
+                telefone = partes[1].strip()
+                break
+        else:
+            # Se não tem separador, assume que é só o passaporte
+            passaporte = texto_pass_tel
+
+        # =========================================================
         # PARSE DO PARCELAMENTO
-        # Aceita formatos: "4 parcelas mensal", "4 mensal", "4 parcelas semanais", etc
         # =========================================================
         parcelamento_str = self.parcelamento.value.strip().lower()
         import re
-        # Extrai o número
         numeros = re.findall(r'\d+', parcelamento_str)
         if not numeros:
             await interaction.followup.send(
@@ -11214,7 +11223,6 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo 
             await interaction.followup.send("❌ **Número de parcelas inválido!** (1 a 100)", ephemeral=True)
             return
 
-        # Extrai a frequência
         if "semanal" in parcelamento_str or "semana" in parcelamento_str:
             frequencia = "semanal"
         elif "quinzenal" in parcelamento_str or "quinzena" in parcelamento_str:
@@ -11234,9 +11242,9 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo 
             juros_percent=juros,
             total_parcelas=parcelas,
             frequencia=frequencia,
-            passaporte=self.passaporte.value.strip(),
+            passaporte=passaporte,
             nome_faccao=self.nome_faccao.value.strip().upper(),
-            telefone=self.telefone.value.strip(),
+            telefone=telefone,
             autor=interaction.user.id
         )
 
@@ -11256,8 +11264,8 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo Empréstimo 
             timestamp=agora()
         )
         embed.add_field(name="🏢 Facção", value=self.nome_faccao.value.strip().upper(), inline=True)
-        embed.add_field(name="🆔 Passaporte", value=self.passaporte.value.strip(), inline=True)
-        embed.add_field(name="📱 Telefone", value=self.telefone.value.strip(), inline=True)
+        embed.add_field(name="🆔 Passaporte", value=passaporte, inline=True)
+        embed.add_field(name="📱 Telefone", value=telefone, inline=True)
         embed.add_field(name="💰 Valor emprestado", value=formatar_dinheiro(valor), inline=True)
         embed.add_field(name="📈 Juros", value=f"{juros}%", inline=True)
         embed.add_field(name="💵 Valor total", value=formatar_dinheiro(valor_total), inline=True)
@@ -11273,17 +11281,11 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a
         required=True,
         max_length=100
     )
-    valor_recebido = discord.ui.TextInput(
-        label="💰 Valor Recebido (R$)",
-        placeholder="Ex: 800000",
+    valores = discord.ui.TextInput(
+        label="💰 Valor Recebido / Valor Total",
+        placeholder="Ex: 800000 / 960000",
         required=True,
-        max_length=15
-    )
-    valor_total = discord.ui.TextInput(
-        label="💵 Valor Total a Pagar (R$)",
-        placeholder="Ex: 960000",
-        required=True,
-        max_length=15
+        max_length=50
     )
     parcelamento = discord.ui.TextInput(
         label="📊 Parcelas e Frequência",
@@ -11297,24 +11299,40 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a
         required=False,
         max_length=50
     )
+    observacoes = discord.ui.TextInput(
+        label="📝 Observações (opcional)",
+        placeholder="Ex: Pagamento via PIX",
+        required=False,
+        max_length=200
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        try:
-            valor_recebido = safe_int(self.valor_recebido.value)
-            if valor_recebido <= 0:
-                raise ValueError
-        except:
-            await interaction.followup.send("❌ **Valor recebido inválido!**", ephemeral=True)
+        # =========================================================
+        # PARSE DOS VALORES
+        # Aceita: "800000 / 960000" ou "800000 - 960000"
+        # =========================================================
+        valores_str = self.valores.value.strip()
+        for separador in (" / ", " - ", " | ", "/"):
+            if separador in valores_str:
+                partes = valores_str.split(separador, 1)
+                try:
+                    valor_recebido = safe_int(partes[0].strip())
+                    valor_total = safe_int(partes[1].strip())
+                except:
+                    await interaction.followup.send("❌ **Valores inválidos!**", ephemeral=True)
+                    return
+                break
+        else:
+            await interaction.followup.send(
+                "❌ **Formato inválido!** Use `800000 / 960000` (recebido / total).",
+                ephemeral=True
+            )
             return
 
-        try:
-            valor_total = safe_int(self.valor_total.value)
-            if valor_total <= 0:
-                raise ValueError
-        except:
-            await interaction.followup.send("❌ **Valor total inválido!**", ephemeral=True)
+        if valor_recebido <= 0 or valor_total <= 0:
+            await interaction.followup.send("❌ **Valores devem ser positivos!**", ephemeral=True)
             return
 
         # =========================================================
@@ -11359,6 +11377,7 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a
             frequencia=frequencia,
             nome_faccao=self.nome_faccao.value.strip().upper(),
             telefone=self.telefone.value.strip() if self.telefone.value else None,
+            observacoes=self.observacoes.value.strip() if self.observacoes.value else None,
             autor=interaction.user.id
         )
 
@@ -11381,6 +11400,8 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo Empréstimo (a
         embed.add_field(name="💵 Valor total", value=formatar_dinheiro(valor_total), inline=True)
         embed.add_field(name="🔢 Parcelas", value=f"{parcelas}x de {formatar_dinheiro(valor_parcela)}", inline=True)
         embed.add_field(name="⏰ Frequência", value=frequencia.capitalize(), inline=True)
+        if self.observacoes.value:
+            embed.add_field(name="📝 Obs", value=self.observacoes.value.strip(), inline=False)
         embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id:04d}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
