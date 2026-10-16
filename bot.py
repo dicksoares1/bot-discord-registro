@@ -6843,22 +6843,28 @@ class StatusView(discord.ui.View):
     def extrair_dados_venda(self, embed):
         dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "", "observacoes": ""}
         for field in embed.fields:
-            if field.name == "🔫 PT":
+            nome = field.name.upper().strip()
+            valor = field.value or ""
+
+            if "🔫 PT" in nome or nome == "PT":
                 try:
-                    dados["pt"] = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                    dados["pt"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
                 except:
                     pass
-            if field.name == "🔫 SUB":
+            elif "🔫 SUB" in nome or nome == "SUB":
                 try:
-                    dados["sub"] = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                    dados["sub"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
                 except:
                     pass
-            if field.name == "🏷 Organização":
-                dados["organizacao"] = field.value.strip()
-            if field.name == "👤 Vendedor":
-                dados["vendedor"] = field.value.strip()
-            if field.name == "📝 Observações":
-                dados["observacoes"] = field.value.strip()
+            elif "ORGANIZA" in nome:
+                limpo = valor.replace("```yaml", "").replace("```", "").strip()
+                dados["organizacao"] = limpo.split("\n")[0].strip() or "Desconhecida"
+            elif "VENDEDOR" in nome:
+                limpo = valor.replace("```yaml", "").replace("```", "").strip()
+                dados["vendedor"] = limpo.split("\n")[0].strip() or ""
+            elif "OBSERVA" in nome:
+                limpo = valor.replace("```yaml", "").replace("```", "").strip()
+                dados["observacoes"] = limpo
         return dados
 
     async def criar_proxima_entrega(self, interaction: discord.Interaction, embed_anterior, pedido_original):
@@ -7214,20 +7220,22 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
         organizacao_atual = ""
         observacao_atual = ""
         for field in embed.fields:
-            if field.name == "🔫 PT":
+            nome_field = field.name.upper().strip()
+            valor_field = field.value or ""
+            if "🔫 PT" in nome_field or nome_field == "PT":
                 try:
-                    pt_atual = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                    pt_atual = int(valor_field.split(" munições")[0].replace(".", "").replace(",", ""))
                 except:
                     pass
-            if field.name == "🔫 SUB":
+            elif "🔫 SUB" in nome_field or nome_field == "SUB":
                 try:
-                    sub_atual = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                    sub_atual = int(valor_field.split(" munições")[0].replace(".", "").replace(",", ""))
                 except:
                     pass
-            if field.name == "🏷 Organização":
-                organizacao_atual = field.value.replace("🏷️ ", "").strip()
-            if field.name == "📝 Observações":
-                observacao_atual = field.value.strip()
+            elif "ORGANIZA" in nome_field:
+                organizacao_atual = valor_field.replace("🏷️ ", "").replace("🏷 ", "").replace("```yaml", "").replace("```", "").strip()
+            elif "OBSERVA" in nome_field:
+                observacao_atual = valor_field.replace("```yaml", "").replace("```", "").strip()                
         nova_pt = safe_int(self.qtd_pt.value) if self.qtd_pt.value else pt_atual
         nova_sub = safe_int(self.qtd_sub.value) if self.qtd_sub.value else sub_atual
         nova_organizacao = self.organizacao.value.strip() if self.organizacao.value else organizacao_atual
@@ -7249,15 +7257,15 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
                 embed.set_field_at(i, name="🔫 SUB", value=f"{fmt_num(nova_sub)} munições\n📦 {pacotes_sub} pacotes", inline=True)
             elif field.name == "💰 VALOR TOTAL":
                 embed.set_field_at(i, name="💰 VALOR TOTAL", value=f"```yaml\n{valor_formatado}\n```", inline=False)
-            elif field.name == "🏷 Organização":
-                embed.set_field_at(i, name="🏷 Organização", value=nova_organizacao, inline=False)
-            elif field.name == "📝 Observações":
+            elif "ORGANIZA" in field.name.upper():
+                embed.set_field_at(i, name="🏷️ ORGANIZAÇÃO", value=nova_organizacao, inline=False)
+            elif "OBSERVA" in field.name.upper():
                 if nova_observacao:
-                    embed.set_field_at(i, name="📝 Observações", value=nova_observacao, inline=False)
+                    embed.set_field_at(i, name="📝 OBSERVAÇÕES", value=nova_observacao, inline=False)
                 else:
                     embed.remove_field(i)
-        if nova_observacao and not any(field.name == "📝 Observações" for field in embed.fields):
-            embed.add_field(name="📝 Observações", value=nova_observacao, inline=False)
+        if nova_observacao and not any("OBSERVA" in f.name.upper() for f in embed.fields):
+            embed.add_field(name="📝 OBSERVAÇÕES", value=nova_observacao, inline=False)
         titulo = embed.title
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
         if pedido_numero > 0:
