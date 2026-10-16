@@ -8856,6 +8856,25 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
             logger.error(f"❌ Erro ao adicionar pólvora no estoque: {e}")
 
         # =========================================================
+        # ✅ INTEGRAÇÃO COM O CAIXA: subtrai o valor da compra
+        # =========================================================
+        try:
+            await movimentar_caixa(
+                tipo="compra",
+                valor=valor,
+                motivo=f"Compra de Pólvora ({fmt_num(qtd)} unidades)",
+                autor=interaction.user.id
+            )
+            logger.info(f"💰 Caixa: -{formatar_dinheiro(valor)} (Compra de Pólvora)")
+            # Atualiza o painel do caixa
+            try:
+                await enviar_painel_caixa()
+            except:
+                pass
+        except Exception as e:
+            logger.error(f"⚠️ Erro ao movimentar caixa pela compra de pólvora: {e}")
+
+        # =========================================================
         # ENVIA EMBED NO CANAL DE REGISTRO
         # =========================================================
         canal = interaction.guild.get_channel(CANAL_REGISTRO_POLVORA_ID)
@@ -8881,7 +8900,8 @@ class PolvoraModal(discord.ui.Modal, title="Registro de Compra de Pólvora"):
             f"✅ **Registro feito com sucesso!**\n\n"
             f"📦 Quantidade: {fmt_num(qtd)} unidades\n"
             f"💰 Valor: {formatar_dinheiro(valor)}\n"
-            f"📊 **Adicionado ao estoque!** (Total agora: {fmt_num(estoque_atual)})",
+            f"📊 **Adicionado ao estoque!** (Total agora: {fmt_num(estoque_atual)})\n"
+            f"💸 **Caixa debitado:** {formatar_dinheiro(valor)}",
             ephemeral=True
         )
 
