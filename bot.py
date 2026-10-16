@@ -6480,6 +6480,10 @@ class StatusView(discord.ui.View):
         return any(l.startswith("✅") for l in linhas)
 
     async def pago(self, interaction: discord.Interaction, button):
+        """
+        Marca a entrega como paga.
+        NÃO cria próxima entrega (isso é papel do botão ENTREGUE).
+        """
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
@@ -6500,10 +6504,6 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        pago_foi_clicado = any(l.startswith("💰") for l in linhas)
-        entregue_foi_clicado = any(l.startswith("✅") for l in linhas)
-        finalizado = pago_foi_clicado and entregue_foi_clicado
-
         # =========================================================
         # AUDITORIA
         # =========================================================
@@ -6523,42 +6523,28 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao auditar pagamento: {e}")
 
-        if finalizado:
-            embed.color = 0x2ecc71
-            embed.title = "🎉 VENDA CONCLUÍDA"
-            for i, field in enumerate(embed.fields):
-                if field.name == "📌 STATUS DO PEDIDO":
-                    embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="✅ Pago e Entregue", inline=False)
-                    break
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
-
-            await interaction.message.edit(embed=embed, view=StatusView(
-                disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas,
-                entrega_atual=self.entrega_atual, pago_ja_clicado=True,
-                mensagem_original=interaction.message, transferencia_confirmada=False,
-                valor_total=self.valor_total, pt=self.pt, sub=self.sub,
-                pedido_numero=self.pedido_numero, entregue_ja_clicado=True
-            ))
-            await interaction.followup.send("✅ **Venda concluída com sucesso!**", ephemeral=True)
-            if self.entrega_atual < self.total_entregas:
-                await self.criar_proxima_entrega(interaction, embed, self.pedido_numero)
-            await enviar_painel_vendas()
-            await enviar_painel_fabricacao()
-            return
-
+        # =========================================================
+        # ATUALIZA O EMBED (só isso, NÃO cria próxima entrega)
+        # =========================================================
         await interaction.message.edit(embed=embed, view=StatusView(
-            disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas,
-            entrega_atual=self.entrega_atual, pago_ja_clicado=True,
-            mensagem_original=interaction.message, transferencia_confirmada=False,
-            valor_total=self.valor_total, pt=self.pt, sub=self.sub,
-            pedido_numero=self.pedido_numero, entregue_ja_clicado=self.entrega_ja_entregue
+            disabled=False,
+            entrega_id=self.entrega_id,
+            total_entregas=self.total_entregas,
+            entrega_atual=self.entrega_atual,
+            pago_ja_clicado=True,
+            mensagem_original=interaction.message,
+            transferencia_confirmada=False,
+            valor_total=self.valor_total,
+            pt=self.pt,
+            sub=self.sub,
+            pedido_numero=self.pedido_numero,
+            entregue_ja_clicado=self.entrega_ja_entregue
         ))
+
         await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
         
     async def entregue(self, interaction: discord.Interaction, button):
-        """Marca como entregue + finaliza se for a última entrega."""
+        """Marca como entregue + cria a próxima entrega (se tiver)."""
         if self.entrega_ja_entregue:
             await interaction.followup.send("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
             return
@@ -6574,6 +6560,9 @@ class StatusView(discord.ui.View):
             await interaction.followup.send("⚠️ **Esta entrega já foi entregue!**", ephemeral=True)
             return
 
+        # =========================================================
+        # EXTRAI PACOTES DE PT/SUB DO EMBED
+        # =========================================================
         pacotes_pt = 0
         pacotes_sub = 0
         for field in embed.fields:
@@ -6594,6 +6583,9 @@ class StatusView(discord.ui.View):
                 except:
                     pass
 
+        # =========================================================
+        # VERIFICA ESTOQUE
+        # =========================================================
         if pacotes_pt > 0:
             estoque_suficiente = await verificar_estoque_suficiente("PT", pacotes_pt)
             if not estoque_suficiente:
@@ -6688,53 +6680,15 @@ class StatusView(discord.ui.View):
                 except Exception as e:
                     logger.error(f"Erro envio baú: {e}")
 
-        pago_foi_clicado = any(l.startswith("💰") for l in linhas)
-        entregue_foi_clicado = True
-        finalizado = pago_foi_clicado and entregue_foi_clicado
-
-        if finalizado:
-            embed.color = 0x2ecc71
-            embed.title = "🎉 VENDA CONCLUÍDA"
-
-            for i, field in enumerate(embed.fields):
-                if field.name == "📌 STATUS DO PEDIDO":
-                    embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="✅ Pago e Entregue", inline=False)
-                    break
-
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed.add_field(name="✅ VENDA FINALIZADA COM SUCESSO", value="💰 **Pagamento recebido**\n📦 **Pedido entregue ao cliente**\n📊 **Estoque atualizado**", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
-
-            await interaction.message.edit(embed=embed, view=StatusView(
-                disabled=False,
-                entrega_id=self.entrega_id,
-                total_entregas=self.total_entregas,
-                entrega_atual=self.entrega_atual,
-                pago_ja_clicado=True,
-                mensagem_original=interaction.message,
-                transferencia_confirmada=False,
-                valor_total=self.valor_total,
-                pt=self.pt,
-                sub=self.sub,
-                pedido_numero=self.pedido_numero,
-                entregue_ja_clicado=True
-            ))
-
-            await interaction.followup.send("✅ **Venda concluída com sucesso!**", ephemeral=True)
-
-            if self.entrega_atual < self.total_entregas:
-                await self.criar_proxima_entrega(interaction, embed, pedido_numero)
-
-            await enviar_painel_vendas()
-            await enviar_painel_fabricacao()
-            return
-
+        # =========================================================
+        # ATUALIZA O EMBED DA ENTREGA ATUAL
+        # =========================================================
         await interaction.message.edit(embed=embed, view=StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
-            pago_ja_clicado=pago_foi_clicado,
+            pago_ja_clicado=self.pago_ja_clicado,
             mensagem_original=interaction.message,
             transferencia_confirmada=False,
             valor_total=self.valor_total,
@@ -6746,6 +6700,10 @@ class StatusView(discord.ui.View):
 
         await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
+        # =========================================================
+        # ✅ ÚNICA CHAMADA: criar próxima entrega
+        # (só se ainda tem entregas + não for a última)
+        # =========================================================
         if self.entrega_atual < self.total_entregas:
             await self.criar_proxima_entrega(interaction, embed, pedido_numero)
 
@@ -6904,41 +6862,95 @@ class StatusView(discord.ui.View):
         return dados
 
     async def criar_proxima_entrega(self, interaction: discord.Interaction, embed_anterior, pedido_original):
-        """Cria a próxima entrega automaticamente"""
+        """
+        Cria a próxima entrega automaticamente.
+        Só deve ser chamada quando o botão ENTREGUE for clicado.
+        """
         try:
             if not self.entrega_id:
                 logger.warning("❌ Sem entrega_id para criar próxima")
                 return
+
+            # =========================================================
+            # TRAVA ANTI-DUPLICAÇÃO (por instância)
+            # =========================================================
             if self.entrega_criada:
+                logger.info(f"⏭️ Próxima entrega já foi criada nesta instância (entrega_id={self.entrega_id})")
                 return
+
             pool = await get_pool()
             if not pool:
                 logger.error("❌ Banco de dados indisponível")
                 return
+
             async with pool.acquire() as conn:
-                entrega = await conn.fetchrow("SELECT * FROM entregas_parceladas WHERE id = $1 AND ativo = true", self.entrega_id)
+                entrega = await conn.fetchrow(
+                    "SELECT * FROM entregas_parceladas WHERE id = $1 AND ativo = true",
+                    self.entrega_id
+                )
+
             if not entrega:
                 logger.error(f"❌ Entrega {self.entrega_id} não encontrada")
                 return
+
             total_entregas = entrega["total_entregas"]
             proxima_entrega_num = self.entrega_atual + 1
+
             if proxima_entrega_num > total_entregas:
+                logger.info(f"✅ Última entrega ({self.entrega_atual}/{total_entregas}). Nada a criar.")
                 return
+
+            # =========================================================
+            # TRAVA ANTI-DUPLICAÇÃO (no banco)
+            # Verifica se a próxima entrega já foi criada (baseado no
+            # array de mensagens_ids)
+            # =========================================================
+            async with pool.acquire() as conn:
+                entrega_checar = await conn.fetchrow(
+                    "SELECT mensagem_ids FROM entregas_parceladas WHERE id = $1",
+                    self.entrega_id
+                )
+
+            mensagens_ids = entrega_checar["mensagem_ids"] or []
+
+            # Se já tem `proxima_entrega_num` mensagens, a próxima já foi criada
+            if len(mensagens_ids) >= proxima_entrega_num:
+                logger.warning(
+                    f"⚠️ Entrega {proxima_entrega_num}/{total_entregas} já existe "
+                    f"(total de mensagens no banco: {len(mensagens_ids)}). Bloqueando criação duplicada."
+                )
+                self.entrega_criada = True
+                return
+
+            # =========================================================
+            # BUSCA A LISTA DE ENTREGAS
+            # =========================================================
             async with pool.acquire() as conn2:
-                detalhes = await conn2.fetchrow("SELECT entregas_json FROM entregas_detalhes WHERE entrega_id = $1", self.entrega_id)
+                detalhes = await conn2.fetchrow(
+                    "SELECT entregas_json FROM entregas_detalhes WHERE entrega_id = $1",
+                    self.entrega_id
+                )
+
             if detalhes and detalhes["entregas_json"]:
                 entregas_lista = json.loads(detalhes["entregas_json"])
             else:
+                # Se não tiver detalhes salvos, monta do zero
                 async with pool.acquire() as conn3:
-                    primeira = await conn3.fetchrow("SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1", pedido_original)
+                    primeira = await conn3.fetchrow(
+                        "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas 
+                         WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
+                        pedido_original
+                    )
                 pt_por_entrega = primeira["pt_por_entrega"] if primeira else entrega["pt_por_entrega"]
                 sub_por_entrega = primeira["sub_por_entrega"] if primeira else entrega["sub_por_entrega"]
+
                 entregas_lista = []
                 LIMITE_DIARIO = 8000
                 pt_total = pt_por_entrega * total_entregas
                 sub_total = sub_por_entrega * total_entregas
                 pt_restante = pt_total
                 sub_restante = sub_total
+
                 for i in range(total_entregas):
                     entrega_num = i + 1
                     if pt_restante > 0:
@@ -6949,6 +6961,7 @@ class StatusView(discord.ui.View):
                         pt_restante -= pt_valor
                     else:
                         pt_valor = 0
+
                     if sub_restante > 0:
                         if entrega_num == total_entregas:
                             sub_valor = sub_restante
@@ -6957,24 +6970,45 @@ class StatusView(discord.ui.View):
                         sub_restante -= sub_valor
                     else:
                         sub_valor = 0
+
                     entregas_lista.append({"pt": pt_valor, "sub": sub_valor})
+
+            # =========================================================
+            # CRIA A PRÓXIMA ENTREGA
+            # =========================================================
             idx = proxima_entrega_num - 1
             if idx >= len(entregas_lista):
+                logger.warning(f"❌ Índice {idx} fora do range da lista de entregas")
                 return
+
             entrega_data = entregas_lista[idx]
             pt_entrega = entrega_data["pt"]
             sub_entrega = entrega_data["sub"]
+
             if pt_entrega == 0 and sub_entrega == 0:
+                logger.info(f"⏭️ Entrega {proxima_entrega_num} vazia (0 PT / 0 SUB). Nada a criar.")
                 return
+
             vendedor_id = entrega["vendedor_id"]
             organizacao = entrega["organizacao"]
             observacoes = entrega["observacoes"]
             canal_id = int(entrega["canal_id"])
             canal = bot.get_channel(canal_id)
+
             if not canal:
                 logger.error(f"❌ Canal {canal_id} não encontrado")
                 return
+
             config = ORGANIZACOES_CONFIG.get(organizacao, {"emoji": "🏷️", "cor": 0x1a1a2e})
+
+            # =========================================================
+            # CRIA O EMBED DA PRÓXIMA ENTREGA
+            # =========================================================
+            logger.info(
+                f"📦 Criando Entrega {proxima_entrega_num}/{total_entregas} "
+                f"do pedido #{pedido_original} (PT: {pt_entrega} | SUB: {sub_entrega})"
+            )
+
             await criar_embed_entrega(
                 interaction=interaction,
                 pedido_numero=pedido_original,
@@ -6990,13 +7024,14 @@ class StatusView(discord.ui.View):
                 grupo=None,
                 entregas_lista=entregas_lista
             )
+
+            # Marca como criada nesta instância
             self.entrega_criada = True
-            await interaction.followup.send(f"✅ **Entrega {proxima_entrega_num}/{total_entregas} criada automaticamente!**", ephemeral=True)
-            await enviar_painel_vendas()
-            await enviar_painel_fabricacao()
+
+            logger.info(f"✅ Entrega {proxima_entrega_num}/{total_entregas} criada com sucesso!")
+
         except Exception as e:
             logger.error(f"❌ Erro ao criar próxima entrega automaticamente: {e}")
-            await interaction.followup.send(f"❌ **Erro ao criar próxima entrega:** {str(e)}", ephemeral=True)
 
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="🏷️ Organização", placeholder="Digite o nome da organização (ex: VDR, POLICIA)", required=True)
