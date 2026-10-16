@@ -6937,8 +6937,7 @@ class StatusView(discord.ui.View):
                 # Se não tiver detalhes salvos, monta do zero
                 async with pool.acquire() as conn3:
                     primeira = await conn3.fetchrow(
-                        "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas 
-                         WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
+                        "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
                         pedido_original
                     )
                 pt_por_entrega = primeira["pt_por_entrega"] if primeira else entrega["pt_por_entrega"]
