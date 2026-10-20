@@ -10412,34 +10412,25 @@ async def buscar_caixa():
         return {"sujo": 0, "limpo": 0, "total": 0}
 
 
-async def movimentar_caixa(tipo, valor, motivo, autor, tipo_dinheiro="sujo"):
+async def movimentar_caixa(tipo, valor, motivo, autor, tipo_dinheiro="auto"):
     """
-    Movimenta o caixa da facção, separando dinheiro SUJO e LIMPO.
-
-    tipo_dinheiro:
-        - "sujo" → operações com dinheiro sujo (venda, ação, lavagem entrada)
-        - "limpo" → operações com dinheiro limpo (parcela, ajuste, compra)
-        - "auto" → o tipo é inferido pela `tipo` da movimentação
-
-    Regra padrão:
-        venda              → sujo  (+)
-        acao               → sujo  (+)
-        lavagem            → sujo  (+)  [entrada do membro anotado]
-        lavagem_limpeza    → limpo (+) e sujo (−)  [tratado separado]
-        parcela_receber    → limpo (+)
-        parcela_pagar      → limpo (−)
-        compra             → limpo (−)
-        ajuste_mais        → conforme tipo_dinheiro
-        ajuste_menos       → conforme tipo_dinheiro
+    Movimenta o caixa classificando automaticamente o tipo de dinheiro.
+    
+    REGRAS AUTOMÁTICAS (se tipo_dinheiro == "auto"):
+    - SUJO: 'venda' (não, agora venda é limpa), 'acao', 'lavagem', 'deposito_meta'
+    - LIMPO: 'venda', 'compra', 'parcela_receber', 'parcela_pagar', 'ajuste_mais', 'ajuste_menos'
     """
     pool = await get_pool()
     if not pool:
         return False
 
     try:
-        # Define o tipo de dinheiro se vier "auto"
+        # =========================================================
+        # DEFINE O TIPO DE DINHEIRO
+        # =========================================================
         if tipo_dinheiro == "auto":
-            if tipo in ("venda", "acao", "lavagem"):
+            # Ações e Lavagens entram como SUJO. Vendas entram como LIMPO.
+            if tipo in ("acao", "lavagem", "deposito_meta"):
                 tipo_dinheiro = "sujo"
             else:
                 tipo_dinheiro = "limpo"
@@ -10449,23 +10440,20 @@ async def movimentar_caixa(tipo, valor, motivo, autor, tipo_dinheiro="sujo"):
             sujo_atual = row["valor_sujo"] if row else 0
             limpo_atual = row["valor_limpo"] if row else 0
 
-            # Calcula novo valor
-            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber"):
+            # Define sinal (entra ou sai)
+            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber", "deposito_meta"):
                 sinal = 1
             else:
                 sinal = -1
 
             delta = valor * sinal
 
+            # Calcula novos saldos
             if tipo_dinheiro == "sujo":
-                sujo_novo = sujo_atual + delta
-                if sujo_novo < 0:
-                    sujo_novo = 0
+                sujo_novo = max(0, sujo_atual + delta)
                 limpo_novo = limpo_atual
             else:
-                limpo_novo = limpo_atual + delta
-                if limpo_novo < 0:
-                    limpo_novo = 0
+                limpo_novo = max(0, limpo_atual + delta)
                 sujo_novo = sujo_atual
 
             total_novo = sujo_novo + limpo_novo
@@ -10524,6 +10512,7 @@ async def gerar_embed_caixa():
 
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
+    # Apenas sujo e limpo.
     embed.add_field(
         name="🟥 SALDO SUJO",
         value=f"```yaml\n{formatar_dinheiro(valores['sujo'])}\n```",
@@ -10532,11 +10521,6 @@ async def gerar_embed_caixa():
     embed.add_field(
         name="🟩 SALDO LIMPO",
         value=f"```yaml\n{formatar_dinheiro(valores['limpo'])}\n```",
-        inline=True
-    )
-    embed.add_field(
-        name="💵 SALDO TOTAL",
-        value=f"```yaml\n{formatar_dinheiro(valores['total'])}\n```",
         inline=True
     )
 
@@ -10553,7 +10537,8 @@ async def gerar_embed_caixa():
             if data.tzinfo is None:
                 data = data.replace(tzinfo=BRASIL)
 
-            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber"):
+            # Lógica de sinais
+            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber", "deposito_meta", "lavagem_limpeza"):
                 emoji_tipo = "➕"
                 sinal = "+"
             else:
@@ -10799,6 +10784,177 @@ class AdicionarLavadoModal(discord.ui.Modal, title="💸 Adicionar Dinheiro Lava
         embed.add_field(name="🟩 Limpo", value=formatar_dinheiro(valores['limpo']), inline=True)
         embed.set_footer(text="🛡 Vida Rasa 442 • Caixa")
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+class LavarDinheiroModal(discord.ui.Modal, title="🧼 LAVAR DINHEIRO (CAIXA)"):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    confirmacao = discord.ui.TextInput(
+        label="Digite CONFIRMAR para lavar tudo",
+        placeholder="CONFIRMAR",
+        required=True,
+        max_length=20
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        if self.confirmacao.value.strip().upper() != "CONFIRMAR":
+            await interaction.followup.send("❌ Confirmação incorreta. Nada foi lavado.", ephemeral=True)
+            return
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
+            return
+
+        try:
+            async with pool.acquire() as conn:
+                # 1. Pega o caixa atual
+                caixa_row = await conn.fetchrow("SELECT valor_sujo, valor_limpo FROM caixa WHERE id = 1")
+                sujo_atual = caixa_row["valor_sujo"] if caixa_row else 0
+                limpo_atual = caixa_row["valor_limpo"] if caixa_row else 0
+
+                if sujo_atual <= 0:
+                    await interaction.followup.send("📭 Não há dinheiro sujo no caixa para lavar.", ephemeral=True)
+                    return
+
+                # 2. Calcula os valores da lavagem (80% limpo / 20% taxa para outra fac)
+                valor_taxa = int(sujo_atual * 0.20)
+                valor_limpo_total = sujo_atual - valor_taxa
+
+                # 3. Pega as anotações dos membros (quanto eles colocaram para lavar)
+                lavagens_membros = await conn.fetch(
+                    "SELECT id, user_id, valor_retorno, valor_sujo FROM lavagem_ativa ORDER BY id ASC"
+                )
+
+                # Soma quanto deve ser devolvido aos membros (o valor_retorno é o que o membro recebe)
+                total_repassar_membros = sum(l["valor_retorno"] for l in lavagens_membros)
+
+                # 4. Calcula a sobra limpa da facção
+                # O que veio limpo (80%) MENOS o que vai ser devolvido aos membros
+                valor_limpo_faccao = valor_limpo_total - total_repassar_membros
+                if valor_limpo_faccao < 0:
+                    valor_limpo_faccao = 0
+
+                # 5. Calcula novos saldos
+                novo_sujo = 0
+                novo_limpo = limpo_atual + valor_limpo_faccao
+                novo_total = novo_sujo + novo_limpo
+
+                # 6. Atualiza o caixa
+                await conn.execute(
+                    """UPDATE caixa
+                       SET valor_sujo = $1,
+                           valor_limpo = $2,
+                           valor_atual = $3,
+                           ultima_atualizacao = NOW()
+                       WHERE id = 1""",
+                    novo_sujo, novo_limpo, novo_total
+                )
+
+                # 7. Registra movimentação de saída do dinheiro sujo
+                await conn.execute("""
+                    INSERT INTO caixa_movimentacoes
+                    (tipo, tipo_dinheiro, valor, motivo, autor, data)
+                    VALUES ('lavagem_saida', 'sujo', $1, $2, $3, NOW())
+                """,
+                    sujo_atual,
+                    f"Enviado para lavagem — Taxa 20% = {formatar_dinheiro(valor_taxa)}",
+                    str(interaction.user.id)
+                )
+
+                # 8. Registra movimentação de entrada do dinheiro limpo da facção
+                await conn.execute("""
+                    INSERT INTO caixa_movimentacoes
+                    (tipo, tipo_dinheiro, valor, motivo, autor, data)
+                    VALUES ('lavagem_limpeza', 'limpo', $1, $2, $3, NOW())
+                """,
+                    valor_limpo_faccao,
+                    f"Lavagem concluída — Sobra para a facção (descontado repasse aos membros)",
+                    str(interaction.user.id)
+                )
+
+                # 9. Limpa as anotações ativas
+                await conn.execute("DELETE FROM lavagem_ativa")
+
+            # =========================================================
+            # AVISO AOS MEMBROS / GERÊNCIA (Para pagar o PIX)
+            # =========================================================
+            if lavagens_membros:
+                canal_gerencia = interaction.guild.get_channel(CANAL_GERENCIA_ID)
+                if canal_gerencia:
+                    embed_repasse = discord.Embed(
+                        title="💸 ── REPASSE DE LAVAGEM AOS MEMBROS ── 💸",
+                        description="A lavagem com a outra facção foi concluída. Efetuem o pagamento!",
+                        color=0xF1C40F,
+                        timestamp=agora()
+                    )
+                    texto_repasse = ""
+                    for lav in lavagens_membros:
+                        try:
+                            member = interaction.guild.get_member(int(lav["user_id"]))
+                            nome = member.display_name if member else f"ID: {lav['user_id']}"
+                        except:
+                            nome = f"ID: {lav['user_id']}"
+                        
+                        texto_repasse += f"👤 **{nome}**\n"
+                        texto_repasse += f"Colocou: {formatar_dinheiro(lav['valor_sujo'])} (Sujo)\n"
+                        texto_repasse += f"Devolver: **{formatar_dinheiro(lav['valor_retorno'])}** (Limpo)\n\n"
+
+                    embed_repasse.add_field(name="📋 LISTA DE REPASSES", value=texto_repasse[:1024], inline=False)
+                    embed_repasse.set_footer(text=f"🛡 Vida Rasa 442 • Processado por {interaction.user.display_name}")
+                    await canal_gerencia.send(embed=embed_repasse)
+
+            # Atualiza o painel
+            await enviar_painel_caixa()
+            valores = await buscar_caixa()
+
+            # =========================================================
+            # RESPOSTA FINAL EPHEMERAL
+            # =========================================================
+            embed = discord.Embed(
+                title="🧼 ── DINHEIRO LAVADO ── 🧼",
+                description="✅ O dinheiro sujo foi convertido em limpo",
+                color=0x2ECC71,
+                timestamp=agora()
+            )
+            embed.add_field(
+                name="📊 RESUMO GERAL DA LAVAGEM",
+                value=(
+                    f"```yaml\n"
+                    f"🟥 Sujo enviado: {formatar_dinheiro(sujo_atual)}\n"
+                    f"💸 Taxa outra facção (20%): {formatar_dinheiro(valor_taxa)}\n"
+                    f"🟩 Limpo recebido (80%): {formatar_dinheiro(valor_limpo_total)}\n"
+                    f"```"
+                ),
+                inline=False
+            )
+            embed.add_field(
+                name="👥 REPASSE AOS MEMBROS",
+                value=(
+                    f"```yaml\n"
+                    f"🟩 Total a pagar aos membros: {formatar_dinheiro(total_repassar_membros)}\n"
+                    f"*(Confira o canal de gerência)*\n"
+                    f"```"
+                ),
+                inline=False
+            )
+            embed.add_field(
+                name="🟩 SOBRA LIMPA DA FACÇÃO",
+                value=(
+                    f"```yaml\n"
+                    f"Valor que ficou no caixa: {formatar_dinheiro(valor_limpo_faccao)}\n"
+                    f"```"
+                ),
+                inline=False
+            )
+            embed.set_footer(text=f"🛡 Vida Rasa 442 • Lavado por {interaction.user.display_name}")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao lavar dinheiro: {e}")
+            await interaction.followup.send(f"❌ Erro: `{str(e)[:150]}`", ephemeral=True)
 
 class RelatorioCaixaModal(discord.ui.Modal, title="📈 Relatório do Caixa"):
     data_inicio = discord.ui.TextInput(
@@ -11062,32 +11218,6 @@ class CaixaView(discord.ui.View):
     async def lavar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
             return
-
-        pool = await get_pool()
-        if not pool:
-            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
-            return
-
-        async with pool.acquire() as conn:
-            total_membros = await conn.fetchval(
-                "SELECT COALESCE(SUM(valor_retorno), 0) FROM lavagem_ativa"
-            ) or 0
-            caixa_row = await conn.fetchrow("SELECT valor_sujo FROM caixa WHERE id = 1")
-            sujo_atual = caixa_row["valor_sujo"] if caixa_row else 0
-
-        embed = discord.Embed(
-            title="🧼 ── CONFIRMAR LAVAGEM ── 🧼",
-            description=(
-                f"```yaml\n"
-                f"🟥 Sujo no caixa: {formatar_dinheiro(sujo_atual)}\n"
-                f"👥 A devolver aos membros: {formatar_dinheiro(total_membros)}\n"
-                f"🟩 Vai virar limpo: {formatar_dinheiro(max(0, sujo_atual - total_membros))}\n"
-                f"```\n\n"
-                f"⚠️ **Isso vai zerar o saldo sujo e converter o restante em limpo.**"
-            ),
-            color=0xF1C40F,
-            timestamp=agora()
-        )
         await interaction.response.send_modal(LavarDinheiroModal())
 
     @discord.ui.button(label="📊 Histórico Completo", style=discord.ButtonStyle.secondary, custom_id="caixa_historico", emoji="📊", row=1)
@@ -11124,7 +11254,7 @@ class CaixaView(discord.ui.View):
             if data.tzinfo is None:
                 data = data.replace(tzinfo=BRASIL)
 
-            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber"):
+            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber", "deposito_meta", "lavagem_limpeza"):
                 emoji_tipo = "➕"
                 sinal = "+"
             else:
@@ -11159,8 +11289,6 @@ class CaixaView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_caixa()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
-
-
 
 # =========================================================
 # ENVIAR PAINEL DO CAIXA
