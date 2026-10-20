@@ -15278,7 +15278,7 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
 
             # Pega a meta limite pra saber se cumpriu
             meta_limite_dinheiro = await definir_valor_meta_por_id(user_id)
-            meta_limite_polvora = await definir_valor_meta_por_polvora(user_id)
+            meta_limite_polvora = await definir_valor_meta_polvora(user_id)
 
             # O tipo de meta usado nessa semana
             tipo_meta = item.get("tipo_meta", "dinheiro")
