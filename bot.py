@@ -925,34 +925,60 @@ async def inicializar_tabelas(pool):
             ON CONFLICT (id) DO NOTHING
         """)
         # =========================================================
-        # TABELA: CAIXA DA FACÇÃO
+        # TABELA: CAIXA DA FACÇÃO (SUJO + LIMPO)
         # =========================================================
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS caixa (
                 id INTEGER PRIMARY KEY DEFAULT 1,
                 valor_atual BIGINT DEFAULT 0,
+                valor_sujo BIGINT DEFAULT 0,
+                valor_limpo BIGINT DEFAULT 0,
                 ultima_atualizacao TIMESTAMP DEFAULT NOW()
             )
         """)
+        # Migração suave: adiciona colunas se a tabela já existia
         await conn.execute("""
-            INSERT INTO caixa (id, valor_atual)
-            VALUES (1, 0)
+            ALTER TABLE caixa ADD COLUMN IF NOT EXISTS valor_sujo BIGINT DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE caixa ADD COLUMN IF NOT EXISTS valor_limpo BIGINT DEFAULT 0
+        """)
+        await conn.execute("""
+            INSERT INTO caixa (id, valor_atual, valor_sujo, valor_limpo)
+            VALUES (1, 0, 0, 0)
             ON CONFLICT (id) DO NOTHING
         """)
 
-        # =========================================================
-        # TABELA: MOVIMENTAÇÕES DO CAIXA
-        # =========================================================
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS caixa_movimentacoes (
                 id SERIAL PRIMARY KEY,
                 tipo VARCHAR(20) NOT NULL,
+                tipo_dinheiro VARCHAR(10) DEFAULT 'sujo',
                 valor BIGINT NOT NULL,
                 motivo TEXT,
                 autor VARCHAR(30),
                 data TIMESTAMP DEFAULT NOW()
             )
         """)
+        await conn.execute("""
+            ALTER TABLE caixa_movimentacoes ADD COLUMN IF NOT EXISTS tipo_dinheiro VARCHAR(10) DEFAULT 'sujo'
+        """)
+
+        # =========================================================
+        # TABELA: LAVAGEM ATIVA (dinheiro sujo aguardando limpeza)
+        # =========================================================
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS lavagem_ativa (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                valor_sujo BIGINT NOT NULL,
+                valor_retorno BIGINT NOT NULL,
+                taxa BIGINT NOT NULL,
+                data TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+        
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_caixa_mov_data ON caixa_movimentacoes(data DESC)
         """)
@@ -2787,7 +2813,40 @@ async def on_message_lavagem(message: discord.Message):
                 await dados_temp["msg_info"].delete()
             except:
                 pass
+
             await salvar_lavagem_db(message.author.id, valor_sujo, taxa, valor_retorno)
+
+            # =========================================================
+            # ✅ INTEGRAÇÃO: registra na tabela lavagem_ativa
+            # =========================================================
+            try:
+                pool = await get_pool()
+                if pool:
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            """INSERT INTO lavagem_ativa (user_id, valor_sujo, valor_retorno, taxa)
+                               VALUES ($1, $2, $3, $4)""",
+                            str(message.author.id), valor_sujo, valor_retorno, taxa
+                        )
+            except Exception as e:
+                logger.error(f"❌ Erro ao registrar lavagem ativa: {e}")
+
+            # =========================================================
+            # ✅ INTEGRAÇÃO: adiciona o VALOR SUJO ao caixa (sujo)
+            # (o membro anotou a lavagem → o dinheiro entra no caixa sujo)
+            # =========================================================
+            try:
+                await movimentar_caixa(
+                    tipo="lavagem",
+                    valor=valor_sujo,
+                    motivo=f"Lavagem anotada por {message.author.display_name}",
+                    autor=message.author.id,
+                    tipo_dinheiro="sujo"
+                )
+                logger.info(f"🟥 Caixa (sujo): +{formatar_dinheiro(valor_sujo)} (lavagem de {message.author.display_name})")
+            except Exception as e:
+                logger.error(f"⚠️ Erro ao somar lavagem no caixa: {e}")
+
             embed = discord.Embed(title="🧼 Nova Lavagem", color=0x1abc9c, timestamp=agora())
             embed.add_field(name="👤 Membro", value=message.author.mention, inline=False)
             embed.add_field(name="💰 Valor sujo", value=formatar_dinheiro(valor_sujo), inline=True)
@@ -2795,6 +2854,7 @@ async def on_message_lavagem(message: discord.Message):
             embed.add_field(name="📊 Taxa", value=f"{taxa}%", inline=True)
             embed.set_image(url=f"attachment://{arquivo.filename}")
             await canal_destino.send(embed=embed, file=arquivo)
+
             try:
                 await message.author.send(
                     f"✅ **Lavagem registrada!**\n\n"
@@ -5110,7 +5170,25 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
                     return
 
             await conn.execute(
+                            await conn.execute(
                 "UPDATE acoes_semana SET valor=$1, resultado='ganhou' WHERE id=$2",
+                valor_total, self.acao_id
+            )
+
+            # =========================================================
+            # ✅ INTEGRAÇÃO COM O CAIXA: ação ganha → entra como SUJO
+            # =========================================================
+            try:
+                await movimentar_caixa(
+                    tipo="acao",
+                    valor=valor_total,
+                    motivo=f"Ação ganha: {acao['tipo']} (ID {self.acao_id})",
+                    autor=interaction.user.id,
+                    tipo_dinheiro="sujo"
+                )
+                logger.info(f"🟥 Caixa (sujo): +{formatar_dinheiro(valor_total)} (Ação ganha {acao['tipo']})")
+            except Exception as e:
+                logger.error(f"⚠️ Erro ao somar ação no caixa: {e}")
                 valor_total, self.acao_id
             )
 
@@ -6043,6 +6121,26 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                 await interaction.followup.send("❌ **Nome inválido!** Digite o nome da pessoa que recebeu a transferência.", ephemeral=True)
                 return
 
+            # =========================================================
+            # ✅ TRAVA ANTI-DUPLICAÇÃO (banco como verdade única)
+            # =========================================================
+            pool = await get_pool()
+            if not pool:
+                await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+                return
+
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT finalizado, cancelado, migrado FROM vendas WHERE pedido_numero = $1",
+                    self.pedido_numero
+                )
+                if row and (row["finalizado"] or row["cancelado"] or row["migrado"]):
+                    await interaction.followup.send(
+                        "⚠️ **Este pedido já foi finalizado!** A transferência não será duplicada.",
+                        ephemeral=True
+                    )
+                    return
+
             embed = self.mensagem_original.embeds[0]
             embed.color = 0x2ecc71
 
@@ -6096,9 +6194,6 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
 
             await self.mensagem_original.edit(embed=embed, view=view)
 
-            # =========================================================
-            # LOG NO CANAL GERAL
-            # =========================================================
             canal_log = interaction.guild.get_channel(CANAL_LOGS_GERAIS_ID)
             if canal_log:
                 embed_log = discord.Embed(
@@ -6114,9 +6209,9 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                 embed_log.add_field(name="🔫 SUB", value=f"{fmt_num(self.sub)} munições", inline=True)
                 embed_log.set_footer(text=f"Transferência confirmada em {agora().strftime('%d/%m/%Y %H:%M')}")
                 await canal_log.send(embed=embed_log)
-                    
+
             # =========================================================
-            # ✅ INTEGRAÇÃO COM O CAIXA: soma o valor da venda
+            # ✅ CAIXA: soma o valor da venda (dinheiro sujo)
             # =========================================================
             try:
                 await movimentar_caixa(
@@ -6125,13 +6220,12 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
                     motivo=f"Venda #{self.pedido_numero:04d}",
                     autor=interaction.user.id
                 )
-                logger.info(f"💰 Caixa: +{formatar_dinheiro(self.valor_total)} (Venda #{self.pedido_numero:04d})")
+                logger.info(f"💰 Caixa (sujo): +{formatar_dinheiro(self.valor_total)} (Venda #{self.pedido_numero:04d})")
             except Exception as e:
                 logger.error(f"⚠️ Erro ao somar venda no caixa: {e}")
 
-
             # =========================================================
-            # ✅ FINALIZAR PEDIDO: DELETAR DO CANAL E ENVIAR PARA FINALIZADOS
+            # ✅ FINALIZAR PEDIDO
             # =========================================================
             await finalizar_e_mover_pedido(
                 interaction=interaction,
@@ -6334,6 +6428,51 @@ class StatusView(discord.ui.View):
             row=1
         ))
 
+    # =========================================================
+    # TRAVA ANTI-DUPLICAÇÃO (banco como verdade única)
+    # =========================================================
+    async def _pedido_ja_finalizado_no_banco(self, pedido_numero: int) -> bool:
+        """Verifica no banco se o pedido já foi finalizado/cancelado/migrado."""
+        if not pedido_numero:
+            return False
+        pool = await get_pool()
+        if not pool:
+            return False
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT finalizado, cancelado, migrado FROM vendas WHERE pedido_numero = $1",
+                    pedido_numero
+                )
+                if not row:
+                    return False
+                return bool(row["finalizado"] or row["cancelado"] or row["migrado"])
+        except Exception as e:
+            logger.error(f"❌ Erro ao checar pedido {pedido_numero} no banco: {e}")
+            return False
+
+    async def _entrega_ja_criada_no_banco(self, entrega_id: int, proxima_entrega_num: int) -> bool:
+        """Verifica no banco se a próxima entrega já foi criada."""
+        if not entrega_id:
+            return False
+        pool = await get_pool()
+        if not pool:
+            return False
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT mensagem_ids FROM entregas_parceladas WHERE id = $1",
+                    entrega_id
+                )
+                if not row:
+                    return False
+                mensagens = row["mensagem_ids"] or []
+                # Se já tem `proxima_entrega_num` mensagens, a próxima já foi criada
+                return len(mensagens) >= proxima_entrega_num
+        except Exception as e:
+            logger.error(f"❌ Erro ao checar entrega {entrega_id} no banco: {e}")
+            return False
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
 
@@ -6352,7 +6491,6 @@ class StatusView(discord.ui.View):
             # =========================================================
             # RECUPERAR DADOS DO PEDIDO (CASO VENHAM ZERADOS)
             # =========================================================
-            # 1. Tentar extrair do embed se pedido_numero estiver zerado
             pedido_numero_temp = self.pedido_numero
             if pedido_numero_temp == 0:
                 embed = interaction.message.embeds[0]
@@ -6364,7 +6502,6 @@ class StatusView(discord.ui.View):
                     except:
                         pass
 
-            # 2. Extrair PT/SUB do embed se estiverem zerados
             if self.pt == 0 or self.sub == 0:
                 embed = interaction.message.embeds[0]
                 for field in embed.fields:
@@ -6379,7 +6516,6 @@ class StatusView(discord.ui.View):
                         except:
                             pass
 
-            # 3. Buscar valor no banco
             if self.valor_total == 0:
                 try:
                     pool = await get_pool()
@@ -6391,7 +6527,6 @@ class StatusView(discord.ui.View):
                 except Exception as e:
                     logger.error(f"❌ Erro ao buscar valor do pedido: {e}")
 
-            # 4. Se ainda estiver zerado, calcular pelo PT/SUB
             if self.valor_total == 0:
                 valor_calculado = (self.pt * 50) + (self.sub * 90)
                 if valor_calculado > 0:
@@ -6400,6 +6535,17 @@ class StatusView(discord.ui.View):
 
             if self.valor_total == 0:
                 await interaction.response.send_message("❌ Não foi possível encontrar o valor do pedido!", ephemeral=True)
+                return False
+
+            # =========================================================
+            # ✅ TRAVA ANTI-DUPLICAÇÃO (banco)
+            # =========================================================
+            ja_finalizado = await self._pedido_ja_finalizado_no_banco(pedido_numero_temp)
+            if ja_finalizado:
+                await interaction.response.send_message(
+                    "⚠️ Este pedido já foi finalizado no banco de dados! A transferência não será duplicada.",
+                    ephemeral=True
+                )
                 return False
 
             modal = ConfirmarTransferenciaModal(
@@ -6485,10 +6631,6 @@ class StatusView(discord.ui.View):
         return any(l.startswith("✅") for l in linhas)
 
     async def pago(self, interaction: discord.Interaction, button):
-        """
-        Marca a entrega como paga.
-        NÃO cria próxima entrega (isso é papel do botão ENTREGUE).
-        """
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
 
@@ -6509,9 +6651,6 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        # =========================================================
-        # AUDITORIA
-        # =========================================================
         try:
             titulo = embed.title or ""
             pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
@@ -6528,9 +6667,6 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao auditar pagamento: {e}")
 
-        # =========================================================
-        # ATUALIZA O EMBED (só isso, NÃO cria próxima entrega)
-        # =========================================================
         await interaction.message.edit(embed=embed, view=StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
@@ -6547,9 +6683,8 @@ class StatusView(discord.ui.View):
         ))
 
         await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
-        
+
     async def entregue(self, interaction: discord.Interaction, button):
-        """Marca como entregue + cria a próxima entrega (se tiver)."""
         if self.entrega_ja_entregue:
             await interaction.followup.send("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
             return
@@ -6630,9 +6765,6 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
-        # =========================================================
-        # AUDITORIA
-        # =========================================================
         try:
             await registrar_auditoria(
                 user_id=str(interaction.user.id),
@@ -6652,9 +6784,6 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao auditar entrega: {e}")
 
-        # =========================================================
-        # SAÍDA DO BAÚ
-        # =========================================================
         if pacotes_pt > 0 or pacotes_sub > 0:
             canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
             if canal_bau:
@@ -6685,9 +6814,6 @@ class StatusView(discord.ui.View):
                 except Exception as e:
                     logger.error(f"Erro envio baú: {e}")
 
-        # =========================================================
-        # ATUALIZA O EMBED DA ENTREGA ATUAL
-        # =========================================================
         await interaction.message.edit(embed=embed, view=StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
@@ -6705,10 +6831,6 @@ class StatusView(discord.ui.View):
 
         await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
-        # =========================================================
-        # ✅ ÚNICA CHAMADA: criar próxima entrega
-        # (só se ainda tem entregas + não for a última)
-        # =========================================================
         if self.entrega_atual < self.total_entregas:
             await self.criar_proxima_entrega(interaction, embed, pedido_numero)
 
@@ -6752,7 +6874,6 @@ class StatusView(discord.ui.View):
         titulo = embed.title
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
 
-        # Captura status ANTES para auditoria
         status_anterior = ""
         if self.entrega_ja_entregue or self.pedido_pago(linhas):
             if self.entrega_ja_entregue and self.pedido_pago(linhas):
@@ -6808,9 +6929,6 @@ class StatusView(discord.ui.View):
         if self.entrega_id:
             await finalizar_entregas(self.entrega_id)
 
-        # =========================================================
-        # AUDITORIA
-        # =========================================================
         try:
             await registrar_auditoria(
                 user_id=str(interaction.user.id),
@@ -6829,9 +6947,6 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao auditar cancelamento de venda: {e}")
 
-        # =========================================================
-        # ✅ CANCELAR: DELETAR DO CANAL E ENVIAR PARA FINALIZADOS
-        # =========================================================
         await finalizar_e_mover_pedido(
             interaction=interaction,
             mensagem_original=interaction.message,
@@ -6875,7 +6990,9 @@ class StatusView(discord.ui.View):
     async def criar_proxima_entrega(self, interaction: discord.Interaction, embed_anterior, pedido_original):
         """
         Cria a próxima entrega automaticamente.
-        Só deve ser chamada quando o botão ENTREGUE for clicado.
+        Travas:
+        1. `self.entrega_criada` (instância)
+        2. `_entrega_ja_criada_no_banco` (verdade única no banco)
         """
         try:
             if not self.entrega_id:
@@ -6883,7 +7000,7 @@ class StatusView(discord.ui.View):
                 return
 
             # =========================================================
-            # TRAVA ANTI-DUPLICAÇÃO (por instância)
+            # TRAVA 1 (instância)
             # =========================================================
             if self.entrega_criada:
                 logger.info(f"⏭️ Próxima entrega já foi criada nesta instância (entrega_id={self.entrega_id})")
@@ -6912,23 +7029,13 @@ class StatusView(discord.ui.View):
                 return
 
             # =========================================================
-            # TRAVA ANTI-DUPLICAÇÃO (no banco)
-            # Verifica se a próxima entrega já foi criada (baseado no
-            # array de mensagens_ids)
+            # TRAVA 2 (banco — verdade única)
             # =========================================================
-            async with pool.acquire() as conn:
-                entrega_checar = await conn.fetchrow(
-                    "SELECT mensagem_ids FROM entregas_parceladas WHERE id = $1",
-                    self.entrega_id
-                )
-
-            mensagens_ids = entrega_checar["mensagem_ids"] or []
-
-            # Se já tem `proxima_entrega_num` mensagens, a próxima já foi criada
-            if len(mensagens_ids) >= proxima_entrega_num:
+            ja_criada = await self._entrega_ja_criada_no_banco(self.entrega_id, proxima_entrega_num)
+            if ja_criada:
                 logger.warning(
-                    f"⚠️ Entrega {proxima_entrega_num}/{total_entregas} já existe "
-                    f"(total de mensagens no banco: {len(mensagens_ids)}). Bloqueando criação duplicada."
+                    f"⚠️ Entrega {proxima_entrega_num}/{total_entregas} já existe no banco "
+                    f"(entrega_id={self.entrega_id}). Bloqueando criação duplicada."
                 )
                 self.entrega_criada = True
                 return
@@ -6945,7 +7052,6 @@ class StatusView(discord.ui.View):
             if detalhes and detalhes["entregas_json"]:
                 entregas_lista = json.loads(detalhes["entregas_json"])
             else:
-                # Se não tiver detalhes salvos, monta do zero
                 async with pool.acquire() as conn3:
                     primeira = await conn3.fetchrow(
                         "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
@@ -7011,9 +7117,6 @@ class StatusView(discord.ui.View):
 
             config = ORGANIZACOES_CONFIG.get(organizacao, {"emoji": "🏷️", "cor": 0x1a1a2e})
 
-            # =========================================================
-            # CRIA O EMBED DA PRÓXIMA ENTREGA
-            # =========================================================
             logger.info(
                 f"📦 Criando Entrega {proxima_entrega_num}/{total_entregas} "
                 f"do pedido #{pedido_original} (PT: {pt_entrega} | SUB: {sub_entrega})"
@@ -7035,9 +7138,7 @@ class StatusView(discord.ui.View):
                 entregas_lista=entregas_lista
             )
 
-            # Marca como criada nesta instância
             self.entrega_criada = True
-
             logger.info(f"✅ Entrega {proxima_entrega_num}/{total_entregas} criada com sucesso!")
 
         except Exception as e:
@@ -7539,9 +7640,9 @@ async def finalizar_e_mover_pedido(
     """
     Finaliza um pedido:
     - Extrai dados do embed original
-    - Marca no banco como finalizado/cancelado
-    - DELETA a mensagem original
-    - ENVIA embed novo (sem botões) no canal de Pedidos Finalizados
+    - DELETA a mensagem original PRIMEIRO
+    - Só depois marca no banco como finalizado/cancelado
+    - ENVIA embed novo no canal de Pedidos Finalizados
     """
     try:
         # =========================================================
@@ -7550,7 +7651,6 @@ async def finalizar_e_mover_pedido(
         embed_original = mensagem_original.embeds[0]
         dados = await extrair_dados_pedido_do_embed(embed_original)
 
-        # Sobrescreve com dados mais confiáveis
         if pedido_numero:
             dados["pedido_numero"] = pedido_numero
         if pt:
@@ -7561,15 +7661,43 @@ async def finalizar_e_mover_pedido(
             dados["transferido_para"] = transferido_para
 
         # =========================================================
-        # 2. MARCAR NO BANCO
+        # 2. DELETAR MENSAGEM ORIGINAL PRIMEIRO (evita estado inconsistente)
         # =========================================================
-        if tipo == "cancelado":
-            await marcar_pedido_finalizado(dados["pedido_numero"], tipo="cancelado")
-        else:
-            await marcar_pedido_finalizado(dados["pedido_numero"], tipo="finalizado")
+        deletado = False
+        try:
+            await mensagem_original.delete()
+            deletado = True
+            logger.info(f"🗑️ Pedido #{dados['pedido_numero']:04d} removido do canal de encomendas")
+        except discord.NotFound:
+            deletado = True  # Já não existia, tudo bem
+        except Exception as e:
+            logger.warning(f"⚠️ Não foi possível deletar mensagem original: {e}")
 
         # =========================================================
-        # 3. ENVIAR EMBED NOVO NO CANAL DE FINALIZADOS
+        # 3. MARCAR NO BANCO (só se deletou ou já não existia)
+        # =========================================================
+        if deletado:
+            if tipo == "cancelado":
+                await marcar_pedido_finalizado(dados["pedido_numero"], tipo="cancelado")
+            else:
+                await marcar_pedido_finalizado(dados["pedido_numero"], tipo="finalizado")
+        else:
+            logger.warning(
+                f"⚠️ Pedido #{dados['pedido_numero']:04d} NÃO foi marcado no banco "
+                f"(deleção da mensagem falhou). Verifique permissões."
+            )
+            try:
+                await interaction.followup.send(
+                    f"⚠️ **Atenção:** não foi possível deletar a mensagem original do pedido "
+                    f"#{dados['pedido_numero']:04d}. O banco NÃO foi marcado como finalizado. "
+                    f"Verifique as permissões do bot no canal Encomendas.",
+                    ephemeral=True
+                )
+            except:
+                pass
+
+        # =========================================================
+        # 4. ENVIAR EMBED NOVO NO CANAL DE FINALIZADOS
         # =========================================================
         await enviar_embed_pedido_finalizado(
             pedido_numero=dados["pedido_numero"],
@@ -7588,15 +7716,6 @@ async def finalizar_e_mover_pedido(
             cancelado_em=dados["cancelado_em"],
             tipo=tipo
         )
-
-        # =========================================================
-        # 4. DELETAR MENSAGEM ORIGINAL
-        # =========================================================
-        try:
-            await mensagem_original.delete()
-            logger.info(f"🗑️ Pedido #{dados['pedido_numero']:04d} removido do canal de encomendas")
-        except Exception as e:
-            logger.warning(f"⚠️ Não foi possível deletar mensagem original: {e}")
 
         # =========================================================
         # 5. REMOVER BOTÕES PERSISTENTES DO BANCO
@@ -7627,7 +7746,7 @@ async def finalizar_e_mover_pedido(
     except Exception as e:
         logger.error(f"❌ Erro em finalizar_e_mover_pedido: {e}")
         return False
-
+        
 async def restaurar_botoes_vendas():
     """
     Restaura os botões de pedidos EM ABERTO.
@@ -10164,36 +10283,65 @@ async def buscar_divida_ativa(user_id):
 
 async def criar_divida_meta(user_id, valor_original, semana_fechamento):
     """
-    Cria uma dívida de meta (dobrada) para o usuário.
-    valor_divida = valor_original * 2
+    Cria ou ACRESCENTA uma dívida de DINHEIRO para o usuário.
+
+    Regra:
+    - Se NÃO tem dívida ativa de dinheiro → cria com valor_original
+    - Se JÁ tem dívida ativa → SOMA +valor_original (cresce a cada semana não paga)
+    - Nunca cria duas dívidas ativas do mesmo tipo — só acumula na existente
     """
     pool = await get_pool()
     if not pool:
         return False
     try:
         async with pool.acquire() as conn:
-            # Evita duplicar dívida na mesma semana
-            existente = await conn.fetchval(
-                "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND semana_fechamento = $2 AND pago = false",
+            duplicada_mesma_semana = await conn.fetchval(
+                """SELECT 1 FROM metas_dividas
+                   WHERE user_id = $1 AND semana_fechamento = $2
+                     AND pago = false AND tipo = 'dinheiro'""",
                 str(user_id), semana_fechamento
             )
-            if existente:
+            if duplicada_mesma_semana:
+                logger.info(
+                    f"ℹ️ Dívida de dinheiro de {user_id} já foi criada/crescida "
+                    f"na semana {semana_fechamento}. Nada a fazer."
+                )
                 return False
 
-            valor_divida = valor_original * 2
+            existente = await conn.fetchrow(
+                """SELECT id, valor_divida, valor_original FROM metas_dividas
+                   WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro'
+                   ORDER BY data_criacao ASC LIMIT 1""",
+                str(user_id)
+            )
+
+            if existente:
+                nova_divida = (existente["valor_divida"] or 0) + valor_original
+                novo_original = (existente["valor_original"] or 0) + valor_original
+                await conn.execute(
+                    """UPDATE metas_dividas
+                       SET valor_divida = $1, valor_original = $2
+                       WHERE id = $3""",
+                    nova_divida, novo_original, existente["id"]
+                )
+                logger.info(
+                    f"📈 Dívida de dinheiro de {user_id} cresceu: "
+                    f"R$ {nova_divida} (antes: R$ {existente['valor_divida']})"
+                )
+                return True
 
             await conn.execute(
-                """INSERT INTO metas_dividas 
-                   (user_id, valor_divida, valor_original, semana_fechamento) 
-                   VALUES ($1, $2, $3, $4)""",
-                str(user_id), valor_divida, valor_original, semana_fechamento
+                """INSERT INTO metas_dividas
+                   (user_id, valor_divida, valor_original, semana_fechamento, tipo)
+                   VALUES ($1, $2, $3, $4, 'dinheiro')""",
+                str(user_id), valor_original, valor_original, semana_fechamento
             )
+            logger.info(f"🆕 Dívida de dinheiro criada para {user_id}: R$ {valor_original}")
             return True
     except Exception as e:
-        logger.error(f"❌ Erro ao criar dívida de meta: {e}")
+        logger.error(f"❌ Erro ao criar/crescer dívida de dinheiro: {e}")
         return False
-
-
+        
 async def quitar_dividas(user_id):
     """Marca todas as dívidas ativas do usuário como pagas."""
     pool = await get_pool()
@@ -10249,68 +10397,99 @@ async def listar_dividas_ativas():
 
 async def buscar_caixa():
     """
-    Retorna o valor atual do caixa.
+    Retorna dict com {sujo, limpo, total}.
     """
     pool = await get_pool()
     if not pool:
-        return 0
+        return {"sujo": 0, "limpo": 0, "total": 0}
     try:
         async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT valor_atual FROM caixa WHERE id = 1")
-            return row["valor_atual"] if row else 0
+            row = await conn.fetchrow("SELECT valor_sujo, valor_limpo FROM caixa WHERE id = 1")
+            if not row:
+                return {"sujo": 0, "limpo": 0, "total": 0}
+            sujo = row["valor_sujo"] or 0
+            limpo = row["valor_limpo"] or 0
+            return {"sujo": sujo, "limpo": limpo, "total": sujo + limpo}
     except Exception as e:
         logger.error(f"❌ Erro ao buscar caixa: {e}")
-        return 0
+        return {"sujo": 0, "limpo": 0, "total": 0}
 
 
-async def movimentar_caixa(tipo, valor, motivo, autor):
+async def movimentar_caixa(tipo, valor, motivo, autor, tipo_dinheiro="sujo"):
     """
-    Movimenta o caixa.
-    tipo: 'venda', 'compra', 'ajuste_mais', 'ajuste_menos', 'lavagem', 'parcela_receber', 'parcela_pagar'
-    valor: valor da movimentação (positivo)
-    motivo: descrição
-    autor: user_id
+    Movimenta o caixa da facção, separando dinheiro SUJO e LIMPO.
+
+    tipo_dinheiro:
+        - "sujo" → operações com dinheiro sujo (venda, ação, lavagem entrada)
+        - "limpo" → operações com dinheiro limpo (parcela, ajuste, compra)
+        - "auto" → o tipo é inferido pela `tipo` da movimentação
+
+    Regra padrão:
+        venda              → sujo  (+)
+        acao               → sujo  (+)
+        lavagem            → sujo  (+)  [entrada do membro anotado]
+        lavagem_limpeza    → limpo (+) e sujo (−)  [tratado separado]
+        parcela_receber    → limpo (+)
+        parcela_pagar      → limpo (−)
+        compra             → limpo (−)
+        ajuste_mais        → conforme tipo_dinheiro
+        ajuste_menos       → conforme tipo_dinheiro
     """
     pool = await get_pool()
     if not pool:
         return False
 
     try:
-        async with pool.acquire() as conn:
-            # 1. Pega o valor atual
-            row = await conn.fetchrow("SELECT valor_atual FROM caixa WHERE id = 1")
-            valor_atual = row["valor_atual"] if row else 0
-
-            # 2. Calcula o novo valor
-            if tipo in ("ajuste_mais", "venda", "lavagem", "parcela_receber"):
-                novo_valor = valor_atual + valor
-                # Garante que não fique negativo (por segurança)
-                if novo_valor < 0:
-                    novo_valor = 0
+        # Define o tipo de dinheiro se vier "auto"
+        if tipo_dinheiro == "auto":
+            if tipo in ("venda", "acao", "lavagem"):
+                tipo_dinheiro = "sujo"
             else:
-                # ajuste_menos, compra, parcela_pagar
-                novo_valor = valor_atual - valor
-                if novo_valor < 0:
-                    novo_valor = 0
+                tipo_dinheiro = "limpo"
 
-            # 3. Atualiza o caixa
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT valor_sujo, valor_limpo FROM caixa WHERE id = 1")
+            sujo_atual = row["valor_sujo"] if row else 0
+            limpo_atual = row["valor_limpo"] if row else 0
+
+            # Calcula novo valor
+            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber"):
+                sinal = 1
+            else:
+                sinal = -1
+
+            delta = valor * sinal
+
+            if tipo_dinheiro == "sujo":
+                sujo_novo = sujo_atual + delta
+                if sujo_novo < 0:
+                    sujo_novo = 0
+                limpo_novo = limpo_atual
+            else:
+                limpo_novo = limpo_atual + delta
+                if limpo_novo < 0:
+                    limpo_novo = 0
+                sujo_novo = sujo_atual
+
+            total_novo = sujo_novo + limpo_novo
+
             await conn.execute(
-                "UPDATE caixa SET valor_atual = $1, ultima_atualizacao = NOW() WHERE id = 1",
-                novo_valor
+                """UPDATE caixa
+                   SET valor_sujo = $1, valor_limpo = $2, valor_atual = $3, ultima_atualizacao = NOW()
+                   WHERE id = 1""",
+                sujo_novo, limpo_novo, total_novo
             )
 
-            # 4. Registra movimentação
             await conn.execute("""
-                INSERT INTO caixa_movimentacoes (tipo, valor, motivo, autor, data)
-                VALUES ($1, $2, $3, $4, NOW())
-            """, tipo, valor, motivo, str(autor))
+                INSERT INTO caixa_movimentacoes (tipo, tipo_dinheiro, valor, motivo, autor, data)
+                VALUES ($1, $2, $3, $4, $5, NOW())
+            """, tipo, tipo_dinheiro, valor, motivo, str(autor))
 
             return True
 
     except Exception as e:
         logger.error(f"❌ Erro ao movimentar caixa: {e}")
         return False
-
 
 async def buscar_movimentacoes_caixa(limite=5):
     """
@@ -10331,10 +10510,7 @@ async def buscar_movimentacoes_caixa(limite=5):
 
 
 async def gerar_embed_caixa():
-    """
-    Monta o embed do painel do caixa.
-    """
-    valor_caixa = await buscar_caixa()
+    valores = await buscar_caixa()
     movimentacoes = await buscar_movimentacoes_caixa(5)
 
     embed = discord.Embed(
@@ -10351,16 +10527,24 @@ async def gerar_embed_caixa():
 
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
-    # Saldo
     embed.add_field(
-        name="💵 SALDO ATUAL",
-        value=f"```yaml\n{formatar_dinheiro(valor_caixa)}\n```",
-        inline=False
+        name="🟥 SALDO SUJO",
+        value=f"```yaml\n{formatar_dinheiro(valores['sujo'])}\n```",
+        inline=True
+    )
+    embed.add_field(
+        name="🟩 SALDO LIMPO",
+        value=f"```yaml\n{formatar_dinheiro(valores['limpo'])}\n```",
+        inline=True
+    )
+    embed.add_field(
+        name="💵 SALDO TOTAL",
+        value=f"```yaml\n{formatar_dinheiro(valores['total'])}\n```",
+        inline=True
     )
 
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
-    # Últimas movimentações
     if movimentacoes:
         texto_movs = ""
         for mov in movimentacoes:
@@ -10372,15 +10556,16 @@ async def gerar_embed_caixa():
             if data.tzinfo is None:
                 data = data.replace(tzinfo=BRASIL)
 
-            # Emoji e sinal por tipo
-            if tipo in ("ajuste_mais", "venda", "lavagem", "parcela_receber"):
+            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber"):
                 emoji_tipo = "➕"
                 sinal = "+"
             else:
                 emoji_tipo = "➖"
                 sinal = "-"
 
-            # Nome do autor
+            tipo_dinheiro = mov.get("tipo_dinheiro", "sujo")
+            tag = "🟥" if tipo_dinheiro == "sujo" else "🟩"
+
             try:
                 guild = bot.get_guild(GUILD_ID)
                 member = guild.get_member(int(autor_id)) if guild else None
@@ -10388,7 +10573,7 @@ async def gerar_embed_caixa():
             except:
                 nome_autor = f"ID: {autor_id}"
 
-            texto_movs += f"{emoji_tipo} **{motivo}** • {sinal}{formatar_dinheiro(valor)}\n"
+            texto_movs += f"{emoji_tipo} {tag} **{motivo}** • {sinal}{formatar_dinheiro(valor)}\n"
             texto_movs += f"   👤 {nome_autor} • {data.strftime('%d/%m %H:%M')}\n\n"
 
         embed.add_field(
@@ -10404,14 +10589,11 @@ async def gerar_embed_caixa():
         )
 
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
     embed.set_footer(
         text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}",
         icon_url=bot.user.display_avatar.url if bot.user else None
     )
-
     return embed
-
 
 # =========================================================
 # MODAIS DO CAIXA
@@ -10430,10 +10612,15 @@ class AdicionarCaixaModal(discord.ui.Modal, title="➕ Adicionar Dinheiro ao Cai
         required=True,
         max_length=200
     )
+    tipo_dinheiro = discord.ui.TextInput(
+        label="🏷️ Tipo: sujo ou limpo",
+        placeholder="Digite sujo ou limpo",
+        required=True,
+        max_length=5
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-
         try:
             valor = safe_int(self.valor.value)
             if valor <= 0:
@@ -10447,30 +10634,36 @@ class AdicionarCaixaModal(discord.ui.Modal, title="➕ Adicionar Dinheiro ao Cai
             await interaction.followup.send("❌ **Motivo é obrigatório!**", ephemeral=True)
             return
 
-        # Adiciona ao caixa
+        tipo_dinheiro = self.tipo_dinheiro.value.strip().lower()
+        if tipo_dinheiro not in ("sujo", "limpo"):
+            await interaction.followup.send("❌ **Tipo inválido!** Use `sujo` ou `limpo`.", ephemeral=True)
+            return
+
         sucesso = await movimentar_caixa(
             tipo="ajuste_mais",
             valor=valor,
             motivo=f"Ajuste Manual: {motivo}",
-            autor=interaction.user.id
+            autor=interaction.user.id,
+            tipo_dinheiro=tipo_dinheiro
         )
 
         if not sucesso:
             await interaction.followup.send("❌ Erro ao adicionar no caixa!", ephemeral=True)
             return
 
-        # Atualiza painel
         await enviar_painel_caixa()
+        valores = await buscar_caixa()
 
         embed = discord.Embed(
             title="✅ DINHEIRO ADICIONADO",
-            description=f"```yaml\n+{formatar_dinheiro(valor)}\n```",
+            description=f"```yaml\n+{formatar_dinheiro(valor)} ({tipo_dinheiro.upper()})\n```",
             color=0x2ECC71,
             timestamp=agora()
         )
         embed.add_field(name="📝 Motivo", value=motivo, inline=False)
         embed.add_field(name="👤 Autor", value=interaction.user.mention, inline=True)
-        embed.add_field(name="💰 Novo saldo", value=formatar_dinheiro(await buscar_caixa()), inline=True)
+        embed.add_field(name="🟥 Sujo", value=formatar_dinheiro(valores['sujo']), inline=True)
+        embed.add_field(name="🟩 Limpo", value=formatar_dinheiro(valores['limpo']), inline=True)
         embed.set_footer(text="🛡 Vida Rasa 442 • Caixa")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -10484,14 +10677,19 @@ class RemoverCaixaModal(discord.ui.Modal, title="➖ Remover Dinheiro do Caixa")
     )
     motivo = discord.ui.TextInput(
         label="📝 Motivo (obrigatório)",
-        placeholder="Ex: Compra extra, pagamento, ajuste com tablet...",
+        placeholder="Ex: Compra extra, pagamento, ajuste...",
         required=True,
         max_length=200
+    )
+    tipo_dinheiro = discord.ui.TextInput(
+        label="🏷️ Tipo: sujo ou limpo",
+        placeholder="Digite sujo ou limpo",
+        required=True,
+        max_length=5
     )
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-
         try:
             valor = safe_int(self.valor.value)
             if valor <= 0:
@@ -10505,13 +10703,19 @@ class RemoverCaixaModal(discord.ui.Modal, title="➖ Remover Dinheiro do Caixa")
             await interaction.followup.send("❌ **Motivo é obrigatório!**", ephemeral=True)
             return
 
-        # Verifica se tem saldo
-        saldo_atual = await buscar_caixa()
-        if saldo_atual < valor:
+        tipo_dinheiro = self.tipo_dinheiro.value.strip().lower()
+        if tipo_dinheiro not in ("sujo", "limpo"):
+            await interaction.followup.send("❌ **Tipo inválido!** Use `sujo` ou `limpo`.", ephemeral=True)
+            return
+
+        valores = await buscar_caixa()
+        saldo_disponivel = valores["sujo"] if tipo_dinheiro == "sujo" else valores["limpo"]
+        if saldo_disponivel < valor:
             await interaction.followup.send(
                 f"❌ **Saldo insuficiente!**\n\n"
-                f"💰 Caixa atual: {formatar_dinheiro(saldo_atual)}\n"
-                f"💸 Tentativa de remoção: {formatar_dinheiro(valor)}",
+                f"🟥 Sujo: {formatar_dinheiro(valores['sujo'])}\n"
+                f"🟩 Limpo: {formatar_dinheiro(valores['limpo'])}\n"
+                f"💸 Tentativa: {formatar_dinheiro(valor)} ({tipo_dinheiro})",
                 ephemeral=True
             )
             return
@@ -10520,7 +10724,8 @@ class RemoverCaixaModal(discord.ui.Modal, title="➖ Remover Dinheiro do Caixa")
             tipo="ajuste_menos",
             valor=valor,
             motivo=f"Ajuste Manual: {motivo}",
-            autor=interaction.user.id
+            autor=interaction.user.id,
+            tipo_dinheiro=tipo_dinheiro
         )
 
         if not sucesso:
@@ -10528,16 +10733,18 @@ class RemoverCaixaModal(discord.ui.Modal, title="➖ Remover Dinheiro do Caixa")
             return
 
         await enviar_painel_caixa()
+        valores_novos = await buscar_caixa()
 
         embed = discord.Embed(
             title="✅ DINHEIRO REMOVIDO",
-            description=f"```yaml\n-{formatar_dinheiro(valor)}\n```",
+            description=f"```yaml\n-{formatar_dinheiro(valor)} ({tipo_dinheiro.upper()})\n```",
             color=0xE74C3C,
             timestamp=agora()
         )
         embed.add_field(name="📝 Motivo", value=motivo, inline=False)
         embed.add_field(name="👤 Autor", value=interaction.user.mention, inline=True)
-        embed.add_field(name="💰 Novo saldo", value=formatar_dinheiro(await buscar_caixa()), inline=True)
+        embed.add_field(name="🟥 Sujo", value=formatar_dinheiro(valores_novos['sujo']), inline=True)
+        embed.add_field(name="🟩 Limpo", value=formatar_dinheiro(valores_novos['limpo']), inline=True)
         embed.set_footer(text="🛡 Vida Rasa 442 • Caixa")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -10558,7 +10765,6 @@ class AdicionarLavadoModal(discord.ui.Modal, title="💸 Adicionar Dinheiro Lava
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-
         try:
             valor = safe_int(self.valor.value)
             if valor <= 0:
@@ -10572,8 +10778,9 @@ class AdicionarLavadoModal(discord.ui.Modal, title="💸 Adicionar Dinheiro Lava
         sucesso = await movimentar_caixa(
             tipo="lavagem",
             valor=valor,
-            motivo=f"Lavagem: {origem}",
-            autor=interaction.user.id
+            motivo=f"Lavagem (entrada): {origem}",
+            autor=interaction.user.id,
+            tipo_dinheiro="sujo"
         )
 
         if not sucesso:
@@ -10581,19 +10788,20 @@ class AdicionarLavadoModal(discord.ui.Modal, title="💸 Adicionar Dinheiro Lava
             return
 
         await enviar_painel_caixa()
+        valores = await buscar_caixa()
 
         embed = discord.Embed(
-            title="💸 DINHEIRO LAVADO ADICIONADO",
-            description=f"```yaml\n+{formatar_dinheiro(valor)}\n```",
+            title="💸 DINHEIRO SUJO ADICIONADO",
+            description=f"```yaml\n+{formatar_dinheiro(valor)} (SUJO)\n```",
             color=0x9B59B6,
             timestamp=agora()
         )
         embed.add_field(name="📝 Origem", value=origem, inline=False)
         embed.add_field(name="👤 Autor", value=interaction.user.mention, inline=True)
-        embed.add_field(name="💰 Novo saldo", value=formatar_dinheiro(await buscar_caixa()), inline=True)
+        embed.add_field(name="🟥 Sujo", value=formatar_dinheiro(valores['sujo']), inline=True)
+        embed.add_field(name="🟩 Limpo", value=formatar_dinheiro(valores['limpo']), inline=True)
         embed.set_footer(text="🛡 Vida Rasa 442 • Caixa")
         await interaction.followup.send(embed=embed, ephemeral=True)
-
 
 class RelatorioCaixaModal(discord.ui.Modal, title="📈 Relatório do Caixa"):
     data_inicio = discord.ui.TextInput(
@@ -10632,35 +10840,72 @@ class RelatorioCaixaModal(discord.ui.Modal, title="📈 Relatório do Caixa"):
 
         try:
             async with pool.acquire() as conn:
-                # Soma por tipo
-                entradas = await conn.fetchval(
-                    """SELECT COALESCE(SUM(valor), 0) FROM caixa_movimentacoes 
-                       WHERE tipo IN ('venda', 'lavagem', 'ajuste_mais', 'parcela_receber') 
-                       AND data >= $1 AND data <= $2""",
+                entradas_sujo = await conn.fetchval(
+                    """SELECT COALESCE(SUM(valor), 0) FROM caixa_movimentacoes
+                       WHERE tipo IN ('venda', 'acao', 'lavagem', 'ajuste_mais')
+                         AND tipo_dinheiro = 'sujo'
+                         AND data >= $1 AND data <= $2""",
+                    inicio_dt, fim_dt
+                ) or 0
+                entradas_limpo = await conn.fetchval(
+                    """SELECT COALESCE(SUM(valor), 0) FROM caixa_movimentacoes
+                       WHERE tipo IN ('venda', 'acao', 'lavagem', 'ajuste_mais', 'parcela_receber', 'lavagem_limpeza')
+                         AND tipo_dinheiro = 'limpo'
+                         AND data >= $1 AND data <= $2""",
+                    inicio_dt, fim_dt
+                ) or 0
+                saidas_sujo = await conn.fetchval(
+                    """SELECT COALESCE(SUM(valor), 0) FROM caixa_movimentacoes
+                       WHERE tipo IN ('compra', 'ajuste_menos', 'parcela_pagar')
+                         AND tipo_dinheiro = 'sujo'
+                         AND data >= $1 AND data <= $2""",
+                    inicio_dt, fim_dt
+                ) or 0
+                saidas_limpo = await conn.fetchval(
+                    """SELECT COALESCE(SUM(valor), 0) FROM caixa_movimentacoes
+                       WHERE tipo IN ('compra', 'ajuste_menos', 'parcela_pagar')
+                         AND tipo_dinheiro = 'limpo'
+                         AND data >= $1 AND data <= $2""",
+                    inicio_dt, fim_dt
+                ) or 0
+
+                saldo_sujo_periodo = entradas_sujo - saidas_sujo
+                saldo_limpo_periodo = entradas_limpo - saidas_limpo
+
+                movs = await conn.fetch(
+                    """SELECT * FROM caixa_movimentacoes
+                       WHERE data >= $1 AND data <= $2
+                       ORDER BY data DESC LIMIT 20""",
                     inicio_dt, fim_dt
                 )
-                saidas = await conn.fetchval(
-                    """SELECT COALESCE(SUM(valor), 0) FROM caixa_movimentacoes 
-                       WHERE tipo IN ('compra', 'ajuste_menos', 'parcela_pagar') 
-                       AND data >= $1 AND data <= $2""",
-                    inicio_dt, fim_dt
-                )
+
                 total_movs = await conn.fetchval(
                     "SELECT COUNT(*) FROM caixa_movimentacoes WHERE data >= $1 AND data <= $2",
                     inicio_dt, fim_dt
-                )
+                ) or 0
 
-                # Movimentações detalhadas
-                movs = await conn.fetch(
-                    "SELECT * FROM caixa_movimentacoes WHERE data >= $1 AND data <= $2 ORDER BY data DESC LIMIT 20",
+                caixa_atual = await conn.fetchrow(
+                    "SELECT valor_sujo, valor_limpo, valor_atual FROM caixa WHERE id = 1"
+                )
+                sujo_atual = caixa_atual["valor_sujo"] if caixa_atual else 0
+                limpo_atual = caixa_atual["valor_limpo"] if caixa_atual else 0
+                total_atual = caixa_atual["valor_atual"] if caixa_atual else 0
+
+                por_tipo = await conn.fetch(
+                    """SELECT tipo, tipo_dinheiro, COUNT(*) AS qtd, SUM(valor) AS total
+                       FROM caixa_movimentacoes
+                       WHERE data >= $1 AND data <= $2
+                       GROUP BY tipo, tipo_dinheiro
+                       ORDER BY total DESC""",
                     inicio_dt, fim_dt
                 )
 
-            saldo = entradas - saidas
-
             embed = discord.Embed(
                 title="📈 ── RELATÓRIO DO CAIXA ── 📈",
-                description=f"📅 **Período:** {self.data_inicio.value} a {self.data_fim.value}",
+                description=(
+                    f"📅 **Período:** {self.data_inicio.value} a {self.data_fim.value}\n"
+                    f"📊 **Total de movimentações:** {total_movs}"
+                ),
                 color=0x3498DB,
                 timestamp=agora()
             )
@@ -10669,49 +10914,99 @@ class RelatorioCaixaModal(discord.ui.Modal, title="📈 Relatório do Caixa"):
                 icon_url=bot.user.display_avatar.url if bot.user else None
             )
 
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
             embed.add_field(
-                name="➕ ENTRADAS",
-                value=f"```yaml\n{formatar_dinheiro(entradas)}\n```",
-                inline=True
+                name="🟥 MOVIMENTAÇÕES — DINHEIRO SUJO",
+                value=(
+                    f"```yaml\n"
+                    f"➕ Entradas: {formatar_dinheiro(entradas_sujo)}\n"
+                    f"➖ Saídas:   {formatar_dinheiro(saidas_sujo)}\n"
+                    f"📊 Saldo do período: {formatar_dinheiro(saldo_sujo_periodo)}\n"
+                    f"```"
+                ),
+                inline=False
             )
+
             embed.add_field(
-                name="➖ SAÍDAS",
-                value=f"```yaml\n{formatar_dinheiro(saidas)}\n```",
-                inline=True
-            )
-            embed.add_field(
-                name="💰 SALDO",
-                value=f"```yaml\n{formatar_dinheiro(saldo)}\n```",
-                inline=True
+                name="🟩 MOVIMENTAÇÕES — DINHEIRO LIMPO",
+                value=(
+                    f"```yaml\n"
+                    f"➕ Entradas: {formatar_dinheiro(entradas_limpo)}\n"
+                    f"➖ Saídas:   {formatar_dinheiro(saidas_limpo)}\n"
+                    f"📊 Saldo do período: {formatar_dinheiro(saldo_limpo_periodo)}\n"
+                    f"```"
+                ),
+                inline=False
             )
 
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
-            # Lista movs
+            if por_tipo:
+                texto_por_tipo = ""
+                for item in por_tipo[:15]:
+                    tipo = item["tipo"]
+                    tipo_dinheiro = item["tipo_dinheiro"] or "sujo"
+                    tag = "🟥" if tipo_dinheiro == "sujo" else "🟩"
+                    qtd = item["qtd"]
+                    total = item["total"] or 0
+                    texto_por_tipo += f"{tag} **{tipo}** — {qtd}x • {formatar_dinheiro(total)}\n"
+
+                embed.add_field(
+                    name="📋 RESUMO POR TIPO",
+                    value=texto_por_tipo[:1024],
+                    inline=False
+                )
+                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
             if movs:
-                texto = ""
+                texto_movs = ""
                 for mov in movs[:15]:
                     tipo = mov["tipo"]
+                    tipo_dinheiro = mov.get("tipo_dinheiro", "sujo")
                     valor = mov["valor"]
                     motivo = mov["motivo"] or "Sem motivo"
                     data = mov["data"]
                     if data.tzinfo is None:
                         data = data.replace(tzinfo=BRASIL)
 
-                    if tipo in ("ajuste_mais", "venda", "lavagem", "parcela_receber"):
+                    if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber", "lavagem_limpeza"):
                         emoji_tipo = "➕"
                         sinal = "+"
                     else:
                         emoji_tipo = "➖"
                         sinal = "-"
 
-                    texto += f"{emoji_tipo} {data.strftime('%d/%m')} • {sinal}{formatar_dinheiro(valor)} • {motivo[:40]}\n"
+                    tag = "🟥" if tipo_dinheiro == "sujo" else "🟩"
 
-                embed.add_field(name="📋 MOVIMENTAÇÕES", value=f"```yaml\n{texto}\n```", inline=False)
+                    linha = f"{emoji_tipo} {tag} {data.strftime('%d/%m %H:%M')} • {sinal}{formatar_dinheiro(valor)}\n   📝 {motivo[:45]}\n"
+                    if len(texto_movs) + len(linha) > 1000:
+                        embed.add_field(
+                            name="📋 MOVIMENTAÇÕES",
+                            value=f"```yaml\n{texto_movs}\n```",
+                            inline=False
+                        )
+                        texto_movs = ""
+                    texto_movs += linha
+
+                if texto_movs:
+                    embed.add_field(
+                        name="📋 MOVIMENTAÇÕES",
+                        value=f"```yaml\n{texto_movs}\n```",
+                        inline=False
+                    )
+
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
             embed.add_field(
-                name="📊 TOTAL DE MOVIMENTAÇÕES",
-                value=f"```yaml\n{total_movs}\n```",
+                name="💼 SALDO ATUAL (referência)",
+                value=(
+                    f"```yaml\n"
+                    f"🟥 Sujo:  {formatar_dinheiro(sujo_atual)}\n"
+                    f"🟩 Limpo: {formatar_dinheiro(limpo_atual)}\n"
+                    f"💵 Total: {formatar_dinheiro(total_atual)}\n"
+                    f"```"
+                ),
                 inline=False
             )
 
@@ -10725,7 +11020,6 @@ class RelatorioCaixaModal(discord.ui.Modal, title="📈 Relatório do Caixa"):
         except Exception as e:
             logger.error(f"❌ Erro no relatório do caixa: {e}")
             await interaction.followup.send(f"❌ Erro: `{str(e)[:150]}`", ephemeral=True)
-
 
 # =========================================================
 # VIEW DO CAIXA
@@ -10767,6 +11061,38 @@ class CaixaView(discord.ui.View):
             return
         await interaction.response.send_modal(AdicionarLavadoModal())
 
+    @discord.ui.button(label="🧼 Lavar Dinheiro", style=discord.ButtonStyle.success, custom_id="caixa_lavar", emoji="🧼", row=0)
+    async def lavar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            total_membros = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor_retorno), 0) FROM lavagem_ativa"
+            ) or 0
+            caixa_row = await conn.fetchrow("SELECT valor_sujo FROM caixa WHERE id = 1")
+            sujo_atual = caixa_row["valor_sujo"] if caixa_row else 0
+
+        embed = discord.Embed(
+            title="🧼 ── CONFIRMAR LAVAGEM ── 🧼",
+            description=(
+                f"```yaml\n"
+                f"🟥 Sujo no caixa: {formatar_dinheiro(sujo_atual)}\n"
+                f"👥 A devolver aos membros: {formatar_dinheiro(total_membros)}\n"
+                f"🟩 Vai virar limpo: {formatar_dinheiro(max(0, sujo_atual - total_membros))}\n"
+                f"```\n\n"
+                f"⚠️ **Isso vai zerar o saldo sujo e converter o restante em limpo.**"
+            ),
+            color=0xF1C40F,
+            timestamp=agora()
+        )
+        await interaction.response.send_modal(LavarDinheiroModal())
+
     @discord.ui.button(label="📊 Histórico Completo", style=discord.ButtonStyle.secondary, custom_id="caixa_historico", emoji="📊", row=1)
     async def historico(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
@@ -10801,14 +11127,17 @@ class CaixaView(discord.ui.View):
             if data.tzinfo is None:
                 data = data.replace(tzinfo=BRASIL)
 
-            if tipo in ("ajuste_mais", "venda", "lavagem", "parcela_receber"):
+            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber"):
                 emoji_tipo = "➕"
                 sinal = "+"
             else:
                 emoji_tipo = "➖"
                 sinal = "-"
 
-            linha = f"{emoji_tipo} {data.strftime('%d/%m %H:%M')} • {sinal}{formatar_dinheiro(valor)}\n   📝 {motivo[:50]}\n"
+            tipo_dinheiro = mov.get("tipo_dinheiro", "sujo")
+            tag = "🟥" if tipo_dinheiro == "sujo" else "🟩"
+
+            linha = f"{emoji_tipo} {tag} {data.strftime('%d/%m %H:%M')} • {sinal}{formatar_dinheiro(valor)}\n   📝 {motivo[:50]}\n"
             if len(texto) + len(linha) > 1000:
                 embed.add_field(name="📋 MOVIMENTAÇÕES", value=f"```yaml\n{texto}\n```", inline=False)
                 texto = ""
@@ -10833,6 +11162,7 @@ class CaixaView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_caixa()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+
 
 
 # =========================================================
@@ -12012,32 +12342,64 @@ async def editar_polvora_meta(user_id, novo_valor):
 
 async def criar_divida_polvora(user_id, valor_original, semana_fechamento):
     """
-    Cria uma dívida de pólvora para o usuário.
-    valor_divida = valor_original (NÃO dobra)
+    Cria ou ACRESCENTA uma dívida de PÓLVORA para o usuário.
+
+    Regra:
+    - Se NÃO tem dívida ativa de pólvora → cria com valor_original
+    - Se JÁ tem dívida ativa → SOMA +valor_original (cresce a cada semana não paga)
+    - Nunca cria duas dívidas ativas do mesmo tipo — só acumula na existente
     """
     pool = await get_pool()
     if not pool:
         return False
     try:
         async with pool.acquire() as conn:
-            # Evita duplicar dívida na mesma semana
-            existente = await conn.fetchval(
-                "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND semana_fechamento = $2 AND pago = false AND tipo = 'polvora'",
+            duplicada_mesma_semana = await conn.fetchval(
+                """SELECT 1 FROM metas_dividas
+                   WHERE user_id = $1 AND semana_fechamento = $2
+                     AND pago = false AND tipo = 'polvora'""",
                 str(user_id), semana_fechamento
             )
-            if existente:
+            if duplicada_mesma_semana:
+                logger.info(
+                    f"ℹ️ Dívida de pólvora de {user_id} já foi criada/crescida "
+                    f"na semana {semana_fechamento}. Nada a fazer."
+                )
                 return False
 
-            await conn.execute("""
-                INSERT INTO metas_dividas 
-                (user_id, valor_divida, valor_original, semana_fechamento, tipo) 
-                VALUES ($1, $2, $3, $4, 'polvora')
-            """, str(user_id), valor_original, valor_original, semana_fechamento)
+            existente = await conn.fetchrow(
+                """SELECT id, valor_divida, valor_original FROM metas_dividas
+                   WHERE user_id = $1 AND pago = false AND tipo = 'polvora'
+                   ORDER BY data_criacao ASC LIMIT 1""",
+                str(user_id)
+            )
+
+            if existente:
+                nova_divida = (existente["valor_divida"] or 0) + valor_original
+                novo_original = (existente["valor_original"] or 0) + valor_original
+                await conn.execute(
+                    """UPDATE metas_dividas
+                       SET valor_divida = $1, valor_original = $2
+                       WHERE id = $3""",
+                    nova_divida, novo_original, existente["id"]
+                )
+                logger.info(
+                    f"📈 Dívida de pólvora de {user_id} cresceu: "
+                    f"{nova_divida} (antes: {existente['valor_divida']})"
+                )
+                return True
+
+            await conn.execute(
+                """INSERT INTO metas_dividas
+                   (user_id, valor_divida, valor_original, semana_fechamento, tipo)
+                   VALUES ($1, $2, $3, $4, 'polvora')""",
+                str(user_id), valor_original, valor_original, semana_fechamento
+            )
+            logger.info(f"🆕 Dívida de pólvora criada para {user_id}: {valor_original}")
             return True
     except Exception as e:
-        logger.error(f"❌ Erro ao criar dívida de pólvora: {e}")
+        logger.error(f"❌ Erro ao criar/crescer dívida de pólvora: {e}")
         return False
-
 
 async def buscar_dividas_usuario(user_id):
     """
@@ -12882,8 +13244,8 @@ async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, mo
     Envia aviso em MAIÚSCULO e VERMELHO no canal de meta do membro.
 
     motivo:
-    - "NAO_BATEU": não bateu a meta → dívida
-    - "NAO_BATEU_DOBRADA": não bateu dívida prolongada
+    - "NAO_BATEU": não bateu a meta → dívida (cresce a cada semana)
+    - "NAO_BATEU_DOBRADA": não bateu dívida prolongada (legado, não usado mais)
 
     tipo: "dinheiro" ou "polvora"
     """
@@ -12901,7 +13263,6 @@ async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, mo
         member = guild.get_member(int(user_id)) if guild else None
         nome = member.display_name if member else f"ID: {user_id}"
 
-        # Formata os valores conforme o tipo
         if tipo == "polvora":
             valor_original_str = f"{fmt_num(valor_original)} PÓLVORAS"
             valor_divida_str = f"{fmt_num(valor_divida)} PÓLVORAS"
@@ -12922,12 +13283,12 @@ async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, mo
                     f"```\n"
                     f"**{nome.upper()}**\n\n"
                     f"```yaml\n"
-                    f"{emoji_tipo} META ORIGINAL: {valor_original_str}\n"
-                    f"{emoji_tipo} SUA DÍVIDA AGORA: {valor_divida_str}\n"
+                    f"{emoji_tipo} META DA SEMANA: {valor_original_str}\n"
+                    f"{emoji_tipo} SUA DÍVIDA ACUMULADA: {valor_divida_str}\n"
                     f"```\n\n"
                     f"🔴 **ATENÇÃO:**\n"
                     f"```diff\n"
-                    f"- VOCÊ FICOU DEVENDO ESSA META!\n"
+                    f"- A DÍVIDA CRESCE A CADA SEMANA NÃO PAGA!\n"
                     f"- PAGUE PARA LIMPAR SEU NOME!\n"
                     f"- SE NÃO PAGAR, PODE PERDER O SET!\n"
                     f"```\n\n"
@@ -12947,7 +13308,7 @@ async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, mo
                 icon_url=bot.user.display_avatar.url if bot.user else None
             )
 
-        else:  # NAO_BATEU_DOBRADA
+        else:
             embed = discord.Embed(
                 title="💀 VOCÊ PERDEU O SET! 💀",
                 description=(
@@ -14915,14 +15276,14 @@ async def fechar_todas_metas(data_inicio, data_fim):
     """
     Fecha todas as metas da semana.
 
-    FLUXO NOVO:
+    FLUXO:
     1. Pega o tipo da semana atual (dinheiro ou pólvora)
     2. Calcula as horas dos mecânicos (ANTES DE ZERAR)
     3. Verifica dívidas antigas (quita se pagou)
     4. Para cada membro:
-       - Se semana = DINHEIRO: verifica se bateu dinheiro
+       - Se semana = DINHEIRO: verifica se bateu dinheiro (soldado = dinheiro_acoes)
        - Se semana = PÓLVORA: verifica se bateu pólvora
-       - Se não bateu: cria dívida do tipo + envia aviso
+       - Se não bateu: cria/cresce a dívida do tipo + envia aviso
     5. Se semana foi de PÓLVORA: gera relatório de bonificação
     6. Salva histórico
     7. Retorna o relatório + horas_mecanicos
@@ -14944,7 +15305,6 @@ async def fechar_todas_metas(data_inicio, data_fim):
             data_fechamento = agora_db()
             semana_str = f"{data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
 
-            # Pega o tipo da semana
             tipo_semana = await buscar_tipo_meta_semana()
             logger.info(f"📊 Fechando metas — Tipo: {tipo_semana.upper()}")
 
@@ -14954,7 +15314,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
             salvos = 0
 
             # =========================================================
-            # NOVO: CALCULAR HORAS DOS MECÂNICOS ANTES DE ZERAR
+            # CALCULAR HORAS DOS MECÂNICOS ANTES DE ZERAR
             # =========================================================
             horas_mecanicos = {}
             if guild:
@@ -15027,21 +15387,31 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 acao = meta.get("acao") or "N/A"
 
                 meta_dinheiro = await definir_valor_meta_por_id(user_id)
-                meta_polvora = await definir_valor_meta_por_polvora(user_id)
+                meta_polvora = await definir_valor_meta_polvora(user_id)
 
                 if tipo_semana == "polvora":
                     if meta_polvora > 0 and polvora < meta_polvora:
-                        ja_tem = await conn.fetchval(
-                            "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'polvora'",
-                            user_id
-                        )
-                        if not ja_tem:
-                            await criar_divida_polvora(user_id, meta_polvora, semana_str)
-                            logger.info(f"📢 Dívida de pólvora criada para {user_id}: {meta_polvora}")
-                            await enviar_aviso_meta_nao_batida(
-                                user_id, meta_polvora, meta_polvora,
-                                motivo="NAO_BATEU", tipo="polvora"
+                        criou_ou_cresceu = await criar_divida_polvora(user_id, meta_polvora, semana_str)
+
+                        if criou_ou_cresceu:
+                            divida_polvora_atual = await conn.fetchrow(
+                                """SELECT valor_original, valor_divida FROM metas_dividas
+                                   WHERE user_id = $1 AND pago = false AND tipo = 'polvora'
+                                   ORDER BY data_criacao ASC LIMIT 1""",
+                                user_id
                             )
+                            if divida_polvora_atual:
+                                logger.info(
+                                    f"📢 Aviso de dívida de pólvora para {user_id} "
+                                    f"(dívida atual: {divida_polvora_atual['valor_divida']})"
+                                )
+                                await enviar_aviso_meta_nao_batida(
+                                    user_id,
+                                    divida_polvora_atual["valor_original"],
+                                    divida_polvora_atual["valor_divida"],
+                                    motivo="NAO_BATEU",
+                                    tipo="polvora"
+                                )
 
                     if polvora_total_semana > 5000:
                         member_nome = member.display_name if member else str(user_id)
@@ -15053,24 +15423,39 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         })
 
                 else:
-                    if meta_dinheiro > 0 and dinheiro < meta_dinheiro:
-                        ja_tem = await conn.fetchval(
-                            "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro'",
-                            user_id
-                        )
-                        if not ja_tem:
-                            await criar_divida_meta(user_id, meta_dinheiro, semana_str)
-                            logger.info(f"📢 Dívida de dinheiro criada para {user_id}: {meta_dinheiro * 2}")
-                            await enviar_aviso_meta_nao_batida(
-                                user_id, meta_dinheiro, meta_dinheiro * 2,
-                                motivo="NAO_BATEU", tipo="dinheiro"
+                    is_soldado_member = False
+                    if member:
+                        is_soldado_member = CARGO_SOLDADO_ID in [r.id for r in member.roles]
+
+                    valor_real_meta = dinheiro_acoes if is_soldado_member else dinheiro
+
+                    if meta_dinheiro > 0 and valor_real_meta < meta_dinheiro:
+                        criou_ou_cresceu = await criar_divida_meta(user_id, meta_dinheiro, semana_str)
+
+                        if criou_ou_cresceu:
+                            divida_atual = await conn.fetchrow(
+                                """SELECT valor_original, valor_divida FROM metas_dividas
+                                   WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro'
+                                   ORDER BY data_criacao ASC LIMIT 1""",
+                                user_id
                             )
+                            if divida_atual:
+                                logger.info(
+                                    f"📢 Aviso de dívida de dinheiro para {user_id} "
+                                    f"(dívida atual: R$ {divida_atual['valor_divida']})"
+                                )
+                                await enviar_aviso_meta_nao_batida(
+                                    user_id,
+                                    divida_atual["valor_original"],
+                                    divida_atual["valor_divida"],
+                                    motivo="NAO_BATEU",
+                                    tipo="dinheiro"
+                                )
 
                 # =========================================================
                 # SALVA NO HISTÓRICO (agora com horas)
                 # =========================================================
                 try:
-                    # Pega as horas salvas (se for mecânico)
                     horas_salvas = horas_mecanicos.get(str(user_id), 0)
 
                     await conn.execute("""
@@ -15774,19 +16159,6 @@ async def verificar_avisos_meta():
     except Exception as e:
         logger.error(f"❌ Erro ao verificar avisos de meta: {e}")
 
-@tasks.loop(hours=1)
-async def fechar_metas_semanais():
-    agora_br = agora()
-    if agora_br.weekday() == 6 and agora_br.hour == 23 and agora_br.minute == 59:
-        logger.info("🔄 Fechando metas automaticamente...")
-        try:
-            data_inicio, data_fim = calcular_semana_anterior()
-            relatorio, membros_sem_meta = await fechar_todas_metas(data_inicio, data_fim)
-            if relatorio:
-                logger.info(f"✅ {len(relatorio)} metas fechadas automaticamente")
-                await zerar_exibicao_metas()
-        except Exception as e:
-            logger.error(f"❌ Erro ao fechar metas automaticamente: {e}")
 
 # =========================================================
 # ==================== PARTE 15: SISTEMA DE GRUPOS ========
@@ -19368,9 +19740,12 @@ async def cmd_listar_dividas(ctx):
 @bot.command(name="quitar_divida")
 @commands.has_permissions(administrator=True)
 async def cmd_quitar_divida(ctx, member: discord.Member):
-    """Quita manualmente a dívida de um membro."""
-    divida = await buscar_divida_ativa(member.id)
-    if not divida:
+    """Quita manualmente TODAS as dívidas de um membro (dinheiro + pólvora)."""
+    dividas = await buscar_dividas_usuario(member.id)
+    total_dinheiro = dividas["dinheiro"]
+    total_polvora = dividas["polvora"]
+
+    if total_dinheiro == 0 and total_polvora == 0:
         await ctx.send(f"✅ {member.mention} **não tem dívida ativa!**")
         return
 
@@ -19378,21 +19753,16 @@ async def cmd_quitar_divida(ctx, member: discord.Member):
     await atualizar_embed_meta(member.id)
 
     embed = discord.Embed(
-        title="✅ DÍVIDA QUITADA MANUALMENTE",
+        title="✅ DÍVIDAS QUITADAS MANUALMENTE",
         description=f"👤 {member.mention}",
         color=0x2ECC71,
         timestamp=agora()
     )
-    embed.add_field(
-        name="💰 Valor Quitado",
-        value=formatar_dinheiro(divida["valor_divida"]),
-        inline=True
-    )
-    embed.add_field(
-        name="👤 Por",
-        value=ctx.author.mention,
-        inline=True
-    )
+    if total_dinheiro > 0:
+        embed.add_field(name="💰 Dinheiro quitado", value=formatar_dinheiro(total_dinheiro), inline=True)
+    if total_polvora > 0:
+        embed.add_field(name="🧨 Pólvora quitada", value=f"{fmt_num(total_polvora)} unidades", inline=True)
+    embed.add_field(name="👤 Por", value=ctx.author.mention, inline=False)
     embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
     await ctx.send(embed=embed)
 
