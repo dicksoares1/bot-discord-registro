@@ -369,9 +369,14 @@ async def inicializar_tabelas(pool):
                 data_fim TIMESTAMP,
                 data_fechamento TIMESTAMP,
                 polvora BIGINT DEFAULT 0,
-                tipo_meta VARCHAR(20) DEFAULT 'dinheiro'
+                tipo_meta VARCHAR(20) DEFAULT 'dinheiro',
+                horas_segundos BIGINT DEFAULT 0
             )
         """)
+        await conn.execute("""
+            ALTER TABLE metas_historico ADD COLUMN IF NOT EXISTS horas_segundos BIGINT DEFAULT 0
+        """)
+        
         await conn.execute("""
             ALTER TABLE metas_historico ADD COLUMN IF NOT EXISTS polvora BIGINT DEFAULT 0
         """)
@@ -15022,16 +15027,19 @@ async def fechar_todas_metas(data_inicio, data_fim):
                             )
 
                 # =========================================================
-                # SALVA NO HISTÓRICO
+                # SALVA NO HISTÓRICO (agora com horas)
                 # =========================================================
                 try:
+                    # Pega as horas salvas (se for mecânico)
+                    horas_salvas = horas_mecanicos.get(str(user_id), 0)
+
                     await conn.execute("""
                         INSERT INTO metas_historico 
-                        (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento, polvora, tipo_meta) 
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento, polvora, tipo_meta, horas_segundos) 
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     """, user_id, min(dinheiro, meta_dinheiro), acao, dinheiro_acoes,
                         data_inicio_naive, data_fim_naive, data_fechamento,
-                        polvora, tipo_semana)
+                        polvora, tipo_semana, horas_salvas)
                     salvos += 1
                 except Exception as e:
                     logger.error(f"❌ Erro ao salvar meta de {user_id} no histórico: {e}")
@@ -15199,8 +15207,6 @@ async def zerar_exibicao_metas():
 async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, historico, titulo_extra="", horas_mecanicos=None):
     """
     Gera o relatório de metas em formato .txt organizado.
-    - titulo_extra: texto extra pro título (ex: "RELATÓRIO DE METAS FECHADAS")
-    - horas_mecanicos: dict com {user_id: segundos} pra usar as horas capturadas antes de zerar
     """
     try:
         if not historico:
@@ -15284,13 +15290,23 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             tipo_meta = item.get("tipo_meta", "dinheiro")
             item_dict["tipo_meta"] = tipo_meta
 
-            # Verifica se cumpriu
-            if tipo_meta == "polvora":
+            # =========================================================
+            # LÓGICA CORRETA DE "CUMPRIU"
+            # =========================================================
+            if meta_limite_dinheiro == 0 and meta_limite_polvora == 0:
+                cumpriu = True # Se for isento, não precisa cumprir
+            elif tipo_meta == "polvora":
                 cumpriu = (item.get("polvora", 0) >= meta_limite_polvora) if meta_limite_polvora > 0 else True
             else:
                 cumpriu = (item["dinheiro"] >= meta_limite_dinheiro) if meta_limite_dinheiro > 0 else True
 
             item_dict["cumpriu"] = cumpriu
+            
+            # Pega a hora salva no banco (se for mecânico)
+            if item_dict["is_mecanico"]:
+                item_dict["horas_salvas"] = item.get("horas_segundos", 0)
+            else:
+                item_dict["horas_salvas"] = 0
 
             cargo_encontrado = False
             for grupo_key, grupo_data in grupos.items():
@@ -15369,6 +15385,8 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                     linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item['dinheiro'])}")
                     linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
                     linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
+                    if item.get("is_mecanico"):
+                        linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
                     linhas.append(f"   📌 Status: 🟡 ISENTO (não paga meta)")
                     linhas.append("")
             else:
@@ -15379,23 +15397,14 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                 if pagaram:
                     linhas.append("✅ QUEM PAGOU:")
                     linhas.append("")
-                    # Ordenar por dinheiro (maior primeiro)
                     pagaram_ordenados = sorted(pagaram, key=lambda x: x["dinheiro"], reverse=True)
                     for idx, item in enumerate(pagaram_ordenados, 1):
                         linhas.append(f"{idx}. {item['nome']}")
                         linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item['dinheiro'])}")
                         linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
                         linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
-                        # Horas do mecânico
                         if item.get("is_mecanico"):
-                            segundos = 0
-                            if horas_mecanicos and str(item["user_id"]) in horas_mecanicos:
-                                segundos = horas_mecanicos[str(item["user_id"])]
-                            elif horas_mecanicos and item["user_id"] in horas_mecanicos:
-                                segundos = horas_mecanicos[item["user_id"]]
-                            else:
-                                segundos = await calcular_horas_semana(item["user_id"])
-                            linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(segundos)}")
+                            linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
                         linhas.append(f"   📌 Status: ✅ CUMPRIU A META")
                         linhas.append("")
 
@@ -15408,16 +15417,8 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                         linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item['dinheiro'])}")
                         linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
                         linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
-                        # Horas do mecânico
                         if item.get("is_mecanico"):
-                            segundos = 0
-                            if horas_mecanicos and str(item["user_id"]) in horas_mecanicos:
-                                segundos = horas_mecanicos[str(item["user_id"])]
-                            elif horas_mecanicos and item["user_id"] in horas_mecanicos:
-                                segundos = horas_mecanicos[item["user_id"]]
-                            else:
-                                segundos = await calcular_horas_semana(item["user_id"])
-                            linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(segundos)}")
+                            linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
                         linhas.append(f"   📌 Status: ❌ NÃO CUMPRIU A META")
                         linhas.append("")
 
