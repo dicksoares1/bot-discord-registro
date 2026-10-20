@@ -13997,6 +13997,25 @@ async def enviar_painel_relatorio_metas():
     view.add_item(VerDividasButton())
     view.add_item(ResetarHorasSemanaButton())  # Botão de Resetar Horas
     await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495695092999279, embed, view)
+    # =========================================================
+    # COMANDO: LIMPAR ERRO DO PAINEL DE METAS
+    # =========================================================
+    @bot.command(name="limpar_erro_painel")
+    @commands.has_permissions(administrator=True)    
+    async def cmd_limpar_erro_painel(ctx):
+        """Remove o registro do painel quebrado do banco de dados para parar o erro."""
+        pool = await get_pool()
+        if not pool:
+            await ctx.send("❌ Banco indisponível.")
+            return
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM paineis WHERE nome = 'painel_relatorio_metas'")
+                await conn.execute("DELETE FROM paineis_ultimos WHERE nome = 'painel_relatorio_metas'")
+            await ctx.send("✅ **Registro do painel removido do banco!** O erro vai parar de aparecer. Para recriar o painel, use `!atualizar_paineis_metas`.")
+            logger.info("🗑️ Registro do painel_relatorio_metas deletado via comando.")
+        except Exception as e:
+            await ctx.send(f"❌ Erro: {e}")
 
 class RelatorioMetasButton(discord.ui.Button):
     def __init__(self):
@@ -17751,15 +17770,24 @@ async def mover_painel_para_final(nome, canal, mensagem_id_antiga):
     except Exception as e:
         logger.error(f"❌ Erro ao mover painel {nome}: {e}")
 
+# Variável global para não spammar o log
+avisos_painel = set()
+
 async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
+    global avisos_painel
     canal = bot.get_channel(canal_id)
+    
     if not canal:
-        logger.error(f"❌ Canal não encontrado para painel: {nome}")
+        if nome not in avisos_painel:
+            logger.error(f"❌ Canal não encontrado para painel: {nome} (ID: {canal_id})")
+            avisos_painel.add(nome)
         return
+        
     pool = await get_pool()
     if not pool:
         logger.error(f"❌ Banco de dados não disponível para painel: {nome}")
         return
+        
     try:
         # =========================================================
         # BUSCAR PAINEL EXISTENTE
@@ -17781,7 +17809,6 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
         # =========================================================
         if msg:
             await msg.edit(embed=embed, view=view)
-            # Registra como painel "fixo no final"
             await registrar_painel_ultimo(nome, canal_id, msg.id)
             return
 
@@ -17795,7 +17822,6 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
                     "INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ($1,$2,$3) ON CONFLICT (nome) DO UPDATE SET canal_id=$2, mensagem_id=$3",
                     nome, str(canal_id), str(msg.id)
                 )
-            # Registra como painel "fixo no final"
             await registrar_painel_ultimo(nome, canal_id, msg.id)
     except Exception as e:
         logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
