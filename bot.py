@@ -5170,7 +5170,6 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
                     return
 
             await conn.execute(
-                            await conn.execute(
                 "UPDATE acoes_semana SET valor=$1, resultado='ganhou' WHERE id=$2",
                 valor_total, self.acao_id
             )
@@ -5189,8 +5188,6 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
                 logger.info(f"🟥 Caixa (sujo): +{formatar_dinheiro(valor_total)} (Ação ganha {acao['tipo']})")
             except Exception as e:
                 logger.error(f"⚠️ Erro ao somar ação no caixa: {e}")
-                valor_total, self.acao_id
-            )
 
             participantes_botao = await conn.fetch("SELECT user_id FROM participantes_acoes WHERE acao_id=$1", self.acao_id)
             participantes_manuais = await conn.fetch("SELECT nome FROM acoes_participantes_manuais WHERE acao_id=$1", self.acao_id)
@@ -5246,7 +5243,7 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         await interaction.followup.send(
             f"✅ **Ação registrada como GANHA!**\n"
             f"💰 Valor: {formatar_dinheiro(valor_total)}\n"
-            f"📌 **Valor vai para o caixa da facção.**",
+            f"📌 **Valor vai para o caixa da facção (dinheiro sujo).**",
             ephemeral=True
         )
 
@@ -15280,12 +15277,11 @@ async def fechar_todas_metas(data_inicio, data_fim):
     1. Pega o tipo da semana atual (dinheiro ou pólvora)
     2. Calcula as horas dos mecânicos (ANTES DE ZERAR)
     3. Verifica dívidas antigas (quita se pagou)
-    4. Para cada membro:
-       - Se semana = DINHEIRO: verifica se bateu dinheiro (soldado = dinheiro_acoes)
-       - Se semana = PÓLVORA: verifica se bateu pólvora
-       - Se não bateu: cria/cresce a dívida do tipo + envia aviso
+    4. Para CADA membro com meta:
+       - Isento (Gerentes, 01/02/03, SM): APARECE no relatório, NÃO gera dívida
+       - Obrigado: verifica se bateu. Se não, cria/cresce dívida + envia aviso
     5. Se semana foi de PÓLVORA: gera relatório de bonificação
-    6. Salva histórico
+    6. Salva histórico de TODOS (inclusive isentos)
     7. Retorna o relatório + horas_mecanicos
     """
     pool = await get_pool()
@@ -15371,12 +15367,14 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         logger.info(f"✅ {user_id} quitou dívida de dinheiro ({valor_divida})")
 
             # =========================================================
-            # VERIFICA CADA MEMBRO
+            # VERIFICA CADA MEMBRO (INCLUSIVE ISENTOS)
             # =========================================================
             for meta in metas:
                 user_id = meta["user_id"]
                 member = guild.get_member(int(user_id)) if guild else None
                 status = membro_deve_ter_meta(member) if member else None
+
+                # Se não tem cargo nenhum relevante, ignora
                 if status is None:
                     continue
 
@@ -15389,71 +15387,89 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 meta_dinheiro = await definir_valor_meta_por_id(user_id)
                 meta_polvora = await definir_valor_meta_polvora(user_id)
 
-                if tipo_semana == "polvora":
-                    if meta_polvora > 0 and polvora < meta_polvora:
-                        criou_ou_cresceu = await criar_divida_polvora(user_id, meta_polvora, semana_str)
-
-                        if criou_ou_cresceu:
-                            divida_polvora_atual = await conn.fetchrow(
-                                """SELECT valor_original, valor_divida FROM metas_dividas
-                                   WHERE user_id = $1 AND pago = false AND tipo = 'polvora'
-                                   ORDER BY data_criacao ASC LIMIT 1""",
-                                user_id
-                            )
-                            if divida_polvora_atual:
-                                logger.info(
-                                    f"📢 Aviso de dívida de pólvora para {user_id} "
-                                    f"(dívida atual: {divida_polvora_atual['valor_divida']})"
-                                )
-                                await enviar_aviso_meta_nao_batida(
-                                    user_id,
-                                    divida_polvora_atual["valor_original"],
-                                    divida_polvora_atual["valor_divida"],
-                                    motivo="NAO_BATEU",
-                                    tipo="polvora"
-                                )
-
-                    if polvora_total_semana > 5000:
-                        member_nome = member.display_name if member else str(user_id)
-                        membros_com_bonificacao.append({
-                            "user_id": user_id,
-                            "nome": member_nome,
-                            "total": polvora_total_semana,
-                            "valor": polvora_total_semana * 80
-                        })
-
-                else:
-                    is_soldado_member = False
-                    if member:
-                        is_soldado_member = CARGO_SOLDADO_ID in [r.id for r in member.roles]
-
-                    valor_real_meta = dinheiro_acoes if is_soldado_member else dinheiro
-
-                    if meta_dinheiro > 0 and valor_real_meta < meta_dinheiro:
-                        criou_ou_cresceu = await criar_divida_meta(user_id, meta_dinheiro, semana_str)
-
-                        if criou_ou_cresceu:
-                            divida_atual = await conn.fetchrow(
-                                """SELECT valor_original, valor_divida FROM metas_dividas
-                                   WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro'
-                                   ORDER BY data_criacao ASC LIMIT 1""",
-                                user_id
-                            )
-                            if divida_atual:
-                                logger.info(
-                                    f"📢 Aviso de dívida de dinheiro para {user_id} "
-                                    f"(dívida atual: R$ {divida_atual['valor_divida']})"
-                                )
-                                await enviar_aviso_meta_nao_batida(
-                                    user_id,
-                                    divida_atual["valor_original"],
-                                    divida_atual["valor_divida"],
-                                    motivo="NAO_BATEU",
-                                    tipo="dinheiro"
-                                )
+                is_isento = (status == "isento")
 
                 # =========================================================
-                # SALVA NO HISTÓRICO (agora com horas)
+                # SE FOR ISENTO: APARECE NO RELATÓRIO, NÃO GERA DÍVIDA
+                # =========================================================
+                if is_isento:
+                    logger.info(
+                        f"🟡 {member.display_name if member else user_id} é isento — "
+                        f"aparece no relatório mas não gera dívida "
+                        f"(dinheiro={dinheiro}, polvora={polvora})"
+                    )
+                else:
+                    # =========================================================
+                    # OBRIGADO: verifica se bateu
+                    # =========================================================
+                    if tipo_semana == "polvora":
+                        if meta_polvora > 0 and polvora < meta_polvora:
+                            criou_ou_cresceu = await criar_divida_polvora(user_id, meta_polvora, semana_str)
+
+                            if criou_ou_cresceu:
+                                divida_polvora_atual = await conn.fetchrow(
+                                    """SELECT valor_original, valor_divida FROM metas_dividas
+                                       WHERE user_id = $1 AND pago = false AND tipo = 'polvora'
+                                       ORDER BY data_criacao ASC LIMIT 1""",
+                                    user_id
+                                )
+                                if divida_polvora_atual:
+                                    logger.info(
+                                        f"📢 Aviso de dívida de pólvora para {user_id} "
+                                        f"(dívida atual: {divida_polvora_atual['valor_divida']})"
+                                    )
+                                    await enviar_aviso_meta_nao_batida(
+                                        user_id,
+                                        divida_polvora_atual["valor_original"],
+                                        divida_polvora_atual["valor_divida"],
+                                        motivo="NAO_BATEU",
+                                        tipo="polvora"
+                                    )
+
+                    else:
+                        is_soldado_member = False
+                        if member:
+                            is_soldado_member = CARGO_SOLDADO_ID in [r.id for r in member.roles]
+
+                        valor_real_meta = dinheiro_acoes if is_soldado_member else dinheiro
+
+                        if meta_dinheiro > 0 and valor_real_meta < meta_dinheiro:
+                            criou_ou_cresceu = await criar_divida_meta(user_id, meta_dinheiro, semana_str)
+
+                            if criou_ou_cresceu:
+                                divida_atual = await conn.fetchrow(
+                                    """SELECT valor_original, valor_divida FROM metas_dividas
+                                       WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro'
+                                       ORDER BY data_criacao ASC LIMIT 1""",
+                                    user_id
+                                )
+                                if divida_atual:
+                                    logger.info(
+                                        f"📢 Aviso de dívida de dinheiro para {user_id} "
+                                        f"(dívida atual: R$ {divida_atual['valor_divida']})"
+                                    )
+                                    await enviar_aviso_meta_nao_batida(
+                                        user_id,
+                                        divida_atual["valor_original"],
+                                        divida_atual["valor_divida"],
+                                        motivo="NAO_BATEU",
+                                        tipo="dinheiro"
+                                    )
+
+                # =========================================================
+                # BONIFICAÇÃO DE PÓLVORA (só vale em semana de pólvora)
+                # =========================================================
+                if tipo_semana == "polvora" and polvora_total_semana > 5000:
+                    member_nome = member.display_name if member else str(user_id)
+                    membros_com_bonificacao.append({
+                        "user_id": user_id,
+                        "nome": member_nome,
+                        "total": polvora_total_semana,
+                        "valor": polvora_total_semana * 80
+                    })
+
+                # =========================================================
+                # SALVA NO HISTÓRICO (TODOS, INCLUSIVE ISENTOS)
                 # =========================================================
                 try:
                     horas_salvas = horas_mecanicos.get(str(user_id), 0)
@@ -15469,7 +15485,9 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 except Exception as e:
                     logger.error(f"❌ Erro ao salvar meta de {user_id} no histórico: {e}")
 
-                # Adiciona ao relatório
+                # =========================================================
+                # ADICIONA AO RELATÓRIO (TODOS, INCLUSIVE ISENTOS)
+                # =========================================================
                 if tipo_semana == "polvora":
                     relatorio.append({
                         "user_id": user_id,
@@ -15479,18 +15497,20 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         "polvora": polvora,
                         "total_meta": polvora,
                         "status": status,
+                        "is_isento": is_isento,
                         "tipo": "polvora",
                         "tipo_meta": tipo_semana
                     })
                 else:
                     relatorio.append({
                         "user_id": user_id,
-                        "dinheiro": min(dinheiro, meta_dinheiro),
+                        "dinheiro": min(dinheiro, meta_dinheiro) if not is_isento else dinheiro,
                         "acao": acao,
                         "dinheiro_acoes": dinheiro_acoes,
                         "polvora": polvora,
-                        "total_meta": min(dinheiro, meta_dinheiro),
+                        "total_meta": min(dinheiro, meta_dinheiro) if not is_isento else dinheiro,
                         "status": status,
+                        "is_isento": is_isento,
                         "tipo": "dinheiro",
                         "tipo_meta": tipo_semana
                     })
@@ -15632,15 +15652,17 @@ async def zerar_exibicao_metas():
 async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, historico, titulo_extra="", horas_mecanicos=None):
     """
     Gera o relatório de metas em formato .txt organizado.
+
+    REGRA:
+    - Isentos (Gerentes, 01/02/03, SM): aparecem em seção PRÓPRIA "ISENTOS"
+      mostrando o valor que contribuíram, NÃO aparecem como "não pagou".
+    - Obrigados: separados em "QUEM PAGOU" e "QUEM NÃO PAGOU".
     """
     try:
         if not historico:
             await interaction.followup.send(f"📭 Nenhuma meta fechada no período **{data_inicio_str}** até **{data_fim_str}**.", ephemeral=True)
             return
 
-        # =========================================================
-        # 1. CALCULAR TOTAIS
-        # =========================================================
         total_dinheiro = sum(r["dinheiro"] for r in historico)
         total_polvora = sum(r.get("polvora", 0) for r in historico)
         total_geral = total_dinheiro
@@ -15648,7 +15670,7 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
         guild = interaction.guild
 
         # =========================================================
-        # 2. AGRUPAR POR CARGO (ORDEM DEFINIDA)
+        # GRUPOS DE CARGOS
         # =========================================================
         grupos = {
             "gerentes": {
@@ -15694,7 +15716,7 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
         }
 
         # =========================================================
-        # 3. DISTRIBUIR ITENS NOS GRUPOS
+        # DISTRIBUIR ITENS NOS GRUPOS
         # =========================================================
         for item in historico:
             user_id = int(item["user_id"])
@@ -15707,27 +15729,32 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             item_dict["user_id"] = user_id
             item_dict["is_mecanico"] = CARGO_MECANICO_ID in [r.id for r in member.roles]
 
-            # Pega a meta limite pra saber se cumpriu
             meta_limite_dinheiro = await definir_valor_meta_por_id(user_id)
             meta_limite_polvora = await definir_valor_meta_polvora(user_id)
 
-            # O tipo de meta usado nessa semana
             tipo_meta = item.get("tipo_meta", "dinheiro")
             item_dict["tipo_meta"] = tipo_meta
 
             # =========================================================
-            # LÓGICA CORRETA DE "CUMPRIU"
+            # ISENÇÃO: quem tem cargo isento → é isento (não cobra)
             # =========================================================
-            if meta_limite_dinheiro == 0 and meta_limite_polvora == 0:
-                cumpriu = True # Se for isento, não precisa cumprir
+            roles_ids = [r.id for r in member.roles]
+            is_isento_por_cargo = any(r in roles_ids for r in CARGOS_ISENTOS_META)
+            item_dict["is_isento"] = is_isento_por_cargo
+
+            # =========================================================
+            # LÓGICA DE "CUMPRIU"
+            # =========================================================
+            if is_isento_por_cargo:
+                # Isento: não precisa cumprir
+                cumpriu = True
             elif tipo_meta == "polvora":
                 cumpriu = (item.get("polvora", 0) >= meta_limite_polvora) if meta_limite_polvora > 0 else True
             else:
                 cumpriu = (item["dinheiro"] >= meta_limite_dinheiro) if meta_limite_dinheiro > 0 else True
 
             item_dict["cumpriu"] = cumpriu
-            
-            # Pega a hora salva no banco (se for mecânico)
+
             if item_dict["is_mecanico"]:
                 item_dict["horas_salvas"] = item.get("horas_segundos", 0)
             else:
@@ -15746,13 +15773,12 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                 grupos["outros"]["itens"].append(item_dict)
 
         # =========================================================
-        # 4. MONTAR O TEXTO .TXT
+        # MONTAR O TEXTO .TXT
         # =========================================================
         linhas = []
         sep_igual = "=" * 80
         sep_traco = "-" * 80
 
-        # Cabeçalho
         titulo_final = titulo_extra if titulo_extra else "RELATÓRIO DE METAS FECHADAS"
         linhas.append(f"📊 {titulo_final}")
         linhas.append(f"📅 Período: {data_inicio_str} até {data_fim_str}")
@@ -15770,7 +15796,7 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
 
         total_isentos = sum(len(g["itens"]) for g in grupos.values() if g.get("is_isento", False))
         total_obrigados = sum(len(g["itens"]) for g in grupos.values() if not g.get("is_isento", False))
-        linhas.append(f"🟡 Isentos: {total_isentos}")
+        linhas.append(f"🟡 Isentos (não cobrados): {total_isentos}")
         linhas.append(f"📊 Obrigados: {total_obrigados}")
         linhas.append("")
 
@@ -15787,7 +15813,7 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             total_grupo_dinheiro = sum(i["dinheiro"] for i in grupo_data["itens"])
             total_grupo_polvora = sum(i.get("polvora", 0) for i in grupo_data["itens"])
             if grupo_data.get("is_isento", False):
-                linhas.append(f"{grupo_data['nome']}: {qtd} membros (ISENTOS)")
+                linhas.append(f"{grupo_data['nome']}: {qtd} membros | Contribuíram: {formatar_dinheiro(total_grupo_dinheiro)} | 🧨 {fmt_num(total_grupo_polvora)} (ISENTOS)")
             else:
                 linhas.append(f"{grupo_data['nome']}: {qtd} membros | {formatar_dinheiro(total_grupo_dinheiro)} | 🧨 {fmt_num(total_grupo_polvora)}")
         linhas.append("")
@@ -15803,7 +15829,7 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             linhas.append("")
 
             if grupo_data.get("is_isento", False):
-                # ISENTOS: ordem alfabética
+                # ISENTOS: ordem alfabética, mostrando contribuição
                 itens_ordenados = sorted(grupo_data["itens"], key=lambda x: x["nome"].lower())
                 for idx, item in enumerate(itens_ordenados, 1):
                     linhas.append(f"{idx}. {item['nome']}")
@@ -15812,7 +15838,7 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                     linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
                     if item.get("is_mecanico"):
                         linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
-                    linhas.append(f"   📌 Status: 🟡 ISENTO (não paga meta)")
+                    linhas.append(f"   📌 Status: 🟡 ISENTO (não paga meta, mas contribuiu)")
                     linhas.append("")
             else:
                 # OBRIGADOS: separar quem pagou e quem não pagou
@@ -15850,14 +15876,13 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             linhas.append(sep_traco)
             linhas.append("")
 
-        # Rodapé
         linhas.append(sep_igual)
         linhas.append("📋 FIM DO RELATÓRIO")
         linhas.append(f"🛡 Vida Rasa 442 • Gerado em {agora().strftime('%d/%m/%Y às %H:%M')}")
         linhas.append(sep_igual)
 
         # =========================================================
-        # 5. CRIAR E ENVIAR O ARQUIVO
+        # CRIAR E ENVIAR O ARQUIVO
         # =========================================================
         texto_final = "\n".join(linhas)
         arquivo = discord.File(
