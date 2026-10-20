@@ -8679,13 +8679,16 @@ class FabricacaoView(discord.ui.View):
             return
         estoque = await carregar_estoque()
         insumos = await carregar_estoque_insumos()
+        polvora_atual = await carregar_estoque_polvora()
+        
         modal = EditarEstoqueCompletoModal()
         modal.pt.placeholder = f"Atual: {fmt_num(estoque['PT'])} pacotes"
         modal.sub.placeholder = f"Atual: {fmt_num(estoque['SUB'])} pacotes"
         modal.capsulas.placeholder = f"Atual: {fmt_num(insumos['capsulas'])} unidades"
         modal.embalagens.placeholder = f"Atual: {fmt_num(insumos['embalagens'])} unidades"
+        modal.polvora.placeholder = f"Atual: {fmt_num(polvora_atual)} unidades"
+        
         await interaction.response.send_modal(modal)
-
     @discord.ui.button(label="🧨 Registrar Pólvora Manual", style=discord.ButtonStyle.primary, custom_id="registrar_polvora_manual_btn", emoji="🧨", row=3)
     async def registrar_polvora_manual(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Botão para adicionar pólvora ao estoque manualmente."""
@@ -8709,6 +8712,7 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
     sub = discord.ui.TextInput(label="🔫 Quantidade de SUB (pacotes)", placeholder="Digite a quantidade atual de SUB", required=False, max_length=10)
     capsulas = discord.ui.TextInput(label="💊 Quantidade de Cápsulas", placeholder="Digite a quantidade atual de cápsulas", required=False, max_length=10)
     embalagens = discord.ui.TextInput(label="📦 Quantidade de Embalagens", placeholder="Digite a quantidade atual de embalagens", required=False, max_length=10)
+    polvora = discord.ui.TextInput(label="🧨 Quantidade de Pólvora", placeholder="Digite a quantidade atual de pólvora", required=False, max_length=10)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -8722,11 +8726,13 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
             # =========================================================
             antes = await carregar_estoque()
             insumos_antes = await carregar_estoque_insumos()
+            polvora_antes = await carregar_estoque_polvora()
 
             nova_pt = None
             nova_sub = None
             nova_capsulas = None
             nova_embalagens = None
+            nova_polvora = None
 
             async with pool.acquire() as conn:
                 if self.pt.value and self.pt.value.strip():
@@ -8734,25 +8740,35 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
                     if nova_pt < 0:
                         raise ValueError("Valores não podem ser negativos")
                     await conn.execute("UPDATE estoque_municoes SET quantidade = $1, ultima_atualizacao = NOW() WHERE tipo = 'PT'", nova_pt)
+                
                 if self.sub.value and self.sub.value.strip():
                     nova_sub = int(self.sub.value.replace(".", "").replace(",", ""))
                     if nova_sub < 0:
                         raise ValueError("Valores não podem ser negativos")
                     await conn.execute("UPDATE estoque_municoes SET quantidade = $1, ultima_atualizacao = NOW() WHERE tipo = 'SUB'", nova_sub)
+                
                 if self.capsulas.value and self.capsulas.value.strip():
                     nova_capsulas = int(self.capsulas.value.replace(".", "").replace(",", ""))
                     if nova_capsulas < 0:
                         raise ValueError("Valores não podem ser negativos")
                     await conn.execute("UPDATE estoque_capsulas SET quantidade = $1, ultima_atualizacao = NOW() WHERE id = 1", nova_capsulas)
+                
                 if self.embalagens.value and self.embalagens.value.strip():
                     nova_embalagens = int(self.embalagens.value.replace(".", "").replace(",", ""))
                     if nova_embalagens < 0:
                         raise ValueError("Valores não podem ser negativos")
                     await conn.execute("UPDATE estoque_embalagens SET quantidade = $1, ultima_atualizacao = NOW() WHERE id = 1", nova_embalagens)
 
+                if self.polvora.value and self.polvora.value.strip():
+                    nova_polvora = int(self.polvora.value.replace(".", "").replace(",", ""))
+                    if nova_polvora < 0:
+                        raise ValueError("Valores não podem ser negativos")
+                    await conn.execute("UPDATE estoque_polvora SET quantidade = $1, ultima_atualizacao = NOW() WHERE id = 1", nova_polvora)
+
             await enviar_painel_fabricacao()
             estoque_atual = await carregar_estoque()
             insumos_atual = await carregar_estoque_insumos()
+            polvora_atual = await carregar_estoque_polvora()
 
             # =========================================================
             # AUDITORIA
@@ -8772,17 +8788,21 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
                 if nova_embalagens is not None:
                     dados_antes["embalagens"] = insumos_antes.get("embalagens", 0)
                     dados_depois["embalagens"] = nova_embalagens
+                if nova_polvora is not None:
+                    dados_antes["polvora"] = polvora_antes
+                    dados_depois["polvora"] = nova_polvora
 
-                await registrar_auditoria(
-                    user_id=str(interaction.user.id),
-                    acao=AuditAcao.EDITAR_ESTOQUE,
-                    modulo=AuditModulo.ESTOQUE,
-                    item_id=None,
-                    item_nome="Estoque manual",
-                    dados_antes=dados_antes if dados_antes else None,
-                    dados_depois=dados_depois if dados_depois else None,
-                    detalhes="Edição manual do estoque pelo painel de fabricação"
-                )
+                if dados_antes:
+                    await registrar_auditoria(
+                        user_id=str(interaction.user.id),
+                        acao=AuditAcao.EDITAR_ESTOQUE,
+                        modulo=AuditModulo.ESTOQUE,
+                        item_id=None,
+                        item_nome="Estoque manual",
+                        dados_antes=dados_antes,
+                        dados_depois=dados_depois,
+                        detalhes="Edição manual do estoque pelo painel de fabricação"
+                    )
             except Exception as e:
                 logger.error(f"❌ Erro ao auditar edição de estoque: {e}")
 
@@ -8791,6 +8811,7 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             embed.add_field(name="🔫 MUNIÇÕES", value=f"```yaml\nPT: {fmt_num(estoque_atual['PT'])} pacotes\nSUB: {fmt_num(estoque_atual['SUB'])} pacotes\n```", inline=True)
             embed.add_field(name="💊 INSUMOS", value=f"```yaml\nCápsulas: {fmt_num(insumos_atual['capsulas'])} unidades\nEmbalagens: {fmt_num(insumos_atual['embalagens'])} unidades\n```", inline=True)
+            embed.add_field(name="🧨 PÓLVORA", value=f"```yaml\n{fmt_num(polvora_atual)} unidades\n```", inline=True)
             embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado por {interaction.user.display_name}", icon_url=bot.user.display_avatar.url if bot.user else None)
             await interaction.followup.send(embed=embed, ephemeral=True)
         except ValueError as e:
@@ -8798,7 +8819,7 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
         except Exception as e:
             logger.error(f"❌ Erro ao editar estoque: {e}")
             await interaction.followup.send(f"❌ Erro ao editar estoque: {e}", ephemeral=True)
-
+            
 class RegistrarPolvoraManualModal(discord.ui.Modal, title="🧨 Registrar Pólvora Manual"):
     def __init__(self, estoque_atual=0):
         super().__init__(timeout=300)
