@@ -9917,6 +9917,57 @@ async def resetar_pontos_semana_com_historico(data_inicio, data_fim):
         logger.error(f"❌ Erro ao resetar pontos: {e}")
 
 # =========================================================
+# RESETAR HORAS DA SEMANA (MANUAL - COMANDO/BOTÃO)
+# =========================================================
+async def resetar_horas_semana_manual(guild):
+    """
+    Reseta as horas da semana ATUAL manualmente.
+    - Fecha todos os pontos abertos
+    - Salva no histórico
+    - Zera os pontos da semana
+    - Atualiza todos os embeds de meta
+    """
+    pool = await get_pool()
+    if not pool:
+        return {"sucesso": False, "erro": "Banco de dados indisponível"}
+
+    try:
+        hoje = agora()
+        dia_semana = hoje.weekday()
+        segunda = (hoje - timedelta(days=dia_semana)).replace(hour=0, minute=0, second=0, microsecond=0)
+        domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+        # =========================================================
+        # 1. Salva histórico e fecha pontos
+        # =========================================================
+        await resetar_pontos_semana_com_historico(segunda, domingo)
+
+        # =========================================================
+        # 2. Atualiza os embeds de meta dos mecânicos
+        # =========================================================
+        atualizados = 0
+        cargo_mecanico = guild.get_role(CARGO_MECANICO_ID) if guild else None
+        if guild and cargo_mecanico:
+            for member in guild.members:
+                if member.bot:
+                    continue
+                if cargo_mecanico not in member.roles:
+                    continue
+                if str(member.id) in metas_cache:
+                    try:
+                        await atualizar_embed_meta(member.id)
+                        atualizados += 1
+                        await asyncio.sleep(0.5)
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao atualizar meta de {member.display_name}: {e}")
+
+        return {"sucesso": True, "atualizados": atualizados}
+
+    except Exception as e:
+        logger.error(f"❌ Erro em resetar_horas_semana_manual: {e}")
+        return {"sucesso": False, "erro": str(e)}
+
+# =========================================================
 # ==================== PARTE 14: SISTEMA DE METAS =========
 # =========================================================
 
@@ -13916,9 +13967,9 @@ async def enviar_painel_relatorio_metas():
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharMetasAutomaticoButton())
     view.add_item(RelatorioHorasButton())
-    view.add_item(ResetarHorasSemanaButton())
     view.add_item(TrocarTipoMetaButton())
     view.add_item(VerDividasButton())
+    view.add_item(ResetarHorasSemanaButton())  # Botão de Resetar Horas
     await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495695092999279, embed, view)
 
 class RelatorioMetasButton(discord.ui.Button):
@@ -14247,16 +14298,9 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
             data_fim_str = self.data_fim.value.strip() if self.data_fim.value else ""
 
             if data_ini_str and data_fim_str:
-                # =========================================================
-                # ✅ TODAS AS DATAS SÃO NAIVE (sem timezone) — sem erro!
-                # =========================================================
                 try:
-                    inicio_naive = datetime.strptime(data_ini_str, "%d/%m/%Y").replace(
-                        hour=0, minute=0, second=0, microsecond=0
-                    )
-                    fim_naive = datetime.strptime(data_fim_str, "%d/%m/%Y").replace(
-                        hour=23, minute=59, second=59, microsecond=0
-                    )
+                    inicio_naive = datetime.strptime(data_ini_str, "%d/%m/%Y").replace(hour=0, minute=0, second=0, microsecond=0)
+                    fim_naive = datetime.strptime(data_fim_str, "%d/%m/%Y").replace(hour=23, minute=59, second=59, microsecond=0)
                 except:
                     await interaction.followup.send("❌ Formato de data inválido! Use DD/MM/AAAA", ephemeral=True)
                     return
@@ -14265,44 +14309,25 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
                     await interaction.followup.send("❌ Data FIM deve ser depois da INÍCIO!", ephemeral=True)
                     return
 
-                # ✅ Compara naive com naive (agora() removido tz)
                 hoje_naive = agora().replace(tzinfo=None)
-                segunda_atual = (hoje_naive - timedelta(days=hoje_naive.weekday())).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
+                segunda_atual = (hoje_naive - timedelta(days=hoje_naive.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
                 domingo_atual = segunda_atual + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
                 if inicio_naive >= segunda_atual and fim_naive <= domingo_atual:
-                    # Semana atual — converte de volta para aware só pra calcular
-                    await self._gerar_relatorio_atual(
-                        interaction,
-                        inicio_naive.replace(tzinfo=BRASIL),
-                        fim_naive.replace(tzinfo=BRASIL),
-                        data_ini_str, data_fim_str
-                    )
+                    await self._gerar_relatorio_atual(interaction, inicio_naive.replace(tzinfo=BRASIL), fim_naive.replace(tzinfo=BRASIL), data_ini_str, data_fim_str)
                 else:
-                    # Histórico — passa naive direto
-                    await self._gerar_relatorio_historico(
-                        interaction, inicio_naive, fim_naive, data_ini_str, data_fim_str
-                    )
+                    await self._gerar_relatorio_historico(interaction, inicio_naive, fim_naive, data_ini_str, data_fim_str)
             else:
-                # Semana atual (padrão) — todos aware consistentes
                 hoje = agora()
-                segunda = (hoje - timedelta(days=hoje.weekday())).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
+                segunda = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
                 domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
-                await self._gerar_relatorio_atual(
-                    interaction, segunda, domingo,
-                    segunda.strftime("%d/%m/%Y"), domingo.strftime("%d/%m/%Y")
-                )
+                await self._gerar_relatorio_atual(interaction, segunda, domingo, segunda.strftime("%d/%m/%Y"), domingo.strftime("%d/%m/%Y"))
 
         except Exception as e:
             logger.error(f"❌ Erro no RelatorioHorasModal: {e}")
             await interaction.followup.send(f"❌ Erro ao gerar relatório: {str(e)[:150]}", ephemeral=True)
 
     async def _gerar_relatorio_atual(self, interaction, inicio, fim, ini_str, fim_str):
-        """Relatório da semana atual (calculado dos pontos)."""
         guild = bot.get_guild(GUILD_ID)
         if not guild:
             await interaction.followup.send("❌ Guild não encontrada!", ephemeral=True)
@@ -14315,30 +14340,25 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
 
         mecanicos = []
         for member in guild.members:
-            if member.bot:
-                continue
-            if cargo_mecanico not in member.roles:
+            if member.bot or cargo_mecanico not in member.roles:
                 continue
             segundos = await calcular_horas_periodo(member.id, inicio, fim)
             mecanicos.append({
                 "user_id": str(member.id),
                 "nome": member.display_name,
-                "segundos": segundos,
-                "menção": member.mention
+                "segundos": segundos
             })
 
         mecanicos.sort(key=lambda x: x["segundos"], reverse=True)
-        await self._enviar_embeds(interaction, mecanicos, ini_str, fim_str, tipo="ATUAL")
+        await self._enviar_txt(interaction, mecanicos, ini_str, fim_str, tipo="ATUAL")
 
     async def _gerar_relatorio_historico(self, interaction, inicio, fim, ini_str, fim_str):
-        """Relatório do histórico — recebe datas NAIVE."""
         pool = await get_pool()
         if not pool:
             await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
             return
 
         try:
-            # ✅ Já recebe naive, mas garante
             inicio_naive = inicio.replace(tzinfo=None) if hasattr(inicio, 'tzinfo') and inicio.tzinfo else inicio
             fim_naive = fim.replace(tzinfo=None) if hasattr(fim, 'tzinfo') and fim.tzinfo else fim
 
@@ -14356,33 +14376,23 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
             for r in rows:
                 uid = r["user_id"]
                 if uid not in agrupado:
-                    agrupado[uid] = {
-                        "user_id": uid,
-                        "nome": r["nome"] or uid,
-                        "segundos": 0,
-                        "menção": f"<@{uid}>"
-                    }
+                    agrupado[uid] = {"user_id": uid, "nome": r["nome"] or uid, "segundos": 0}
                 agrupado[uid]["segundos"] += r["segundos_totais"] or 0
 
             mecanicos = list(agrupado.values())
             mecanicos.sort(key=lambda x: x["segundos"], reverse=True)
 
             if not mecanicos:
-                await interaction.followup.send(
-                    f"📭 Nenhum registro de horas encontrado no período **{ini_str}** a **{fim_str}**.\n\n"
-                    f"💡 Dica: se ainda não fechou a semana, use **semana atual** (deixe os campos em branco).",
-                    ephemeral=True
-                )
+                await interaction.followup.send(f"📭 Nenhum registro de horas encontrado no período **{ini_str}** a **{fim_str}**.", ephemeral=True)
                 return
 
-            await self._enviar_embeds(interaction, mecanicos, ini_str, fim_str, tipo="HISTÓRICO")
+            await self._enviar_txt(interaction, mecanicos, ini_str, fim_str, tipo="HISTÓRICO")
 
         except Exception as e:
             logger.error(f"❌ Erro ao buscar histórico de horas: {e}")
             await interaction.followup.send(f"❌ Erro: {str(e)[:150]}", ephemeral=True)
 
-    async def _enviar_embeds(self, interaction, mecanicos, ini_str, fim_str, tipo="ATUAL"):
-        """Envia os embeds formatados."""
+    async def _enviar_txt(self, interaction, mecanicos, ini_str, fim_str, tipo="ATUAL"):
         if not mecanicos:
             await interaction.followup.send("📭 Nenhum mecânico registrado no período.", ephemeral=True)
             return
@@ -14393,69 +14403,57 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
         cumprindo = len([m for m in mecanicos if m["segundos"] >= meta_horas])
         nao_cumprindo = len(mecanicos) - cumprindo
 
-        embed_resumo = discord.Embed(
-            title="⏰ ── RELATÓRIO DE HORAS (MECÂNICA) ── ⏰",
-            description=f"📅 **Período:** {ini_str} a {fim_str}\n🔖 **Tipo:** {tipo}",
-            color=Cores.PRODUCAO,
-            timestamp=agora()
-        )
-        embed_resumo.set_author(
-            name="🛡 Vida Rasa 442 • Relatório de Horas",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
-        embed_resumo.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+        linhas = []
+        sep = "=" * 80
+        sep_traco = "-" * 80
 
-        embed_resumo.add_field(
-            name="📊 RESUMO GERAL",
-            value=(
-                f"```yaml\n"
-                f"👥 Total de mecânicos: {len(mecanicos)}\n"
-                f"⏰ Total de horas: {formatar_horas(total_geral)}\n"
-                f"📊 Média por mecânico: {formatar_horas(media)}\n"
-                f"🎯 Meta semanal: 6h por mecânico\n"
-                f"✅ Cumprindo meta: {cumprindo}\n"
-                f"❌ Não cumprindo: {nao_cumprindo}\n"
-                f"```"
-            ),
-            inline=False
-        )
+        linhas.append(f"⏰ RELATÓRIO DE HORAS (MECÂNICA) - {tipo}")
+        linhas.append(f"📅 Período: {ini_str} a {fim_str}")
+        linhas.append("")
+        linhas.append(sep)
+        linhas.append("📊 RESUMO GERAL")
+        linhas.append(sep)
+        linhas.append("")
+        linhas.append(f"👥 Total de mecânicos: {len(mecanicos)}")
+        linhas.append(f"⏰ Total de horas: {formatar_horas(total_geral)}")
+        linhas.append(f"📊 Média por mecânico: {formatar_horas(media)}")
+        linhas.append(f"🎯 Meta semanal: 6h por mecânico")
+        linhas.append(f"✅ Cumprindo meta: {cumprindo}")
+        linhas.append(f"❌ Não cumprindo: {nao_cumprindo}")
+        linhas.append("")
+        linhas.append(sep_traco)
 
-        texto_ranking = ""
-        for i, m in enumerate(mecanicos[:15], 1):
-            emoji_medalha = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"`{i}.`"
-            status = "✅" if m["segundos"] >= meta_horas else "⚠️" if m["segundos"] >= meta_horas * 0.5 else "❌"
-            texto_ranking += f"{emoji_medalha} **{m['nome']}** — {formatar_horas(m['segundos'])} {status}\n"
+        linhas.append(sep)
+        linhas.append("🏆 RANKING DE HORAS")
+        linhas.append(sep)
+        linhas.append("")
 
-        if len(mecanicos) > 15:
-            texto_ranking += f"\n*... e mais {len(mecanicos) - 15} mecânicos*"
+        for i, m in enumerate(mecanicos, 1):
+            status = "✅ CUMPRIU" if m["segundos"] >= meta_horas else "⚠️ EM ANDAMENTO" if m["segundos"] >= meta_horas * 0.5 else "❌ ABAIXO"
+            linhas.append(f"{i}. {m['nome']}")
+            linhas.append(f"   ⏰ Tempo: {formatar_horas(m['segundos'])}")
+            linhas.append(f"   📌 Status: {status}")
+            linhas.append("")
 
-        if not texto_ranking:
-            texto_ranking = "📭 Nenhum registro."
+        linhas.append(sep_traco)
+        linhas.append("")
+        linhas.append(sep)
+        linhas.append(f"🛡 Vida Rasa 442 • Gerado em {agora().strftime('%d/%m/%Y às %H:%M')}")
+        linhas.append(sep)
 
-        embed_resumo.add_field(name="🏆 RANKING DE HORAS", value=texto_ranking[:1024], inline=False)
-        embed_resumo.add_field(
-            name="📌 LEGENDA",
-            value="✅ Cumprindo meta (≥6h) • ⚠️ Em andamento (≥3h) • ❌ Abaixo (menos de 3h)",
-            inline=False
-        )
-        embed_resumo.set_footer(
-            text=f"🛡 Vida Rasa 442 • Gerado em {agora().strftime('%d/%m/%Y %H:%M')}",
-            icon_url=bot.user.display_avatar.url if bot.user else None
+        texto_final = "\n".join(linhas)
+        arquivo = discord.File(
+            io.BytesIO(texto_final.encode("utf-8")),
+            filename=f"relatorio_horas_{ini_str.replace('/', '-')}_{fim_str.replace('/', '-')}.txt"
         )
 
         canal = interaction.guild.get_channel(RESULTADOS_METAS_ID)
         if not canal:
             canal = interaction.channel
 
-        await canal.send(embed=embed_resumo)
-
-        await interaction.followup.send(
-            f"✅ **Relatório de horas gerado!**\n"
-            f"📊 {len(mecanicos)} mecânicos • Total: {formatar_horas(total_geral)}\n"
-            f"📨 Enviado em {canal.mention}",
-            ephemeral=True
-        )
-
+        await canal.send(content=f"⏰ **Relatório de Horas** — `{ini_str}` a `{fim_str}`", file=arquivo)
+        await interaction.followup.send(f"✅ **Relatório de horas gerado e enviado em {canal.mention}!**", ephemeral=True)
+        
 # =========================================================
 # BOTÃO: RESETAR HORAS DA SEMANA (GLOBAL)
 # =========================================================
@@ -14547,155 +14545,45 @@ class ConfirmarResetHorasView(discord.ui.View):
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
 
-        pool = await get_pool()
-        if not pool:
-            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+        resultado = await resetar_horas_semana_manual(interaction.guild)
+
+        if not resultado.get("sucesso"):
+            await interaction.followup.send(f"❌ **Erro:** {resultado.get('erro', 'Desconhecido')}", ephemeral=True)
             return
 
+        atualizados = resultado.get("atualizados", 0)
+
+        # =========================================================
+        # AUDITORIA
+        # =========================================================
         try:
-            hoje = agora()
-            dia_semana = hoje.weekday()
-            segunda = (hoje - timedelta(days=dia_semana)).replace(
-                hour=0, minute=0, second=0, microsecond=0
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.RESETAR_HORAS,
+                modulo=AuditModulo.HORAS,
+                item_id=None,
+                item_nome="Reset manual de horas",
+                detalhes=f"Reset manual — {atualizados} embeds atualizados"
             )
-            domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
-
-            # ✅ Capturar total ANTES de deletar (para auditoria)
-            total_horas_antes = 0
-            guild = bot.get_guild(GUILD_ID)
-            cargo_mecanico = guild.get_role(CARGO_MECANICO_ID) if guild else None
-            if guild and cargo_mecanico:
-                for member in guild.members:
-                    if member.bot or cargo_mecanico not in member.roles:
-                        continue
-                    segundos_membro = await calcular_horas_periodo(member.id, segunda, domingo)
-                    total_horas_antes += segundos_membro
-
-            async with pool.acquire() as conn:
-                # 1. Fecha pontos abertos da semana (calcula tempo)
-                await conn.execute(
-                    """UPDATE pontos_mecanica 
-                       SET saida = $1,
-                           tempo_segundos = EXTRACT(EPOCH FROM ($1::timestamp - entrada))::BIGINT,
-                           ativo = false
-                       WHERE ativo = true 
-                       AND entrada >= $2 
-                       AND entrada <= $3""",
-                    agora_db(), para_db_naive(segunda), para_db_naive(domingo)
-                )
-
-                # 2. Deleta pontos da semana atual
-                deletados = await conn.fetchval(
-                    """SELECT COUNT(*) FROM pontos_mecanica 
-                       WHERE entrada >= $1 AND entrada <= $2""",
-                    para_db_naive(segunda), para_db_naive(domingo)
-                )
-
-                await conn.execute(
-                    """DELETE FROM pontos_mecanica 
-                       WHERE entrada >= $1 AND entrada <= $2""",
-                    para_db_naive(segunda), para_db_naive(domingo)
-                )
-
-                # 3. Deleta histórico de horas da semana atual
-                hist_deletados = await conn.fetchval(
-                    """SELECT COUNT(*) FROM horas_historico 
-                       WHERE data_fechamento >= $1 AND data_fechamento <= $2""",
-                    para_db_naive(segunda), para_db_naive(domingo)
-                )
-
-                await conn.execute(
-                    """DELETE FROM horas_historico 
-                       WHERE data_fechamento >= $1 AND data_fechamento <= $2""",
-                    para_db_naive(segunda), para_db_naive(domingo)
-                )
-
-            logger.info(
-                f"🔄 [RESET HORAS] {deletados} pontos deletados + "
-                f"{hist_deletados} registros de histórico por {interaction.user.display_name}"
-            )
-
-            # 4. Atualiza os embeds de meta de todos os mecânicos
-            atualizados = 0
-            if guild and cargo_mecanico:
-                for member in guild.members:
-                    if member.bot:
-                        continue
-                    if cargo_mecanico not in member.roles:
-                        continue
-                    if str(member.id) in metas_cache:
-                        try:
-                            await atualizar_embed_meta(member.id)
-                            atualizados += 1
-                            await asyncio.sleep(0.5)
-                        except Exception as e:
-                            logger.error(f"❌ Erro ao atualizar meta de {member.display_name}: {e}")
-
-            # =========================================================
-            # AUDITORIA
-            # =========================================================
-            try:
-                await registrar_auditoria(
-                    user_id=str(interaction.user.id),
-                    acao=AuditAcao.RESETAR_HORAS,
-                    modulo=AuditModulo.HORAS,
-                    item_id=None,
-                    item_nome="Reset global de horas",
-                    dados_antes={"total_horas": total_horas_antes},
-                    dados_depois={"total_horas": 0},
-                    detalhes=f"Reset GLOBAL — {deletados} pontos deletados, {hist_deletados} históricos removidos, {atualizados} embeds atualizados. Total zerado: {formatar_horas(total_horas_antes)}"
-                )
-            except Exception as e:
-                logger.error(f"❌ Erro ao auditar reset de horas: {e}")
-
-            # 5. Envia log no canal geral (extra)
-            canal_log = guild.get_channel(CANAL_LOGS_GERAIS_ID) if guild else None
-            if canal_log:
-                embed_log = discord.Embed(
-                    title="🔄 RESET DE HORAS EXECUTADO",
-                    description="Todos os pontos da semana foram zerados.",
-                    color=0xe74c3c,
-                    timestamp=agora()
-                )
-                embed_log.add_field(name="👤 Executado por", value=interaction.user.mention, inline=True)
-                embed_log.add_field(name="📊 Pontos deletados", value=str(deletados), inline=True)
-                embed_log.add_field(name="📋 Históricos deletados", value=str(hist_deletados), inline=True)
-                embed_log.add_field(name="🔄 Embeds atualizados", value=str(atualizados), inline=True)
-                embed_log.set_footer(
-                    text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}",
-                    icon_url=bot.user.display_avatar.url if bot.user else None
-                )
-                try:
-                    await canal_log.send(embed=embed_log)
-                except:
-                    pass
-
-            # 6. Confirmação
-            embed = discord.Embed(
-                title="✅ HORAS RESETADAS COM SUCESSO!",
-                description=(
-                    "**Todas as horas da semana atual foram zeradas.**\n\n"
-                    f"📊 **Resumo:**\n"
-                    f"• 🔄 Pontos deletados: **{deletados}**\n"
-                    f"• 📋 Históricos removidos: **{hist_deletados}**\n"
-                    f"• 👤 Embeds atualizados: **{atualizados}**\n"
-                    f"• ⏰ Total zerado: **{formatar_horas(total_horas_antes)}**"
-                ),
-                color=0x2ecc71,
-                timestamp=agora()
-            )
-            embed.set_footer(
-                text=f"Reset realizado por {interaction.user.display_name}",
-                icon_url=bot.user.display_avatar.url if bot.user else None
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
         except Exception as e:
-            logger.error(f"❌ Erro ao resetar horas: {e}")
-            await interaction.followup.send(
-                f"❌ **Erro ao resetar horas:** {str(e)[:150]}",
-                ephemeral=True
-            )
+            logger.error(f"❌ Erro ao auditar reset de horas: {e}")
+
+        embed = discord.Embed(
+            title="✅ HORAS RESETADAS COM SUCESSO!",
+            description=(
+                "**Todas as horas da semana atual foram zeradas.**\n\n"
+                f"📊 **Resumo:**\n"
+                f"• 👤 Embeds atualizados: **{atualizados}**\n"
+                f"• 📌 O histórico da semana foi salvo antes de zerar."
+            ),
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.set_footer(
+            text=f"Reset realizado por {interaction.user.display_name}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @discord.ui.button(
         label="❌ CANCELAR",
@@ -14709,7 +14597,7 @@ class ConfirmarResetHorasView(discord.ui.View):
             await interaction.message.delete()
         except:
             pass
-
+            
 class ConfirmarFechamentoAutomaticoView(discord.ui.View):
     def __init__(self, data_inicio, data_fim, data_inicio_str, data_fim_str):
         super().__init__(timeout=60)
@@ -14722,7 +14610,7 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            relatorio, membros_sem_meta = await fechar_todas_metas(self.data_inicio, self.data_fim)
+            relatorio, membros_sem_meta, horas_mecanicos = await fechar_todas_metas(self.data_inicio, self.data_fim)
             if not relatorio and not membros_sem_meta:
                 await interaction.followup.send("📭 Nenhuma meta para fechar.", ephemeral=True)
                 return
@@ -14753,8 +14641,9 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
                 data_inicio_str=self.data_inicio_str,
                 data_fim_str=self.data_fim_str,
                 historico=relatorio,
-                titulo_extra="📊 RELATÓRIO SEMANAL - METAS FECHADAS"
-            )
+                titulo_extra="📊 RELATÓRIO SEMANAL - METAS FECHADAS",
+                horas_mecanicos=horas_mecanicos
+            )          
             await zerar_exibicao_metas()
             if membros_sem_meta:
                 canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
@@ -14983,26 +14872,27 @@ async def fechar_todas_metas(data_inicio, data_fim):
 
     FLUXO NOVO:
     1. Pega o tipo da semana atual (dinheiro ou pólvora)
-    2. Verifica dívidas antigas (quita se pagou)
-    3. Para cada membro:
+    2. Calcula as horas dos mecânicos (ANTES DE ZERAR)
+    3. Verifica dívidas antigas (quita se pagou)
+    4. Para cada membro:
        - Se semana = DINHEIRO: verifica se bateu dinheiro
        - Se semana = PÓLVORA: verifica se bateu pólvora
        - Se não bateu: cria dívida do tipo + envia aviso
-    4. Se semana foi de PÓLVORA: gera relatório de bonificação
-    5. Salva histórico
-    6. Verifica dívidas prolongadas (2+ semanas)
+    5. Se semana foi de PÓLVORA: gera relatório de bonificação
+    6. Salva histórico
+    7. Retorna o relatório + horas_mecanicos
     """
     pool = await get_pool()
     if not pool:
         logger.error("❌ Pool do banco indisponível em fechar_todas_metas")
-        return None, []
+        return None, [], {}
 
     try:
         async with pool.acquire() as conn:
             metas = await conn.fetch("SELECT * FROM metas")
             if not metas:
                 logger.warning("📭 Nenhuma meta encontrada para fechar")
-                return None, []
+                return None, [], {}
 
             data_inicio_naive = data_inicio.replace(tzinfo=None) if hasattr(data_inicio, 'replace') else data_inicio
             data_fim_naive = data_fim.replace(tzinfo=None) if hasattr(data_fim, 'replace') else data_fim
@@ -15019,7 +14909,21 @@ async def fechar_todas_metas(data_inicio, data_fim):
             salvos = 0
 
             # =========================================================
-            # 1. VERIFICA DÍVIDAS ANTIGAS (quita se pagou)
+            # NOVO: CALCULAR HORAS DOS MECÂNICOS ANTES DE ZERAR
+            # =========================================================
+            horas_mecanicos = {}
+            if guild:
+                cargo_mecanico = guild.get_role(CARGO_MECANICO_ID)
+                if cargo_mecanico:
+                    for member in guild.members:
+                        if member.bot or cargo_mecanico not in member.roles:
+                            continue
+                        segundos = await calcular_horas_periodo(member.id, data_inicio, data_fim)
+                        horas_mecanicos[str(member.id)] = segundos
+                    logger.info(f"⏰ Horas calculadas para {len(horas_mecanicos)} mecânicos ANTES de zerar.")
+
+            # =========================================================
+            # VERIFICA DÍVIDAS ANTIGAS (quita se pagou)
             # =========================================================
             dividas_ativas = await conn.fetch(
                 "SELECT * FROM metas_dividas WHERE pago = false"
@@ -15034,7 +14938,6 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 if not member:
                     continue
 
-                # Busca meta do membro
                 meta = await conn.fetchrow(
                     "SELECT dinheiro, dinheiro_acoes, polvora_atual FROM metas WHERE user_id = $1",
                     user_id
@@ -15046,7 +14949,6 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 polvora = meta["polvora_atual"] or 0
                 dinheiro_acoes = meta["dinheiro_acoes"] or 0
 
-                # Verifica se pagou
                 if tipo_divida == "polvora":
                     if polvora >= valor_divida:
                         await conn.execute(
@@ -15055,7 +14957,6 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         )
                         logger.info(f"✅ {user_id} quitou dívida de pólvora ({valor_divida})")
                 else:
-                    # Dinheiro: considera o maior entre dinheiro e ações
                     total_pago = max(dinheiro, dinheiro_acoes)
                     if total_pago >= valor_divida:
                         await conn.execute(
@@ -15065,7 +14966,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         logger.info(f"✅ {user_id} quitou dívida de dinheiro ({valor_divida})")
 
             # =========================================================
-            # 2. VERIFICA CADA MEMBRO
+            # VERIFICA CADA MEMBRO
             # =========================================================
             for meta in metas:
                 user_id = meta["user_id"]
@@ -15081,15 +14982,10 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 acao = meta.get("acao") or "N/A"
 
                 meta_dinheiro = await definir_valor_meta_por_id(user_id)
-                meta_polvora = await definir_valor_meta_polvora(user_id)
+                meta_polvora = await definir_valor_meta_por_polvora(user_id)
 
-                # =========================================================
-                # VERIFICA META DO TIPO DA SEMANA
-                # =========================================================
                 if tipo_semana == "polvora":
-                    # META DE PÓLVORA
                     if meta_polvora > 0 and polvora < meta_polvora:
-                        # ❌ Não bateu
                         ja_tem = await conn.fetchval(
                             "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'polvora'",
                             user_id
@@ -15097,13 +14993,11 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         if not ja_tem:
                             await criar_divida_polvora(user_id, meta_polvora, semana_str)
                             logger.info(f"📢 Dívida de pólvora criada para {user_id}: {meta_polvora}")
-                            # ✅ Envia aviso personalizado de PÓLVORA
                             await enviar_aviso_meta_nao_batida(
                                 user_id, meta_polvora, meta_polvora,
                                 motivo="NAO_BATEU", tipo="polvora"
                             )
 
-                    # Verifica bonificação (só se bateu e passou de 5000)
                     if polvora_total_semana > 5000:
                         member_nome = member.display_name if member else str(user_id)
                         membros_com_bonificacao.append({
@@ -15114,7 +15008,6 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         })
 
                 else:
-                    # META DE DINHEIRO
                     if meta_dinheiro > 0 and dinheiro < meta_dinheiro:
                         ja_tem = await conn.fetchval(
                             "SELECT 1 FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro'",
@@ -15123,7 +15016,6 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         if not ja_tem:
                             await criar_divida_meta(user_id, meta_dinheiro, semana_str)
                             logger.info(f"📢 Dívida de dinheiro criada para {user_id}: {meta_dinheiro * 2}")
-                            # ✅ Envia aviso personalizado de DINHEIRO
                             await enviar_aviso_meta_nao_batida(
                                 user_id, meta_dinheiro, meta_dinheiro * 2,
                                 motivo="NAO_BATEU", tipo="dinheiro"
@@ -15154,7 +15046,8 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         "polvora": polvora,
                         "total_meta": polvora,
                         "status": status,
-                        "tipo": "polvora"
+                        "tipo": "polvora",
+                        "tipo_meta": tipo_semana
                     })
                 else:
                     relatorio.append({
@@ -15165,11 +15058,12 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         "polvora": polvora,
                         "total_meta": min(dinheiro, meta_dinheiro),
                         "status": status,
-                        "tipo": "dinheiro"
+                        "tipo": "dinheiro",
+                        "tipo_meta": tipo_semana
                     })
 
             # =========================================================
-            # 3. MEMBROS SEM META
+            # MEMBROS SEM META
             # =========================================================
             membros_sem_meta = []
             if guild:
@@ -15194,25 +15088,19 @@ async def fechar_todas_metas(data_inicio, data_fim):
                                 "menção": member.mention
                             })
 
-            # =========================================================
-            # 4. ENVIA RELATÓRIO DE BONIFICAÇÃO (só se foi semana de pólvora)
-            # =========================================================
             if tipo_semana == "polvora" and membros_com_bonificacao:
                 canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
                 if canal_gerencia:
                     await gerar_relatorio_bonificacao(membros_com_bonificacao, semana_str, canal_gerencia)
 
-            # =========================================================
-            # 5. VERIFICA DÍVIDAS PROLONGADAS
-            # =========================================================
             await verificar_dividas_prolongadas()
 
             logger.info(f"✅ {salvos} metas salvas no histórico | Tipo: {tipo_semana}")
-            return relatorio, membros_sem_meta
+            return relatorio, membros_sem_meta, horas_mecanicos
 
     except Exception as e:
         logger.error(f"❌ Erro ao fechar todas as metas: {e}")
-        return None, []
+        return None, [], {}
         
 async def zerar_exibicao_metas():
     """
@@ -15261,13 +15149,8 @@ async def zerar_exibicao_metas():
                     polvora_total_semana = 0
             """)
             logger.info("⚠️ METAS ZERADAS PARA A NOVA SEMANA! (dinheiro + pólvora)")
-            # Salva horas no histórico ANTES de resetar (correção do bug)
-            try:
-                semana_ini, semana_fim = calcular_semana_anterior()
-                await resetar_pontos_semana_com_historico(semana_ini, semana_fim)
-            except Exception as e:
-                logger.error(f"❌ Erro ao salvar histórico de horas: {e}")
-                await resetar_pontos_semana()
+            # ✅ RESET DE HORAS REMOVIDO DAQUI (agora é manual pelo botão/comando)
+            logger.info("⏰ Horas NÃO foram resetadas automaticamente. Use o botão 'Resetar Horas' ou !resetar_horas.")
 
         await carregar_metas_cache()
         contador = 0
@@ -15310,47 +15193,107 @@ async def zerar_exibicao_metas():
         logger.error(f"❌ Erro ao zerar exibição das metas: {e}")
         return 0
 
-async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, historico, titulo_extra=""):
+# =========================================================
+# NOVA FUNÇÃO: GERAR RELATÓRIO EM .TXT
+# =========================================================
+async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, historico, titulo_extra="", horas_mecanicos=None):
+    """
+    Gera o relatório de metas em formato .txt organizado.
+    - titulo_extra: texto extra pro título (ex: "RELATÓRIO DE METAS FECHADAS")
+    - horas_mecanicos: dict com {user_id: segundos} pra usar as horas capturadas antes de zerar
+    """
     try:
         if not historico:
             await interaction.followup.send(f"📭 Nenhuma meta fechada no período **{data_inicio_str}** até **{data_fim_str}**.", ephemeral=True)
             return
 
+        # =========================================================
+        # 1. CALCULAR TOTAIS
+        # =========================================================
         total_dinheiro = sum(r["dinheiro"] for r in historico)
         total_polvora = sum(r.get("polvora", 0) for r in historico)
         total_geral = total_dinheiro
 
         guild = interaction.guild
+
+        # =========================================================
+        # 2. AGRUPAR POR CARGO (ORDEM DEFINIDA)
+        # =========================================================
         grupos = {
-            "gerentes": {"cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID], "nome": "🟢 GERENTES (ISENTOS)", "cor": 0x2ecc71, "itens": [], "is_isento": True},
-            "cargos_01_02_03": {"cargos": [CARGO_01_ID, CARGO_02_ID, CARGO_03_ID], "nome": "🟡 CARGOS 01/02/03 (ISENTOS)", "cor": 0xf1c40f, "itens": [], "is_isento": True},
-            "responsaveis": {"cargos": [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID], "nome": "🔵 RESPONSÁVEIS", "cor": 0x3498db, "itens": [], "is_isento": False},
-            "mecanicos": {"cargos": [CARGO_MECANICO_ID], "nome": "🔧 MECÂNICOS", "cor": 0x9b59b6, "itens": [], "is_isento": False},
-            "soldados": {"cargos": [CARGO_SOLDADO_ID], "nome": "🟠 SOLDADOS", "cor": 0xe67e22, "itens": [], "is_isento": False},
-            "membros": {"cargos": [CARGO_MEMBRO_ID], "nome": "🔴 MEMBROS", "cor": 0xe74c3c, "itens": [], "is_isento": False},
-            "moradores": {"cargos": [CARGO_MORADOR_ID], "nome": "🏠 MORADORES", "cor": 0x1abc9c, "itens": [], "is_isento": False},
-            "agregados": {"cargos": [CARGO_AGREGADO_ID], "nome": "⚪ AGREGADOS", "cor": 0x95a5a6, "itens": [], "is_isento": False},
-            "setados": {"cargos": [CARGO_SETADO_ID], "nome": "🎯 SETADOS", "cor": 0x7289da, "itens": [], "is_isento": False}
+            "gerentes": {
+                "cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID],
+                "nome": "🟢 GERENTES (ISENTOS)",
+                "is_isento": True,
+                "itens": []
+            },
+            "cargos_01_02_03": {
+                "cargos": [CARGO_01_ID, CARGO_02_ID, CARGO_03_ID],
+                "nome": "🟡 CARGOS 01/02/03 (ISENTOS)",
+                "is_isento": True,
+                "itens": []
+            },
+            "responsaveis": {
+                "cargos": [
+                    CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID,
+                    CARGO_RESP_PRODUCAO_ID, CARGO_RESP_P1_ID,
+                    CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID
+                ],
+                "nome": "🔵 RESPONSÁVEIS",
+                "is_isento": False,
+                "itens": []
+            },
+            "membros": {
+                "cargos": [CARGO_MEMBRO_ID, CARGO_SOLDADO_ID],
+                "nome": "🔴 MEMBROS / SOLDADOS",
+                "is_isento": False,
+                "itens": []
+            },
+            "agregados": {
+                "cargos": [CARGO_AGREGADO_ID, CARGO_MORADOR_ID],
+                "nome": "⚪ AGREGADOS / MORADORES",
+                "is_isento": False,
+                "itens": []
+            },
+            "mecanicos": {
+                "cargos": [CARGO_MECANICO_ID],
+                "nome": "🔧 MECÂNICOS",
+                "is_isento": False,
+                "itens": []
+            }
         }
 
+        # =========================================================
+        # 3. DISTRIBUIR ITENS NOS GRUPOS
+        # =========================================================
         for item in historico:
             user_id = int(item["user_id"])
             member = guild.get_member(user_id) if guild else None
             if not member:
                 continue
 
-            total_meta = item["dinheiro"]
             item_dict = dict(item)
-            item_dict["total_meta"] = total_meta
             item_dict["nome"] = member.display_name
+            item_dict["user_id"] = user_id
             item_dict["is_mecanico"] = CARGO_MECANICO_ID in [r.id for r in member.roles]
-            item_dict["polvora"] = item.get("polvora", 0)
-            item_dict["tipo_meta"] = item.get("tipo_meta", "dinheiro")
+
+            # Pega a meta limite pra saber se cumpriu
+            meta_limite_dinheiro = await definir_valor_meta_por_id(user_id)
+            meta_limite_polvora = await definir_valor_meta_por_polvora(user_id)
+
+            # O tipo de meta usado nessa semana
+            tipo_meta = item.get("tipo_meta", "dinheiro")
+            item_dict["tipo_meta"] = tipo_meta
+
+            # Verifica se cumpriu
+            if tipo_meta == "polvora":
+                cumpriu = (item.get("polvora", 0) >= meta_limite_polvora) if meta_limite_polvora > 0 else True
+            else:
+                cumpriu = (item["dinheiro"] >= meta_limite_dinheiro) if meta_limite_dinheiro > 0 else True
+
+            item_dict["cumpriu"] = cumpriu
 
             cargo_encontrado = False
             for grupo_key, grupo_data in grupos.items():
-                if "cargos" not in grupo_data:
-                    continue
                 if any(role.id in grupo_data["cargos"] for role in member.roles):
                     grupo_data["itens"].append(item_dict)
                     cargo_encontrado = True
@@ -15358,129 +15301,184 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
 
             if not cargo_encontrado:
                 if "outros" not in grupos:
-                    grupos["outros"] = {"nome": "📌 OUTROS", "cor": 0x808080, "itens": [], "is_isento": False}
+                    grupos["outros"] = {"nome": "📌 OUTROS", "is_isento": False, "itens": [], "cargos": []}
                 grupos["outros"]["itens"].append(item_dict)
+
+        # =========================================================
+        # 4. MONTAR O TEXTO .TXT
+        # =========================================================
+        linhas = []
+        sep_igual = "=" * 80
+        sep_traco = "-" * 80
+
+        # Cabeçalho
+        titulo_final = titulo_extra if titulo_extra else "RELATÓRIO DE METAS FECHADAS"
+        linhas.append(f"📊 {titulo_final}")
+        linhas.append(f"📅 Período: {data_inicio_str} até {data_fim_str}")
+        linhas.append("")
+
+        # RESUMO GERAL
+        linhas.append(sep_igual)
+        linhas.append("📊 RESUMO GERAL")
+        linhas.append(sep_igual)
+        linhas.append("")
+        linhas.append(f"💰 Dinheiro Sujo (Meta): {formatar_dinheiro(total_dinheiro)}")
+        linhas.append(f"🧨 Pólvora: {fmt_num(total_polvora)} unidades")
+        linhas.append(f"📦 Total Geral: {formatar_dinheiro(total_geral)}")
+        linhas.append(f"👥 Total de metas fechadas: {len(historico)}")
+
+        total_isentos = sum(len(g["itens"]) for g in grupos.values() if g.get("is_isento", False))
+        total_obrigados = sum(len(g["itens"]) for g in grupos.values() if not g.get("is_isento", False))
+        linhas.append(f"🟡 Isentos: {total_isentos}")
+        linhas.append(f"📊 Obrigados: {total_obrigados}")
+        linhas.append("")
+
+        # RESUMO POR CARGO
+        linhas.append(sep_igual)
+        linhas.append("📊 RESUMO POR CARGO")
+        linhas.append(sep_igual)
+        linhas.append("")
+
+        for grupo_key, grupo_data in grupos.items():
+            if not grupo_data["itens"]:
+                continue
+            qtd = len(grupo_data["itens"])
+            total_grupo_dinheiro = sum(i["dinheiro"] for i in grupo_data["itens"])
+            total_grupo_polvora = sum(i.get("polvora", 0) for i in grupo_data["itens"])
+            if grupo_data.get("is_isento", False):
+                linhas.append(f"{grupo_data['nome']}: {qtd} membros (ISENTOS)")
+            else:
+                linhas.append(f"{grupo_data['nome']}: {qtd} membros | {formatar_dinheiro(total_grupo_dinheiro)} | 🧨 {fmt_num(total_grupo_polvora)}")
+        linhas.append("")
+
+        # DETALHAMENTO POR CARGO
+        for grupo_key, grupo_data in grupos.items():
+            if not grupo_data["itens"]:
+                continue
+
+            linhas.append(sep_igual)
+            linhas.append(f"{grupo_data['nome']} - {len(grupo_data['itens'])} membros")
+            linhas.append(sep_igual)
+            linhas.append("")
+
+            if grupo_data.get("is_isento", False):
+                # ISENTOS: ordem alfabética
+                itens_ordenados = sorted(grupo_data["itens"], key=lambda x: x["nome"].lower())
+                for idx, item in enumerate(itens_ordenados, 1):
+                    linhas.append(f"{idx}. {item['nome']}")
+                    linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item['dinheiro'])}")
+                    linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
+                    linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
+                    linhas.append(f"   📌 Status: 🟡 ISENTO (não paga meta)")
+                    linhas.append("")
+            else:
+                # OBRIGADOS: separar quem pagou e quem não pagou
+                pagaram = [i for i in grupo_data["itens"] if i["cumpriu"]]
+                nao_pagaram = [i for i in grupo_data["itens"] if not i["cumpriu"]]
+
+                if pagaram:
+                    linhas.append("✅ QUEM PAGOU:")
+                    linhas.append("")
+                    # Ordenar por dinheiro (maior primeiro)
+                    pagaram_ordenados = sorted(pagaram, key=lambda x: x["dinheiro"], reverse=True)
+                    for idx, item in enumerate(pagaram_ordenados, 1):
+                        linhas.append(f"{idx}. {item['nome']}")
+                        linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item['dinheiro'])}")
+                        linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
+                        linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
+                        # Horas do mecânico
+                        if item.get("is_mecanico"):
+                            segundos = 0
+                            if horas_mecanicos and str(item["user_id"]) in horas_mecanicos:
+                                segundos = horas_mecanicos[str(item["user_id"])]
+                            elif horas_mecanicos and item["user_id"] in horas_mecanicos:
+                                segundos = horas_mecanicos[item["user_id"]]
+                            else:
+                                segundos = await calcular_horas_semana(item["user_id"])
+                            linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(segundos)}")
+                        linhas.append(f"   📌 Status: ✅ CUMPRIU A META")
+                        linhas.append("")
+
+                if nao_pagaram:
+                    linhas.append("❌ QUEM NÃO PAGOU:")
+                    linhas.append("")
+                    nao_pagaram_ordenados = sorted(nao_pagaram, key=lambda x: x["nome"].lower())
+                    for idx, item in enumerate(nao_pagaram_ordenados, 1):
+                        linhas.append(f"{idx}. {item['nome']}")
+                        linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item['dinheiro'])}")
+                        linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
+                        linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
+                        # Horas do mecânico
+                        if item.get("is_mecanico"):
+                            segundos = 0
+                            if horas_mecanicos and str(item["user_id"]) in horas_mecanicos:
+                                segundos = horas_mecanicos[str(item["user_id"])]
+                            elif horas_mecanicos and item["user_id"] in horas_mecanicos:
+                                segundos = horas_mecanicos[item["user_id"]]
+                            else:
+                                segundos = await calcular_horas_semana(item["user_id"])
+                            linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(segundos)}")
+                        linhas.append(f"   📌 Status: ❌ NÃO CUMPRIU A META")
+                        linhas.append("")
+
+            linhas.append(sep_traco)
+            linhas.append("")
+
+        # Rodapé
+        linhas.append(sep_igual)
+        linhas.append("📋 FIM DO RELATÓRIO")
+        linhas.append(f"🛡 Vida Rasa 442 • Gerado em {agora().strftime('%d/%m/%Y às %H:%M')}")
+        linhas.append(sep_igual)
+
+        # =========================================================
+        # 5. CRIAR E ENVIAR O ARQUIVO
+        # =========================================================
+        texto_final = "\n".join(linhas)
+        arquivo = discord.File(
+            io.BytesIO(texto_final.encode("utf-8")),
+            filename=f"relatorio_metas_{data_inicio_str.replace('/', '-')}_{data_fim_str.replace('/', '-')}.txt"
+        )
 
         canal_resultados = interaction.guild.get_channel(RESULTADOS_METAS_ID)
         if not canal_resultados:
             canal_resultados = interaction.channel
 
-        titulo = f"📊 RELATÓRIO DE METAS FECHADAS"
-        if titulo_extra:
-            titulo = f"📊 {titulo_extra}"
-
-        embed_resumo = discord.Embed(title=titulo, description=f"📅 **Período:** {data_inicio_str} até {data_fim_str}", color=0x2ecc71, timestamp=agora())
-
-        total_nao_isentos = 0
-        total_isentos = 0
-        for grupo_key, grupo_data in grupos.items():
-            if grupo_data["itens"]:
-                if grupo_data.get("is_isento", False):
-                    total_isentos += len(grupo_data["itens"])
-                else:
-                    total_nao_isentos += len(grupo_data["itens"])
-
-        resumo_texto = (
-            f"💰 **Dinheiro Sujo (Meta):** {formatar_dinheiro(total_dinheiro)}\n"
-            f"🧨 **Pólvora:** {fmt_num(total_polvora)} unidades\n"
-            f"📦 **Total Geral:** {formatar_dinheiro(total_geral)}\n"
-            f"👥 **Total de metas fechadas:** {len(historico)}\n"
-            f"🟡 **Isentos:** {total_isentos}\n"
-            f"📊 **Obrigados:** {total_nao_isentos}"
+        await canal_resultados.send(
+            content=f"📊 **Relatório de Metas** — `{data_inicio_str}` a `{data_fim_str}`",
+            file=arquivo
         )
-        embed_resumo.add_field(name="📊 RESUMO GERAL", value=resumo_texto, inline=False)
-
-        resumo_grupos = ""
-        for grupo_key, grupo_data in grupos.items():
-            if grupo_data["itens"]:
-                qtd = len(grupo_data["itens"])
-                total_grupo = sum(item["total_meta"] for item in grupo_data["itens"])
-                total_polvora_grupo = sum(item.get("polvora", 0) for item in grupo_data["itens"])
-                if grupo_data.get("is_isento", False):
-                    resumo_grupos += f"{grupo_data['nome']}: {qtd} membros (ISENTOS)\n"
-                else:
-                    resumo_grupos += f"{grupo_data['nome']}: {qtd} membros | {formatar_dinheiro(total_grupo)} | 🧨 {fmt_num(total_polvora_grupo)}\n"
-
-        if resumo_grupos:
-            embed_resumo.add_field(name="📊 RESUMO POR CARGO", value=resumo_grupos[:1024], inline=False)
-
-        embed_resumo.set_footer(text=f"Relatório gerado por {interaction.user.display_name}")
-        await canal_resultados.send(embed=embed_resumo)
-        await asyncio.sleep(1.5)
-
-        for grupo_key, grupo_data in grupos.items():
-            if not grupo_data["itens"]:
-                continue
-
-            itens_ordenados = sorted(grupo_data["itens"], key=lambda x: x["total_meta"], reverse=True)
-
-            if grupo_data.get("is_isento", False):
-                for i in range(0, len(itens_ordenados), 10):
-                    grupo = itens_ordenados[i:i+10]
-                    embed = discord.Embed(title=f"🟡 {grupo_data['nome']} ({len(itens_ordenados)} membros) - Parte {i//10 + 1}", color=grupo_data["cor"])
-                    texto = ""
-                    for idx, item in enumerate(grupo, i + 1):
-                        texto += f"**{idx}.** {item['nome']} - 🟡 ISENTO (não paga meta)\n"
-                    embed.add_field(name="📋 LISTA DE ISENTOS", value=texto, inline=False)
-                    await canal_resultados.send(embed=embed)
-                    await asyncio.sleep(0.3)
-                continue
-
-            pagaram = [item for item in itens_ordenados if item["total_meta"] > 0]
-            nao_pagaram = [item for item in itens_ordenados if item["total_meta"] == 0]
-
-            if pagaram:
-                for i in range(0, len(pagaram), 5):
-                    grupo = pagaram[i:i+5]
-                    embed = discord.Embed(title=f"✅ {grupo_data['nome']} - QUEM PAGOU ({len(pagaram)} membros) - Parte {i//5 + 1}", color=grupo_data["cor"])
-                    texto = ""
-                    for idx, item in enumerate(grupo, i + 1):
-                        texto += f"**{idx}.** {item['nome']}\n"
-                        texto += f"   💰 Meta: {formatar_dinheiro(item['total_meta'])}\n"
-                        if item.get("polvora", 0) > 0:
-                            texto += f"   🧨 Pólvora: {fmt_num(item['polvora'])} unidades\n"
-                        if item.get("is_mecanico"):
-                            segundos = await calcular_horas_semana(item["user_id"])
-                            texto += f"   ⏰ Horas Mecânica: {formatar_horas(segundos)}\n"
-                        texto += "\n"
-
-                    if len(texto) > 1000:
-                        parte1 = texto[:900]
-                        parte2 = texto[900:]
-                        embed.add_field(name="📋 LISTA (parte 1)", value=parte1, inline=False)
-                        embed.add_field(name="📋 LISTA (parte 2)", value=parte2, inline=False)
-                    else:
-                        embed.add_field(name="📋 LISTA", value=texto, inline=False)
-                    await canal_resultados.send(embed=embed)
-                    await asyncio.sleep(0.3)
-
-            if nao_pagaram:
-                for i in range(0, len(nao_pagaram), 10):
-                    grupo = nao_pagaram[i:i+10]
-                    embed = discord.Embed(title=f"❌ {grupo_data['nome']} - QUEM NÃO PAGOU ({len(nao_pagaram)} membros) - Parte {i//10 + 1}", color=0xe74c3c)
-                    texto = ""
-                    for idx, item in enumerate(grupo, i + 1):
-                        texto += f"**{idx}.** {item['nome']} - ❌ ZERADO\n"
-                    embed.add_field(name="📋 LISTA", value=texto, inline=False)
-                    await canal_resultados.send(embed=embed)
-                    await asyncio.sleep(0.3)
-
-        total_embeds = 1
-        for grupo_key, grupo_data in grupos.items():
-            if grupo_data["itens"]:
-                if grupo_data.get("is_isento", False):
-                    total_embeds += (len(grupo_data["itens"]) + 9) // 10
-                else:
-                    pagaram = [item for item in grupo_data["itens"] if item["total_meta"] > 0]
-                    nao_pagaram = [item for item in grupo_data["itens"] if item["total_meta"] == 0]
-                    total_embeds += (len(pagaram) + 4) // 5
-                    total_embeds += (len(nao_pagaram) + 9) // 10
 
         await interaction.followup.send(
             f"✅ **Relatório enviado com sucesso!**\n"
             f"📊 {len(historico)} metas processadas\n"
-            f"📨 {total_embeds} mensagens enviadas",
+            f"📨 Enviado em {canal_resultados.mention}",
             ephemeral=True
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao gerar relatório .txt: {e}")
+        try:
+            await interaction.followup.send(f"❌ Erro ao gerar relatório: `{str(e)[:150]}`", ephemeral=True)
+        except:
+            pass
+
+async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, historico, titulo_extra="", horas_mecanicos=None):
+    """
+    Chama a nova função .txt em vez de gerar os embeds antigos.
+    """
+    try:
+        if not historico:
+            await interaction.followup.send(f"📭 Nenhuma meta fechada no período **{data_inicio_str}** até **{data_fim_str}**.", ephemeral=True)
+            return
+            
+        # Chama a função que gera o .txt
+        await gerar_relatorio_txt(
+            interaction=interaction,
+            data_inicio_str=data_inicio_str,
+            data_fim_str=data_fim_str,
+            historico=historico,
+            titulo_extra=titulo_extra,
+            horas_mecanicos=horas_mecanicos
         )
 
     except Exception as e:
@@ -19408,6 +19406,71 @@ async def cmd_atualizar_acesso_resp(ctx):
     await ctx.send("🔄 Atualizando acesso dos responsáveis...")
     await atualizar_acesso_responsaveis()
     await ctx.send("✅ Acesso dos responsáveis atualizado!")
+
+# =========================================================
+# COMANDO: RESETAR HORAS DA SEMANA (MANUAL)
+# =========================================================
+@bot.command(name="resetar_horas")
+@commands.has_permissions(administrator=True)
+async def cmd_resetar_horas(ctx):
+    """
+    Reseta as horas da semana atual dos mecânicos.
+    """
+    is_admin = ctx.author.guild_permissions.administrator
+    is_gerente = any(
+        r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+        for r in ctx.author.roles
+    )
+    if not is_admin and not is_gerente:
+        await ctx.send("❌ Apenas **ADM** ou **GERENTES** podem resetar as horas!")
+        return
+
+    # Conta quantos mecânicos serão afetados
+    cargo_mecanico = ctx.guild.get_role(CARGO_MECANICO_ID)
+    total_mecanicos = 0
+    total_horas = 0
+
+    if cargo_mecanico:
+        hoje = agora()
+        segunda = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
+        for member in ctx.guild.members:
+            if member.bot:
+                continue
+            if cargo_mecanico not in member.roles:
+                continue
+            segundos = await calcular_horas_periodo(member.id, segunda, domingo)
+            if segundos > 0:
+                total_mecanicos += 1
+                total_horas += segundos
+
+    embed = discord.Embed(
+        title="⚠️ ── RESETAR HORAS DA SEMANA ── ⚠️",
+        description=(
+            "**ATENÇÃO!** Esta ação irá **ZERAR TODAS AS HORAS** "
+            "dos mecânicos da **semana atual**.\n\n"
+            "📌 **O que será resetado:**\n"
+            "• Todos os pontos abertos serão fechados\n"
+            "• Todos os pontos da semana serão apagados\n"
+            "• Histórico da semana atual será removido\n"
+            "• Todos os mecânicos voltarão para **0h 0min**\n\n"
+            f"📊 **Ação afetará:**\n"
+            f"• 👥 Mecânicos com horas: **{total_mecanicos}**\n"
+            f"• ⏰ Total a ser zerado: **{formatar_horas(total_horas)}**\n\n"
+            "⚠️ **Esta ação é IRREVERSÍVEL!**\n\n"
+            "Clique em **✅ CONFIRMAR RESET** para continuar."
+        ),
+        color=0xe74c3c,
+        timestamp=agora()
+    )
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Reset de Horas (Mecânica)",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    view = ConfirmarResetHorasView()
+    await ctx.send(embed=embed, view=view)
 
 # =========================================================
 # ==================== COMANDO DE TESTAR AVISO QUARTA =====
