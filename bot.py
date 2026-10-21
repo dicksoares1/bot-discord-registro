@@ -6443,8 +6443,73 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
         })
     return msg
 
+class ConfirmarDoacaoView(discord.ui.View):
+    def __init__(self, mensagem_original, pedido_numero, entrega_id=None):
+        super().__init__(timeout=60)
+        self.mensagem_original = mensagem_original
+        self.pedido_numero = pedido_numero
+        self.entrega_id = entrega_id
+
+    @discord.ui.button(label="✅ Sim, zerar valor", style=discord.ButtonStyle.danger, custom_id="confirmar_doacao_sim")
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                # 1. Zera no banco de dados e já marca como pago (pois não tem pagamento em doação)
+                await conn.execute("UPDATE vendas SET valor = 0, finalizado = false, cancelado = false WHERE pedido_numero = $1", self.pedido_numero)
+
+        # 2. Edita o embed original
+        embed = self.mensagem_original.embeds[0]
+        
+        embed.color = 0xF1C40F
+        if "DOAÇÃO" not in embed.title:
+            embed.title = f"🎁 [DOAÇÃO] {embed.title}"
+
+        for i, field in enumerate(embed.fields):
+            if field.name == "💰 VALOR TOTAL":
+                embed.set_field_at(i, name="💰 VALOR TOTAL", value="```yaml\nR$ 0,00 (DOAÇÃO)\n```", inline=False)
+            if field.name == "📌 STATUS DO PEDIDO":
+                embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="```yaml\n📦 A Entregar\n🎁 Doação (Sem custo)\n```", inline=False)
+
+        if not any(f.name == "🎁 AVISO DE DOAÇÃO" for f in embed.fields):
+            embed.add_field(
+                name="🎁 AVISO DE DOAÇÃO",
+                value="```diff\n+ Este pedido é uma DOAÇÃO.\n+ Nenhum valor será cobrado.\n+ Apenas a ENTREGA precisa ser confirmada.\n```",
+                inline=False
+            )
+
+        # 3. Cria a nova view com o novo estado
+        view = StatusView(
+            disabled=False,
+            entrega_id=self.entrega_id,
+            total_entregas=1,
+            entrega_atual=1,
+            pago_ja_clicado=True, # Já entra como pago
+            mensagem_original=self.mensagem_original,
+            transferencia_confirmada=False,
+            valor_total=0,
+            pedido_numero=self.pedido_numero,
+            entregue_ja_clicado=False,
+            is_doacao=True # ✅ NOVO PARÂMETRO
+        )
+
+        await self.mensagem_original.edit(embed=embed, view=view)
+        
+        await interaction.followup.send("✅ **Pedido transformado em doação!**\nAgora apenas o botão **'✅ Entregue'** está ativo.", ephemeral=True)
+        await enviar_painel_vendas()
+
+    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary, custom_id="confirmar_doacao_nao")
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Ação cancelada. O valor do pedido foi mantido.", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+
 class StatusView(discord.ui.View):
-    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False, valor_total: int = 0, pt: int = 0, sub: int = 0, pedido_numero: int = 0, entregue_ja_clicado: bool = False):
+    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False, valor_total: int = 0, pt: int = 0, sub: int = 0, pedido_numero: int = 0, entregue_ja_clicado: bool = False, is_doacao: bool = False):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
         self.total_entregas = total_entregas
@@ -6458,21 +6523,29 @@ class StatusView(discord.ui.View):
         self.pt = pt
         self.sub = sub
         self.pedido_numero = pedido_numero
+        self.is_doacao = is_doacao
 
-        # =========================================================
-        # BOTÃO PAGO
-        # =========================================================
-        self.add_item(discord.ui.Button(
-            label="💰 Pago",
-            style=discord.ButtonStyle.primary,
-            custom_id="status_pago_fixo",
-            emoji="💰",
-            disabled=self.pago_ja_clicado or self.transferencia_confirmada
-        ))
+        if not self.is_doacao:
+            # Se for venda normal, mostra todos os botões
+            self.add_item(discord.ui.Button(
+                label="💰 Pago",
+                style=discord.ButtonStyle.primary,
+                custom_id="status_pago_fixo",
+                emoji="💰",
+                disabled=self.pago_ja_clicado or self.transferencia_confirmada
+            ))
+            
+            self.add_item(discord.ui.Button(
+                label="❌ Pedido cancelado",
+                style=discord.ButtonStyle.danger,
+                custom_id="status_cancelado_fixo",
+                emoji="❌",
+                disabled=self.transferencia_confirmada
+            ))
+        else:
+            # Se for doação, não tem botão de pago nem cancelado
+            pass
 
-        # =========================================================
-        # BOTÃO ENTREGUE
-        # =========================================================
         self.add_item(discord.ui.Button(
             label="✅ Entregue",
             style=discord.ButtonStyle.success,
@@ -6481,9 +6554,6 @@ class StatusView(discord.ui.View):
             disabled=self.entrega_ja_entregue or self.transferencia_confirmada
         ))
 
-        # =========================================================
-        # BOTÃO EDITAR
-        # =========================================================
         self.add_item(discord.ui.Button(
             label="✏️ Editar Venda",
             style=discord.ButtonStyle.primary,
@@ -6492,34 +6562,27 @@ class StatusView(discord.ui.View):
             disabled=self.transferencia_confirmada
         ))
 
-        # =========================================================
-        # BOTÃO CANCELAR
-        # =========================================================
-        self.add_item(discord.ui.Button(
-            label="❌ Pedido cancelado",
-            style=discord.ButtonStyle.danger,
-            custom_id="status_cancelado_fixo",
-            emoji="❌",
-            disabled=self.transferencia_confirmada
-        ))
+        if not self.is_doacao:
+            # Botão Transferência e Doação só existem se não for doação ainda
+            self.add_item(discord.ui.Button(
+                label="📤 Confirmar Transferência",
+                style=discord.ButtonStyle.success,
+                custom_id="confirmar_transferencia_fixo",
+                emoji="📤",
+                disabled=(not self.pago_ja_clicado) or self.transferencia_confirmada,
+                row=1
+            ))
 
-        # =========================================================
-        # BOTÃO TRANSFERÊNCIA (só habilita depois de pago)
-        # =========================================================
-        self.add_item(discord.ui.Button(
-            label="📤 Confirmar Transferência",
-            style=discord.ButtonStyle.success,
-            custom_id="confirmar_transferencia_fixo",
-            emoji="📤",
-            disabled=(not self.pago_ja_clicado) or self.transferencia_confirmada,
-            row=1
-        ))
+            self.add_item(discord.ui.Button(
+                label="🎁 Transformar em Doação",
+                style=discord.ButtonStyle.secondary,
+                custom_id="transformar_doacao",
+                emoji="🎁",
+                disabled=self.transferencia_confirmada or (self.valor_total == 0),
+                row=1
+            ))
 
-    # =========================================================
-    # TRAVA ANTI-DUPLICAÇÃO (banco como verdade única)
-    # =========================================================
     async def _pedido_ja_finalizado_no_banco(self, pedido_numero: int) -> bool:
-        """Verifica no banco se o pedido já foi finalizado/cancelado/migrado."""
         if not pedido_numero:
             return False
         pool = await get_pool()
@@ -6539,7 +6602,6 @@ class StatusView(discord.ui.View):
             return False
 
     async def _entrega_ja_criada_no_banco(self, entrega_id: int, proxima_entrega_num: int) -> bool:
-        """Verifica no banco se a próxima entrega já foi criada."""
         if not entrega_id:
             return False
         pool = await get_pool()
@@ -6554,7 +6616,6 @@ class StatusView(discord.ui.View):
                 if not row:
                     return False
                 mensagens = row["mensagem_ids"] or []
-                # Se já tem `proxima_entrega_num` mensagens, a próxima já foi criada
                 return len(mensagens) >= proxima_entrega_num
         except Exception as e:
             logger.error(f"❌ Erro ao checar entrega {entrega_id} no banco: {e}")
@@ -6563,11 +6624,24 @@ class StatusView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
 
-        # =========================================================
-        # SE JÁ FOI TRANSFERIDA, BLOQUEAR TUDO
-        # =========================================================
         if self.transferencia_confirmada:
             await interaction.response.send_message("⚠️ Esta venda já foi finalizada (transferência confirmada).", ephemeral=True)
+            return False
+
+        if custom_id == "transformar_doacao":
+            embed = discord.Embed(
+                title="⚠️ CONFIRMAR DOAÇÃO",
+                description=f"Tem certeza que deseja transformar o **Pedido #{self.pedido_numero:04d}** em DOAÇÃO?\n\nIsso vai **zerar o valor** de {formatar_dinheiro(self.valor_total)} para **R$ 0,00**.\nO estoque será entregue normalmente, mas o caixa não receberá nada.",
+                color=0xE74C3C
+            )
+            pedido_num = self.pedido_numero
+            if not pedido_num:
+                titulo = interaction.message.embeds[0].title or ""
+                if "#" in titulo:
+                    pedido_num = safe_int(titulo.split("#")[1].split(" ")[0].strip())
+
+            view = ConfirmarDoacaoView(mensagem_original=interaction.message, pedido_numero=pedido_num, entrega_id=self.entrega_id)
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
             return False
 
         if custom_id == "confirmar_transferencia_fixo":
@@ -6575,9 +6649,6 @@ class StatusView(discord.ui.View):
                 await interaction.response.send_message("⚠️ O pedido precisa estar **PAGO** antes de confirmar a transferência!", ephemeral=True)
                 return False
 
-            # =========================================================
-            # RECUPERAR DADOS DO PEDIDO (CASO VENHAM ZERADOS)
-            # =========================================================
             pedido_numero_temp = self.pedido_numero
             if pedido_numero_temp == 0:
                 embed = interaction.message.embeds[0]
@@ -6586,22 +6657,17 @@ class StatusView(discord.ui.View):
                     try:
                         pedido_numero_temp = safe_int(titulo.split("#")[1].split(" ")[0].strip())
                         self.pedido_numero = pedido_numero_temp
-                    except:
-                        pass
+                    except: pass
 
             if self.pt == 0 or self.sub == 0:
                 embed = interaction.message.embeds[0]
                 for field in embed.fields:
                     if field.name == "🔫 PT" and self.pt == 0:
-                        try:
-                            self.pt = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
-                        except:
-                            pass
+                        try: self.pt = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                        except: pass
                     if field.name == "🔫 SUB" and self.sub == 0:
-                        try:
-                            self.sub = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
-                        except:
-                            pass
+                        try: self.sub = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                        except: pass
 
             if self.valor_total == 0:
                 try:
@@ -6609,30 +6675,22 @@ class StatusView(discord.ui.View):
                     if pool:
                         async with pool.acquire() as conn:
                             row = await conn.fetchrow("SELECT valor FROM vendas WHERE pedido_numero = $1", pedido_numero_temp)
-                            if row:
-                                self.valor_total = row["valor"]
+                            if row: self.valor_total = row["valor"]
                 except Exception as e:
                     logger.error(f"❌ Erro ao buscar valor do pedido: {e}")
 
             if self.valor_total == 0:
-                valor_calculado = (self.pt * 50) + (self.sub * 90)
-                if valor_calculado > 0:
-                    self.valor_total = valor_calculado
-                    logger.info(f"✅ Valor calculado: {valor_calculado} (PT: {self.pt}, SUB: {self.sub})")
+                if "DOAÇÃO" in (interaction.message.embeds[0].title or ""):
+                    pass 
+                else:
+                    self.valor_total = (self.pt * 50) + (self.sub * 90)
+                    if self.valor_total == 0:
+                        await interaction.response.send_message("❌ Não foi possível encontrar o valor do pedido!", ephemeral=True)
+                        return False
 
-            if self.valor_total == 0:
-                await interaction.response.send_message("❌ Não foi possível encontrar o valor do pedido!", ephemeral=True)
-                return False
-
-            # =========================================================
-            # ✅ TRAVA ANTI-DUPLICAÇÃO (banco)
-            # =========================================================
             ja_finalizado = await self._pedido_ja_finalizado_no_banco(pedido_numero_temp)
             if ja_finalizado:
-                await interaction.response.send_message(
-                    "⚠️ Este pedido já foi finalizado no banco de dados! A transferência não será duplicada.",
-                    ephemeral=True
-                )
+                await interaction.response.send_message("⚠️ Este pedido já foi finalizado no banco de dados! A transferência não será duplicada.", ephemeral=True)
                 return False
 
             modal = ConfirmarTransferenciaModal(
@@ -6766,7 +6824,8 @@ class StatusView(discord.ui.View):
             pt=self.pt,
             sub=self.sub,
             pedido_numero=self.pedido_numero,
-            entregue_ja_clicado=self.entrega_ja_entregue
+            entregue_ja_clicado=self.entrega_ja_entregue,
+            is_doacao=self.is_doacao
         ))
 
         await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
@@ -6787,9 +6846,6 @@ class StatusView(discord.ui.View):
             await interaction.followup.send("⚠️ **Esta entrega já foi entregue!**", ephemeral=True)
             return
 
-        # =========================================================
-        # EXTRAI PACOTES DE PT/SUB DO EMBED
-        # =========================================================
         pacotes_pt = 0
         pacotes_sub = 0
         for field in embed.fields:
@@ -6799,38 +6855,27 @@ class StatusView(discord.ui.View):
                     for l in linhas_field:
                         if "📦" in l:
                             pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except:
-                    pass
+                except: pass
             if field.name == "🔫 SUB":
                 try:
                     linhas_field = field.value.split("\n")
                     for l in linhas_field:
                         if "📦" in l:
                             pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except:
-                    pass
+                except: pass
 
-        # =========================================================
-        # VERIFICA ESTOQUE
-        # =========================================================
         if pacotes_pt > 0:
             estoque_suficiente = await verificar_estoque_suficiente("PT", pacotes_pt)
             if not estoque_suficiente:
                 estoque_atual = await carregar_estoque()
-                await interaction.followup.send(
-                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n🔫 PT: {pacotes_pt} pacotes necessários\n📦 Estoque atual: {estoque_atual['PT']} pacotes",
-                    ephemeral=True
-                )
+                await interaction.followup.send(f"❌ **ESTOQUE INSUFICIENTE!**\n\n🔫 PT: {pacotes_pt} pacotes necessários\n📦 Estoque atual: {estoque_atual['PT']} pacotes", ephemeral=True)
                 return
 
         if pacotes_sub > 0:
             estoque_suficiente = await verificar_estoque_suficiente("SUB", pacotes_sub)
             if not estoque_suficiente:
                 estoque_atual = await carregar_estoque()
-                await interaction.followup.send(
-                    f"❌ **ESTOQUE INSUFICIENTE!**\n\n🔫 SUB: {pacotes_sub} pacotes necessários\n📦 Estoque atual: {estoque_atual['SUB']} pacotes",
-                    ephemeral=True
-                )
+                await interaction.followup.send(f"❌ **ESTOQUE INSUFICIENTE!**\n\n🔫 SUB: {pacotes_sub} pacotes necessários\n📦 Estoque atual: {estoque_atual['SUB']} pacotes", ephemeral=True)
                 return
 
         self.entrega_ja_entregue = True
@@ -6883,10 +6928,8 @@ class StatusView(discord.ui.View):
                             if pool:
                                 async with pool.acquire() as conn:
                                     row = await conn.fetchrow("SELECT organizacao FROM entregas_parceladas WHERE id = $1", self.entrega_id)
-                                    if row:
-                                        org_retirada = row["organizacao"]
-                        except:
-                            pass
+                                    if row: org_retirada = row["organizacao"]
+                        except: pass
                     itens = ""
                     if pacotes_pt > 0 and pacotes_sub > 0:
                         itens = f"PT: {pacotes_pt} pacotes / SUB: {pacotes_sub} pacotes"
@@ -6913,13 +6956,26 @@ class StatusView(discord.ui.View):
             pt=self.pt,
             sub=self.sub,
             pedido_numero=self.pedido_numero,
-            entregue_ja_clicado=True
+            entregue_ja_clicado=True,
+            is_doacao=self.is_doacao
         ))
 
         await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
         if self.entrega_atual < self.total_entregas:
             await self.criar_proxima_entrega(interaction, embed, pedido_numero)
+        else:
+            # ✅ Se for a ÚLTIMA entrega E for doação, finaliza automaticamente!
+            if self.is_doacao:
+                await finalizar_e_mover_pedido(
+                    interaction=interaction,
+                    mensagem_original=interaction.message,
+                    pedido_numero=pedido_numero,
+                    pt=self.pt,
+                    sub=self.sub,
+                    transferido_para="DOAÇÃO",
+                    tipo="finalizado"
+                )
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
@@ -6947,16 +7003,14 @@ class StatusView(discord.ui.View):
                     for l in linhas_field:
                         if "📦" in l:
                             pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except:
-                    pass
+                except: pass
             if field.name == "🔫 SUB":
                 try:
                     linhas_field = field.value.split("\n")
                     for l in linhas_field:
                         if "📦" in l:
                             pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except:
-                    pass
+                except: pass
 
         titulo = embed.title
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
@@ -7011,7 +7065,8 @@ class StatusView(discord.ui.View):
             entrega_atual=self.entrega_atual, pago_ja_clicado=True,
             mensagem_original=interaction.message, transferencia_confirmada=True,
             valor_total=self.valor_total, pt=self.pt, sub=self.sub,
-            pedido_numero=self.pedido_numero, entregue_ja_clicado=True
+            pedido_numero=self.pedido_numero, entregue_ja_clicado=True,
+            is_doacao=self.is_doacao
         ))
         if self.entrega_id:
             await finalizar_entregas(self.entrega_id)
@@ -7056,13 +7111,11 @@ class StatusView(discord.ui.View):
             if "🔫 PT" in nome or nome == "PT":
                 try:
                     dados["pt"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
-                except:
-                    pass
+                except: pass
             elif "🔫 SUB" in nome or nome == "SUB":
                 try:
                     dados["sub"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
-                except:
-                    pass
+                except: pass
             elif "ORGANIZA" in nome:
                 limpo = valor.replace("```yaml", "").replace("```", "").strip()
                 dados["organizacao"] = limpo.split("\n")[0].strip() or "Desconhecida"
@@ -7075,20 +7128,11 @@ class StatusView(discord.ui.View):
         return dados
 
     async def criar_proxima_entrega(self, interaction: discord.Interaction, embed_anterior, pedido_original):
-        """
-        Cria a próxima entrega automaticamente.
-        Travas:
-        1. `self.entrega_criada` (instância)
-        2. `_entrega_ja_criada_no_banco` (verdade única no banco)
-        """
         try:
             if not self.entrega_id:
                 logger.warning("❌ Sem entrega_id para criar próxima")
                 return
 
-            # =========================================================
-            # TRAVA 1 (instância)
-            # =========================================================
             if self.entrega_criada:
                 logger.info(f"⏭️ Próxima entrega já foi criada nesta instância (entrega_id={self.entrega_id})")
                 return
@@ -7115,21 +7159,12 @@ class StatusView(discord.ui.View):
                 logger.info(f"✅ Última entrega ({self.entrega_atual}/{total_entregas}). Nada a criar.")
                 return
 
-            # =========================================================
-            # TRAVA 2 (banco — verdade única)
-            # =========================================================
             ja_criada = await self._entrega_ja_criada_no_banco(self.entrega_id, proxima_entrega_num)
             if ja_criada:
-                logger.warning(
-                    f"⚠️ Entrega {proxima_entrega_num}/{total_entregas} já existe no banco "
-                    f"(entrega_id={self.entrega_id}). Bloqueando criação duplicada."
-                )
+                logger.warning(f"⚠️ Entrega {proxima_entrega_num}/{total_entregas} já existe no banco. Bloqueando criação duplicada.")
                 self.entrega_criada = True
                 return
 
-            # =========================================================
-            # BUSCA A LISTA DE ENTREGAS
-            # =========================================================
             async with pool.acquire() as conn2:
                 detalhes = await conn2.fetchrow(
                     "SELECT entregas_json FROM entregas_detalhes WHERE entrega_id = $1",
@@ -7176,9 +7211,6 @@ class StatusView(discord.ui.View):
 
                     entregas_lista.append({"pt": pt_valor, "sub": sub_valor})
 
-            # =========================================================
-            # CRIA A PRÓXIMA ENTREGA
-            # =========================================================
             idx = proxima_entrega_num - 1
             if idx >= len(entregas_lista):
                 logger.warning(f"❌ Índice {idx} fora do range da lista de entregas")
