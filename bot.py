@@ -216,6 +216,7 @@ CANAL_REGISTRO_AUSENCIA_ID = 1313854772545196032
 CANAL_GERENCIA_ID = 1237393478414241854
 CANAL_GRUPOS_ID = 1448563544386961479
 CANAL_RELATORIO_FINANCEIRO_ID = 1498664038559776768
+CANAL_RELATORIO_GERENCIA_METAS_ID = 1521495685092999279
 CANAL_REGISTRAR_COMPRA_ID = 1498668853465448560
 CANAL_COMPRAS_REGISTRADAS_ID = 1270467793363669053
 CANAL_LOGS_GERAIS_ID = 1541438570705977564
@@ -14412,7 +14413,7 @@ async def enviar_painel_solicitar_sala():
     await enviar_ou_atualizar_painel("painel_solicitar_sala", CANAL_SOLICITAR_SALA_ID, embed, SolicitarSalaView())
 
 async def enviar_painel_relatorio_metas():
-    canal = bot.get_channel(1521495685092999279)
+    canal = bot.get_channel(CANAL_RELATORIO_GERENCIA_METAS_ID)
     if not canal:
         logger.error("❌ Canal de relatório de metas não encontrado")
         return
