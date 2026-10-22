@@ -14479,26 +14479,7 @@ async def enviar_painel_relatorio_metas():
     view.add_item(ResetarHorasSemanaButton())  # Botão de Resetar Horas
     view.add_item(ConfigurarMetaCargoButton())
 
-    await enviar_ou_atualizar_painel("painel_relatorio_metas", 1521495695092999279, embed, view)
-    # =========================================================
-    # COMANDO: LIMPAR ERRO DO PAINEL DE METAS
-    # =========================================================
-    @bot.command(name="limpar_erro_painel")
-    @commands.has_permissions(administrator=True)    
-    async def cmd_limpar_erro_painel(ctx):
-        """Remove o registro do painel quebrado do banco de dados para parar o erro."""
-        pool = await get_pool()
-        if not pool:
-            await ctx.send("❌ Banco indisponível.")
-            return
-        try:
-            async with pool.acquire() as conn:
-                await conn.execute("DELETE FROM paineis WHERE nome = 'painel_relatorio_metas'")
-                await conn.execute("DELETE FROM paineis_ultimos WHERE nome = 'painel_relatorio_metas'")
-            await ctx.send("✅ **Registro do painel removido do banco!** O erro vai parar de aparecer. Para recriar o painel, use `!atualizar_paineis_metas`.")
-            logger.info("🗑️ Registro do painel_relatorio_metas deletado via comando.")
-        except Exception as e:
-            await ctx.send(f"❌ Erro: {e}")
+    await enviar_ou_atualizar_painel("painel_relatorio_metas", CANAL_RELATORIO_GERENCIA_METAS_ID, embed, view)
 
 class ConfigurarMetaCargoSelect(discord.ui.Select):
     def __init__(self):
@@ -19327,6 +19308,16 @@ async def cmd_diagnostico(ctx):
     embed.set_footer(text=f"Versão 7.0 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
     await ctx.send(embed=embed)
 
+@bot.command(name="forcar_painel_metas")
+@commands.has_permissions(administrator=True)
+async def cmd_forcar_painel_metas(ctx):
+    await ctx.send("🔄 **Forçando a recriação do painel de metas...**")
+    try:
+        await enviar_painel_relatorio_metas()
+        await ctx.send("✅ **Painel de metas enviado/atualizado com sucesso!** Verifique o canal configurado.")
+    except Exception as e:
+        logger.error(f"❌ Erro ao forçar painel de metas: {e}")
+        await ctx.send(f"❌ **Erro ao enviar o painel:**\n```\n{str(e)[:500]}\n```")
 # =========================================================
 # ==================== COMANDO DE HELP ====================
 # =========================================================
