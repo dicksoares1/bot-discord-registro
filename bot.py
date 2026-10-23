@@ -1572,6 +1572,269 @@ bau_print_pendente = {}
 armas_print_pendente = {}
 
 # ════════════════════════════════════════════════════════════════════════════════
+# ║  BLOCO F — BIBLIOTECA UX (CORES, EMOJIS, EMBEDS)                           ║
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CoresUX
+# ────────────────────────────────────────────────────────────────────────────────
+class CoresUX:
+    PRIMARIA     = 0x5865F2
+    SUCESSO      = 0x2ECC71
+    AVISO        = 0xF1C40F
+    ERRO         = 0xE74C3C
+    INFO         = 0x3498DB
+    NEUTRO       = 0x95A5A6
+    META         = 0x9B59B6
+    VENDA        = 0x1ABC9C
+    PRODUCAO     = 0xE67E22
+    ACAO         = 0xC0392B
+    GRUPO        = 0x34495E
+    LIVE         = 0x9146FF
+    AUSENCIA     = 0xD35400
+    FINANCEIRO   = 0x27AE60
+    BAU          = 0x7F8C8D
+    LOGS         = 0x2C3E50
+    AUDITORIA    = 0x8E44AD
+    ARMAS        = 0xB22222
+    PREMIUM      = 0xF9CA24
+    DESTAQUE     = 0xFF6B81
+    ESCURO       = 0x1A1A2E
+    CLARO        = 0xECF0F1
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EmojisUX
+# ────────────────────────────────────────────────────────────────────────────────
+class EmojisUX:
+    META        = "📊"
+    VENDA       = "🛒"
+    PRODUCAO    = "🏭"
+    ACAO        = "⚔️"
+    GRUPO       = "👥"
+    LIVE        = "🎥"
+    AUSENCIA    = "📋"
+    FINANCEIRO  = "💰"
+    BAU         = "📦"
+    ARMAS       = "🔫"
+    POLVORA     = "🧨"
+    LOGS        = "📜"
+    AUDITORIA   = "🔍"
+    SUCESSO     = "✅"
+    ERRO        = "❌"
+    AVISO       = "⚠️"
+    INFO        = "ℹ️"
+    DESTAQUE    = "⭐"
+    CARREGANDO  = "⏳"
+    BLOQUEADO   = "🔒"
+    LIBERADO    = "🔓"
+    ANTERIOR    = "⬅️"
+    PROXIMO     = "➡️"
+    INICIO      = "🏠"
+    FIM         = "⏭️"
+    ATUALIZAR   = "🔄"
+    FECHAR      = "❌"
+    CONFIRMAR   = "✅"
+    USER        = "👤"
+    USERS       = "👥"
+    ADMIN       = "👑"
+    GERENTE     = "⭐"
+    DINHEIRO    = "💰"
+    TROFEU      = "🏆"
+    MEDALHA     = "🥇"
+    FOGO        = "🔥"
+    ESCUDO      = "🛡️"
+    CORACAO     = "❤️"
+    ESTRELA     = "⭐"
+    RAIO        = "⚡"
+    LAMPADA     = "💡"
+    PASTA       = "📁"
+    ARQUIVO     = "📄"
+    CALENDARIO  = "📅"
+    RELOGIO     = "⏰"
+    LOCAL       = "📍"
+    LINK        = "🔗"
+    ESTATISTICA = "📈"
+    GRAFICO     = "📊"
+    DIVISOR     = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    DIVISOR_ALT = "═══════════════════════════════════"
+    DIVISOR_CURTO = "──────────────────"
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_padrao
+# ────────────────────────────────────────────────────────────────────────────────
+def embed_padrao(
+    titulo: str,
+    descricao: str = "",
+    cor: int = None,
+    emoji: str = None,
+    autor: str = None,
+    thumbnail_bot: bool = True,
+    footer: str = None,
+    timestamp: bool = True
+) -> discord.Embed:
+    if emoji:
+        titulo = f"{emoji} {titulo}"
+
+    embed = discord.Embed(
+        title=titulo,
+        description=descricao,
+        color=cor or CoresUX.PRIMARIA,
+        timestamp=agora() if timestamp else None
+    )
+
+    if autor:
+        embed.set_author(
+            name=f"🛡 Vida Rasa 442 • {autor}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    elif thumbnail_bot:
+        embed.set_author(
+            name="🛡 Vida Rasa 442",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+    if thumbnail_bot and bot.user:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+
+    if footer:
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {footer}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    elif timestamp:
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y às %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+    return embed
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: adicionar_separador
+# ────────────────────────────────────────────────────────────────────────────────
+def adicionar_separador(embed: discord.Embed, texto: str = ""):
+    embed.add_field(
+        name=EmojisUX.DIVISOR,
+        value=texto if texto else "\u200b",
+        inline=False
+    )
+    return embed
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: adicionar_campo
+# ────────────────────────────────────────────────────────────────────────────────
+def adicionar_campo(embed: discord.Embed, nome: str, valor: str, emoji: str = None, inline: bool = True):
+    if emoji:
+        nome = f"{emoji} {nome}"
+    embed.add_field(name=nome, value=valor, inline=inline)
+    return embed
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: com_rodape
+# ────────────────────────────────────────────────────────────────────────────────
+def com_rodape(embed: discord.Embed, texto: str = None):
+    if texto:
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {texto}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    else:
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y às %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+    return embed
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: formatar_lista_colunas
+# ────────────────────────────────────────────────────────────────────────────────
+def formatar_lista_colunas(itens: list, titulo: str = "", largura: int = 2):
+    if not itens:
+        return "Nenhum item."
+
+    resultado = ""
+    for i in range(0, len(itens), largura):
+        linha = itens[i:i+largura]
+        linha_texto = ""
+        for j, item in enumerate(linha):
+            numero = i + j + 1
+            linha_texto += f"**{numero}.** {item}"
+            if j < len(linha) - 1:
+                linha_texto += " " * 10
+        resultado += linha_texto + "\n"
+
+    return resultado
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: barra_progresso_ux
+# ────────────────────────────────────────────────────────────────────────────────
+def barra_progresso_ux(pct: float, tamanho: int = 20) -> str:
+    pct = max(0, min(1, pct))
+    preenchido = int(pct * tamanho)
+    vazio = tamanho - preenchido
+
+    if pct < 0.5:
+        emoji = "🟢"
+    elif pct < 0.8:
+        emoji = "🟡"
+    else:
+        emoji = "🔴"
+
+    return f"{emoji} `{'█' * preenchido}{'░' * vazio}` **{int(pct * 100)}%**"
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_sucesso
+# ────────────────────────────────────────────────────────────────────────────────
+def embed_sucesso(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
+    return embed_padrao(
+        titulo=titulo,
+        descricao=descricao,
+        cor=CoresUX.SUCESSO,
+        emoji=EmojisUX.SUCESSO,
+        autor=autor
+    )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_erro
+# ────────────────────────────────────────────────────────────────────────────────
+def embed_erro(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
+    return embed_padrao(
+        titulo=titulo,
+        descricao=descricao,
+        cor=CoresUX.ERRO,
+        emoji=EmojisUX.ERRO,
+        autor=autor
+    )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_aviso
+# ────────────────────────────────────────────────────────────────────────────────
+def embed_aviso(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
+    return embed_padrao(
+        titulo=titulo,
+        descricao=descricao,
+        cor=CoresUX.AVISO,
+        emoji=EmojisUX.AVISO,
+        autor=autor
+    )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_info
+# ────────────────────────────────────────────────────────────────────────────────
+def embed_info(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
+    return embed_padrao(
+        titulo=titulo,
+        descricao=descricao,
+        cor=CoresUX.INFO,
+        emoji=EmojisUX.INFO,
+        autor=autor
+    )
+
+# ════════════════════════════════════════════════════════════════════════════════
+# ║  FIM DO BLOCO F — BIBLIOTECA UX                                             ║
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 03                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════════════════
@@ -10715,6 +10978,121 @@ async def enviar_painel_caixa():
         logger.error(f"❌ Erro ao enviar painel do caixa: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CaixaView
+# ────────────────────────────────────────────────────────────────────────────────
+class CaixaView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem mexer no caixa!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="➕ Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="caixa_adicionar", emoji="➕", row=0)
+    async def adicionar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(AdicionarCaixaModal())
+
+    @discord.ui.button(label="➖ Remover Dinheiro", style=discord.ButtonStyle.danger, custom_id="caixa_remover", emoji="➖", row=0)
+    async def remover(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(RemoverCaixaModal())
+
+    @discord.ui.button(label="💸 Adicionar Lavado", style=discord.ButtonStyle.primary, custom_id="caixa_lavado", emoji="💸", row=0)
+    async def lavado(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(AdicionarLavadoModal())
+
+    @discord.ui.button(label="🧼 Lavar Dinheiro", style=discord.ButtonStyle.success, custom_id="caixa_lavar", emoji="🧼", row=0)
+    async def lavar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(LavarDinheiroModal())
+
+    @discord.ui.button(label="📊 Histórico Completo", style=discord.ButtonStyle.secondary, custom_id="caixa_historico", emoji="📊", row=1)
+    async def historico(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            movs = await conn.fetch("SELECT * FROM caixa_movimentacoes ORDER BY data DESC LIMIT 50")
+
+        if not movs:
+            await interaction.followup.send("📭 Nenhuma movimentação registrada.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📊 ── HISTÓRICO DO CAIXA ── 📊",
+            description=f"📋 Últimas **{len(movs)}** movimentações",
+            color=0x3498DB,
+            timestamp=agora()
+        )
+
+        texto = ""
+        for mov in movs:
+            tipo = mov["tipo"]
+            valor = mov["valor"]
+            motivo = mov["motivo"] or "Sem motivo"
+            data = mov["data"]
+            if data.tzinfo is None:
+                data = data.replace(tzinfo=BRASIL)
+
+            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber", "deposito_meta", "lavagem_limpeza"):
+                emoji_tipo = "➕"
+                sinal = "+"
+            else:
+                emoji_tipo = "➖"
+                sinal = "-"
+
+            tipo_dinheiro = mov.get("tipo_dinheiro", "sujo")
+            tag = "🟥" if tipo_dinheiro == "sujo" else "🟩"
+
+            linha = f"{emoji_tipo} {tag} {data.strftime('%d/%m %H:%M')} • {sinal}{formatar_dinheiro(valor)}\n   📝 {motivo[:50]}\n"
+            if len(texto) + len(linha) > 1000:
+                embed.add_field(name="📋 MOVIMENTAÇÕES", value=f"```yaml\n{texto}\n```", inline=False)
+                texto = ""
+            texto += linha
+
+        if texto:
+            embed.add_field(name="📋 MOVIMENTAÇÕES", value=f"```yaml\n{texto}\n```", inline=False)
+
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y às %H:%M')}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="📈 Relatório por Período", style=discord.ButtonStyle.secondary, custom_id="caixa_relatorio", emoji="📈", row=1)
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(RelatorioCaixaModal())
+
+    @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="caixa_atualizar", emoji="🔄", row=1)
+    async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_caixa()
+        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+
+# ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_caixa
 # ────────────────────────────────────────────────────────────────────────────────
 async def buscar_caixa():
@@ -11275,6 +11653,131 @@ async def enviar_painel_emprestimos():
         logger.info("✅ Painel de empréstimos atualizado")
     except Exception as e:
         logger.error(f"❌ Erro ao enviar painel de empréstimos: {e}")
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EmprestimosView
+# ────────────────────────────────────────────────────────────────────────────────
+class EmprestimosView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message(
+                "❌ Apenas **ADM** ou **GERENTES** podem mexer nos empréstimos!",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="📥 Novo (a Receber)", style=discord.ButtonStyle.success, custom_id="emprestimo_novo_receber", emoji="📥", row=0)
+    async def novo_receber(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(NovoEmprestimoReceberModal())
+
+    @discord.ui.button(label="📤 Novo (a Pagar)", style=discord.ButtonStyle.danger, custom_id="emprestimo_novo_pagar", emoji="📤", row=0)
+    async def novo_pagar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.send_modal(NovoEmprestimoPagarModal())
+
+    @discord.ui.button(label="📊 Listar Todos", style=discord.ButtonStyle.primary, custom_id="emprestimo_listar", emoji="📊", row=1)
+    async def listar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        ativos = await listar_emprestimos_ativos()
+        if not ativos:
+            await interaction.followup.send("📭 Nenhum empréstimo ativo.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📊 ── EMPRÉSTIMOS ATIVOS ── 📊",
+            description=f"📋 Total: **{len(ativos)}**",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+
+        for e in ativos[:10]:
+            parcelas_pagas = e["parcelas_pagas"]
+            total_parcelas = e["total_parcelas"]
+            restante = e["valor_total"] - (e["valor_parcela"] * parcelas_pagas)
+            tipo_emoji = "📥" if e["tipo"] == "receber" else "📤"
+
+            texto = f"🏢 **{e['nome_faccao']}**\n"
+            texto += f"💰 Total: {formatar_dinheiro(e['valor_total'])}\n"
+            texto += f"📆 Parcelas: {parcelas_pagas}/{total_parcelas}\n"
+            texto += f"💵 Restante: {formatar_dinheiro(restante)}\n"
+            texto += f"⏰ {e['frequencia'].capitalize()}\n"
+
+            embed.add_field(
+                name=f"{tipo_emoji} Empréstimo #{e['id']:04d}",
+                value=texto,
+                inline=False
+            )
+
+        if len(ativos) > 10:
+            embed.set_footer(text=f"Mostrando 10 de {len(ativos)}")
+        else:
+            embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="📜 Histórico", style=discord.ButtonStyle.secondary, custom_id="emprestimo_historico", emoji="📜", row=1)
+    async def historico(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        quitados = await listar_emprestimos_quitados()
+        if not quitados:
+            await interaction.followup.send("📭 Nenhum empréstimo quitado ainda.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📜 ── HISTÓRICO DE EMPRÉSTIMOS ── 📜",
+            description=f"📋 Últimos **{len(quitados)}** quitados",
+            color=0x95A5A6,
+            timestamp=agora()
+        )
+
+        for e in quitados[:10]:
+            tipo_emoji = "📥" if e["tipo"] == "receber" else "📤"
+            data = e["data_criacao"]
+            if data.tzinfo is None:
+                data = data.replace(tzinfo=BRASIL)
+
+            texto = f"🏢 **{e['nome_faccao']}**\n"
+            texto += f"💰 Total: {formatar_dinheiro(e['valor_total'])}\n"
+            texto += f"📅 Criado em: {data.strftime('%d/%m/%Y')}\n"
+
+            embed.add_field(
+                name=f"{tipo_emoji} Empréstimo #{e['id']:04d}",
+                value=texto,
+                inline=False
+            )
+
+        if len(quitados) > 10:
+            embed.set_footer(text=f"Mostrando 10 de {len(quitados)}")
+        else:
+            embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="emprestimo_atualizar", emoji="🔄", row=1)
+    async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_emprestimos()
+        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 14 (PARTE 1/3)                                                ║
