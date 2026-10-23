@@ -12739,7 +12739,7 @@ async def carregar_metas_cache():
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_embed_meta (SOLDADO + MECÂNICO MOSTRA AMBOS)
+# FUNÇÃO: atualizar_embed_meta (PONTO SÓ SE FOR MECÂNICO)
 # ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_embed_meta(user_id):
     try:
@@ -12783,6 +12783,7 @@ async def atualizar_embed_meta(user_id):
 
         nome = member.display_name
         is_mecanico = CARGO_MECANICO_ID in [r.id for r in member.roles]
+        is_soldado = CARGO_SOLDADO_ID in [r.id for r in member.roles]
         is_isento_lideranca = regra.get("is_isento_lideranca", False)
 
         dinheiro_meta = meta["dinheiro"] or 0
@@ -12907,7 +12908,7 @@ async def atualizar_embed_meta(user_id):
             embed.add_field(name="🚨 DÍVIDAS PENDENTES", value=f"```diff\n- {texto_dividas.strip().replace(chr(10), chr(10) + '- ')}\n```", inline=False)
 
         # ═══════════════════════════════════════════════════════════════════════
-        # MECÂNICO (INCLUSIVE SOLDADO+MECÂNICO) — mostra meta de horas
+        # MECÂNICO: mostra meta de horas INDEPENDENTE do cargo principal
         # ═══════════════════════════════════════════════════════════════════════
         if is_mecanico:
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -12927,17 +12928,17 @@ async def atualizar_embed_meta(user_id):
                     pass
 
         # ═══════════════════════════════════════════════════════════════════════
-        # VIEW: soldado usa SoldadoView, mas se for mecânico também tem botão de ponto
-        # Se for soldado+mecânico, usamos MecanicoView mas com labels adaptados
+        # VIEW: só tem ponto quem tem cargo mecânico
+        # - soldado + mecânico → SoldadoMecanicoView (tem ponto + botões de soldado)
+        # - soldado puro → SoldadoView (SEM ponto)
+        # - mecânico puro → MecanicoView (com ponto)
+        # - outros → MetaView (sem ponto)
         # ═══════════════════════════════════════════════════════════════════════
-        if tipo_membro == "soldado" and not is_mecanico:
-            view_final = SoldadoView(user_id)
-        elif tipo_membro == "soldado" and is_mecanico:
-            # Soldado+mecânico: usa MecanicoView (tem botão de ponto)
-            view_final = MecanicoView(user_id)
+        if tipo_membro == "soldado" and is_mecanico:
+            view_final = SoldadoMecanicoView(user_id)
             ponto_ativo = await buscar_ponto_ativo(user_id)
             for item in view_final.children:
-                if item.custom_id == "mecanico_ponto_dinamico":
+                if item.custom_id == "soldado_mecanico_ponto":
                     if ponto_ativo:
                         item.label = "🔴 Fechar Ponto"
                         item.style = discord.ButtonStyle.danger
@@ -12946,6 +12947,8 @@ async def atualizar_embed_meta(user_id):
                         item.label = "🟢 Abrir Ponto"
                         item.style = discord.ButtonStyle.success
                         item.emoji = "🟢"
+        elif tipo_membro == "soldado":
+            view_final = SoldadoView(user_id)
         elif is_mecanico:
             view_final = MecanicoView(user_id)
             ponto_ativo = await buscar_ponto_ativo(user_id)
@@ -13116,7 +13119,7 @@ async def atualizar_categoria_meta(member):
         logger.error(f"❌ Erro ao atualizar categoria de {member.name}: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: fixar_painel_meta_no_final (ROBUSTO — RECRIA SE SUMIR)
+# FUNÇÃO: fixar_painel_meta_no_final (DELETA + RECRIA IMEDIATAMENTE)
 # ────────────────────────────────────────────────────────────────────────────────
 async def fixar_painel_meta_no_final(user_id):
     try:
@@ -13127,7 +13130,6 @@ async def fixar_painel_meta_no_final(user_id):
         if not canal:
             return
 
-        # Busca o painel de meta no canal
         mensagem_painel = None
         async for msg in canal.history(limit=30):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
@@ -13135,12 +13137,10 @@ async def fixar_painel_meta_no_final(user_id):
                     mensagem_painel = msg
                     break
 
-        # Se não achou, recria
         if not mensagem_painel:
             await atualizar_embed_meta(user_id)
             return
 
-        # Verifica se já é a última mensagem
         ultima_msg = None
         async for msg in canal.history(limit=1):
             ultima_msg = msg
@@ -13149,16 +13149,21 @@ async def fixar_painel_meta_no_final(user_id):
         if ultima_msg and ultima_msg.id == mensagem_painel.id:
             return
 
-        # Se não é a última, deleta e recria
         try:
             await mensagem_painel.delete()
-            await asyncio.sleep(1.5)
-            await atualizar_embed_meta(user_id)
         except Exception as e:
-            logger.error(f"Erro ao recolocar painel: {e}")
+            logger.error(f"Erro ao deletar painel: {e}")
+            return
+
+        await asyncio.sleep(0.5)
+
+        try:
+            await atualizar_embed_meta(user_id)
+            logger.info(f"✅ Painel de meta do user {user_id} recriado no final")
+        except Exception as e:
+            logger.error(f"❌ Erro ao recriar painel de meta: {e}")
     except Exception as e:
         logger.error(f"❌ Erro ao fixar painel: {e}")
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MetaView
 # ────────────────────────────────────────────────────────────────────────────────
@@ -19140,48 +19145,88 @@ class BotaoPersistente:
         return None
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: verificar_e_mover_paineis (ROBUSTO — MOVE TUDO PRO FINAL)
+# FUNÇÃO: verificar_e_mover_paineis (DELETA + RECRIA IMEDIATAMENTE)
 # ────────────────────────────────────────────────────────────────────────────────
 async def verificar_e_mover_paineis(canal):
-    paineis = await buscar_paineis_do_canal(canal.id)
-    if not paineis:
-        return
+    try:
+        paineis = await buscar_paineis_do_canal(canal.id)
+        if not paineis:
+            return
 
-    await asyncio.sleep(1.5)
+        await asyncio.sleep(1.5)
 
-    ultima_msg = None
-    async for msg in canal.history(limit=1):
-        ultima_msg = msg
-        break
+        ultima_msg = None
+        async for msg in canal.history(limit=1):
+            ultima_msg = msg
+            break
 
-    if not ultima_msg:
-        return
+        if not ultima_msg:
+            return
 
-    ids_paineis = [int(p["mensagem_id"]) for p in paineis]
-    if ultima_msg.id in ids_paineis:
-        return
+        ids_paineis = [int(p["mensagem_id"]) for p in paineis]
+        if ultima_msg.id in ids_paineis:
+            return
 
-    for painel in paineis:
-        nome = painel["nome"]
-        msg_id = int(painel["mensagem_id"])
-
-        try:
-            msg = await safe_fetch_message(canal, msg_id)
-            if not msg:
-                continue
-
-            embed_salvo = None
-            if msg.embeds:
-                embed_salvo = msg.embeds[0]
+        for painel in paineis:
+            nome = painel["nome"]
+            msg_id = int(painel["mensagem_id"])
 
             try:
-                await msg.delete()
-            except Exception as e:
-                logger.warning(f"⚠️ Erro ao deletar painel antigo {nome}: {e}")
+                msg = await safe_fetch_message(canal, msg_id)
+                if not msg:
+                    logger.warning(f"⚠️ Painel '{nome}' não existe mais no canal. Tentando recriar...")
+                    # Se é painel de meta, recria via atualizar_embed_meta
+                    if nome.startswith("meta_"):
+                        try:
+                            user_id = int(nome.replace("meta_", ""))
+                            await atualizar_embed_meta(user_id)
+                            logger.info(f"✅ Painel '{nome}' recriado via atualizar_embed_meta")
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao recriar painel de meta {nome}: {e}")
+                    else:
+                        logger.warning(f"⚠️ Painel '{nome}' não existe mais e não pode ser recriado automaticamente")
+                    continue
 
-            if embed_salvo:
+                # ═══════════════════════════════════════════════════════════════
+                # SALVA EMBED E VIEW ANTES DE DELETAR
+                # ═══════════════════════════════════════════════════════════════
+                embed_salvo = None
+                if msg.embeds and len(msg.embeds) > 0:
+                    embed_salvo = msg.embeds[0]
+
+                if not embed_salvo:
+                    logger.warning(f"⚠️ Painel '{nome}' não tem embed. Tentando recriar...")
+                    if nome.startswith("meta_"):
+                        try:
+                            user_id = int(nome.replace("meta_", ""))
+                            await atualizar_embed_meta(user_id)
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao recriar painel de meta {nome}: {e}")
+                    continue
+
                 view_nova = criar_view_por_painel(nome)
-                nova_msg = await safe_request(canal.send, embed=embed_salvo, view=view_nova)
+
+                # ═══════════════════════════════════════════════════════════════
+                # DELETA
+                # ═══════════════════════════════════════════════════════════════
+                try:
+                    await msg.delete()
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao deletar painel antigo {nome}: {e}")
+                    continue
+
+                # ═══════════════════════════════════════════════════════════════
+                # RECRIA IMEDIATAMENTE (com retry de 3 tentativas)
+                # ═══════════════════════════════════════════════════════════════
+                nova_msg = None
+                for tentativa in range(3):
+                    try:
+                        nova_msg = await canal.send(embed=embed_salvo, view=view_nova)
+                        if nova_msg:
+                            break
+                    except Exception as e:
+                        logger.error(f"❌ Tentativa {tentativa + 1}/3 falhou ao recriar painel '{nome}': {e}")
+                        await asyncio.sleep(2 * (tentativa + 1))
 
                 if nova_msg:
                     await registrar_painel_ultimo(nome, canal.id, nova_msg.id)
@@ -19194,16 +19239,17 @@ async def verificar_e_mover_paineis(canal):
                             )
                     await BotaoPersistente.salvar_botao(nova_msg.id, canal.id, "painel", {"nome": nome})
                     logger.info(f"🔄 Painel '{nome}' movido para o final")
-        except Exception as e:
-            logger.error(f"❌ Erro ao mover painel {nome}: {e}")
+                else:
+                    logger.error(f"❌❌❌ Painel '{nome}' foi PERDIDO — não foi possível recriar após 3 tentativas!")
 
+            except Exception as e:
+                logger.error(f"❌ Erro ao mover painel {nome}: {e}")
+    except Exception as e:
+        logger.error(f"❌ Erro geral em verificar_e_mover_paineis: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: criar_view_por_painel (SUPORTA META_{USER_ID})
+# FUNÇÃO: criar_view_por_painel (PONTO SÓ SE MECÂNICO)
 # ────────────────────────────────────────────────────────────────────────────────
 def criar_view_por_painel(nome):
-    # ═══════════════════════════════════════════════════════════════════════════
-    # PAINEL DE META INDIVIDUAL (meta_{user_id})
-    # ═══════════════════════════════════════════════════════════════════════════
     if nome.startswith("meta_"):
         try:
             user_id = int(nome.replace("meta_", ""))
@@ -19211,10 +19257,24 @@ def criar_view_por_painel(nome):
             member = guild.get_member(user_id) if guild else None
             if not member:
                 return None
-            # Recria a view correta baseado no cargo atual
-            if CARGO_SOLDADO_ID in [r.id for r in member.roles]:
+            roles_ids = [r.id for r in member.roles]
+            tem_soldado = CARGO_SOLDADO_ID in roles_ids
+            tem_mecanico = CARGO_MECANICO_ID in roles_ids
+
+            # Soldado + Mecânico → SoldadoMecanicoView (com ponto)
+            if tem_soldado and tem_mecanico:
+                view = SoldadoMecanicoView(user_id)
+                for item in view.children:
+                    if item.custom_id == "soldado_mecanico_ponto":
+                        item.label = "🟢 Abrir Ponto"
+                        item.style = discord.ButtonStyle.success
+                        item.emoji = "🟢"
+                return view
+            # Só soldado → SoldadoView (SEM ponto)
+            elif tem_soldado:
                 return SoldadoView(user_id)
-            elif CARGO_MECANICO_ID in [r.id for r in member.roles]:
+            # Só mecânico → MecanicoView (com ponto)
+            elif tem_mecanico:
                 view = MecanicoView(user_id)
                 for item in view.children:
                     if item.custom_id == "mecanico_ponto_dinamico":
@@ -19222,6 +19282,7 @@ def criar_view_por_painel(nome):
                         item.style = discord.ButtonStyle.success
                         item.emoji = "🟢"
                 return view
+            # Outros → MetaView (sem ponto)
             else:
                 return MetaView(user_id)
         except:
@@ -19276,7 +19337,6 @@ def criar_view_por_painel(nome):
     elif nome == "painel_emprestimos":
         return EmprestimosView()
     return None
-
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 20 — PAINEL GLOBAL + BOTÕES PERSISTENTES                      ║
 # ════════════════════════════════════════════════════════════════════════════════
