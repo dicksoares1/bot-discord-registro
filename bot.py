@@ -12739,7 +12739,7 @@ async def carregar_metas_cache():
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_embed_meta (SOLDADO MOSTRA TOTAL COLETIVO)
+# FUNÇÃO: atualizar_embed_meta (REGISTRA COMO ÚLTIMO)
 # ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_embed_meta(user_id):
     try:
@@ -12778,7 +12778,6 @@ async def atualizar_embed_meta(user_id):
         if not regra:
             return
 
-        # Se é isento E não é soldado → não monta painel
         if regra["isento"] and regra["tipo"] != "soldado":
             return
 
@@ -12809,9 +12808,6 @@ async def atualizar_embed_meta(user_id):
         tipo_membro = regra["tipo"]
         progresso = 0
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # SOLDADO — mostra TOTAL COLETIVO (não o individual)
-        # ═══════════════════════════════════════════════════════════════════════
         if tipo_membro == "soldado":
             embed.add_field(name="🎯 TIPO DA SEMANA: ⚔️ SOLDADO", value="\u200b", inline=False)
             if is_isento_lideranca:
@@ -12947,6 +12943,15 @@ async def atualizar_embed_meta(user_id):
 
         msg = await canal.send(embed=embed, view=view_final)
         await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # REGISTRA COMO PAINEL ÚLTIMO (pra subir pro final do canal)
+        # ═══════════════════════════════════════════════════════════════════════
+        try:
+            await registrar_painel_ultimo(f"meta_{user_id}", canal.id, msg.id)
+        except Exception as e:
+            logger.error(f"❌ Erro ao registrar painel de meta como último: {e}")
+
         await verificar_meta_concluida(user_id, progresso)
 
     except Exception as e:
@@ -13093,7 +13098,7 @@ async def atualizar_categoria_meta(member):
         logger.error(f"❌ Erro ao atualizar categoria de {member.name}: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: fixar_painel_meta_no_final
+# FUNÇÃO: fixar_painel_meta_no_final (ROBUSTO — RECRIA SE SUMIR)
 # ────────────────────────────────────────────────────────────────────────────────
 async def fixar_painel_meta_no_final(user_id):
     try:
@@ -13103,21 +13108,30 @@ async def fixar_painel_meta_no_final(user_id):
         canal = bot.get_channel(dados["canal_id"])
         if not canal:
             return
+
+        # Busca o painel de meta no canal
         mensagem_painel = None
         async for msg in canal.history(limit=30):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
-                if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
+                if msg.embeds[0].title and "META SEMANAL" in msg.embeds[0].title.upper():
                     mensagem_painel = msg
                     break
+
+        # Se não achou, recria
         if not mensagem_painel:
             await atualizar_embed_meta(user_id)
             return
+
+        # Verifica se já é a última mensagem
         ultima_msg = None
         async for msg in canal.history(limit=1):
             ultima_msg = msg
             break
+
         if ultima_msg and ultima_msg.id == mensagem_painel.id:
             return
+
+        # Se não é a última, deleta e recria
         try:
             await mensagem_painel.delete()
             await asyncio.sleep(1.5)
@@ -19108,7 +19122,7 @@ class BotaoPersistente:
         return None
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: verificar_e_mover_paineis
+# FUNÇÃO: verificar_e_mover_paineis (ROBUSTO — MOVE TUDO PRO FINAL)
 # ────────────────────────────────────────────────────────────────────────────────
 async def verificar_e_mover_paineis(canal):
     paineis = await buscar_paineis_do_canal(canal.id)
@@ -19166,9 +19180,35 @@ async def verificar_e_mover_paineis(canal):
             logger.error(f"❌ Erro ao mover painel {nome}: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: criar_view_por_painel
+# FUNÇÃO: criar_view_por_painel (SUPORTA META_{USER_ID})
 # ────────────────────────────────────────────────────────────────────────────────
 def criar_view_por_painel(nome):
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PAINEL DE META INDIVIDUAL (meta_{user_id})
+    # ═══════════════════════════════════════════════════════════════════════════
+    if nome.startswith("meta_"):
+        try:
+            user_id = int(nome.replace("meta_", ""))
+            guild = bot.get_guild(GUILD_ID)
+            member = guild.get_member(user_id) if guild else None
+            if not member:
+                return None
+            # Recria a view correta baseado no cargo atual
+            if CARGO_SOLDADO_ID in [r.id for r in member.roles]:
+                return SoldadoView(user_id)
+            elif CARGO_MECANICO_ID in [r.id for r in member.roles]:
+                view = MecanicoView(user_id)
+                for item in view.children:
+                    if item.custom_id == "mecanico_ponto_dinamico":
+                        item.label = "🟢 Abrir Ponto"
+                        item.style = discord.ButtonStyle.success
+                        item.emoji = "🟢"
+                return view
+            else:
+                return MetaView(user_id)
+        except:
+            return None
+
     if nome == "painel_registro":
         return RegistroView()
     elif nome == "painel_avisos":
@@ -21765,13 +21805,33 @@ async def on_ready():
     if not hasattr(bot, "heartbeat_producao_started"):
         bot.loop.create_task(heartbeat_producao_loop())
         bot.heartbeat_producao_started = True
+    # ═══════════════════════════════════════════════════════════════════════════
+    # RESTAURA PAINÉIS COMO ÚLTIMO EM TODOS OS CANAIS
+    # ═══════════════════════════════════════════════════════════════════════════
+    try:
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                paineis_rows = await conn.fetch("SELECT DISTINCT canal_id FROM paineis_ultimos WHERE ativo = true")
+            for row in paineis_rows:
+                canal_id = int(row["canal_id"])
+                canal = bot.get_channel(canal_id)
+                if canal:
+                    try:
+                        await verificar_e_mover_paineis(canal)
+                        await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao restaurar painel do canal {canal_id}: {e}")
+        logger.info("✅ Painéis restaurados como último em todos os canais")
+    except Exception as e:
+        logger.error(f"❌ Erro ao restaurar painéis últimos: {e}")
     gc.collect()
     logger.info("=" * 50)
     logger.info("✅ BOT ONLINE 100% COMPLETO - v8.0")
     logger.info("=" * 50)
 
 # ────────────────────────────────────────────────────────────────────────────────
-# EVENTO: on_message
+# EVENTO: on_message (MOVE PAINÉIS PRO FINAL SEMPRE)
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_message(message: discord.Message):
@@ -21782,7 +21842,11 @@ async def on_message(message: discord.Message):
         return
 
     canal = message.channel
+
     if isinstance(canal, discord.TextChannel):
+        # ═══════════════════════════════════════════════════════════════════════
+        # PRIORIDADE 1: canal de meta (de um membro)
+        # ═══════════════════════════════════════════════════════════════════════
         for uid, dados in list(metas_cache.items()):
             if dados["canal_id"] == canal.id:
                 try:
@@ -21792,7 +21856,9 @@ async def on_message(message: discord.Message):
                     logger.error(f"Erro ao fixar painel de meta: {e}")
                 break
 
-    if isinstance(canal, discord.TextChannel):
+        # ═══════════════════════════════════════════════════════════════════════
+        # PRIORIDADE 2: qualquer outro painel registrado em paineis_ultimos
+        # ═══════════════════════════════════════════════════════════════════════
         try:
             await verificar_e_mover_paineis(canal)
         except Exception as e:
@@ -21801,7 +21867,6 @@ async def on_message(message: discord.Message):
     await on_message_lavagem(message)
 
     await bot.process_commands(message)
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: shutdown
 # ────────────────────────────────────────────────────────────────────────────────
