@@ -12739,51 +12739,64 @@ async def carregar_metas_cache():
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_embed_meta (PONTO SÓ SE FOR MECÂNICO)
+# FUNÇÃO: atualizar_embed_meta (COM LOGS DE DEBUG)
 # ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_embed_meta(user_id):
     try:
+        logger.info(f"🔍 [atualizar_embed_meta] Iniciando para user_id={user_id}")
+
         if str(user_id) not in metas_cache:
+            logger.info(f"🔍 [atualizar_embed_meta] {user_id} NÃO está em metas_cache. Tentando recarregar...")
             await carregar_metas_cache()
             if str(user_id) not in metas_cache:
                 guild = bot.get_guild(GUILD_ID)
                 member = guild.get_member(int(user_id))
                 if member:
+                    logger.info(f"🔍 [atualizar_embed_meta] Criando sala para {member.display_name}")
                     await criar_sala_meta(member)
                     await carregar_metas_cache()
+                else:
+                    logger.warning(f"⚠️ [atualizar_embed_meta] Membro {user_id} não encontrado no servidor")
                 return
 
         dados = metas_cache[str(user_id)]
         canal = bot.get_channel(dados["canal_id"])
         if not canal:
+            logger.warning(f"⚠️ [atualizar_embed_meta] Canal {dados['canal_id']} não encontrado pra {user_id}")
             if str(user_id) in metas_cache:
                 del metas_cache[str(user_id)]
             return
 
         pool = await get_pool()
         if not pool:
+            logger.error(f"❌ [atualizar_embed_meta] Pool indisponível")
             return
 
         async with pool.acquire() as conn:
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
         if not meta:
+            logger.warning(f"⚠️ [atualizar_embed_meta] Meta não existe no banco pra {user_id}")
             return
 
         guild = bot.get_guild(GUILD_ID)
         member = guild.get_member(int(user_id))
         if not member:
+            logger.warning(f"⚠️ [atualizar_embed_meta] Membro {user_id} não encontrado")
             return
 
         regra = await obter_regra_meta_membro(member)
         if not regra:
+            logger.warning(f"⚠️ [atualizar_embed_meta] Regra não encontrada pra {user_id}")
             return
 
         if regra["isento"] and regra["tipo"] != "soldado":
+            logger.info(f"🔍 [atualizar_embed_meta] {member.display_name} é ISENTO (tipo={regra['tipo']}), não cria painel")
             return
+
+        logger.info(f"🔍 [atualizar_embed_meta] Criando painel pra {member.display_name} (tipo={regra['tipo']}, is_mecanico={CARGO_MECANICO_ID in [r.id for r in member.roles]})")
 
         nome = member.display_name
         is_mecanico = CARGO_MECANICO_ID in [r.id for r in member.roles]
-        is_soldado = CARGO_SOLDADO_ID in [r.id for r in member.roles]
         is_isento_lideranca = regra.get("is_isento_lideranca", False)
 
         dinheiro_meta = meta["dinheiro"] or 0
@@ -12907,9 +12920,6 @@ async def atualizar_embed_meta(user_id):
                 texto_dividas += f"🧨 Pólvora: {fmt_num(divida_polvora)} unidades\n"
             embed.add_field(name="🚨 DÍVIDAS PENDENTES", value=f"```diff\n- {texto_dividas.strip().replace(chr(10), chr(10) + '- ')}\n```", inline=False)
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # MECÂNICO: mostra meta de horas INDEPENDENTE do cargo principal
-        # ═══════════════════════════════════════════════════════════════════════
         if is_mecanico:
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             segundos_semana = await calcular_horas_semana(user_id)
@@ -12928,11 +12938,8 @@ async def atualizar_embed_meta(user_id):
                     pass
 
         # ═══════════════════════════════════════════════════════════════════════
-        # VIEW: só tem ponto quem tem cargo mecânico
-        # - soldado + mecânico → SoldadoMecanicoView (tem ponto + botões de soldado)
-        # - soldado puro → SoldadoView (SEM ponto)
-        # - mecânico puro → MecanicoView (com ponto)
-        # - outros → MetaView (sem ponto)
+        # VIEW: soldado+mecânico → SoldadoMecanicoView | soldado puro → SoldadoView
+        #       mecânico puro → MecanicoView | outros → MetaView
         # ═══════════════════════════════════════════════════════════════════════
         if tipo_membro == "soldado" and is_mecanico:
             view_final = SoldadoMecanicoView(user_id)
@@ -12966,6 +12973,8 @@ async def atualizar_embed_meta(user_id):
             view_final = MetaView(user_id)
 
         msg = await canal.send(embed=embed, view=view_final)
+        logger.info(f"✅ [atualizar_embed_meta] Painel criado pra {nome} (msg_id={msg.id})")
+
         await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
 
         try:
@@ -12976,7 +12985,10 @@ async def atualizar_embed_meta(user_id):
         await verificar_meta_concluida(user_id, progresso)
 
     except Exception as e:
-        logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
+        logger.error(f"❌ [atualizar_embed_meta] Erro ao atualizar embed da meta: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_aviso_meta_nao_batida
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13389,6 +13401,139 @@ class SoldadoView(discord.ui.View):
             await interaction.response.send_modal(EditarDinheiroAcoesModal(self.user_id, valor_atual))
         except Exception as e:
             logger.error(f"❌ Erro no botão Editar Ações (Soldado): {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: SoldadoMecanicoView (Soldado + Mecânico — TEM PONTO)
+# ────────────────────────────────────────────────────────────────────────────────
+class SoldadoMecanicoView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+
+    @discord.ui.button(label="🟢 Abrir Ponto", style=discord.ButtonStyle.success, custom_id="soldado_mecanico_ponto", emoji="🟢", row=0)
+    async def ponto_dinamico(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != str(self.user_id):
+            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        ponto_ativo = await buscar_ponto_ativo(self.user_id)
+        if ponto_ativo:
+            resultado = await fechar_ponto(self.user_id)
+            if not resultado:
+                await interaction.followup.send("⚠️ Erro ao fechar ponto. Tente novamente.", ephemeral=True)
+                return
+            await atualizar_embed_meta(self.user_id)
+            tempo_formatado = formatar_horas(resultado["tempo"])
+            await interaction.followup.send(
+                f"✅ **Ponto fechado!**\n"
+                f"⏰ **Entrada:** {resultado['entrada'].strftime('%H:%M:%S')}\n"
+                f"⏰ **Saída:** {resultado['saida'].strftime('%H:%M:%S')}\n"
+                f"⏱️ **Tempo desta sessão:** {tempo_formatado}",
+                ephemeral=True
+            )
+        else:
+            sucesso = await abrir_ponto(self.user_id)
+            if not sucesso:
+                await interaction.followup.send("❌ Erro ao abrir ponto. Tente novamente.", ephemeral=True)
+                return
+            await atualizar_embed_meta(self.user_id)
+            await interaction.followup.send(
+                f"✅ **Ponto aberto às {agora().strftime('%H:%M:%S')}!**\n⏰ O tempo está contando...",
+                ephemeral=True
+            )
+
+    @discord.ui.button(label="💰 Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="soldado_mecanico_add_din", emoji="💰", row=1)
+    async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            pool = await get_pool()
+            if not pool:
+                await interaction.response.send_message("❌ Banco de dados indisponível!", ephemeral=True)
+                return
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            if not meta:
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                return
+            await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Adicionar Dinheiro (SoldadoMecânico): {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="soldado_mecanico_edit", emoji="✏️", row=1)
+    async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            is_dono = str(interaction.user.id) == str(self.user_id)
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
+            if not is_dono and not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar a meta!", ephemeral=True)
+                return
+            pool = await get_pool()
+            if not pool:
+                return
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            if not meta:
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                return
+            dados = {
+                "dinheiro": meta["dinheiro"] or 0,
+                "saldo_excedente": meta.get("saldo_excedente") or 0
+            }
+            await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Meta (SoldadoMecânico): {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    @discord.ui.button(label="✏️ Editar Horas", style=discord.ButtonStyle.primary, custom_id="soldado_mecanico_edit_horas", emoji="⏰", row=2)
+    async def editar_horas(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            is_dono = str(interaction.user.id) == str(self.user_id)
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
+            if not is_dono and not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar as horas!", ephemeral=True)
+                return
+            segundos_atuais = await calcular_horas_semana(self.user_id)
+            modal = EditarHorasModal(self.user_id, segundos_atuais)
+            await interaction.response.send_modal(modal)
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Horas (SoldadoMecânico): {e}")
+            try:
+                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
+    @discord.ui.button(label="⚔️ Editar Dinheiro de Ações", style=discord.ButtonStyle.primary, custom_id="soldado_mecanico_edit_acoes", emoji="⚔️", row=2)
+    async def editar_acoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+            is_admin = interaction.user.guild_permissions.administrator
+            if not is_gerente and not is_admin:
+                await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM** podem editar o dinheiro de ações!", ephemeral=True)
+                return
+            pool = await get_pool()
+            if not pool:
+                return
+            async with pool.acquire() as conn:
+                meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            if not meta:
+                await interaction.response.send_message("❌ **Meta não encontrada!**", ephemeral=True)
+                return
+            valor_atual = meta.get("dinheiro_acoes") or 0
+            await interaction.response.send_modal(EditarDinheiroAcoesModal(self.user_id, valor_atual))
+        except Exception as e:
+            logger.error(f"❌ Erro no botão Editar Ações (SoldadoMecânico): {e}")
             try:
                 await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
