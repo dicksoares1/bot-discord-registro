@@ -955,6 +955,9 @@ async def inicializar_tabelas(pool):
         await conn.execute("""
             ALTER TABLE config_meta_global ADD COLUMN IF NOT EXISTS meta_soldado BIGINT DEFAULT 0
         """)
+        await conn.execute("""
+            ALTER TABLE config_meta_global ADD COLUMN IF NOT EXISTS total_soldado_semana BIGINT DEFAULT 0
+        """)
         # ═══════════════ TABELAS DO CAIXA ═══════════════
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS caixa (
@@ -1315,31 +1318,63 @@ def membro_deve_ter_meta(member):
     return None
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: obter_regra_meta_membro (COM PRIORIDADE SOLDADO)
+# FUNÇÃO: obter_regra_meta_membro (SOLDADO VISUAL SOBRESCREVE, MAS NÃO REMOVE ISENÇÃO)
 # ────────────────────────────────────────────────────────────────────────────────
 async def obter_regra_meta_membro(member):
     if not member:
         return None
     roles_ids = [r.id for r in member.roles]
-    if membro_deve_ter_meta(member) == "isento" or CARGO_SEM_META_ID in roles_ids:
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PRIORIDADE #1: SM — ISENTO TOTAL (nem aparece no painel de soldado)
+    # ═══════════════════════════════════════════════════════════════════════════
+    if CARGO_SEM_META_ID in roles_ids:
         return {"isento": True, "tipo": None, "meta_dinheiro": 0, "meta_polvora": 0, "meta_acoes": 0, "meta_soldado": 0}
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # PRIORIDADE ABSOLUTA: CARGO SOLDADO
-    # Se o membro tem cargo Soldado, ele SEMPRE entra na meta de soldado,
-    # ignorando qualquer outro cargo (membro, responsável, mecânico, etc).
+    # CARGO ISENTO? (Gerente, Gerente Geral, 01, 02, 03)
+    # ═══════════════════════════════════════════════════════════════════════════
+    cargos_isento_lideranca = [
+        CARGO_GERENTE_ID,
+        CARGO_GERENTE_GERAL_ID,
+        CARGO_GERENTE_MECANICA_ID,
+        CARGO_01_ID,
+        CARGO_02_ID,
+        CARGO_03_ID,
+    ]
+    is_isento_lideranca = any(r in roles_ids for r in cargos_isento_lideranca)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PRIORIDADE #2: SOLDADO
+    # - Se é SOLDADO + cargo isento (Gerente, 01, etc.):
+    #   → Mostra painel de SOLDADO (visual), MAS continua isento de cobrança
+    # - Se é SOLDADO + cargo NÃO isento:
+    #   → É SOLDADO normal (cobra meta, gera dívida)
     # ═══════════════════════════════════════════════════════════════════════════
     if CARGO_SOLDADO_ID in roles_ids:
         meta_soldado = await buscar_meta_soldado()
         return {
-            "isento": False,
+            "isento": is_isento_lideranca,
             "tipo": "soldado",
             "meta_dinheiro": 0,
             "meta_polvora": 0,
             "meta_acoes": meta_soldado,
-            "meta_soldado": meta_soldado
+            "meta_soldado": meta_soldado,
+            "is_isento_lideranca": is_isento_lideranca
         }
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CARGO ISENTO SEM SOLDADO — ISENTO TOTAL
+    # ═══════════════════════════════════════════════════════════════════════════
+    if is_isento_lideranca:
+        return {"isento": True, "tipo": None, "meta_dinheiro": 0, "meta_polvora": 0, "meta_acoes": 0, "meta_soldado": 0}
+
+    if membro_deve_ter_meta(member) == "isento":
+        return {"isento": True, "tipo": None, "meta_dinheiro": 0, "meta_polvora": 0, "meta_acoes": 0, "meta_soldado": 0}
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # DEMAIS CARGOS — segue lógica normal
+    # ═══════════════════════════════════════════════════════════════════════════
     hierarquia = [
         CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID,
         CARGO_RESP_PRODUCAO_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
@@ -1350,29 +1385,34 @@ async def obter_regra_meta_membro(member):
         if c_id in roles_ids:
             cargo_principal = c_id
             break
+
     tipo_config, valor_config = await buscar_config_cargo(cargo_principal) if cargo_principal else (None, None)
     tipo_global = await buscar_tipo_meta_semana()
     tipo_final = tipo_config if tipo_config else tipo_global
+
     meta_dinheiro = 0
     meta_polvora = 0
     meta_acoes = 0
+
     if tipo_final == "acoes":
         meta_acoes = await buscar_meta_global_acoes()
     elif tipo_final in ("dinheiro", "ambos"):
         meta_dinheiro = valor_config if valor_config else await definir_valor_meta_por_id(member.id)
         if meta_dinheiro == 0:
             meta_dinheiro = await definir_valor_meta_por_cargo(member)
+
     if tipo_final in ("polvora", "ambos"):
         meta_polvora = valor_config if valor_config else await definir_valor_meta_polvora(member.id)
+
     return {
         "isento": False,
         "tipo": tipo_final,
         "meta_dinheiro": meta_dinheiro,
         "meta_polvora": meta_polvora,
         "meta_acoes": meta_acoes,
-        "meta_soldado": 0
+        "meta_soldado": 0,
+        "is_isento_lideranca": False
     }
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: safe_request
 # ────────────────────────────────────────────────────────────────────────────────
@@ -5811,7 +5851,7 @@ class ResultadoAcaoView(discord.ui.View):
         await interaction.response.send_modal(ResultadoPerdeuModal(self.acao_id, self.mensagem_original))
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: ResultadoGanhouModal (COM DIVISÃO ENTRE PARTICIPANTES)
+# CLASSE: ResultadoGanhouModal (DIVISÃO COLETIVA DOS SOLDADOS)
 # ────────────────────────────────────────────────────────────────────────────────
 class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
     dinheiro = discord.ui.TextInput(
@@ -5880,13 +5920,11 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
 
         # ═══════════════════════════════════════════════════════════════════════
         # DIVISÃO DO VALOR ENTRE PARTICIPANTES
-        # Regra: divide entre TODOS os participantes (botão + manuais com match).
-        # Só quem tem CARGO SOLDADO recebe na meta (dinheiro_acoes).
+        # Regra: divide entre TODOS os participantes.
+        # Só quem tem CARGO SOLDADO tem a parte somada no ACUMULADO COLETIVO
+        # dos soldados (não mais no dinheiro_acoes individual).
         # ═══════════════════════════════════════════════════════════════════════
-        total_participantes_botao = len(participantes_botao)
-        total_participantes_manuais = len(participantes_manuais)
-        total_participantes = total_participantes_botao + total_participantes_manuais
-
+        total_participantes = len(participantes_botao) + len(participantes_manuais)
         valor_por_participante = valor_total // total_participantes if total_participantes > 0 else 0
 
         logger.info(
@@ -5894,11 +5932,11 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
             f"{total_participantes} participantes = R$ {formatar_dinheiro(valor_por_participante)} por pessoa"
         )
 
-        membros_que_receberam = []
         membros_soldados = []
         membros_nao_soldados = []
+        total_para_soldados = 0
 
-        # Processa participantes do botão (IDs)
+        # Processa participantes do botão
         for p in participantes_botao:
             uid = p["user_id"]
             try:
@@ -5906,38 +5944,21 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
                 if not member:
                     continue
 
-                # ═══════════════════════════════════════════════════════════════
-                # SÓ SOLDADO RECEBE NA META (dinheiro_acoes)
-                # ═══════════════════════════════════════════════════════════════
                 tem_soldado = any(r.id == CARGO_SOLDADO_ID for r in member.roles)
                 if tem_soldado:
-                    # Adiciona ao dinheiro_acoes do membro
-                    meta_row = await conn.fetchrow("SELECT dinheiro_acoes FROM metas WHERE user_id = $1", str(uid))
-                    if meta_row:
-                        novo_acoes = (meta_row["dinheiro_acoes"] or 0) + valor_por_participante
-                        await conn.execute("UPDATE metas SET dinheiro_acoes = $1 WHERE user_id = $2", novo_acoes, str(uid))
-                        if str(uid) in metas_cache:
-                            metas_cache[str(uid)]["dinheiro_acoes"] = novo_acoes
-                        membros_soldados.append(member.display_name)
-                        try:
-                            await atualizar_embed_meta(int(uid))
-                        except:
-                            pass
-                    else:
-                        logger.warning(f"⚠️ Soldado {member.display_name} sem sala de meta — pulando")
+                    membros_soldados.append(member.display_name)
+                    total_para_soldados += valor_por_participante
                 else:
-                    # Não é soldado → não recebe nada (conforme opção C)
                     membros_nao_soldados.append(member.display_name)
 
             except Exception as e:
                 logger.error(f"❌ Erro ao processar participante {uid}: {e}")
 
-        # Processa participantes manuais (nomes)
+        # Processa participantes manuais
         for p in participantes_manuais:
             nome_manual = p["nome"]
             if not nome_manual:
                 continue
-            # Tenta achar o membro pelo nome/apelido
             member_encontrado = None
             try:
                 for m in guild.members:
@@ -5950,24 +5971,38 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
             if member_encontrado:
                 tem_soldado = any(r.id == CARGO_SOLDADO_ID for r in member_encontrado.roles)
                 if tem_soldado:
-                    try:
-                        meta_row = await conn.fetchrow("SELECT dinheiro_acoes FROM metas WHERE user_id = $1", str(member_encontrado.id))
-                        if meta_row:
-                            novo_acoes = (meta_row["dinheiro_acoes"] or 0) + valor_por_participante
-                            await conn.execute("UPDATE metas SET dinheiro_acoes = $1 WHERE user_id = $2", novo_acoes, str(member_encontrado.id))
-                            if str(member_encontrado.id) in metas_cache:
-                                metas_cache[str(member_encontrado.id)]["dinheiro_acoes"] = novo_acoes
-                            membros_soldados.append(member_encontrado.display_name)
-                            try:
-                                await atualizar_embed_meta(member_encontrado.id)
-                            except:
-                                pass
-                    except Exception as e:
-                        logger.error(f"❌ Erro ao processar manual soldado {nome_manual}: {e}")
+                    membros_soldados.append(member_encontrado.display_name)
+                    total_para_soldados += valor_por_participante
                 else:
                     membros_nao_soldados.append(nome_manual)
             else:
                 logger.warning(f"⚠️ Participante manual '{nome_manual}' não encontrado no servidor")
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # SOMA NO ACUMULADO COLETIVO DOS SOLDADOS
+        # ═══════════════════════════════════════════════════════════════════════
+        if total_para_soldados > 0:
+            await somar_total_soldado(total_para_soldados)
+            logger.info(f"⚔️ Total coletivo de soldados somado: +{formatar_dinheiro(total_para_soldados)}")
+
+            # Atualiza o painel de todos os soldados
+            meta_soldado = await buscar_meta_soldado()
+            total_atual = await buscar_total_soldado()
+            try:
+                cargo_soldado = guild.get_role(CARGO_SOLDADO_ID)
+                if cargo_soldado:
+                    for m in guild.members:
+                        if m.bot:
+                            continue
+                        if cargo_soldado not in m.roles:
+                            continue
+                        try:
+                            await atualizar_embed_meta(m.id)
+                            await asyncio.sleep(0.3)
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao atualizar soldado {m.display_name}: {e}")
+            except Exception as e:
+                logger.error(f"❌ Erro ao atualizar painéis dos soldados: {e}")
 
         # ═══════════════════════════════════════════════════════════════════════
         # MONTA LISTA DE PARTICIPANTES PARA O EMBED
@@ -6023,8 +6058,8 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
 
         if membros_soldados:
             embed.add_field(
-                name="⚔️ SOLDADOS (RECEBERAM NA META)",
-                value=f"```yaml\n{chr(10).join(membros_soldados)}\n```",
+                name="⚔️ SOLDADOS (SOMADO NA META COLETIVA)",
+                value=f"```yaml\n{chr(10).join(membros_soldados)}\n```\n💵 **+{formatar_dinheiro(total_para_soldados)}** no total coletivo",
                 inline=False
             )
         if membros_nao_soldados:
@@ -6043,7 +6078,9 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
 
         msg_extra = ""
         if membros_soldados:
-            msg_extra = f"\n\n⚔️ **Soldados que receberam:** {len(membros_soldados)}\n💵 **Valor por soldado:** {formatar_dinheiro(valor_por_participante)}"
+            meta_soldado = await buscar_meta_soldado()
+            total_atual = await buscar_total_soldado()
+            msg_extra = f"\n\n⚔️ **Soldados que receberam:** {len(membros_soldados)}\n💵 **Somado no total coletivo:** {formatar_dinheiro(total_para_soldados)}\n📊 **Progresso da meta coletiva:** {formatar_dinheiro(total_atual)} / {formatar_dinheiro(meta_soldado)}"
 
         await interaction.followup.send(
             f"✅ **Ação registrada como GANHA!**\n"
@@ -11853,7 +11890,57 @@ async def definir_meta_soldado(valor):
             return True
     except:
         return False
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_total_soldado
+# ────────────────────────────────────────────────────────────────────────────────
+async def buscar_total_soldado():
+    pool = await get_pool()
+    if not pool:
+        return 0
+    try:
+        async with pool.acquire() as conn:
+            val = await conn.fetchval("SELECT total_soldado_semana FROM config_meta_global WHERE id = 1")
+            return val if val else 0
+    except:
+        return 0
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: somar_total_soldado
+# ────────────────────────────────────────────────────────────────────────────────
+async def somar_total_soldado(valor):
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE config_meta_global 
+                SET total_soldado_semana = COALESCE(total_soldado_semana, 0) + $1,
+                    data_atualizacao = NOW()
+                WHERE id = 1
+            """, valor)
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao somar total soldado: {e}")
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: zerar_total_soldado
+# ────────────────────────────────────────────────────────────────────────────────
+async def zerar_total_soldado():
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE config_meta_global 
+                SET total_soldado_semana = 0, data_atualizacao = NOW()
+                WHERE id = 1
+            """)
+            return True
+    except:
+        return False
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: definir_meta_global_acoes
 # ────────────────────────────────────────────────────────────────────────────────
@@ -12652,7 +12739,7 @@ async def carregar_metas_cache():
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_embed_meta (COM VIEW SOLDADO)
+# FUNÇÃO: atualizar_embed_meta (SOLDADO MOSTRA TOTAL COLETIVO)
 # ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_embed_meta(user_id):
     try:
@@ -12691,8 +12778,13 @@ async def atualizar_embed_meta(user_id):
         if not regra:
             return
 
+        # Se é isento E não é soldado → não monta painel
+        if regra["isento"] and regra["tipo"] != "soldado":
+            return
+
         nome = member.display_name
         is_mecanico = CARGO_MECANICO_ID in [r.id for r in member.roles]
+        is_isento_lideranca = regra.get("is_isento_lideranca", False)
 
         dinheiro_meta = meta["dinheiro"] or 0
         dinheiro_acoes = meta.get("dinheiro_acoes") or 0
@@ -12718,23 +12810,31 @@ async def atualizar_embed_meta(user_id):
         progresso = 0
 
         # ═══════════════════════════════════════════════════════════════════════
-        # SOLDADO — Prioridade absoluta
+        # SOLDADO — mostra TOTAL COLETIVO (não o individual)
         # ═══════════════════════════════════════════════════════════════════════
         if tipo_membro == "soldado":
             embed.add_field(name="🎯 TIPO DA SEMANA: ⚔️ SOLDADO", value="\u200b", inline=False)
+            if is_isento_lideranca:
+                embed.add_field(
+                    name="🟡 STATUS: ISENTO (CARGO DE LIDERANÇA)",
+                    value="```diff\n+ Você é Gerente/01/02/03 — NÃO gera dívida\n+ Mas o painel mostra o progresso coletivo\n```",
+                    inline=False
+                )
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            
+
             meta_atual = regra["meta_soldado"]
+            total_coletivo = await buscar_total_soldado()
+
             if meta_atual > 0:
-                progresso = min(dinheiro_acoes / meta_atual, 1.0)
+                progresso = min(total_coletivo / meta_atual, 1.0)
             else:
                 progresso = 0
-            
+
             barra_p = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
-            
+
             embed.add_field(
-                name="⚔️ META DE SOLDADO (CONJUNTA)",
-                value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)} / {formatar_dinheiro(meta_atual)}\n```",
+                name="⚔️ META DE SOLDADO (COLETIVA)",
+                value=f"```yaml\n{formatar_dinheiro(total_coletivo)} / {formatar_dinheiro(meta_atual)}\n```",
                 inline=False
             )
             embed.add_field(
@@ -12742,12 +12842,11 @@ async def atualizar_embed_meta(user_id):
                 value=f"```prolog\n{barra_p}\n```",
                 inline=False
             )
-            if dinheiro_acoes > 0:
-                embed.add_field(
-                    name="💰 TOTAL ACUMULADO (AÇÕES)",
-                    value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)}\n```",
-                    inline=False
-                )
+            embed.add_field(
+                name="💰 SUA CONTRIBUIÇÃO INDIVIDUAL",
+                value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)}\n```",
+                inline=False
+            )
 
         elif tipo_membro == "polvora":
             embed.add_field(name="🎯 TIPO DA SEMANA: 🧨 PÓLVORA", value="\u200b", inline=False)
@@ -12802,7 +12901,7 @@ async def atualizar_embed_meta(user_id):
                 embed.add_field(name="📦 SALDO EXCEDENTE", value=f"```yaml\n{formatar_dinheiro(saldo_excedente)}\n```", inline=False)
             embed.add_field(name=f"📊 PROGRESSO • {int(progresso*100)}%", value=f"```prolog\n{barra_p}\n```", inline=False)
 
-        if divida_dinheiro > 0 or divida_polvora > 0:
+        if (divida_dinheiro > 0 or divida_polvora > 0) and not is_isento_lideranca:
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             texto_dividas = ""
             if divida_dinheiro > 0:
@@ -12828,7 +12927,9 @@ async def atualizar_embed_meta(user_id):
                 except:
                     pass
 
-        if is_mecanico and tipo_membro != "soldado":
+        if tipo_membro == "soldado":
+            view_final = SoldadoView(user_id)
+        elif is_mecanico:
             view_final = MecanicoView(user_id)
             ponto_ativo = await buscar_ponto_ativo(user_id)
             for item in view_final.children:
@@ -12841,8 +12942,6 @@ async def atualizar_embed_meta(user_id):
                         item.label = "🟢 Abrir Ponto"
                         item.style = discord.ButtonStyle.success
                         item.emoji = "🟢"
-        elif tipo_membro == "soldado":
-            view_final = SoldadoView(user_id)
         else:
             view_final = MetaView(user_id)
 
@@ -12852,7 +12951,6 @@ async def atualizar_embed_meta(user_id):
 
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_aviso_meta_nao_batida
 # ────────────────────────────────────────────────────────────────────────────────
@@ -15135,7 +15233,7 @@ async def verificar_dividas_prolongadas():
         logger.error(f"❌ Erro em verificar_dividas_prolongadas: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: fechar_todas_metas (COM META DE SOLDADO)
+# FUNÇÃO: fechar_todas_metas (CHECA TOTAL COLETIVO DOS SOLDADOS)
 # ────────────────────────────────────────────────────────────────────────────────
 async def fechar_todas_metas(data_inicio, data_fim):
     pool = await get_pool()
@@ -15167,6 +15265,10 @@ async def fechar_todas_metas(data_inicio, data_fim):
                             horas_mecanicos[str(member.id)] = segundos
 
             meta_soldado_atual = await buscar_meta_soldado()
+            total_soldado_semana = await buscar_total_soldado()
+            soldados_bateram = total_soldado_semana >= meta_soldado_atual and meta_soldado_atual > 0
+
+            logger.info(f"⚔️ Fechamento soldados: {formatar_dinheiro(total_soldado_semana)} / {formatar_dinheiro(meta_soldado_atual)} — {'BATERAM' if soldados_bateram else 'NÃO BATERAM'}")
 
             dividas_ativas = await conn.fetch("SELECT * FROM metas_dividas WHERE pago = false")
             for divida in dividas_ativas:
@@ -15195,7 +15297,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     continue
                     
                 regra = await obter_regra_meta_membro(member)
-                if not regra or regra["isento"]:
+                if not regra or (regra["isento"] and regra["tipo"] != "soldado"):
                     continue
 
                 dinheiro = meta["dinheiro"] or 0
@@ -15205,19 +15307,20 @@ async def fechar_todas_metas(data_inicio, data_fim):
                 acao = meta.get("acao") or "N/A"
 
                 tipo_membro = regra["tipo"]
+                is_isento_lideranca = regra.get("is_isento_lideranca", False)
 
                 # ═══════════════════════════════════════════════════════════════
-                # SOLDADO: cobrança baseada no dinheiro_acoes vs meta_soldado
+                # SOLDADO: dívida só se o COLETIVO não bateu E ele não é isento
                 # ═══════════════════════════════════════════════════════════════
                 if tipo_membro == "soldado":
-                    if meta_soldado_atual > 0 and dinheiro_acoes < meta_soldado_atual:
+                    if not is_isento_lideranca and not soldados_bateram and meta_soldado_atual > 0:
                         criou = await criar_divida_meta(user_id, meta_soldado_atual, semana_str)
                         if criou:
                             divida_atual = await conn.fetchrow("SELECT valor_original, valor_divida FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro' ORDER BY data_criacao ASC LIMIT 1", user_id)
                             if divida_atual:
                                 await enviar_aviso_meta_nao_batida(user_id, divida_atual["valor_original"], divida_atual["valor_divida"], motivo="NAO_BATEU", tipo="dinheiro")
 
-                if tipo_membro in ("polvora", "ambos"):
+                if tipo_membro in ("polvora", "ambos") and not is_isento_lideranca:
                     if regra["meta_polvora"] > 0 and polvora < regra["meta_polvora"]:
                         criou = await criar_divida_polvora(user_id, regra["meta_polvora"], semana_str)
                         if criou:
@@ -15230,7 +15333,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                             "user_id": user_id, "nome": member.display_name, "total": polvora_total_semana, "valor": polvora_total_semana * 80
                         })
 
-                if tipo_membro in ("dinheiro", "ambos", "acoes"):
+                if tipo_membro in ("dinheiro", "ambos", "acoes") and not is_isento_lideranca:
                     if tipo_membro == "acoes":
                         valor_real_meta = dinheiro_acoes
                         meta_limite = regra["meta_acoes"]
@@ -15264,7 +15367,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     "polvora": polvora,
                     "total_meta": dinheiro_acoes if tipo_membro == "soldado" else (polvora if tipo_membro == "polvora" else min(dinheiro, regra["meta_dinheiro"])),
                     "status": "obrigado",
-                    "is_isento": False,
+                    "is_isento": is_isento_lideranca,
                     "tipo": tipo_membro,
                     "tipo_meta": tipo_membro
                 })
@@ -15287,7 +15390,6 @@ async def fechar_todas_metas(data_inicio, data_fim):
     except Exception as e:
         logger.error(f"❌ Erro ao fechar todas as metas: {e}")
         return None, [], {}
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: zerar_exibicao_metas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -15320,7 +15422,13 @@ async def zerar_exibicao_metas():
                     total_dinheiro_acoes_antes = row["total_acoes"] or 0
         except Exception as e:
             logger.error(f"❌ Erro ao capturar estado das metas antes de zerar: {e}")
-
+        # Zera o total coletivo de soldados da semana
+        try:
+            await zerar_total_soldado()
+            logger.info("⚔️ Total coletivo de soldados zerado para a nova semana")
+        except Exception as e:
+            logger.error(f"❌ Erro ao zerar total soldado: {e}")
+            
         async with pool.acquire() as conn:
             await conn.execute("""
                 UPDATE metas 
@@ -15388,8 +15496,14 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
         guild = interaction.guild
 
         grupos = {
+            "soldados": {
+                "cargos": [CARGO_SOLDADO_ID],
+                "nome": "⚔️ SOLDADOS",
+                "is_isento": False,
+                "itens": []
+            },
             "gerentes": {
-                "cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID],
+                "cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID, CARGO_GERENTE_GERAL_ID],
                 "nome": "🟢 GERENTES (ISENTOS)",
                 "is_isento": True,
                 "itens": []
@@ -15411,8 +15525,8 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                 "itens": []
             },
             "membros": {
-                "cargos": [CARGO_MEMBRO_ID, CARGO_SOLDADO_ID],
-                "nome": "🔴 MEMBROS / SOLDADOS",
+                "cargos": [CARGO_MEMBRO_ID],
+                "nome": "🔴 MEMBROS",
                 "is_isento": False,
                 "itens": []
             },
@@ -15451,15 +15565,20 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             is_isento_por_cargo = any(r in roles_ids for r in CARGOS_ISENTOS_META)
             item_dict["is_isento"] = is_isento_por_cargo
 
-            if is_isento_por_cargo:
+            if is_isento_por_cargo and tipo_meta != "soldado":
                 cumpriu = True
+            elif tipo_meta == "soldado":
+                if is_isento_por_cargo:
+                    cumpriu = True
+                else:
+                    meta_soldado = await buscar_meta_soldado()
+                    total_coletivo = await buscar_total_soldado()
+                    cumpriu = (total_coletivo >= meta_soldado) if meta_soldado > 0 else True
             elif tipo_meta == "polvora":
                 cumpriu = (item.get("polvora", 0) >= meta_limite_polvora) if meta_limite_polvora > 0 else True
             else:
                 cumpriu = (item["dinheiro"] >= meta_limite_dinheiro) if meta_limite_dinheiro > 0 else True
-
-            item_dict["cumpriu"] = cumpriu
-
+                
             if item_dict["is_mecanico"]:
                 item_dict["horas_salvas"] = item.get("horas_segundos", 0)
             else:
@@ -17604,6 +17723,20 @@ async def on_member_update(before, after):
             return
     except Exception as e:
         logger.error(f"❌ Erro ao processar cargo Agregado: {e}")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SOLDADO: atualiza o painel quando ganha ou perde o cargo
+    # ═══════════════════════════════════════════════════════════════════════════
+    try:
+        tinha_soldado = any(r.id == CARGO_SOLDADO_ID for r in before.roles)
+        tem_soldado = any(r.id == CARGO_SOLDADO_ID for r in after.roles)
+        if tinha_soldado != tem_soldado:
+            if str(after.id) in metas_cache:
+                await atualizar_embed_meta(after.id)
+                status_sold = "GANHOU" if tem_soldado else "PERDEU"
+                logger.info(f"⚔️ {after.display_name} {status_sold} o cargo Soldado — meta atualizada")
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar meta por mudança de cargo Soldado: {e}")
 
     try:
         if str(after.id) in metas_cache:
