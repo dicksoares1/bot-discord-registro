@@ -12739,7 +12739,7 @@ async def carregar_metas_cache():
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_embed_meta (REGISTRA COMO ÚLTIMO)
+# FUNÇÃO: atualizar_embed_meta (SOLDADO + MECÂNICO MOSTRA AMBOS)
 # ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_embed_meta(user_id):
     try:
@@ -12906,7 +12906,10 @@ async def atualizar_embed_meta(user_id):
                 texto_dividas += f"🧨 Pólvora: {fmt_num(divida_polvora)} unidades\n"
             embed.add_field(name="🚨 DÍVIDAS PENDENTES", value=f"```diff\n- {texto_dividas.strip().replace(chr(10), chr(10) + '- ')}\n```", inline=False)
 
-        if is_mecanico and tipo_membro != "soldado":
+        # ═══════════════════════════════════════════════════════════════════════
+        # MECÂNICO (INCLUSIVE SOLDADO+MECÂNICO) — mostra meta de horas
+        # ═══════════════════════════════════════════════════════════════════════
+        if is_mecanico:
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             segundos_semana = await calcular_horas_semana(user_id)
             progresso_horas = min(segundos_semana / (6 * 3600), 1.0)
@@ -12923,8 +12926,26 @@ async def atualizar_embed_meta(user_id):
                 except:
                     pass
 
-        if tipo_membro == "soldado":
+        # ═══════════════════════════════════════════════════════════════════════
+        # VIEW: soldado usa SoldadoView, mas se for mecânico também tem botão de ponto
+        # Se for soldado+mecânico, usamos MecanicoView mas com labels adaptados
+        # ═══════════════════════════════════════════════════════════════════════
+        if tipo_membro == "soldado" and not is_mecanico:
             view_final = SoldadoView(user_id)
+        elif tipo_membro == "soldado" and is_mecanico:
+            # Soldado+mecânico: usa MecanicoView (tem botão de ponto)
+            view_final = MecanicoView(user_id)
+            ponto_ativo = await buscar_ponto_ativo(user_id)
+            for item in view_final.children:
+                if item.custom_id == "mecanico_ponto_dinamico":
+                    if ponto_ativo:
+                        item.label = "🔴 Fechar Ponto"
+                        item.style = discord.ButtonStyle.danger
+                        item.emoji = "🔴"
+                    else:
+                        item.label = "🟢 Abrir Ponto"
+                        item.style = discord.ButtonStyle.success
+                        item.emoji = "🟢"
         elif is_mecanico:
             view_final = MecanicoView(user_id)
             ponto_ativo = await buscar_ponto_ativo(user_id)
@@ -12944,9 +12965,6 @@ async def atualizar_embed_meta(user_id):
         msg = await canal.send(embed=embed, view=view_final)
         await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # REGISTRA COMO PAINEL ÚLTIMO (pra subir pro final do canal)
-        # ═══════════════════════════════════════════════════════════════════════
         try:
             await registrar_painel_ultimo(f"meta_{user_id}", canal.id, msg.id)
         except Exception as e:
