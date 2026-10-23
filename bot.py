@@ -12739,7 +12739,7 @@ async def carregar_metas_cache():
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_embed_meta (COM LOGS DE DEBUG)
+# FUNÇÃO: atualizar_embed_meta (CRIA PAINEL PRA TODOS, INCLUSIVE ISENTOS)
 # ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_embed_meta(user_id):
     try:
@@ -12784,20 +12784,26 @@ async def atualizar_embed_meta(user_id):
             logger.warning(f"⚠️ [atualizar_embed_meta] Membro {user_id} não encontrado")
             return
 
+        roles_ids = [r.id for r in member.roles]
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # ÚNICA EXCEÇÃO: CARGO_SEM_META_ID (SM) → NÃO cria painel
+        # ═══════════════════════════════════════════════════════════════════════
+        if CARGO_SEM_META_ID in roles_ids:
+            logger.info(f"🔍 [atualizar_embed_meta] {member.display_name} tem cargo SM, não cria painel")
+            return
+
         regra = await obter_regra_meta_membro(member)
         if not regra:
             logger.warning(f"⚠️ [atualizar_embed_meta] Regra não encontrada pra {user_id}")
             return
 
-        if regra["isento"] and regra["tipo"] != "soldado":
-            logger.info(f"🔍 [atualizar_embed_meta] {member.display_name} é ISENTO (tipo={regra['tipo']}), não cria painel")
-            return
-
-        logger.info(f"🔍 [atualizar_embed_meta] Criando painel pra {member.display_name} (tipo={regra['tipo']}, is_mecanico={CARGO_MECANICO_ID in [r.id for r in member.roles]})")
+        logger.info(f"🔍 [atualizar_embed_meta] Criando painel pra {member.display_name} (tipo={regra['tipo']}, isento={regra['isento']})")
 
         nome = member.display_name
-        is_mecanico = CARGO_MECANICO_ID in [r.id for r in member.roles]
+        is_mecanico = CARGO_MECANICO_ID in roles_ids
         is_isento_lideranca = regra.get("is_isento_lideranca", False)
+        is_isento_total = regra["isento"] and regra["tipo"] != "soldado"
 
         dinheiro_meta = meta["dinheiro"] or 0
         dinheiro_acoes = meta.get("dinheiro_acoes") or 0
@@ -12822,7 +12828,40 @@ async def atualizar_embed_meta(user_id):
         tipo_membro = regra["tipo"]
         progresso = 0
 
-        if tipo_membro == "soldado":
+        # ═══════════════════════════════════════════════════════════════════════
+        # ISENTO TOTAL (gerente/01/02/03 sem soldado) → mostra painel "ISENTO"
+        # ═══════════════════════════════════════════════════════════════════════
+        if is_isento_total:
+            embed.add_field(name="🎯 TIPO DA SEMANA: 🟡 ISENTO", value="\u200b", inline=False)
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+            embed.add_field(
+                name="🟡 STATUS: ISENTO DE META",
+                value="```diff\n+ Você é Gerente/01/02/03/Gerente Geral\n+ NÃO é cobrado meta semanal\n+ Painel apenas informativo\n```",
+                inline=False
+            )
+
+            # Se é mecânico, mostra horas mesmo sendo isento
+            if is_mecanico:
+                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+                segundos_semana = await calcular_horas_semana(user_id)
+                progresso_horas = min(segundos_semana / (6 * 3600), 1.0)
+                barra_horas = "▓" * int(progresso_horas * 20) + "░" * (20 - int(progresso_horas * 20))
+                embed.add_field(name="⏰ META DE HORAS (MECÂNICA)", value=f"```yaml\nTempo total: {formatar_horas(segundos_semana)} / 6h\n```", inline=False)
+                embed.add_field(name=f"📊 PROGRESSO DE HORAS • {int(progresso_horas*100)}%", value=f"```prolog\n{barra_horas}\n```", inline=False)
+
+            # Se tem dinheiro/ações depositados, mostra mesmo sendo isento
+            if dinheiro_meta > 0 or dinheiro_acoes > 0 or polvora_atual > 0:
+                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+                embed.add_field(
+                    name="📊 CONTRIBUIÇÕES (informativo)",
+                    value=f"```yaml\n💰 Dinheiro: {formatar_dinheiro(dinheiro_meta)}\n⚔️ Ações: {formatar_dinheiro(dinheiro_acoes)}\n🧨 Pólvora: {fmt_num(polvora_atual)}\n```",
+                    inline=False
+                )
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # SOLDADO
+        # ═══════════════════════════════════════════════════════════════════════
+        elif tipo_membro == "soldado":
             embed.add_field(name="🎯 TIPO DA SEMANA: ⚔️ SOLDADO", value="\u200b", inline=False)
             if is_isento_lideranca:
                 embed.add_field(
@@ -12858,6 +12897,9 @@ async def atualizar_embed_meta(user_id):
                 inline=False
             )
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # PÓLVORA
+        # ═══════════════════════════════════════════════════════════════════════
         elif tipo_membro == "polvora":
             embed.add_field(name="🎯 TIPO DA SEMANA: 🧨 PÓLVORA", value="\u200b", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -12869,6 +12911,9 @@ async def atualizar_embed_meta(user_id):
             embed.add_field(name="🧨 PÓLVORA (META)", value=f"```yaml\n{fmt_num(polvora_atual)} / {fmt_num(meta_atual)} unidades\n```", inline=False)
             embed.add_field(name=f"📊 PROGRESSO • {int(progresso*100)}%", value=f"```prolog\n{barra_p}\n```", inline=False)
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # AÇÕES
+        # ═══════════════════════════════════════════════════════════════════════
         elif tipo_membro == "acoes":
             embed.add_field(name="🎯 TIPO DA SEMANA: ⚔️ AÇÕES", value="\u200b", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -12880,6 +12925,9 @@ async def atualizar_embed_meta(user_id):
             embed.add_field(name="⚔️ DINHEIRO DE AÇÕES (META)", value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)} / {formatar_dinheiro(meta_atual)}\n```", inline=False)
             embed.add_field(name=f"📊 PROGRESSO • {int(progresso*100)}%", value=f"```prolog\n{barra_p}\n```", inline=False)
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # AMBOS
+        # ═══════════════════════════════════════════════════════════════════════
         elif tipo_membro == "ambos":
             embed.add_field(name="🎯 TIPO DA SEMANA: 💰 + 🧨 AMBOS", value="\u200b", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -12898,6 +12946,9 @@ async def atualizar_embed_meta(user_id):
             embed.add_field(name="📊 DINHEIRO", value=f"```prolog\n{barra_d}\n```", inline=True)
             embed.add_field(name="📊 PÓLVORA", value=f"```prolog\n{barra_p}\n```", inline=True)
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # DINHEIRO (padrão)
+        # ═══════════════════════════════════════════════════════════════════════
         else:
             embed.add_field(name="🎯 TIPO DA SEMANA: 💰 DINHEIRO SUJO", value="\u200b", inline=False)
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
@@ -12911,7 +12962,8 @@ async def atualizar_embed_meta(user_id):
                 embed.add_field(name="📦 SALDO EXCEDENTE", value=f"```yaml\n{formatar_dinheiro(saldo_excedente)}\n```", inline=False)
             embed.add_field(name=f"📊 PROGRESSO • {int(progresso*100)}%", value=f"```prolog\n{barra_p}\n```", inline=False)
 
-        if (divida_dinheiro > 0 or divida_polvora > 0) and not is_isento_lideranca:
+        # Dívidas (só mostra se não for isento de liderança)
+        if (divida_dinheiro > 0 or divida_polvora > 0) and not is_isento_lideranca and not is_isento_total:
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             texto_dividas = ""
             if divida_dinheiro > 0:
@@ -12920,7 +12972,8 @@ async def atualizar_embed_meta(user_id):
                 texto_dividas += f"🧨 Pólvora: {fmt_num(divida_polvora)} unidades\n"
             embed.add_field(name="🚨 DÍVIDAS PENDENTES", value=f"```diff\n- {texto_dividas.strip().replace(chr(10), chr(10) + '- ')}\n```", inline=False)
 
-        if is_mecanico:
+        # Mecânico (mostra horas em qualquer caso, menos se isento total já mostrou)
+        if is_mecanico and not is_isento_total:
             embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             segundos_semana = await calcular_horas_semana(user_id)
             progresso_horas = min(segundos_semana / (6 * 3600), 1.0)
@@ -12938,10 +12991,30 @@ async def atualizar_embed_meta(user_id):
                     pass
 
         # ═══════════════════════════════════════════════════════════════════════
-        # VIEW: soldado+mecânico → SoldadoMecanicoView | soldado puro → SoldadoView
-        #       mecânico puro → MecanicoView | outros → MetaView
+        # VIEW: escolhe a view correta
+        # - isento total sem mecânico → MetaView (só botões básicos)
+        # - isento total com mecânico → MecanicoView (com botão de ponto)
+        # - soldado+mecânico → SoldadoMecanicoView
+        # - soldado puro → SoldadoView
+        # - mecânico puro → MecanicoView
+        # - outros → MetaView
         # ═══════════════════════════════════════════════════════════════════════
-        if tipo_membro == "soldado" and is_mecanico:
+        if is_isento_total and not is_mecanico:
+            view_final = MetaView(user_id)
+        elif is_isento_total and is_mecanico:
+            view_final = MecanicoView(user_id)
+            ponto_ativo = await buscar_ponto_ativo(user_id)
+            for item in view_final.children:
+                if item.custom_id == "mecanico_ponto_dinamico":
+                    if ponto_ativo:
+                        item.label = "🔴 Fechar Ponto"
+                        item.style = discord.ButtonStyle.danger
+                        item.emoji = "🔴"
+                    else:
+                        item.label = "🟢 Abrir Ponto"
+                        item.style = discord.ButtonStyle.success
+                        item.emoji = "🟢"
+        elif tipo_membro == "soldado" and is_mecanico:
             view_final = SoldadoMecanicoView(user_id)
             ponto_ativo = await buscar_ponto_ativo(user_id)
             for item in view_final.children:
@@ -19392,7 +19465,7 @@ async def verificar_e_mover_paineis(canal):
     except Exception as e:
         logger.error(f"❌ Erro geral em verificar_e_mover_paineis: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: criar_view_por_painel (PONTO SÓ SE MECÂNICO)
+# FUNÇÃO: criar_view_por_painel (ISENTO TAMBÉM TEM VIEW)
 # ────────────────────────────────────────────────────────────────────────────────
 def criar_view_por_painel(nome):
     if nome.startswith("meta_"):
@@ -19403,11 +19476,32 @@ def criar_view_por_painel(nome):
             if not member:
                 return None
             roles_ids = [r.id for r in member.roles]
+
+            # SM não tem painel
+            if CARGO_SEM_META_ID in roles_ids:
+                return None
+
             tem_soldado = CARGO_SOLDADO_ID in roles_ids
             tem_mecanico = CARGO_MECANICO_ID in roles_ids
+            tem_isento_lideranca = any(r in roles_ids for r in [
+                CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID,
+                CARGO_01_ID, CARGO_02_ID, CARGO_03_ID
+            ])
 
-            # Soldado + Mecânico → SoldadoMecanicoView (com ponto)
-            if tem_soldado and tem_mecanico:
+            # Isento + mecânico → MecanicoView
+            if tem_isento_lideranca and not tem_soldado and tem_mecanico:
+                view = MecanicoView(user_id)
+                for item in view.children:
+                    if item.custom_id == "mecanico_ponto_dinamico":
+                        item.label = "🟢 Abrir Ponto"
+                        item.style = discord.ButtonStyle.success
+                        item.emoji = "🟢"
+                return view
+            # Isento sem mecânico → MetaView
+            elif tem_isento_lideranca and not tem_soldado:
+                return MetaView(user_id)
+            # Soldado + mecânico → SoldadoMecanicoView
+            elif tem_soldado and tem_mecanico:
                 view = SoldadoMecanicoView(user_id)
                 for item in view.children:
                     if item.custom_id == "soldado_mecanico_ponto":
@@ -19415,10 +19509,10 @@ def criar_view_por_painel(nome):
                         item.style = discord.ButtonStyle.success
                         item.emoji = "🟢"
                 return view
-            # Só soldado → SoldadoView (SEM ponto)
+            # Só soldado → SoldadoView
             elif tem_soldado:
                 return SoldadoView(user_id)
-            # Só mecânico → MecanicoView (com ponto)
+            # Só mecânico → MecanicoView
             elif tem_mecanico:
                 view = MecanicoView(user_id)
                 for item in view.children:
@@ -19427,7 +19521,7 @@ def criar_view_por_painel(nome):
                         item.style = discord.ButtonStyle.success
                         item.emoji = "🟢"
                 return view
-            # Outros → MetaView (sem ponto)
+            # Outros → MetaView
             else:
                 return MetaView(user_id)
         except:
