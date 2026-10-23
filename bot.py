@@ -2296,6 +2296,7 @@ class RelatorioFinanceiroView(discord.ui.View):
     async def gerar_relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioFinanceiroModal())
 
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_registrar_compra
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10696,6 +10697,24 @@ async def listar_dividas_ativas():
         return []
 
 # ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_caixa
+# ────────────────────────────────────────────────────────────────────────────────
+async def enviar_painel_caixa():
+    canal_id = 1559914499014660128
+    canal = bot.get_channel(canal_id)
+    if not canal:
+        logger.error(f"❌ Canal do caixa não encontrado: {canal_id}")
+        return
+
+    try:
+        embed = await gerar_embed_caixa()
+        view = CaixaView()
+        await enviar_ou_atualizar_painel("painel_caixa", canal_id, embed, view)
+        logger.info("✅ Painel do caixa atualizado")
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar painel do caixa: {e}")
+
+# ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_caixa
 # ────────────────────────────────────────────────────────────────────────────────
 async def buscar_caixa():
@@ -11164,6 +11183,13 @@ async def verificar_parcelas_vencendo():
         logger.info(f"✅ {len(parcelas)} avisos de parcela enviados.")
     except Exception as e:
         logger.error(f"❌ Erro ao verificar parcelas vencendo: {e}")
+
+@tasks.loop(hours=24)
+async def verificar_parcelas_diario():
+    try:
+        await verificar_parcelas_vencendo()
+    except Exception as e:
+        logger.error(f"❌ Loop parcelas: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: gerar_embed_emprestimos
