@@ -20180,7 +20180,7 @@ LOGS:
                 "Content-Type": "application/json"
             },
             json={
-                "model": "llama-3.3-70b-versatile",  # ← MODELO ATUALIZADO AQUI
+                "model": "openai/gpt-oss-120b",  # ← MODELO ATUALIZADO AQUI
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 800,
                 "temperature": 0.4
