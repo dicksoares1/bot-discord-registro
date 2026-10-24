@@ -14062,7 +14062,7 @@ async def carregar_metas_cache():
 async def atualizar_embed_meta(user_id):
     """
     Atualiza o painel de meta do membro usando Components V2 (LayoutView).
-    Tenta editar a mensagem existente para evitar rate limit e piscar na tela.
+    Deleta painéis antigos do canal e envia o novo V2 com segurança.
     """
     try:
         if str(user_id) not in metas_cache:
@@ -14079,48 +14079,33 @@ async def atualizar_embed_meta(user_id):
         canal = bot.get_channel(dados["canal_id"])
         if not canal:
             logger.warning(f"⚠️ Canal {dados['canal_id']} não encontrado para {user_id}")
-            if str(user_id) in metas_cache:
-                del metas_cache[str(user_id)]
             return
 
-        # Monta container + info de cargos
         container, cargos_info = await _v2_montar_container(user_id)
         if not container:
             logger.warning(f"⚠️ Não foi possível montar container V2 para {user_id}")
             return
 
-        # Monta LayoutView
         view = V2MetaView(user_id, container, cargos_info)
 
-        # Tenta achar a mensagem antiga para EDITAR
-        mensagem_antiga = None
-        async for msg in canal.history(limit=20):
+        # Deleta painéis antigos (Garante que o novo apareça no final e atualizado)
+        async for msg in canal.history(limit=30):
             if msg.author == bot.user:
-                if len(msg.components) > 0:
-                    mensagem_antiga = msg
-                    break
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.3) # Respiro para o Discord
+                except:
+                    pass
 
-        if mensagem_antiga:
-            try:
-                # Tenta editar o painel existente
-                await mensagem_antiga.edit(view=view)
-                logger.info(f"✅ Painel V2 editado para {user_id}")
-                return
-            except discord.HTTPException:
-                # Se der erro na edição (ex: componentes mudaram de tamanho), deleta e recria
-                await mensagem_antiga.delete()
-
-        # Se não achou mensagem antiga ou falhou ao editar, envia uma nova
+        # Envia novo
         msg = await canal.send(view=view)
 
-        # Salva botão persistente
         try:
             await BotaoPersistente.salvar_botao(msg.id, canal.id, f"meta_v2_{user_id}", {"user_id": user_id})
             await BotaoPersistente.salvar_botao(msg.id, canal.id, f"meta_{user_id}", {"user_id": user_id})
         except Exception as e:
             logger.error(f"❌ Erro ao salvar botão persistente: {e}")
 
-        # Registra como último painel
         try:
             await registrar_painel_ultimo(f"meta_{user_id}", canal.id, msg.id)
             await registrar_painel_ultimo(f"meta_v2_{user_id}", canal.id, msg.id)
@@ -14129,8 +14114,6 @@ async def atualizar_embed_meta(user_id):
 
     except Exception as e:
         logger.error(f"❌ Erro crítico em atualizar_embed_meta (V2) para {user_id}: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
         
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_aviso_meta_nao_batida
@@ -14907,7 +14890,7 @@ async def _v2_montar_container(user_id):
             label = "⚔️ META DE AÇÕES"
             is_money = True
         elif regra["isento"]:
-            meta_valor = 1 # Meta falsa de 1 real só pra barra não bugar
+            meta_valor = 1 # Meta falsa só pra barra de progresso não bugar
             atual = dinheiro
             label = "🟡 ISENTO (CONTRIBUIÇÃO INFORMATIVA)"
             is_money = True
@@ -14918,7 +14901,6 @@ async def _v2_montar_container(user_id):
             is_money = True
 
         pct = min(atual / meta_valor, 1.0) if meta_valor > 0 else 1.0
-        # Se for isento e tiver dinheiro, a barra fica cheia (100%)
         if regra["isento"] and atual > 0:
             pct = 1.0
         
@@ -14939,7 +14921,6 @@ async def _v2_montar_container(user_id):
 
         # Meta
         if regra["isento"]:
-            # Se for isento, mostra só o valor que ele tem, sem falar de meta
             container.add_item(discord.ui.TextDisplay(
                 f"### 🎯 {label}\n"
                 f"```yaml\n"
@@ -14961,15 +14942,13 @@ async def _v2_montar_container(user_id):
                 f"**{status_emoji} Progresso:** `{barra}` **{int(pct*100)}%**"
             ))
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # MECÂNICO — META DE HORAS (SEMPRE APARECE)
-        # ═══════════════════════════════════════════════════════════════════════
+        # MECÂNICO — META DE HORAS
         if is_mecanico:
             try:
                 segundos_semana = await calcular_horas_semana(user_id)
             except Exception:
                 segundos_semana = 0
-            meta_horas_segundos = 6 * 3600  # 6 horas
+            meta_horas_segundos = 6 * 3600
             pct_horas = min(segundos_semana / meta_horas_segundos, 1.0) if meta_horas_segundos > 0 else 1.0
             barra_horas = "▓" * int(pct_horas * 20) + "░" * (20 - int(pct_horas * 20))
 
@@ -21882,74 +21861,42 @@ async def verificar_e_mover_paineis(canal):
 
             try:
                 msg = await safe_fetch_message(canal, msg_id)
-                if not msg:
-                    logger.warning(f"⚠️ Painel '{nome}' não existe mais no canal. Tentando recriar...")
-                    # Se é painel de meta, recria via atualizar_embed_meta
+                
+                # Trata painéis V2 (LayoutView não tem "embed")
+                if not msg or (not msg.embeds and not msg.components):
+                    logger.warning(f"⚠️ Painel '{nome}' não existe ou está vazio. Tentando recriar...")
                     if nome.startswith("meta_"):
                         try:
-                            user_id = int(nome.replace("meta_", ""))
-                            await atualizar_embed_meta(user_id)
-                            logger.info(f"✅ Painel '{nome}' recriado via atualizar_embed_meta")
-                        except Exception as e:
-                            logger.error(f"❌ Erro ao recriar painel de meta {nome}: {e}")
-                    else:
-                        logger.warning(f"⚠️ Painel '{nome}' não existe mais e não pode ser recriado automaticamente")
-                    continue
-
-                # ═══════════════════════════════════════════════════════════════
-                # SALVA EMBED E VIEW ANTES DE DELETAR
-                # ═══════════════════════════════════════════════════════════════
-                embed_salvo = None
-                if msg.embeds and len(msg.embeds) > 0:
-                    embed_salvo = msg.embeds[0]
-
-                if not embed_salvo:
-                    logger.warning(f"⚠️ Painel '{nome}' não tem embed. Tentando recriar...")
-                    if nome.startswith("meta_"):
-                        try:
-                            user_id = int(nome.replace("meta_", ""))
+                            # Limpa 'meta_v2_' ou 'meta_' corretamente
+                            clean_id = nome.replace("meta_v2_", "").replace("meta_", "")
+                            user_id = int(clean_id)
                             await atualizar_embed_meta(user_id)
                         except Exception as e:
                             logger.error(f"❌ Erro ao recriar painel de meta {nome}: {e}")
                     continue
 
-                view_nova = criar_view_por_painel(nome)
-
-                # ═══════════════════════════════════════════════════════════════
-                # DELETA
-                # ═══════════════════════════════════════════════════════════════
-                try:
-                    await msg.delete()
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao deletar painel antigo {nome}: {e}")
+                # Se for um painel V2 com componentes, não precisa mover (já é dinâmico no envio)
+                if msg.components and not msg.embeds:
                     continue
 
-                # ═══════════════════════════════════════════════════════════════
-                # RECRIA IMEDIATAMENTE (com retry de 3 tentativas)
-                # ═══════════════════════════════════════════════════════════════
-                nova_msg = None
-                for tentativa in range(3):
+                # Se for um Embed (painéis antigos), move pro final
+                embed_salvo = msg.embeds[0] if msg.embeds else None
+                if embed_salvo:
+                    view_nova = criar_view_por_painel(nome)
                     try:
-                        nova_msg = await canal.send(embed=embed_salvo, view=view_nova)
-                        if nova_msg:
-                            break
-                    except Exception as e:
-                        logger.error(f"❌ Tentativa {tentativa + 1}/3 falhou ao recriar painel '{nome}': {e}")
-                        await asyncio.sleep(2 * (tentativa + 1))
-
-                if nova_msg:
-                    await registrar_painel_ultimo(nome, canal.id, nova_msg.id)
-                    pool = await get_pool()
-                    if pool:
-                        async with pool.acquire() as conn:
-                            await conn.execute(
-                                "UPDATE paineis SET mensagem_id = $1 WHERE nome = $2",
-                                str(nova_msg.id), nome
-                            )
-                    await BotaoPersistente.salvar_botao(nova_msg.id, canal.id, "painel", {"nome": nome})
-                    logger.info(f"🔄 Painel '{nome}' movido para o final")
-                else:
-                    logger.error(f"❌❌❌ Painel '{nome}' foi PERDIDO — não foi possível recriar após 3 tentativas!")
+                        await msg.delete()
+                    except:
+                        pass
+                    
+                    await asyncio.sleep(0.5)
+                    nova_msg = await canal.send(embed=embed_salvo, view=view_nova)
+                    if nova_msg:
+                        await registrar_painel_ultimo(nome, canal.id, nova_msg.id)
+                        pool = await get_pool()
+                        if pool:
+                            async with pool.acquire() as conn:
+                                await conn.execute("UPDATE paineis SET mensagem_id = $1 WHERE nome = $2", str(nova_msg.id), nome)
+                        await BotaoPersistente.salvar_botao(nova_msg.id, canal.id, "painel", {"nome": nome})
 
             except Exception as e:
                 logger.error(f"❌ Erro ao mover painel {nome}: {e}")
