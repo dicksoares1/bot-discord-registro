@@ -20110,6 +20110,123 @@ async def setup_status():
 # ════════════════════════════════════════════════════════════════════════════════
 
 async def gerar_resumo_ia(logs: list, data_str: str = None) -> str:
+    """
+    Usa Groq (grátis, super rápido) para resumir os logs do dia em PT-BR.
+    Retorna string formatada com markdown, ou mensagem de erro.
+    """
+    if not GROQ_API_KEY:
+        return "⚠️ GROQ_API_KEY não configurada no Railway."
+    if not logs:
+        return "📭 Nenhuma atividade registrada hoje."
+
+    # ─── Compacta os logs pra caber no contexto ───
+    resumo_bruto = []
+    for r in logs[:250]:
+        resumo_bruto.append({
+            "autor": r.get("user_nome") or r.get("user_id"),
+            "modulo": r.get("modulo"),
+            "acao": r.get("acao"),
+            "item": r.get("item_nome"),
+            "detalhes": (r.get("detalhes") or "")[:150]
+        })
+
+    if not data_str:
+        data_str = agora().strftime("%d/%m/%Y")
+
+    prompt = f"""Você é o assistente oficial da facção "Vida Rasa 442" no GTA RP.
+Analise os logs abaixo e produza um resumo direto, objetivo e curto em português.
+
+REGRAS:
+- NÃO invente dados que não estão nos logs
+- Se alguma categoria não tiver dados, escreva "nenhum" ou "0"
+- Use emojis nos títulos
+- Seja direto nas frases
+
+FORMATO EXATO (siga à risca):
+
+## 📊 RESUMO DO DIA — {data_str}
+
+**💰 VENDAS**
+• Total de pedidos: X
+• Destaque: <nome de quem mais vendeu ou "nenhum">
+
+**📈 METAS**
+• Ações registradas: X
+• Membros com dívida: X
+
+**⚔️ AÇÕES**
+• Realizadas: X
+• Vitórias registradas: X
+
+**🏭 PRODUÇÃO**
+• Produções finalizadas: X
+• Pólvora movimentada: X unidades
+
+**🚨 ALERTAS**
+• <lista curta de problemas críticos ou "nenhum">
+
+**🔥 DESTAQUE DO DIA**
+<uma frase curta elogiando quem mais se destacou nas ações>
+
+LOGS:
+{json.dumps(resumo_bruto, ensure_ascii=False)}
+"""
+
+    try:
+        async with http_session.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",  # ← MODELO ATUALIZADO AQUI
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 800,
+                "temperature": 0.4
+            },
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as r:
+            if r.status != 200:
+                txt = await r.text()
+                logger.error(f"❌ Groq status {r.status}: {txt[:200]}")
+                return f"⚠️ IA retornou erro {r.status}."
+            data = await r.json()
+            return data["choices"][0]["message"]["content"]
+    except asyncio.TimeoutError:
+        return "⚠️ IA demorou demais para responder (timeout)."
+    except Exception as e:
+        logger.error(f"❌ Erro IA resumo: {e}")
+        return f"⚠️ Erro ao gerar resumo: {str(e)[:150]}"
+
+
+async def _executar_resumo_ia(data_inicio=None):
+    """
+    Função interna reutilizada pela task automática E pelo comando de teste.
+    """
+    pool = await get_pool()
+    if not pool:
+        return "❌ Banco de dados indisponível."
+
+    if not data_inicio:
+        data_inicio = agora().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT user_nome, user_id, modulo, acao, item_nome, detalhes
+                   FROM auditoria
+                   WHERE data >= $1
+                   ORDER BY data DESC
+                   LIMIT 300""",
+                para_db_naive(data_inicio)
+            )
+        logs = [dict(r) for r in rows]
+        data_str = data_inicio.strftime("%d/%m/%Y")
+        return await gerar_resumo_ia(logs, data_str)
+    except Exception as e:
+        logger.error(f"❌ Erro ao executar resumo: {e}")
+        return f"⚠️ Erro: {str(e)[:150]}"
 
 
 async def _executar_resumo_ia(data_inicio=None):
