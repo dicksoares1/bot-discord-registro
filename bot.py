@@ -14845,7 +14845,6 @@ class MecanicoView(discord.ui.View):
 # ════════════════════════════════════════════════════════════════════════════════
 # COMPONENTS V2 — PAINEL DE META HÍBRIDO (LayoutView)
 # ════════════════════════════════════════════════════════════════════════════════
-
 async def _v2_montar_container(user_id):
     """
     Monta o Container (conteúdo visual) do painel de meta V2.
@@ -14871,6 +14870,7 @@ async def _v2_montar_container(user_id):
         if not pool:
             return None, None
         async with pool.acquire() as conn:
+            # Busca FRESCA do banco, ignorando o cache antigo
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
         if not meta:
             return None, None
@@ -14926,7 +14926,7 @@ async def _v2_montar_container(user_id):
         ))
         container.add_item(discord.ui.Separator())
 
-        # Meta
+        # Meta Principal
         container.add_item(discord.ui.TextDisplay(
             f"### 🎯 {label}\n"
             f"```yaml\n"
@@ -14938,8 +14938,24 @@ async def _v2_montar_container(user_id):
             f"**{status_emoji} Progresso:** `{barra}` **{int(pct*100)}%**"
         ))
 
+        # Se for ISENTO, mostra as contribuições separadamente!
+        if is_isento_lideranca:
+            container.add_item(discord.ui.Separator())
+            texto_contribuicoes = ""
+            if dinheiro > 0:
+                texto_contribuicoes += f"💰 Dinheiro: **{formatar_dinheiro(dinheiro)}**\n"
+            if dinheiro_acoes > 0:
+                texto_contribuicoes += f"⚔️ Ações: **{formatar_dinheiro(dinheiro_acoes)}**\n"
+            if polvora > 0:
+                texto_contribuicoes += f"🧨 Pólvora: **{fmt_num(polvora)}** unidades\n"
+            
+            if texto_contribuicoes:
+                container.add_item(discord.ui.TextDisplay(
+                    f"### 📊 SUAS CONTRIBUIÇÕES\n{texto_contribuicoes}"
+                ))
+
         # ═══════════════════════════════════════════════════════════════════════
-        # MECÂNICO — META DE HORAS (SEMPRE APARECE, INDEPENDENTE DE ISENÇÃO)
+        # MECÂNICO — META DE HORAS (SEMPRE APARECE)
         # ═══════════════════════════════════════════════════════════════════════
         if is_mecanico:
             try:
