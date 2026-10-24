@@ -14866,6 +14866,8 @@ async def _v2_montar_container(user_id):
             return None, None
 
         dividas = await buscar_dividas_usuario(user_id)
+        
+        # Puxa os valores REAIS do banco, independente de ser isento ou não
         dinheiro = meta["dinheiro"] or 0
         dinheiro_acoes = meta.get("dinheiro_acoes") or 0
         polvora = meta.get("polvora_atual") or 0
@@ -14889,10 +14891,10 @@ async def _v2_montar_container(user_id):
             atual = dinheiro_acoes
             label = "⚔️ META DE AÇÕES"
             is_money = True
-        elif regra["isento"]:
-            meta_valor = 1 # Meta falsa só pra barra de progresso não bugar
+        elif is_isento_lideranca:
+            meta_valor = 1 # Meta falsa só pra barra não bugar
             atual = dinheiro
-            label = "🟡 ISENTO (CONTRIBUIÇÃO INFORMATIVA)"
+            label = "🟡 ISENTO DE META"
             is_money = True
         else:
             meta_valor = regra["meta_dinheiro"]
@@ -14901,7 +14903,7 @@ async def _v2_montar_container(user_id):
             is_money = True
 
         pct = min(atual / meta_valor, 1.0) if meta_valor > 0 else 1.0
-        if regra["isento"] and atual > 0:
+        if is_isento_lideranca and atual > 0:
             pct = 1.0
         
         barra = "▓" * int(pct * 20) + "░" * (20 - int(pct * 20))
@@ -14920,7 +14922,8 @@ async def _v2_montar_container(user_id):
         container.add_item(discord.ui.Separator())
 
         # Meta
-        if regra["isento"]:
+        if is_isento_lideranca:
+            # Texto de contribuição para isentos
             container.add_item(discord.ui.TextDisplay(
                 f"### 🎯 {label}\n"
                 f"```yaml\n"
@@ -14990,13 +14993,12 @@ async def _v2_montar_container(user_id):
 
         # Informações dos cargos
         is_soldado = CARGO_SOLDADO_ID in roles_ids
-        is_isento = regra.get("isento", False) or regra.get("is_isento_lideranca", False)
         ponto_ativo = await buscar_ponto_ativo(user_id) if is_mecanico else None
 
         cargos_info = {
             "is_soldado": is_soldado,
             "is_mecanico": is_mecanico,
-            "is_isento": is_isento,
+            "is_isento": is_isento_lideranca,
             "ponto_ativo": ponto_ativo,
         }
 
