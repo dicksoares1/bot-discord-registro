@@ -14878,7 +14878,6 @@ async def _v2_montar_container(user_id):
         if not pool:
             return None, None
         async with pool.acquire() as conn:
-            # Busca FRESCA do banco, ignorando o cache antigo
             meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
         if not meta:
             return None, None
@@ -14908,9 +14907,9 @@ async def _v2_montar_container(user_id):
             label = "⚔️ META DE AÇÕES"
             is_money = True
         elif regra["isento"]:
-            meta_valor = 0
-            atual = 0
-            label = "🟡 ISENTO DE META"
+            meta_valor = 1 # Meta falsa de 1 real só pra barra não bugar
+            atual = dinheiro
+            label = "🟡 ISENTO (CONTRIBUIÇÃO INFORMATIVA)"
             is_money = True
         else:
             meta_valor = regra["meta_dinheiro"]
@@ -14919,6 +14918,10 @@ async def _v2_montar_container(user_id):
             is_money = True
 
         pct = min(atual / meta_valor, 1.0) if meta_valor > 0 else 1.0
+        # Se for isento e tiver dinheiro, a barra fica cheia (100%)
+        if regra["isento"] and atual > 0:
+            pct = 1.0
+        
         barra = "▓" * int(pct * 20) + "░" * (20 - int(pct * 20))
         status_emoji = "🟢" if pct >= 1 else "🟡" if pct >= 0.5 else "🔴"
 
@@ -14934,33 +14937,29 @@ async def _v2_montar_container(user_id):
         ))
         container.add_item(discord.ui.Separator())
 
-        # Meta Principal
-        container.add_item(discord.ui.TextDisplay(
-            f"### 🎯 {label}\n"
-            f"```yaml\n"
-            f"Atual: {fmt(atual, is_money)}\n"
-            f"Meta:  {fmt(meta_valor, is_money)}\n"
-            f"```"
-        ))
-        container.add_item(discord.ui.TextDisplay(
-            f"**{status_emoji} Progresso:** `{barra}` **{int(pct*100)}%**"
-        ))
-
-        # Se for ISENTO, mostra as contribuições separadamente!
-        if is_isento_lideranca:
-            container.add_item(discord.ui.Separator())
-            texto_contribuicoes = ""
-            if dinheiro > 0:
-                texto_contribuicoes += f"💰 Dinheiro: **{formatar_dinheiro(dinheiro)}**\n"
-            if dinheiro_acoes > 0:
-                texto_contribuicoes += f"⚔️ Ações: **{formatar_dinheiro(dinheiro_acoes)}**\n"
-            if polvora > 0:
-                texto_contribuicoes += f"🧨 Pólvora: **{fmt_num(polvora)}** unidades\n"
-            
-            if texto_contribuicoes:
-                container.add_item(discord.ui.TextDisplay(
-                    f"### 📊 SUAS CONTRIBUIÇÕES\n{texto_contribuicoes}"
-                ))
+        # Meta
+        if regra["isento"]:
+            # Se for isento, mostra só o valor que ele tem, sem falar de meta
+            container.add_item(discord.ui.TextDisplay(
+                f"### 🎯 {label}\n"
+                f"```yaml\n"
+                f"Contribuição: {fmt(atual, is_money)}\n"
+                f"```"
+            ))
+            container.add_item(discord.ui.TextDisplay(
+                f"**{status_emoji} Status:** `{barra}` **ISENTO**"
+            ))
+        else:
+            container.add_item(discord.ui.TextDisplay(
+                f"### 🎯 {label}\n"
+                f"```yaml\n"
+                f"Atual: {fmt(atual, is_money)}\n"
+                f"Meta:  {fmt(meta_valor, is_money)}\n"
+                f"```"
+            ))
+            container.add_item(discord.ui.TextDisplay(
+                f"**{status_emoji} Progresso:** `{barra}` **{int(pct*100)}%**"
+            ))
 
         # ═══════════════════════════════════════════════════════════════════════
         # MECÂNICO — META DE HORAS (SEMPRE APARECE)
