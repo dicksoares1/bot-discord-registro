@@ -14062,7 +14062,7 @@ async def carregar_metas_cache():
 async def atualizar_embed_meta(user_id):
     """
     Atualiza o painel de meta do membro usando Components V2 (LayoutView).
-    Deleta painéis antigos do canal e envia o novo V2.
+    Tenta editar a mensagem existente para evitar rate limit e piscar na tela.
     """
     try:
         if str(user_id) not in metas_cache:
@@ -14092,32 +14092,40 @@ async def atualizar_embed_meta(user_id):
         # Monta LayoutView
         view = V2MetaView(user_id, container, cargos_info)
 
-        # Deleta painéis antigos (Garante que o novo apareça no final e atualizado)
-        async for msg in canal.history(limit=30):
+        # Tenta achar a mensagem antiga para EDITAR
+        mensagem_antiga = None
+        async for msg in canal.history(limit=20):
             if msg.author == bot.user:
-                try:
-                    await msg.delete()
-                except:
-                    pass
+                if len(msg.components) > 0:
+                    mensagem_antiga = msg
+                    break
 
-        # Envia novo
+        if mensagem_antiga:
+            try:
+                # Tenta editar o painel existente
+                await mensagem_antiga.edit(view=view)
+                logger.info(f"✅ Painel V2 editado para {user_id}")
+                return
+            except discord.HTTPException:
+                # Se der erro na edição (ex: componentes mudaram de tamanho), deleta e recria
+                await mensagem_antiga.delete()
+
+        # Se não achou mensagem antiga ou falhou ao editar, envia uma nova
         msg = await canal.send(view=view)
 
-        # Salva botão persistente (duas chaves pra compatibilidade)
+        # Salva botão persistente
         try:
             await BotaoPersistente.salvar_botao(msg.id, canal.id, f"meta_v2_{user_id}", {"user_id": user_id})
             await BotaoPersistente.salvar_botao(msg.id, canal.id, f"meta_{user_id}", {"user_id": user_id})
         except Exception as e:
             logger.error(f"❌ Erro ao salvar botão persistente: {e}")
 
-        # Registra como último painel (move pro final do canal)
+        # Registra como último painel
         try:
             await registrar_painel_ultimo(f"meta_{user_id}", canal.id, msg.id)
             await registrar_painel_ultimo(f"meta_v2_{user_id}", canal.id, msg.id)
         except Exception as e:
             logger.error(f"❌ Erro ao registrar painel último: {e}")
-
-        logger.info(f"✅ Painel V2 criado para {user_id} (msg {msg.id})")
 
     except Exception as e:
         logger.error(f"❌ Erro crítico em atualizar_embed_meta (V2) para {user_id}: {e}")
