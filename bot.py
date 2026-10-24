@@ -60,6 +60,14 @@ from zoneinfo import ZoneInfo
 from functools import wraps
 from collections import defaultdict, OrderedDict
 from typing import Optional, Dict, List, Any, Callable
+try:
+    import pytesseract
+    from PIL import Image as PILImage
+    _OCR_DISPONIVEL = True
+except ImportError:
+    pytesseract = None
+    PILImage = None
+    _OCR_DISPONIVEL = False
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DOS IMPORTS                                                            ║
@@ -102,6 +110,7 @@ if not DATABASE_URL:
 
 TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 1.3 — CONSTANTES GLOBAIS
@@ -701,6 +710,20 @@ async def inicializar_tabelas(pool):
                 data_criacao TIMESTAMP DEFAULT NOW()
             )
         """)
+        # ═══════════════ TABELAS DE INATIVIDADE ═══════════════
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS atividade_membros (
+                user_id VARCHAR(30) PRIMARY KEY,
+                ultima_mensagem TIMESTAMP,
+                ultimo_deposito TIMESTAMP,
+                ultima_acao TIMESTAMP,
+                ultima_venda TIMESTAMP,
+                ultima_producao TIMESTAMP,
+                data_atualizacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_atividade_ultima_msg ON atividade_membros(ultima_mensagem DESC)")
+        logger.info("✅ Tabela atividade_membros pronta!")
         # ═══════════════ TABELAS DE LAVAGEM ═══════════════
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS lavagens (
@@ -4205,12 +4228,30 @@ class BauModal(discord.ui.Modal):
             if not itens_dict:
                 await interaction.followup.send("❌ **Nenhum item válido encontrado!** Use o formato: `Item: Quantidade`", ephemeral=True)
                 return
-            for item, quantidade in itens_dict.items():
-                if self.tipo == "entrou":
-                    await atualizar_bau_estoque(item, quantidade, "adicionar")
-                else:
-                    await atualizar_bau_estoque(item, quantidade, "remover")
-                await registrar_movimentacao_bau(tipo=self.tipo, item_nome=item, quantidade=quantidade, membro=nome_membro, observacao=self.observacao.value if self.observacao.value else None)
+
+            # ═══════════════════════════════════════════════════════════════════
+            # REGISTRO MANUAL
+            # - SAÍDA (saiu): sempre registra manual (não usa OCR)
+            # - ENTRADA (entrou): se OCR disponível, NÃO registra (aguarda print)
+            # ═══════════════════════════════════════════════════════════════════
+            registrar_manual = True
+            if self.tipo == "entrou" and _OCR_DISPONIVEL:
+                registrar_manual = False
+
+            if registrar_manual:
+                for item, quantidade in itens_dict.items():
+                    if self.tipo == "entrou":
+                        await atualizar_bau_estoque(item, quantidade, "adicionar")
+                    else:
+                        await atualizar_bau_estoque(item, quantidade, "remover")
+                    await registrar_movimentacao_bau(
+                        tipo=self.tipo,
+                        item_nome=item,
+                        quantidade=quantidade,
+                        membro=nome_membro,
+                        observacao=self.observacao.value if self.observacao.value else None
+                    )
+
             log_mensagens = []
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
@@ -4218,36 +4259,88 @@ class BauModal(discord.ui.Modal):
                 else:
                     log_mensagens.append(f"📤 **{nome_membro}** pegou **{quantidade}** {item}.")
             texto_log = "\n".join(log_mensagens)
+
+            # Atualiza painel do baú (sempre, pra refletir estado atual)
             canal_bau = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
             if canal_bau:
-                embed = await criar_embed_bau_estoque()
-                view = BauView()
-                await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
+                try:
+                    embed = await criar_embed_bau_estoque()
+                    view = BauView()
+                    await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
+                except Exception as e:
+                    logger.error(f"❌ Erro ao atualizar painel do baú: {e}")
+
+            # ═══════════════════════════════════════════════════════════════════
+            # FLUXO DE ENTRADA (com OCR)
+            # ═══════════════════════════════════════════════════════════════════
             if self.tipo == "entrou":
                 canal_controle = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
                 if canal_controle:
-                    msg_pedido = await canal_controle.send(
-                        f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n"
-                        f"📝 **Itens:** {', '.join([f'{item} ({qtd})' for item, qtd in itens_dict.items()])}"
-                    )
-                    bau_print_pendente[interaction.user.id] = {
-                        "log": texto_log,
-                        "canal_id": CANAL_BAU_LOG_ID,
-                        "msg_pedido_id": msg_pedido.id
-                    }
-                    await interaction.followup.send(
-                        f"✅ **Registro enviado!**\n📎 Agora anexe o print no canal **#bau-membros** para finalizar.",
-                        ephemeral=True
-                    )
+                    itens_texto = ', '.join([f'{item} ({qtd})' for item, qtd in itens_dict.items()])
+
+                    if _OCR_DISPONIVEL:
+                        aviso_print = (
+                            f"📎 **{nome_membro}**, anexe o **print da tela do baú** aqui.\n"
+                            f"🤖 O bot vai **ler os itens automaticamente** do print.\n"
+                            f"📝 **Itens declarados (referência):** {itens_texto}\n\n"
+                            f"-# ⚠️ Se o OCR falhar, você recebe uma DM e pode registrar manualmente."
+                        )
+                    else:
+                        aviso_print = (
+                            f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n"
+                            f"📝 **Itens:** {itens_texto}"
+                        )
+
+                    try:
+                        msg_pedido = await canal_controle.send(aviso_print)
+                    except:
+                        msg_pedido = None
+
+                    if msg_pedido:
+                        bau_print_pendente[interaction.user.id] = {
+                            "log": texto_log,
+                            "canal_id": CANAL_BAU_LOG_ID,
+                            "msg_pedido_id": msg_pedido.id,
+                            "itens_declarados": itens_dict  # guarda pra fallback
+                        }
+
+                    if _OCR_DISPONIVEL:
+                        await interaction.followup.send(
+                            f"✅ **Registro enviado!**\n"
+                            f"📎 Agora anexe o print no canal <#{CANAL_BAU_MEMBROS_ID}>.\n"
+                            f"🤖 O bot vai ler os itens automaticamente em ~3s.",
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.followup.send(
+                            f"✅ **Registro de entrada enviado!**\n"
+                            f"📎 Anexe o print no canal <#{CANAL_BAU_MEMBROS_ID}> para comprovação.",
+                            ephemeral=True
+                        )
                     return
+
+            # ═══════════════════════════════════════════════════════════════════
+            # FLUXO DE SAÍDA (sempre manual)
+            # ═══════════════════════════════════════════════════════════════════
             else:
                 canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
                 if canal_log:
-                    await canal_log.send(texto_log)
-                await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
+                    try:
+                        await canal_log.send(texto_log)
+                    except:
+                        pass
+                await interaction.followup.send(
+                    f"✅ **Registro de saída enviado com sucesso!**",
+                    ephemeral=True
+                )
+
         except Exception as e:
             logger.error(f"❌ Erro no BauModal: {e}")
-            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
+            try:
+                await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ArmasModal
@@ -4280,12 +4373,30 @@ class ArmasModal(discord.ui.Modal):
             if not itens_dict:
                 await interaction.followup.send("❌ **Nenhuma arma válida encontrada!** Use o formato: `Arma: Quantidade`", ephemeral=True)
                 return
-            for item, quantidade in itens_dict.items():
-                if self.tipo == "entrou":
-                    await atualizar_bau_estoque(item, quantidade, "adicionar")
-                else:
-                    await atualizar_bau_estoque(item, quantidade, "remover")
-                await registrar_movimentacao_bau(tipo=self.tipo, item_nome=item, quantidade=quantidade, membro=nome_membro, observacao=self.observacao.value if self.observacao.value else None)
+
+            # ═══════════════════════════════════════════════════════════════════
+            # REGISTRO MANUAL
+            # - SAÍDA (saiu): sempre manual
+            # - ENTRADA (entrou): OCR disponível → aguarda print
+            # ═══════════════════════════════════════════════════════════════════
+            registrar_manual = True
+            if self.tipo == "entrou" and _OCR_DISPONIVEL:
+                registrar_manual = False
+
+            if registrar_manual:
+                for item, quantidade in itens_dict.items():
+                    if self.tipo == "entrou":
+                        await atualizar_bau_estoque(item, quantidade, "adicionar")
+                    else:
+                        await atualizar_bau_estoque(item, quantidade, "remover")
+                    await registrar_movimentacao_bau(
+                        tipo=self.tipo,
+                        item_nome=item,
+                        quantidade=quantidade,
+                        membro=nome_membro,
+                        observacao=self.observacao.value if self.observacao.value else None
+                    )
+
             log_mensagens = []
             for item, quantidade in itens_dict.items():
                 if self.tipo == "entrou":
@@ -4293,36 +4404,87 @@ class ArmasModal(discord.ui.Modal):
                 else:
                     log_mensagens.append(f"🔫 **{nome_membro}** pegou **{quantidade}** {item}.")
             texto_log = "\n".join(log_mensagens)
+
+            # Atualiza painel de armas
             canal_armas = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
             if canal_armas:
-                embed = await criar_embed_armas_estoque()
-                view = ArmasView()
-                await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
+                try:
+                    embed = await criar_embed_armas_estoque()
+                    view = ArmasView()
+                    await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
+                except Exception as e:
+                    logger.error(f"❌ Erro ao atualizar painel de armas: {e}")
+
+            # ═══════════════════════════════════════════════════════════════════
+            # FLUXO DE ENTRADA (com OCR)
+            # ═══════════════════════════════════════════════════════════════════
             if self.tipo == "entrou":
                 canal_controle = interaction.guild.get_channel(CANAL_ARMAS_ESTOQUE_ID)
                 if canal_controle:
-                    msg_pedido = await canal_controle.send(
-                        f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n"
-                        f"📝 **Itens:** {', '.join([f'{item} ({qtd})' for item, qtd in itens_dict.items()])}"
-                    )
-                    armas_print_pendente[interaction.user.id] = {
-                        "log": texto_log,
-                        "canal_id": CANAL_ARMAS_LOG_ID,
-                        "msg_pedido_id": msg_pedido.id
-                    }
-                    await interaction.followup.send(
-                        f"✅ **Registro de armas enviado!**\n📎 Agora anexe o print no canal **#armas-estoque** para finalizar.",
-                        ephemeral=True
-                    )
+                    itens_texto = ', '.join([f'{item} ({qtd})' for item, qtd in itens_dict.items()])
+
+                    if _OCR_DISPONIVEL:
+                        aviso_print = (
+                            f"📎 **{nome_membro}**, anexe o **print da tela do arsenal** aqui.\n"
+                            f"🤖 O bot vai **ler as armas automaticamente** do print.\n"
+                            f"📝 **Armas declaradas (referência):** {itens_texto}\n\n"
+                            f"-# ⚠️ Se o OCR falhar, você recebe uma DM e pode registrar manualmente."
+                        )
+                    else:
+                        aviso_print = (
+                            f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n"
+                            f"📝 **Armas:** {itens_texto}"
+                        )
+
+                    try:
+                        msg_pedido = await canal_controle.send(aviso_print)
+                    except:
+                        msg_pedido = None
+
+                    if msg_pedido:
+                        armas_print_pendente[interaction.user.id] = {
+                            "log": texto_log,
+                            "canal_id": CANAL_ARMAS_LOG_ID,
+                            "msg_pedido_id": msg_pedido.id,
+                            "itens_declarados": itens_dict
+                        }
+
+                    if _OCR_DISPONIVEL:
+                        await interaction.followup.send(
+                            f"✅ **Registro enviado!**\n"
+                            f"📎 Agora anexe o print no canal <#{CANAL_ARMAS_ESTOQUE_ID}>.\n"
+                            f"🤖 O bot vai ler as armas automaticamente em ~3s.",
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.followup.send(
+                            f"✅ **Registro de armas enviado!**\n"
+                            f"📎 Anexe o print no canal <#{CANAL_ARMAS_ESTOQUE_ID}> para comprovação.",
+                            ephemeral=True
+                        )
                     return
+
+            # ═══════════════════════════════════════════════════════════════════
+            # FLUXO DE SAÍDA (sempre manual)
+            # ═══════════════════════════════════════════════════════════════════
             else:
                 canal_log = interaction.guild.get_channel(CANAL_ARMAS_LOG_ID)
                 if canal_log:
-                    await canal_log.send(texto_log)
-                await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
+                    try:
+                        await canal_log.send(texto_log)
+                    except:
+                        pass
+                await interaction.followup.send(
+                    f"✅ **Registro de saída enviado com sucesso!**",
+                    ephemeral=True
+                )
+
         except Exception as e:
             logger.error(f"❌ Erro no ArmasModal: {e}")
-            await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
+            try:
+                await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
+            except:
+                pass
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: BauView
@@ -4428,6 +4590,207 @@ async def enviar_painel_armas():
     embed = await criar_embed_armas_estoque()
     view = ArmasView()
     await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
+
+# ════════════════════════════════════════════════════════════════════════════════
+# OCR — LEITURA AUTOMÁTICA DE PRINT DO BAÚ
+# ════════════════════════════════════════════════════════════════════════════════
+
+async def processar_print_bau_ocr(attachment: discord.Attachment) -> dict:
+    """
+    Lê o print do baú e retorna {item: quantidade}.
+    Retorna {} se OCR não estiver disponível ou não detectar nada.
+    """
+    if not _OCR_DISPONIVEL:
+        return {}
+    try:
+        raw = await attachment.read()
+        img = PILImage.open(io.BytesIO(raw)).convert("L")
+
+        # Aumenta resolução se a imagem for pequena (OCR melhora muito)
+        largura, altura = img.size
+        if largura < 1500:
+            fator = 1500 / largura
+            img = img.resize(
+                (int(largura * fator), int(altura * fator)),
+                PILImage.LANCZOS
+            )
+
+        # Binariza (threshold adaptativo)
+        img = img.point(lambda p: 0 if p < 140 else 255)
+
+        # Extrai texto
+        texto = pytesseract.image_to_string(
+            img,
+            lang="por",
+            config="--psm 6"
+        )
+
+        itens = {}
+        for linha in texto.split("\n"):
+            linha = linha.strip().lower()
+            if not linha or len(linha) < 3:
+                continue
+
+            # Padrão: "<item> <separador> <quantidade>"
+            match = re.search(
+                r"([a-záàâãéêíóôõúç0-9\s\-_./]+?)[\s:=\-]+(\d{1,7})",
+                linha
+            )
+            if match:
+                item = match.group(1).strip().strip(".:=- ")
+                qtd = int(match.group(2))
+                if len(item) >= 2 and 0 < qtd < 1_000_000:
+                    itens[item] = itens.get(item, 0) + qtd
+
+        logger.info(f"🔍 OCR baú: {len(itens)} itens extraídos → {itens}")
+        return itens
+    except Exception as e:
+        logger.error(f"❌ Erro OCR: {e}")
+        return {}
+
+
+async def on_message_bau_ocr(message: discord.Message):
+    """
+    Detecta print enviado no canal do baú/armas e registra automaticamente.
+    Só roda se o membro tiver um registro pendente (via modal).
+    """
+    if message.author.bot:
+        return
+    if message.channel.id not in (CANAL_BAU_MEMBROS_ID, CANAL_ARMAS_ESTOQUE_ID):
+        return
+    if not message.attachments:
+        return
+    if not _OCR_DISPONIVEL:
+        return
+
+    anexo = message.attachments[0]
+    if not anexo.content_type or not anexo.content_type.startswith("image/"):
+        return
+
+    # Verifica pendente
+    is_arma = message.channel.id == CANAL_ARMAS_ESTOQUE_ID
+    pendente = (
+        armas_print_pendente.get(message.author.id) if is_arma
+        else bau_print_pendente.get(message.author.id)
+    )
+    if not pendente:
+        return
+
+    await message.add_reaction("🔍")
+
+    itens = await processar_print_bau_ocr(anexo)
+
+    if not itens:
+        await message.add_reaction("⚠️")
+        try:
+            await message.author.send(
+                "⚠️ **Não consegui ler o print.** "
+                "Digite os itens manualmente pelo botão do painel."
+            )
+        except:
+            pass
+        return
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # REVERTE O QUE FOI DIGITADO MANUALMENTE (se houver)
+    # E REGISTRA O QUE O OCR DETECTOU
+    # ═══════════════════════════════════════════════════════════════════════════
+    # O modal já registrou X itens manualmente. O OCR detectou Y itens.
+    # Estratégia: adicionamos o que faltou OU sobrou pra corrigir.
+    # Para simplicidade: confiamos no OCR e ignoramos o manual (o print é a verdade).
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    for item, quantidade in itens.items():
+        await atualizar_bau_estoque(item, quantidade, "adicionar")
+        await registrar_movimentacao_bau(
+            tipo="entrou",
+            item_nome=item,
+            quantidade=quantidade,
+            membro=message.author.display_name,
+            observacao="Registrado via OCR (print)"
+        )
+
+    # Log
+    log_msg = "\n".join(
+        f"📥 **{message.author.display_name}** adicionou **{q}** {item} (via OCR)."
+        for item, q in itens.items()
+    )
+    canal_log = message.guild.get_channel(pendente.get("canal_id"))
+    if canal_log:
+        await canal_log.send(log_msg)
+
+    # Limpa pendente
+    if is_arma:
+        armas_print_pendente.pop(message.author.id, None)
+    else:
+        bau_print_pendente.pop(message.author.id, None)
+
+    await message.add_reaction("✅")
+    try:
+        await message.reply(
+            f"✅ **Print processado automaticamente!**\n"
+            f"📦 {len(itens)} item(ns) detectado(s): "
+            f"{', '.join([f'{it} ({q})' for it, q in itens.items()])}",
+            mention_author=False,
+            delete_after=60
+        )
+    except:
+        pass
+
+    # Atualiza o painel visual
+    try:
+        if is_arma:
+            embed = await criar_embed_armas_estoque()
+            view = ArmasView()
+            await enviar_ou_atualizar_painel_bau("painel_armas", CANAL_ARMAS_ESTOQUE_ID, embed, view)
+        else:
+            embed = await criar_embed_bau_estoque()
+            view = BauView()
+            await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar painel após OCR: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: !testar_ocr (verifica se Tesseract está instalado)
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name="testar_ocr")
+@commands.has_permissions(administrator=True)
+async def cmd_testar_ocr(ctx):
+    if not _OCR_DISPONIVEL:
+        await ctx.send(
+            "❌ **OCR NÃO ESTÁ DISPONÍVEL**\n\n"
+            "Verifique:\n"
+            "1️⃣ `requirements.txt` tem `pytesseract` e `Pillow`?\n"
+            "2️⃣ `nixpacks.toml` tem `tesseract-ocr` e `tesseract-ocr-por`?\n"
+            "3️⃣ Fez o deploy novamente no Railway?"
+        )
+        return
+
+    try:
+        versao = pytesseract.get_tesseract_version()
+        idiomas = pytesseract.get_languages()
+        await ctx.send(
+            f"✅ **OCR DISPONÍVEL**\n"
+            f"📌 Versão Tesseract: `{versao}`\n"
+            f"🌐 Idiomas instalados: `{', '.join(idiomas)}`\n\n"
+            f"💡 Para testar de verdade: envie um print no canal de baú."
+        )
+    except Exception as e:
+        await ctx.send(f"⚠️ OCR instalado mas com problema: `{str(e)[:200]}`")
+
+@bot.command(name="registrar_manual_bau")
+async def cmd_registrar_manual_bau(ctx):
+    """Limpa print pendente pra permitir registro manual."""
+    removido = bau_print_pendente.pop(ctx.author.id, None) or armas_print_pendente.pop(ctx.author.id, None)
+    if removido:
+        await ctx.send("✅ Print pendente limpo. Abra o modal novamente e registre manual.", delete_after=10)
+    else:
+        await ctx.send("📭 Você não tem print pendente.", delete_after=10)
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DO OCR DE BAÚ
+# ════════════════════════════════════════════════════════════════════════════════
+
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 10                                                            ║
@@ -4972,6 +5335,7 @@ async def participar_acao_db(acao_id, user_id):
     try:
         async with pool.acquire() as conn:
             await conn.execute("INSERT INTO participantes_acoes (acao_id, user_id) VALUES ($1, $2)", acao_id, str(user_id))
+        await _registrar_atividade(user_id, "acao")
     except Exception as e:
         logger.error(f"❌ Erro ao participar ação: {e}")
 
@@ -7624,6 +7988,12 @@ class StatusView(discord.ui.View):
         if pacotes_sub > 0:
             await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
 
+        # Registrar atividade (fora dos ifs, pra qualquer entrega contar)
+        try:
+            await _registrar_atividade(interaction.user.id, "venda")
+        except Exception as e:
+            logger.error(f"❌ Erro ao registrar atividade de venda: {e}")
+
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         entregador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
 
@@ -7997,7 +8367,6 @@ class StatusView(discord.ui.View):
 
         except Exception as e:
             logger.error(f"❌ Erro ao criar próxima entrega automaticamente: {e}")
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: VendaModal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10353,12 +10722,23 @@ async def finalizar_producao(pid, msg, prod):
         capsulas_por_galpao = (base_por_galpao * polvora_por_galpao) // 400
         capsulas_total = capsulas_por_galpao * qtd_galpoes
         peso_total = capsulas_total * 0.05
+
         pool = await get_pool()
         if pool:
             async with pool.acquire() as conn:
-                await conn.execute("INSERT INTO producoes_finalizadas (user_id, capsulas, data, polvora, galpao) VALUES ($1, $2, $3, $4, $5)", str(prod["autor"]), capsulas_total, agora_db(), polvora_total, f"{galpao} ({qtd_galpoes} galpões)")
+                await conn.execute(
+                    "INSERT INTO producoes_finalizadas (user_id, capsulas, data, polvora, galpao) VALUES ($1, $2, $3, $4, $5)",
+                    str(prod["autor"]), capsulas_total, agora_db(), polvora_total, f"{galpao} ({qtd_galpoes} galpões)"
+                )
                 await conn.execute("UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1", capsulas_total)
                 await conn.execute("INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) VALUES ($1, $2, $3, $4)", "capsulas", capsulas_total, str(prod["autor"]), f"Produção do {galpao} - {qtd_galpoes} galpões - {polvora_total} pólvora")
+
+        # Registrar atividade (fora do if pool, sempre tenta)
+        try:
+            await _registrar_atividade(prod["autor"], "producao")
+        except Exception as e:
+            logger.error(f"❌ Erro ao registrar atividade de produção: {e}")
+
         guild = bot.get_guild(GUILD_ID)
         autor_apelido = await pegar_apelido(prod["autor"], guild)
         if msg:
@@ -10436,7 +10816,6 @@ async def finalizar_producao(pid, msg, prod):
         await enviar_painel_fabricacao()
     except Exception as e:
         logger.error(f"❌ ERRO ao finalizar produção {pid}: {e}")
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_heartbeat_producoes
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10697,6 +11076,137 @@ async def enviar_painel_polvoras():
     )
 
     await enviar_ou_atualizar_painel("painel_polvora", CANAL_CALCULO_POLVORA_ID, embed, PolvoraView())
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PREDIÇÃO DE RUPTURA DE ESTOQUE
+# ════════════════════════════════════════════════════════════════════════════════
+
+async def calcular_ruptura_estoque():
+    """
+    Calcula em quantos dias o estoque acaba com base na média dos últimos 7 dias.
+    Retorna dict com dados de PT e SUB, ou None em caso de erro.
+    """
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT DATE(data) as dia, tipo, SUM(pacotes) as total
+                FROM saida_estoque
+                WHERE data >= NOW() - INTERVAL '7 days'
+                GROUP BY dia, tipo
+                ORDER BY dia DESC
+            """)
+            consumo_pt = 0
+            consumo_sub = 0
+            dias_pt = set()
+            dias_sub = set()
+            for r in rows:
+                if r["tipo"] == "PT":
+                    consumo_pt += r["total"] or 0
+                    dias_pt.add(r["dia"])
+                elif r["tipo"] == "SUB":
+                    consumo_sub += r["total"] or 0
+                    dias_sub.add(r["dia"])
+
+        media_pt = consumo_pt / max(len(dias_pt), 1)
+        media_sub = consumo_sub / max(len(dias_sub), 1)
+
+        estoque = await carregar_estoque()
+        dias_restantes_pt = (estoque["PT"] / media_pt) if media_pt > 0 else 999
+        dias_restantes_sub = (estoque["SUB"] / media_sub) if media_sub > 0 else 999
+
+        return {
+            "pt": {
+                "estoque": estoque["PT"],
+                "media_dia": round(media_pt, 1),
+                "dias_restantes": round(dias_restantes_pt, 1)
+            },
+            "sub": {
+                "estoque": estoque["SUB"],
+                "media_dia": round(media_sub, 1),
+                "dias_restantes": round(dias_restantes_sub, 1)
+            }
+        }
+    except Exception as e:
+        logger.error(f"❌ Erro ao calcular ruptura de estoque: {e}")
+        return None
+
+
+@tasks.loop(hours=12)
+async def alertar_ruptura_estoque():
+    """A cada 12h, alerta a gerência se o estoque for acabar em < 3 dias."""
+    try:
+        dados = await calcular_ruptura_estoque()
+        if not dados:
+            return
+
+        alertas = []
+        if dados["pt"]["dias_restantes"] < 3 and dados["pt"]["media_dia"] > 0:
+            alertas.append(
+                f"🔫 **PT** acaba em **{dados['pt']['dias_restantes']:.1f} dias** "
+                f"(estoque: {dados['pt']['estoque']} pacotes)"
+            )
+        if dados["sub"]["dias_restantes"] < 3 and dados["sub"]["media_dia"] > 0:
+            alertas.append(
+                f"🔫 **SUB** acaba em **{dados['sub']['dias_restantes']:.1f} dias** "
+                f"(estoque: {dados['sub']['estoque']} pacotes)"
+            )
+
+        if not alertas:
+            return
+
+        canal = bot.get_channel(CANAL_GERENCIA_ID)
+        if not canal:
+            logger.warning("⚠️ Canal de gerência não encontrado para alerta de ruptura")
+            return
+
+        embed = discord.Embed(
+            title="⚠️ ── ALERTA DE RUPTURA DE ESTOQUE ── ⚠️",
+            description="\n".join(alertas),
+            color=0xE74C3C,
+            timestamp=agora()
+        )
+        embed.set_author(
+            name="🛡 Vida Rasa 442 • Predição de Estoque",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        embed.add_field(
+            name="📊 MÉDIA DE CONSUMO/DIA (últimos 7 dias)",
+            value=(
+                f"```yaml\n"
+                f"PT:  {dados['pt']['media_dia']} pacotes/dia\n"
+                f"SUB: {dados['sub']['media_dia']} pacotes/dia\n"
+                f"```"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="💡 AÇÃO RECOMENDADA",
+            value=(
+                "Priorizar produção de munição ou pausar vendas "
+                "até reabastecer o estoque."
+            ),
+            inline=False
+        )
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        await canal.send(embed=embed)
+        logger.info(
+            f"🚨 Alerta de ruptura enviado — "
+            f"PT: {dados['pt']['dias_restantes']}d | SUB: {dados['sub']['dias_restantes']}d"
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro no alerta de ruptura: {e}")
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DA PREDIÇÃO DE RUPTURA DE ESTOQUE
+# ════════════════════════════════════════════════════════════════════════════════
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 13                                                            ║
@@ -13550,247 +14060,40 @@ async def carregar_metas_cache():
 # FUNÇÃO: atualizar_embed_meta (CRIA PAINEL PRA TODOS, INCLUSIVE ISENTOS)
 # ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_embed_meta(user_id):
+    """
+    Atualiza o painel de meta do membro usando Components V2 (LayoutView).
+    Deleta painéis antigos do canal e envia o novo V2.
+    Se V2 falhar por qualquer motivo, não faz fallback (V1 foi removida).
+    """
     try:
-        logger.info(f"🔍 [atualizar_embed_meta] Iniciando para user_id={user_id}")
-
         if str(user_id) not in metas_cache:
-            logger.info(f"🔍 [atualizar_embed_meta] {user_id} NÃO está em metas_cache. Tentando recarregar...")
             await carregar_metas_cache()
             if str(user_id) not in metas_cache:
                 guild = bot.get_guild(GUILD_ID)
-                member = guild.get_member(int(user_id))
+                member = guild.get_member(int(user_id)) if guild else None
                 if member:
-                    logger.info(f"🔍 [atualizar_embed_meta] Criando sala para {member.display_name}")
                     await criar_sala_meta(member)
                     await carregar_metas_cache()
-                else:
-                    logger.warning(f"⚠️ [atualizar_embed_meta] Membro {user_id} não encontrado no servidor")
                 return
 
         dados = metas_cache[str(user_id)]
         canal = bot.get_channel(dados["canal_id"])
         if not canal:
-            logger.warning(f"⚠️ [atualizar_embed_meta] Canal {dados['canal_id']} não encontrado pra {user_id}")
+            logger.warning(f"⚠️ Canal {dados['canal_id']} não encontrado para {user_id}")
             if str(user_id) in metas_cache:
                 del metas_cache[str(user_id)]
             return
 
-        pool = await get_pool()
-        if not pool:
-            logger.error(f"❌ [atualizar_embed_meta] Pool indisponível")
+        # Monta container + info de cargos
+        container, cargos_info = await _v2_montar_container(user_id)
+        if not container:
+            logger.warning(f"⚠️ Não foi possível montar container V2 para {user_id}")
             return
 
-        async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
-        if not meta:
-            logger.warning(f"⚠️ [atualizar_embed_meta] Meta não existe no banco pra {user_id}")
-            return
+        # Monta LayoutView
+        view = V2MetaView(user_id, container, cargos_info)
 
-        guild = bot.get_guild(GUILD_ID)
-        member = guild.get_member(int(user_id))
-        if not member:
-            logger.warning(f"⚠️ [atualizar_embed_meta] Membro {user_id} não encontrado")
-            return
-
-        roles_ids = [r.id for r in member.roles]
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # ÚNICA EXCEÇÃO: CARGO_SEM_META_ID (SM) → NÃO cria painel
-        # ═══════════════════════════════════════════════════════════════════════
-        if CARGO_SEM_META_ID in roles_ids:
-            logger.info(f"🔍 [atualizar_embed_meta] {member.display_name} tem cargo SM, não cria painel")
-            return
-
-        regra = await obter_regra_meta_membro(member)
-        if not regra:
-            logger.warning(f"⚠️ [atualizar_embed_meta] Regra não encontrada pra {user_id}")
-            return
-
-        logger.info(f"🔍 [atualizar_embed_meta] Criando painel pra {member.display_name} (tipo={regra['tipo']}, isento={regra['isento']})")
-
-        nome = member.display_name
-        is_mecanico = CARGO_MECANICO_ID in roles_ids
-        is_isento_lideranca = regra.get("is_isento_lideranca", False)
-        is_isento_total = regra["isento"] and regra["tipo"] != "soldado"
-
-        dinheiro_meta = meta["dinheiro"] or 0
-        dinheiro_acoes = meta.get("dinheiro_acoes") or 0
-        saldo_excedente = meta.get("saldo_excedente") or 0
-        acao = meta.get("acao") or "Nenhuma"
-        polvora_atual = meta.get("polvora_atual") or 0
-        polvora_total_semana = meta.get("polvora_total_semana") or 0
-
-        dividas = await buscar_dividas_usuario(user_id)
-        divida_dinheiro = dividas["dinheiro"]
-        divida_polvora = dividas["polvora"]
-
-        embed = discord.Embed(
-            title=f"💀 ── META SEMANAL ── 💀",
-            description=f"👤 {nome.upper()} • VDR 442",
-            color=Cores.META,
-            timestamp=agora()
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.set_author(name="🛡 Vida Rasa 442 • Sistema de Metas", icon_url=bot.user.display_avatar.url if bot.user else None)
-
-        tipo_membro = regra["tipo"]
-        progresso = 0
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # ISENTO TOTAL (gerente/01/02/03 sem soldado) → mostra painel "ISENTO"
-        # ═══════════════════════════════════════════════════════════════════════
-        if is_isento_total:
-            embed.add_field(name="🎯 TIPO DA SEMANA: 🟡 ISENTO", value="\u200b", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed.add_field(
-                name="🟡 STATUS: ISENTO DE META",
-                value="```diff\n+ Você é Gerente/01/02/03/Gerente Geral\n+ NÃO é cobrado meta semanal\n+ Painel apenas informativo\n```",
-                inline=False
-            )
-
-            # Se é mecânico, mostra horas mesmo sendo isento
-            if is_mecanico:
-                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                segundos_semana = await calcular_horas_semana(user_id)
-                progresso_horas = min(segundos_semana / (6 * 3600), 1.0)
-                barra_horas = "▓" * int(progresso_horas * 20) + "░" * (20 - int(progresso_horas * 20))
-                embed.add_field(name="⏰ META DE HORAS (MECÂNICA)", value=f"```yaml\nTempo total: {formatar_horas(segundos_semana)} / 6h\n```", inline=False)
-                embed.add_field(name=f"📊 PROGRESSO DE HORAS • {int(progresso_horas*100)}%", value=f"```prolog\n{barra_horas}\n```", inline=False)
-
-            # Se tem dinheiro/ações depositados, mostra mesmo sendo isento
-            if dinheiro_meta > 0 or dinheiro_acoes > 0 or polvora_atual > 0:
-                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                embed.add_field(
-                    name="📊 CONTRIBUIÇÕES (informativo)",
-                    value=f"```yaml\n💰 Dinheiro: {formatar_dinheiro(dinheiro_meta)}\n⚔️ Ações: {formatar_dinheiro(dinheiro_acoes)}\n🧨 Pólvora: {fmt_num(polvora_atual)}\n```",
-                    inline=False
-                )
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # SOLDADO
-        # ═══════════════════════════════════════════════════════════════════════
-        elif tipo_membro == "soldado":
-            embed.add_field(name="🎯 TIPO DA SEMANA: ⚔️ SOLDADO", value="\u200b", inline=False)
-            if is_isento_lideranca:
-                embed.add_field(
-                    name="🟡 STATUS: ISENTO (CARGO DE LIDERANÇA)",
-                    value="```diff\n+ Você é Gerente/01/02/03 — NÃO gera dívida\n+ Mas o painel mostra o progresso coletivo\n```",
-                    inline=False
-                )
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-            meta_atual = regra["meta_soldado"]
-            total_coletivo = await buscar_total_soldado()
-
-            if meta_atual > 0:
-                progresso = min(total_coletivo / meta_atual, 1.0)
-            else:
-                progresso = 0
-
-            barra_p = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
-
-            embed.add_field(
-                name="⚔️ META DE SOLDADO (COLETIVA)",
-                value=f"```yaml\n{formatar_dinheiro(total_coletivo)} / {formatar_dinheiro(meta_atual)}\n```",
-                inline=False
-            )
-            embed.add_field(
-                name=f"📊 PROGRESSO • {int(progresso*100)}%",
-                value=f"```prolog\n{barra_p}\n```",
-                inline=False
-            )
-            embed.add_field(
-                name="💰 SUA CONTRIBUIÇÃO INDIVIDUAL",
-                value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)}\n```",
-                inline=False
-            )
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # PÓLVORA
-        # ═══════════════════════════════════════════════════════════════════════
-        elif tipo_membro == "polvora":
-            embed.add_field(name="🎯 TIPO DA SEMANA: 🧨 PÓLVORA", value="\u200b", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            
-            meta_atual = regra["meta_polvora"]
-            progresso = min(polvora_atual / meta_atual, 1.0) if meta_atual > 0 else 1.0
-            barra_p = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
-            
-            embed.add_field(name="🧨 PÓLVORA (META)", value=f"```yaml\n{fmt_num(polvora_atual)} / {fmt_num(meta_atual)} unidades\n```", inline=False)
-            embed.add_field(name=f"📊 PROGRESSO • {int(progresso*100)}%", value=f"```prolog\n{barra_p}\n```", inline=False)
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # AÇÕES
-        # ═══════════════════════════════════════════════════════════════════════
-        elif tipo_membro == "acoes":
-            embed.add_field(name="🎯 TIPO DA SEMANA: ⚔️ AÇÕES", value="\u200b", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            
-            meta_atual = regra["meta_acoes"]
-            progresso = min(dinheiro_acoes / meta_atual, 1.0) if meta_atual > 0 else 1.0
-            barra_p = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
-            
-            embed.add_field(name="⚔️ DINHEIRO DE AÇÕES (META)", value=f"```yaml\n{formatar_dinheiro(dinheiro_acoes)} / {formatar_dinheiro(meta_atual)}\n```", inline=False)
-            embed.add_field(name=f"📊 PROGRESSO • {int(progresso*100)}%", value=f"```prolog\n{barra_p}\n```", inline=False)
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # AMBOS
-        # ═══════════════════════════════════════════════════════════════════════
-        elif tipo_membro == "ambos":
-            embed.add_field(name="🎯 TIPO DA SEMANA: 💰 + 🧨 AMBOS", value="\u200b", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            
-            meta_din = regra["meta_dinheiro"]
-            meta_pol = regra["meta_polvora"]
-            prog_din = min(dinheiro_meta / meta_din, 1.0) if meta_din > 0 else 1.0
-            prog_pol = min(polvora_atual / meta_pol, 1.0) if meta_pol > 0 else 1.0
-            progresso = prog_din
-            
-            embed.add_field(name="💰 DINHEIRO", value=f"```yaml\n{formatar_dinheiro(dinheiro_meta)} / {formatar_dinheiro(meta_din)}\n```", inline=True)
-            embed.add_field(name="🧨 PÓLVORA", value=f"```yaml\n{fmt_num(polvora_atual)} / {fmt_num(meta_pol)}\n```", inline=True)
-            
-            barra_d = "▓" * int(prog_din * 20) + "░" * (20 - int(prog_din * 20))
-            barra_p = "▓" * int(prog_pol * 20) + "░" * (20 - int(prog_pol * 20))
-            embed.add_field(name="📊 DINHEIRO", value=f"```prolog\n{barra_d}\n```", inline=True)
-            embed.add_field(name="📊 PÓLVORA", value=f"```prolog\n{barra_p}\n```", inline=True)
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # DINHEIRO (padrão)
-        # ═══════════════════════════════════════════════════════════════════════
-        else:
-            embed.add_field(name="🎯 TIPO DA SEMANA: 💰 DINHEIRO SUJO", value="\u200b", inline=False)
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            
-            meta_atual = regra["meta_dinheiro"]
-            progresso = min(dinheiro_meta / meta_atual, 1.0) if meta_atual > 0 else 1.0
-            barra_p = "▓" * int(progresso * 20) + "░" * (20 - int(progresso * 20))
-            
-            embed.add_field(name="💰 DINHEIRO SUJO (META)", value=f"```yaml\n{formatar_dinheiro(dinheiro_meta)} / {formatar_dinheiro(meta_atual)}\n```", inline=False)
-            if saldo_excedente > 0:
-                embed.add_field(name="📦 SALDO EXCEDENTE", value=f"```yaml\n{formatar_dinheiro(saldo_excedente)}\n```", inline=False)
-            embed.add_field(name=f"📊 PROGRESSO • {int(progresso*100)}%", value=f"```prolog\n{barra_p}\n```", inline=False)
-
-        # Dívidas (só mostra se não for isento de liderança)
-        if (divida_dinheiro > 0 or divida_polvora > 0) and not is_isento_lideranca and not is_isento_total:
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            texto_dividas = ""
-            if divida_dinheiro > 0:
-                texto_dividas += f"💰 Dinheiro: {formatar_dinheiro(divida_dinheiro)}\n"
-            if divida_polvora > 0:
-                texto_dividas += f"🧨 Pólvora: {fmt_num(divida_polvora)} unidades\n"
-            embed.add_field(name="🚨 DÍVIDAS PENDENTES", value=f"```diff\n- {texto_dividas.strip().replace(chr(10), chr(10) + '- ')}\n```", inline=False)
-
-        # Mecânico (mostra horas em qualquer caso, menos se isento total já mostrou)
-        if is_mecanico and not is_isento_total:
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            segundos_semana = await calcular_horas_semana(user_id)
-            progresso_horas = min(segundos_semana / (6 * 3600), 1.0)
-            barra_horas = "▓" * int(progresso_horas * 20) + "░" * (20 - int(progresso_horas * 20))
-            embed.add_field(name="⏰ META DE HORAS (MECÂNICA)", value=f"```yaml\nTempo total: {formatar_horas(segundos_semana)} / 6h\n```", inline=False)
-            embed.add_field(name=f"📊 PROGRESSO DE HORAS • {int(progresso_horas*100)}%", value=f"```prolog\n{barra_horas}\n```", inline=False)
-
-        embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}", icon_url=bot.user.display_avatar.url if bot.user else None)
-
+        # Deleta painéis antigos
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
                 try:
@@ -13798,75 +14101,27 @@ async def atualizar_embed_meta(user_id):
                 except:
                     pass
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # VIEW: escolhe a view correta
-        # - isento total sem mecânico → MetaView (só botões básicos)
-        # - isento total com mecânico → MecanicoView (com botão de ponto)
-        # - soldado+mecânico → SoldadoMecanicoView
-        # - soldado puro → SoldadoView
-        # - mecânico puro → MecanicoView
-        # - outros → MetaView
-        # ═══════════════════════════════════════════════════════════════════════
-        if is_isento_total and not is_mecanico:
-            view_final = MetaView(user_id)
-        elif is_isento_total and is_mecanico:
-            view_final = MecanicoView(user_id)
-            ponto_ativo = await buscar_ponto_ativo(user_id)
-            for item in view_final.children:
-                if item.custom_id == "mecanico_ponto_dinamico":
-                    if ponto_ativo:
-                        item.label = "🔴 Fechar Ponto"
-                        item.style = discord.ButtonStyle.danger
-                        item.emoji = "🔴"
-                    else:
-                        item.label = "🟢 Abrir Ponto"
-                        item.style = discord.ButtonStyle.success
-                        item.emoji = "🟢"
-        elif tipo_membro == "soldado" and is_mecanico:
-            view_final = SoldadoMecanicoView(user_id)
-            ponto_ativo = await buscar_ponto_ativo(user_id)
-            for item in view_final.children:
-                if item.custom_id == "soldado_mecanico_ponto":
-                    if ponto_ativo:
-                        item.label = "🔴 Fechar Ponto"
-                        item.style = discord.ButtonStyle.danger
-                        item.emoji = "🔴"
-                    else:
-                        item.label = "🟢 Abrir Ponto"
-                        item.style = discord.ButtonStyle.success
-                        item.emoji = "🟢"
-        elif tipo_membro == "soldado":
-            view_final = SoldadoView(user_id)
-        elif is_mecanico:
-            view_final = MecanicoView(user_id)
-            ponto_ativo = await buscar_ponto_ativo(user_id)
-            for item in view_final.children:
-                if item.custom_id == "mecanico_ponto_dinamico":
-                    if ponto_ativo:
-                        item.label = "🔴 Fechar Ponto"
-                        item.style = discord.ButtonStyle.danger
-                        item.emoji = "🔴"
-                    else:
-                        item.label = "🟢 Abrir Ponto"
-                        item.style = discord.ButtonStyle.success
-                        item.emoji = "🟢"
-        else:
-            view_final = MetaView(user_id)
+        # Envia novo
+        msg = await canal.send(view=view)
 
-        msg = await canal.send(embed=embed, view=view_final)
-        logger.info(f"✅ [atualizar_embed_meta] Painel criado pra {nome} (msg_id={msg.id})")
+        # Salva botão persistente (duas chaves pra compatibilidade)
+        try:
+            await BotaoPersistente.salvar_botao(msg.id, canal.id, f"meta_v2_{user_id}", {"user_id": user_id})
+            await BotaoPersistente.salvar_botao(msg.id, canal.id, f"meta_{user_id}", {"user_id": user_id})
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar botão persistente: {e}")
 
-        await BotaoPersistente.salvar_botao(msg.id, canal.id, "meta", {"user_id": user_id})
-
+        # Registra como último painel (move pro final do canal)
         try:
             await registrar_painel_ultimo(f"meta_{user_id}", canal.id, msg.id)
+            await registrar_painel_ultimo(f"meta_v2_{user_id}", canal.id, msg.id)
         except Exception as e:
-            logger.error(f"❌ Erro ao registrar painel de meta como último: {e}")
+            logger.error(f"❌ Erro ao registrar painel último: {e}")
 
-        await verificar_meta_concluida(user_id, progresso)
+        logger.info(f"✅ Painel V2 criado para {user_id} (msg {msg.id})")
 
     except Exception as e:
-        logger.error(f"❌ [atualizar_embed_meta] Erro ao atualizar embed da meta: {e}")
+        logger.error(f"❌ Erro crítico em atualizar_embed_meta (V2) para {user_id}: {e}")
         import traceback
         logger.error(traceback.format_exc())
         
@@ -14588,6 +14843,367 @@ class MecanicoView(discord.ui.View):
                 await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
             except:
                 pass
+# ════════════════════════════════════════════════════════════════════════════════
+# COMPONENTS V2 — PAINEL DE META HÍBRIDO (LayoutView)
+# ════════════════════════════════════════════════════════════════════════════════
+
+async def _v2_montar_container(user_id):
+    """
+    Monta o Container (conteúdo visual) do painel de meta V2.
+    Retorna (container, cargos_info) ou (None, None) em caso de erro.
+    """
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            return None, None
+        member = guild.get_member(int(user_id))
+        if not member:
+            return None, None
+        roles_ids = [r.id for r in member.roles]
+
+        if CARGO_SEM_META_ID in roles_ids:
+            return None, None
+
+        regra = await obter_regra_meta_membro(member)
+        if not regra:
+            return None, None
+
+        pool = await get_pool()
+        if not pool:
+            return None, None
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
+        if not meta:
+            return None, None
+
+        dividas = await buscar_dividas_usuario(user_id)
+        dinheiro = meta["dinheiro"] or 0
+        dinheiro_acoes = meta.get("dinheiro_acoes") or 0
+        polvora = meta.get("polvora_atual") or 0
+
+        # Define meta e atual
+        if regra["tipo"] == "soldado":
+            meta_valor = regra["meta_soldado"]
+            atual = await buscar_total_soldado()
+            label = "⚔️ META DE SOLDADO (COLETIVA)"
+            is_money = True
+        elif regra["tipo"] == "polvora":
+            meta_valor = regra["meta_polvora"]
+            atual = polvora
+            label = "🧨 META DE PÓLVORA"
+            is_money = False
+        elif regra["tipo"] == "acoes":
+            meta_valor = regra["meta_acoes"]
+            atual = dinheiro_acoes
+            label = "⚔️ META DE AÇÕES"
+            is_money = True
+        elif regra["isento"]:
+            meta_valor = 0
+            atual = 0
+            label = "🟡 ISENTO DE META"
+            is_money = True
+        else:
+            meta_valor = regra["meta_dinheiro"]
+            atual = dinheiro
+            label = "💰 META DE DINHEIRO SUJO"
+            is_money = True
+
+        pct = min(atual / meta_valor, 1.0) if meta_valor > 0 else 1.0
+        barra = "▓" * int(pct * 20) + "░" * (20 - int(pct * 20))
+        status_emoji = "🟢" if pct >= 1 else "🟡" if pct >= 0.5 else "🔴"
+
+        def fmt(v, d):
+            return formatar_dinheiro(v) if d else fmt_num(v)
+
+        container = discord.ui.Container(accent_color=discord.Color(0x9B59B6))
+
+        # Cabeçalho
+        container.add_item(discord.ui.Section(
+            discord.ui.TextDisplay(f"# 💀 META SEMANAL\n**{member.display_name.upper()}** • VDR 442"),
+            accessory=discord.ui.Thumbnail(member.display_avatar.url)
+        ))
+        container.add_item(discord.ui.Separator())
+
+        # Meta
+        container.add_item(discord.ui.TextDisplay(
+            f"### 🎯 {label}\n"
+            f"```yaml\n"
+            f"Atual: {fmt(atual, is_money)}\n"
+            f"Meta:  {fmt(meta_valor, is_money)}\n"
+            f"```"
+        ))
+        container.add_item(discord.ui.TextDisplay(
+            f"**{status_emoji} Progresso:** `{barra}` **{int(pct*100)}%**"
+        ))
+
+        # Dívidas
+        if dividas["dinheiro"] > 0 or dividas["polvora"] > 0:
+            container.add_item(discord.ui.Separator())
+            texto_div = ""
+            if dividas["dinheiro"] > 0:
+                texto_div += f"💰 Dinheiro: **{formatar_dinheiro(dividas['dinheiro'])}**\n"
+            if dividas["polvora"] > 0:
+                texto_div += f"🧨 Pólvora: **{fmt_num(dividas['polvora'])}** unidades\n"
+            container.add_item(discord.ui.TextDisplay(
+                f"### 🚨 DÍVIDAS PENDENTES\n{texto_div}"
+            ))
+
+        # Footer
+        container.add_item(discord.ui.Separator())
+        container.add_item(discord.ui.TextDisplay(
+            f"-# 🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}"
+        ))
+
+        # Informações dos cargos
+        is_soldado = CARGO_SOLDADO_ID in roles_ids
+        is_mecanico = CARGO_MECANICO_ID in roles_ids
+        is_isento = regra.get("isento", False) or regra.get("is_isento_lideranca", False)
+        ponto_ativo = await buscar_ponto_ativo(user_id) if is_mecanico else None
+
+        cargos_info = {
+            "is_soldado": is_soldado,
+            "is_mecanico": is_mecanico,
+            "is_isento": is_isento,
+            "ponto_ativo": ponto_ativo,
+        }
+
+        return container, cargos_info
+    except Exception as e:
+        logger.error(f"❌ Erro ao montar container V2: {e}")
+        return None, None
+
+
+class V2MetaView(discord.ui.LayoutView):
+    """
+    LayoutView Híbrido para painel de meta.
+    Botões mudam conforme cargos do membro (soldado, mecânico, isento).
+    """
+    def __init__(self, user_id, container, cargos_info):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        self.add_item(container)
+
+        is_soldado = cargos_info["is_soldado"]
+        is_mecanico = cargos_info["is_mecanico"]
+        is_isento = cargos_info["is_isento"]
+        ponto_ativo = cargos_info["ponto_ativo"]
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # LINHA 1 — Botões principais
+        # ═══════════════════════════════════════════════════════════════════════
+        row1 = discord.ui.ActionRow()
+
+        btn_add_din = discord.ui.Button(
+            label="Adicionar Dinheiro", emoji="💰",
+            style=discord.ButtonStyle.success,
+            custom_id=f"v2_add_din_{user_id}"
+        )
+        btn_add_din.callback = self._add_dinheiro
+        row1.add_item(btn_add_din)
+
+        if not is_isento or is_soldado:
+            btn_add_pol = discord.ui.Button(
+                label="Adicionar Pólvora", emoji="🧨",
+                style=discord.ButtonStyle.success,
+                custom_id=f"v2_add_pol_{user_id}"
+            )
+            btn_add_pol.callback = self._add_polvora
+            row1.add_item(btn_add_pol)
+
+        if is_mecanico:
+            if ponto_ativo:
+                label_ponto = "Fechar Ponto"
+                emoji_ponto = "🔴"
+                style_ponto = discord.ButtonStyle.danger
+            else:
+                label_ponto = "Abrir Ponto"
+                emoji_ponto = "🟢"
+                style_ponto = discord.ButtonStyle.success
+            btn_ponto = discord.ui.Button(
+                label=label_ponto, emoji=emoji_ponto,
+                style=style_ponto,
+                custom_id=f"v2_ponto_{user_id}"
+            )
+            btn_ponto.callback = self._ponto_dinamico
+            row1.add_item(btn_ponto)
+
+        self.add_item(row1)
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # LINHA 2 — Editar Meta, Editar Valor, Editar Ações (soldado), Editar Pólvora
+        # ═══════════════════════════════════════════════════════════════════════
+        row2 = discord.ui.ActionRow()
+
+        btn_edit_meta = discord.ui.Button(
+            label="Editar Meta", emoji="✏️",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"v2_edit_meta_{user_id}"
+        )
+        btn_edit_meta.callback = self._editar_meta
+        row2.add_item(btn_edit_meta)
+
+        btn_edit_valor = discord.ui.Button(
+            label="Editar Valor", emoji="⚙️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"v2_edit_valor_{user_id}"
+        )
+        btn_edit_valor.callback = self._editar_valor
+        row2.add_item(btn_edit_valor)
+
+        if is_soldado:
+            btn_edit_acoes = discord.ui.Button(
+                label="Editar Ações", emoji="⚔️",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"v2_edit_acoes_{user_id}"
+            )
+            btn_edit_acoes.callback = self._editar_acoes
+            row2.add_item(btn_edit_acoes)
+
+        if is_mecanico:
+            btn_edit_horas = discord.ui.Button(
+                label="Editar Horas", emoji="⏰",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"v2_edit_horas_{user_id}"
+            )
+            btn_edit_horas.callback = self._editar_horas
+            row2.add_item(btn_edit_horas)
+
+        self.add_item(row2)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CALLBACKS — Adicionar dinheiro
+    # ═══════════════════════════════════════════════════════════════════════════
+    async def _add_dinheiro(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != str(self.user_id):
+            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
+            return
+        pool = await get_pool()
+        if not pool:
+            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
+            return
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+        if not meta:
+            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
+            return
+        await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
+
+    async def _add_polvora(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != str(self.user_id):
+            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
+            return
+        pool = await get_pool()
+        if not pool:
+            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
+            return
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+        if not meta:
+            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
+            return
+        await interaction.response.send_modal(AdicionarPolvoraModal(self.user_id))
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CALLBACKS — Ponto (mecânico)
+    # ═══════════════════════════════════════════════════════════════════════════
+    async def _ponto_dinamico(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != str(self.user_id):
+            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        ponto_ativo = await buscar_ponto_ativo(self.user_id)
+        if ponto_ativo:
+            resultado = await fechar_ponto(self.user_id)
+            if not resultado:
+                await interaction.followup.send("⚠️ Erro ao fechar ponto. Tente novamente.", ephemeral=True)
+                return
+            await atualizar_embed_meta(self.user_id)
+            tempo_formatado = formatar_horas(resultado["tempo"])
+            await interaction.followup.send(
+                f"✅ **Ponto fechado!**\n"
+                f"⏰ **Entrada:** {resultado['entrada'].strftime('%H:%M:%S')}\n"
+                f"⏰ **Saída:** {resultado['saida'].strftime('%H:%M:%S')}\n"
+                f"⏱️ **Tempo desta sessão:** {tempo_formatado}",
+                ephemeral=True
+            )
+        else:
+            sucesso = await abrir_ponto(self.user_id)
+            if not sucesso:
+                await interaction.followup.send("❌ Erro ao abrir ponto. Tente novamente.", ephemeral=True)
+                return
+            await atualizar_embed_meta(self.user_id)
+            await interaction.followup.send(
+                f"✅ **Ponto aberto às {agora().strftime('%H:%M:%S')}!**\n⏰ O tempo está contando...",
+                ephemeral=True
+            )
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CALLBACKS — Edições
+    # ═══════════════════════════════════════════════════════════════════════════
+    async def _editar_meta(self, interaction: discord.Interaction):
+        is_dono = str(interaction.user.id) == str(self.user_id)
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        is_admin = interaction.user.guild_permissions.administrator
+        if not is_dono and not is_gerente and not is_admin:
+            await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+            return
+        pool = await get_pool()
+        if not pool:
+            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
+            return
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+        if not meta:
+            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
+            return
+        dados = {
+            "dinheiro": meta["dinheiro"] or 0,
+            "saldo_excedente": meta.get("saldo_excedente") or 0
+        }
+        await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
+
+    async def _editar_valor(self, interaction: discord.Interaction):
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        is_admin = interaction.user.guild_permissions.administrator
+        if not is_gerente and not is_admin:
+            await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM**!", ephemeral=True)
+            return
+        meta_total = await definir_valor_meta_por_id(self.user_id)
+        await interaction.response.send_modal(EditarValorMetaModal(self.user_id, meta_total))
+
+    async def _editar_acoes(self, interaction: discord.Interaction):
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        is_admin = interaction.user.guild_permissions.administrator
+        if not is_gerente and not is_admin:
+            await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM**!", ephemeral=True)
+            return
+        pool = await get_pool()
+        if not pool:
+            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
+            return
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+        if not meta:
+            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
+            return
+        valor_atual = meta.get("dinheiro_acoes") or 0
+        await interaction.response.send_modal(EditarDinheiroAcoesModal(self.user_id, valor_atual))
+
+    async def _editar_horas(self, interaction: discord.Interaction):
+        is_dono = str(interaction.user.id) == str(self.user_id)
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        is_admin = interaction.user.guild_permissions.administrator
+        if not is_dono and not is_gerente and not is_admin:
+            await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+            return
+        segundos_atuais = await calcular_horas_semana(self.user_id)
+        await interaction.response.send_modal(EditarHorasModal(self.user_id, segundos_atuais))
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DO BLOCO V2 HÍBRIDO
+# ════════════════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AdicionarDinheiroModal
@@ -14629,6 +15245,8 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
         if not sucesso:
             await interaction.response.send_message("❌ Erro ao adicionar dinheiro!", ephemeral=True)
             return
+
+        await _registrar_atividade(self.user_id, "deposito")
         await carregar_metas_cache()
         await atualizar_embed_meta(self.user_id)
         await interaction.response.send_message(f"✅ **{formatar_dinheiro(valor)} adicionado à meta!**", ephemeral=True)
@@ -14681,7 +15299,7 @@ class AdicionarPolvoraModal(discord.ui.Modal, title="🧨 Adicionar Pólvora"):
                 return
 
         resultado = await adicionar_polvora_meta(self.user_id, valor)
-
+        await _registrar_atividade(self.user_id, "deposito")
         if not resultado.get("sucesso"):
             await interaction.followup.send(f"❌ **Erro:** {resultado.get('erro', 'Desconhecido')}", ephemeral=True)
             return
@@ -16294,6 +16912,280 @@ async def verificar_dividas_prolongadas():
         logger.info(f"✅ {len(por_usuario)} avisos de dívida prolongada enviados")
     except Exception as e:
         logger.error(f"❌ Erro em verificar_dividas_prolongadas: {e}")
+
+# ════════════════════════════════════════════════════════════════════════════════
+# ALERTAS ESCALONADOS DE DÍVIDA (7 / 14 / 21 dias)
+# ════════════════════════════════════════════════════════════════════════════════
+
+async def _enviar_alerta_divida_membro(user_id, nivel, dividas_info):
+    """
+    Envia o embed de alerta no canal (sala) do próprio membro.
+    nivel = 1 (7 dias), 2 (14 dias), 3 (21+ dias)
+    """
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            return False
+        member = guild.get_member(int(user_id))
+        if not member:
+            return False
+
+        # Descobre a sala do membro (via metas_cache)
+        canal_id = None
+        if str(user_id) in metas_cache:
+            canal_id = metas_cache[str(user_id)].get("canal_id")
+        if not canal_id:
+            pool = await get_pool()
+            if pool:
+                async with pool.acquire() as conn:
+                    canal_id = await conn.fetchval(
+                        "SELECT canal_id FROM metas WHERE user_id = $1",
+                        str(user_id)
+                    )
+        if not canal_id:
+            return False
+
+        canal = bot.get_channel(int(canal_id))
+        if not canal:
+            return False
+
+        # Monta texto das dívidas
+        texto_dividas = ""
+        if dividas_info.get("dinheiro", 0) > 0:
+            texto_dividas += f"💰 Dinheiro: **{formatar_dinheiro(dividas_info['dinheiro'])}**\n"
+        if dividas_info.get("polvora", 0) > 0:
+            texto_dividas += f"🧨 Pólvora: **{fmt_num(dividas_info['polvora'])}** unidades\n"
+
+        if nivel == 1:
+            embed = discord.Embed(
+                title="🟡 ── LEMBRETE DE DÍVIDA ── 🟡",
+                description=(
+                    f"**{member.display_name}**, você tem dívida pendente "
+                    f"há **1 semana**.\n\n"
+                    f"Ainda dá tempo de quitar **sem consequências**."
+                ),
+                color=0xF1C40F,
+                timestamp=agora()
+            )
+        elif nivel == 2:
+            embed = discord.Embed(
+                title="🟠 ── ATENÇÃO: DÍVIDA PROLONGADA ── 🟠",
+                description=(
+                    f"**{member.display_name}**, sua dívida já está em **2 semanas**.\n\n"
+                    f"⚠️ **Risco:** perder o set do tablet se não houver "
+                    f"regularização."
+                ),
+                color=0xE67E22,
+                timestamp=agora()
+            )
+        else:
+            embed = discord.Embed(
+                title="🔴 ── ÚLTIMO AVISO DE DÍVIDA ── 🔴",
+                description=(
+                    f"**{member.display_name}**, sua dívida já passou de **3 semanas**.\n\n"
+                    f"🚨 **A gerência foi notificada.**\n"
+                    f"📌 Avaliação de **PD** (punição disciplinar) já está em curso."
+                ),
+                color=0xE74C3C,
+                timestamp=agora()
+            )
+
+        embed.add_field(
+            name="💵 DÍVIDAS ATIVAS",
+            value=f"```yaml\n{texto_dividas.strip()}\n```",
+            inline=False
+        )
+        embed.add_field(
+            name="📌 COMO QUITAR",
+            value=(
+                "Use **💰 Adicionar Dinheiro** ou **🧨 Adicionar Pólvora** "
+                "no painel da sua meta. A dívida é quitada automaticamente "
+                "assim que o valor for depositado."
+            ),
+            inline=False
+        )
+        embed.set_author(
+            name="🛡 Vida Rasa 442 • Sistema de Metas",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        await canal.send(content=f"{member.mention}", embed=embed)
+        return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar alerta nível {nivel} para {user_id}: {e}")
+        return False
+
+
+async def _enviar_alerta_divida_gerencia(user_id, nivel, dividas_info):
+    """Envia resumo na gerência (só níveis 2 e 3)."""
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            return False
+        member = guild.get_member(int(user_id))
+        if not member:
+            return False
+
+        canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
+        if not canal_gerencia:
+            return False
+
+        texto_dividas = ""
+        if dividas_info.get("dinheiro", 0) > 0:
+            texto_dividas += f"💰 Dinheiro: {formatar_dinheiro(dividas_info['dinheiro'])}\n"
+        if dividas_info.get("polvora", 0) > 0:
+            texto_dividas += f"🧨 Pólvora: {fmt_num(dividas_info['polvora'])} unidades\n"
+
+        if nivel == 2:
+            embed = discord.Embed(
+                title="🟠 ── DÍVIDA DE 14 DIAS ── 🟠",
+                description=f"👤 {member.mention} — **{member.display_name}**",
+                color=0xE67E22,
+                timestamp=agora()
+            )
+            embed.add_field(name="💵 DÍVIDAS", value=f"```yaml\n{texto_dividas.strip()}\n```", inline=False)
+            embed.add_field(
+                name="📋 STATUS",
+                value="Membro foi avisado que pode perder o set se não regularizar.",
+                inline=False
+            )
+        else:
+            embed = discord.Embed(
+                title="🔴 ── DÍVIDA CRÍTICA (21+ DIAS) ── 🔴",
+                description=f"👤 {member.mention} — **{member.display_name}**",
+                color=0xE74C3C,
+                timestamp=agora()
+            )
+            embed.add_field(name="💵 DÍVIDAS", value=f"```yaml\n{texto_dividas.strip()}\n```", inline=False)
+            embed.add_field(
+                name="⚠️ AÇÃO NECESSÁRIA",
+                value=(
+                    "```diff\n"
+                    "- Avaliar PD / remoção da facção\n"
+                    "- Membro não está em colaboração com o projeto\n"
+                    "```"
+                ),
+                inline=False
+            )
+
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • Sistema de Dívidas • {agora().strftime('%d/%m/%Y %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        await canal_gerencia.send(embed=embed)
+        return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar alerta gerência nível {nivel}: {e}")
+        return False
+
+
+@tasks.loop(hours=12)
+async def alertar_dividas_escalonado():
+    """
+    A cada 12h verifica TODAS as dívidas ativas e dispara alertas por nível.
+    Cada nível só dispara UMA VEZ (controlado via tabela `metas_avisos`).
+    """
+    try:
+        pool = await get_pool()
+        if not pool:
+            return
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT user_id, tipo, valor_divida, semana_fechamento, data_criacao
+                FROM metas_dividas
+                WHERE pago = false AND data_criacao <= NOW() - INTERVAL '7 days'
+                ORDER BY user_id, data_criacao ASC
+            """)
+
+        if not rows:
+            return
+
+        # Agrupa por user
+        por_usuario = {}
+        for r in rows:
+            uid = r["user_id"]
+            if uid not in por_usuario:
+                por_usuario[uid] = {
+                    "dinheiro": 0,
+                    "polvora": 0,
+                    "data_mais_antiga": r["data_criacao"]
+                }
+            tipo = r["tipo"] or "dinheiro"
+            if tipo == "polvora":
+                por_usuario[uid]["polvora"] += r["valor_divida"] or 0
+            else:
+                por_usuario[uid]["dinheiro"] += r["valor_divida"] or 0
+            if r["data_criacao"] < por_usuario[uid]["data_mais_antiga"]:
+                por_usuario[uid]["data_mais_antiga"] = r["data_criacao"]
+
+        enviados = {1: 0, 2: 0, 3: 0}
+
+        for uid, info in por_usuario.items():
+            agora_ts = agora()
+            data_mais_antiga = info["data_mais_antiga"]
+            if data_mais_antiga.tzinfo is None:
+                data_mais_antiga = data_mais_antiga.replace(tzinfo=BRASIL)
+            dias_devendo = (agora_ts - data_mais_antiga).days
+
+            # Define nível
+            if dias_devendo >= 21:
+                nivel = 3
+            elif dias_devendo >= 14:
+                nivel = 2
+            elif dias_devendo >= 7:
+                nivel = 1
+            else:
+                continue
+
+            # Checa se já foi avisado nesse nível (últimos 7 dias)
+            async with pool.acquire() as conn:
+                ja_avisado = await conn.fetchval("""
+                    SELECT 1 FROM metas_avisos
+                    WHERE user_id = $1
+                      AND tipo = $2
+                      AND data > NOW() - INTERVAL '7 days'
+                """, str(uid), f"divida_nivel_{nivel}")
+
+            if ja_avisado:
+                continue
+
+            # Dispara alerta
+            info_alerta = {"dinheiro": info["dinheiro"], "polvora": info["polvora"]}
+            enviado_membro = await _enviar_alerta_divida_membro(uid, nivel, info_alerta)
+
+            if nivel >= 2:
+                await _enviar_alerta_divida_gerencia(uid, nivel, info_alerta)
+
+            if enviado_membro:
+                enviados[nivel] += 1
+                # Marca como avisado
+                async with pool.acquire() as conn:
+                    await conn.execute("""
+                        INSERT INTO metas_avisos (user_id, tipo, data)
+                        VALUES ($1, $2, NOW())
+                    """, str(uid), f"divida_nivel_{nivel}")
+
+            await asyncio.sleep(1.5)  # anti rate-limit
+
+        if sum(enviados.values()) > 0:
+            logger.info(
+                f"📢 Alertas de dívida escalonados — "
+                f"🟡 {enviados[1]} (7d) | 🟠 {enviados[2]} (14d) | 🔴 {enviados[3]} (21d+)"
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro no alerta escalonado de dívidas: {e}")
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DOS ALERTAS ESCALONADOS DE DÍVIDA
+# ════════════════════════════════════════════════════════════════════════════════
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: fechar_todas_metas (CHECA TOTAL COLETIVO DOS SOLDADOS)
@@ -19023,7 +19915,26 @@ async def iniciar_tarefas_background():
             verificar_parcelas_diario.start()
     except Exception as e:
         logger.error(f"Erro loop parcelas: {e}")
-
+    try:
+        if not alertar_dividas_escalonado.is_running():
+            alertar_dividas_escalonado.start()
+    except Exception as e:
+        logger.error(f"Erro loop dívidas escalonadas: {e}")
+    try:
+        if not enviar_resumo_diario_ia.is_running():
+            enviar_resumo_diario_ia.start()
+    except Exception as e:
+        logger.error(f"Erro loop resumo IA: {e}")
+    try:
+        if not alertar_ruptura_estoque.is_running():
+            alertar_ruptura_estoque.start()
+    except Exception as e:
+        logger.error(f"Erro loop ruptura estoque: {e}")
+    try:
+        if not verificar_inatividade_semanal.is_running():
+            verificar_inatividade_semanal.start()
+    except Exception as e:
+        logger.error(f"Erro loop inatividade: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: heartbeat_producao_loop
 # ────────────────────────────────────────────────────────────────────────────────
@@ -19164,6 +20075,243 @@ async def setup_status():
         atualizar_status.start()
 
 # ════════════════════════════════════════════════════════════════════════════════
+# RESUMO DIÁRIO COM IA (GROQ / LLAMA 3.3)
+# ════════════════════════════════════════════════════════════════════════════════
+
+async def gerar_resumo_ia(logs: list, data_str: str = None) -> str:
+    """
+    Usa Groq (grátis, super rápido) para resumir os logs do dia em PT-BR.
+    Retorna string formatada com markdown, ou mensagem de erro.
+    """
+    if not GROQ_API_KEY:
+        return "⚠️ GROQ_API_KEY não configurada no Railway."
+    if not logs:
+        return "📭 Nenhuma atividade registrada hoje."
+
+    # ─── Compacta os logs pra caber no contexto ───
+    resumo_bruto = []
+    for r in logs[:250]:
+        resumo_bruto.append({
+            "autor": r.get("user_nome") or r.get("user_id"),
+            "modulo": r.get("modulo"),
+            "acao": r.get("acao"),
+            "item": r.get("item_nome"),
+            "detalhes": (r.get("detalhes") or "")[:150]
+        })
+
+    if not data_str:
+        data_str = agora().strftime("%d/%m/%Y")
+
+    prompt = f"""Você é o assistente oficial da facção "Vida Rasa 442" no GTA RP.
+Analise os logs abaixo e produza um resumo direto, objetivo e curto em português.
+
+REGRAS:
+- NÃO invente dados que não estão nos logs
+- Se alguma categoria não tiver dados, escreva "nenhum" ou "0"
+- Use emojis nos títulos
+- Seja direto nas frases
+
+FORMATO EXATO (siga à risca):
+
+## 📊 RESUMO DO DIA — {data_str}
+
+**💰 VENDAS**
+• Total de pedidos: X
+• Destaque: <nome de quem mais vendeu ou "nenhum">
+
+**📈 METAS**
+• Ações registradas: X
+• Membros com dívida: X
+
+**⚔️ AÇÕES**
+• Realizadas: X
+• Vitórias registradas: X
+
+**🏭 PRODUÇÃO**
+• Produções finalizadas: X
+• Pólvora movimentada: X unidades
+
+**🚨 ALERTAS**
+• <lista curta de problemas críticos ou "nenhum">
+
+**🔥 DESTAQUE DO DIA**
+<uma frase curta elogiando quem mais se destacou nas ações>
+
+LOGS:
+{json.dumps(resumo_bruto, ensure_ascii=False)}
+"""
+
+    try:
+        async with http_session.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 800,
+                "temperature": 0.4
+            },
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as r:
+            if r.status != 200:
+                txt = await r.text()
+                logger.error(f"❌ Groq status {r.status}: {txt[:200]}")
+                return f"⚠️ IA retornou erro {r.status}."
+            data = await r.json()
+            return data["choices"][0]["message"]["content"]
+    except asyncio.TimeoutError:
+        return "⚠️ IA demorou demais para responder (timeout)."
+    except Exception as e:
+        logger.error(f"❌ Erro IA resumo: {e}")
+        return f"⚠️ Erro ao gerar resumo: {str(e)[:150]}"
+
+
+async def _executar_resumo_ia(data_inicio=None):
+    """
+    Função interna reutilizada pela task automática E pelo comando de teste.
+    """
+    pool = await get_pool()
+    if not pool:
+        return "❌ Banco de dados indisponível."
+
+    if not data_inicio:
+        data_inicio = agora().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT user_nome, user_id, modulo, acao, item_nome, detalhes
+                   FROM auditoria
+                   WHERE data >= $1
+                   ORDER BY data DESC
+                   LIMIT 300""",
+                para_db_naive(data_inicio)
+            )
+        logs = [dict(r) for r in rows]
+        data_str = data_inicio.strftime("%d/%m/%Y")
+        return await gerar_resumo_ia(logs, data_str)
+    except Exception as e:
+        logger.error(f"❌ Erro ao executar resumo: {e}")
+        return f"⚠️ Erro: {str(e)[:150]}"
+
+
+@tasks.loop(minutes=5)
+async def enviar_resumo_diario_ia():
+    """
+    Roda a cada 5min mas só dispara às 23:59 (Brasília).
+    Envia o resumo no canal de gerência.
+    """
+    agora_br = agora()
+    # Só roda no minuto exato 23:59
+    if agora_br.hour != 23 or agora_br.minute != 59:
+        return
+
+    try:
+        # Evita rodar 2x no mesmo dia
+        pool = await get_pool()
+        if not pool:
+            return
+        async with pool.acquire() as conn:
+            ja_enviado = await conn.fetchval("""
+                SELECT 1 FROM metas_avisos
+                WHERE user_id = 'sistema'
+                  AND tipo = 'resumo_ia_diario'
+                  AND data::date = CURRENT_DATE
+            """)
+        if ja_enviado:
+            return
+
+        resumo = await _executar_resumo_ia()
+
+        canal = bot.get_channel(CANAL_GERENCIA_ID)
+        if not canal:
+            logger.warning("⚠️ Canal de gerência não encontrado para resumo IA")
+            return
+
+        # Header em embed + texto puro (resumo já é markdown)
+        embed_header = discord.Embed(
+            title="🤖 ── RESUMO DIÁRIO POR IA ── 🤖",
+            description="Gerado automaticamente por Llama 3.3 via Groq",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+        embed_header.set_author(
+            name="🛡 Vida Rasa 442 • Resumo IA",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        embed_header.set_footer(
+            text="🛡 Vida Rasa 442 • Inteligência Artificial",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+        await canal.send(embed=embed_header)
+
+        # Divide em chunks de 1900 (limite do Discord = 2000)
+        for i in range(0, len(resumo), 1900):
+            await canal.send(resumo[i:i + 1900])
+            await asyncio.sleep(1)
+
+        # Marca como enviado
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO metas_avisos (user_id, tipo, data)
+                VALUES ('sistema', 'resumo_ia_diario', NOW())
+            """)
+
+        logger.info("✅ Resumo IA diário enviado.")
+    except Exception as e:
+        logger.error(f"❌ Erro no resumo diário IA: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: !testar_resumo_ia
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name="testar_resumo_ia")
+@commands.has_permissions(administrator=True)
+async def cmd_testar_resumo_ia(ctx):
+    """Gera o resumo com IA AGORA (modo teste) e envia no canal atual."""
+    if not GROQ_API_KEY:
+        await ctx.send("❌ `GROQ_API_KEY` não configurada no Railway.\nCrie em https://console.groq.com/keys")
+        return
+
+    await ctx.send("🤖 **Consultando IA (Llama 3.3)...** aguarde.")
+
+    # Pergunta se quer só HOJE ou últimos 7 dias
+    view = discord.ui.View(timeout=60)
+
+    async def responder_hoje(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        resumo = await _executar_resumo_ia()
+        for i in range(0, len(resumo), 1900):
+            await interaction.followup.send(resumo[i:i + 1900])
+            await asyncio.sleep(0.5)
+
+    async def responder_7dias(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        inicio = agora() - timedelta(days=7)
+        resumo = await _executar_resumo_ia(data_inicio=inicio)
+        for i in range(0, len(resumo), 1900):
+            await interaction.followup.send(resumo[i:i + 1900])
+            await asyncio.sleep(0.5)
+
+    btn_hoje = discord.ui.Button(label="📅 Só hoje", style=discord.ButtonStyle.primary)
+    btn_hoje.callback = responder_hoje
+    btn_7dias = discord.ui.Button(label="📊 Últimos 7 dias", style=discord.ButtonStyle.secondary)
+    btn_7dias.callback = responder_7dias
+    view.add_item(btn_hoje)
+    view.add_item(btn_7dias)
+
+    await ctx.send("**Qual período?**", view=view)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DO RESUMO DIÁRIO COM IA
+# ════════════════════════════════════════════════════════════════════════════════
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 18 — TASKS E EVENTOS                                          ║
 # ════════════════════════════════════════════════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════════════════
@@ -19302,6 +20450,41 @@ def _audit_formatar_valor(chave: str, valor):
     return str(valor)
 
 # ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _audit_gerar_diff
+# ────────────────────────────────────────────────────────────────────────────────
+def _audit_gerar_diff(antes: dict, depois: dict) -> str:
+    """
+    Gera um diff visual estilo git entre dois dicionários.
+    Retorna string pronta pra usar dentro de ```diff ... ```.
+    """
+    if not antes and not depois:
+        return ""
+    if antes is None:
+        antes = {}
+    if depois is None:
+        depois = {}
+
+    linhas = []
+    chaves = sorted(set(antes.keys()) | set(depois.keys()))
+
+    for k in chaves:
+        v_antes = antes.get(k)
+        v_depois = depois.get(k)
+
+        if k in antes and k in depois:
+            if v_antes == v_depois:
+                linhas.append(f"  {k}: {_audit_formatar_valor(k, v_antes)}")
+            else:
+                linhas.append(f"- {k}: {_audit_formatar_valor(k, v_antes)}")
+                linhas.append(f"+ {k}: {_audit_formatar_valor(k, v_depois)}")
+        elif k in antes:
+            linhas.append(f"- {k}: {_audit_formatar_valor(k, v_antes)}")
+        else:
+            linhas.append(f"+ {k}: {_audit_formatar_valor(k, v_depois)}")
+
+    return "\n".join(linhas)
+
+# ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_auditoria
 # ────────────────────────────────────────────────────────────────────────────────
 async def registrar_auditoria(
@@ -19385,30 +20568,11 @@ async def registrar_auditoria(
                         )
 
                     if dados_antes or dados_depois:
-                        antes_texto = ""
-                        depois_texto = ""
-                        if dados_antes:
-                            for k, v in dados_antes.items():
-                                antes_texto += f"• {k}: {_audit_formatar_valor(k, v)}\n"
-                        if dados_depois:
-                            for k, v in dados_depois.items():
-                                depois_texto += f"• {k}: {_audit_formatar_valor(k, v)}\n"
-
-                        if antes_texto and depois_texto:
+                        diff = _audit_gerar_diff(dados_antes or {}, dados_depois or {})
+                        if diff:
                             embed.add_field(
-                                name="📊 ANTES",
-                                value=f"```yaml\n{antes_texto[:500]}\n```",
-                                inline=True
-                            )
-                            embed.add_field(
-                                name="📊 DEPOIS",
-                                value=f"```yaml\n{depois_texto[:500]}\n```",
-                                inline=True
-                            )
-                        elif depois_texto:
-                            embed.add_field(
-                                name="📊 DADOS",
-                                value=f"```yaml\n{depois_texto[:900]}\n```",
+                                name="🔄 MUDANÇAS",
+                                value=f"```diff\n{diff[:1000]}\n```",
                                 inline=False
                             )
 
@@ -19960,6 +21124,427 @@ async def enviar_painel_auditoria():
     await enviar_ou_atualizar_painel("painel_auditoria", CANAL_AUDITORIA_ID, embed, view)
 
 # ════════════════════════════════════════════════════════════════════════════════
+# DETECTOR DE INATIVIDADE
+# ════════════════════════════════════════════════════════════════════════════════
+
+CARGOS_FACCAO = [
+    CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
+    CARGO_MORADOR_ID, CARGO_MECANICO_ID,
+    CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID,
+    CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID,
+    CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
+    CARGO_01_ID, CARGO_02_ID, CARGO_03_ID,
+    CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID, CARGO_GERENTE_GERAL_ID,
+]
+
+
+async def _registrar_atividade(user_id, tipo):
+    """
+    Atualiza o timestamp da última atividade do membro.
+    tipo: 'mensagem', 'deposito', 'acao', 'venda', 'producao'
+    """
+    coluna_map = {
+        "mensagem": "ultima_mensagem",
+        "deposito": "ultimo_deposito",
+        "acao": "ultima_acao",
+        "venda": "ultima_venda",
+        "producao": "ultima_producao",
+    }
+    coluna = coluna_map.get(tipo)
+    if not coluna:
+        return
+    pool = await get_pool()
+    if not pool:
+        return
+    try:
+        async with pool.acquire() as conn:
+            existe = await conn.fetchval(
+                "SELECT 1 FROM atividade_membros WHERE user_id = $1",
+                str(user_id)
+            )
+            if existe:
+                await conn.execute(
+                    f"UPDATE atividade_membros SET {coluna} = NOW(), data_atualizacao = NOW() WHERE user_id = $1",
+                    str(user_id)
+                )
+            else:
+                await conn.execute(
+                    f"INSERT INTO atividade_membros (user_id, {coluna}, data_atualizacao) VALUES ($1, NOW(), NOW())",
+                    str(user_id)
+                )
+    except Exception as e:
+        logger.error(f"❌ Erro ao registrar atividade ({tipo}) de {user_id}: {e}")
+
+
+async def calcular_inatividade(dias_minimos: int = 7):
+    """
+    Retorna dict com membros classificados por nível de inatividade.
+    """
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return None
+
+    pool = await get_pool()
+    if not pool:
+        return None
+
+    agora_br = agora()
+    limite_atencao = agora_br - timedelta(days=dias_minimos)
+    limite_inativo = agora_br - timedelta(days=dias_minimos + 7)
+    limite_critico = agora_br - timedelta(days=dias_minimos + 14)
+
+    # Carrega atividades do banco (uma query só)
+    atividades = {}
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM atividade_membros")
+            for r in rows:
+                atividades[str(r["user_id"])] = dict(r)
+
+            # Últimos depósitos/fechamentos de metas
+            metas_hist = await conn.fetch("""
+                SELECT user_id, MAX(data_fechamento) as ultima
+                FROM metas_historico
+                GROUP BY user_id
+            """)
+            for r in metas_hist:
+                uid = str(r["user_id"])
+                if r["ultima"]:
+                    atividades.setdefault(uid, {})
+                    atividades[uid]["ultima_meta_hist"] = r["ultima"]
+
+            # Últimas ações
+            acoes = await conn.fetch("""
+                SELECT user_id, MAX(data) as ultima
+                FROM participantes_acoes pa
+                JOIN acoes_semana a ON a.id = pa.acao_id
+                GROUP BY user_id
+            """)
+            for r in acoes:
+                uid = str(r["user_id"])
+                if r["ultima"]:
+                    atividades.setdefault(uid, {})
+                    atividades[uid]["ultima_acao_db"] = r["ultima"]
+
+            # Últimas vendas
+            vendas = await conn.fetch("""
+                SELECT user_id, MAX(data) as ultima
+                FROM vendas
+                GROUP BY user_id
+            """)
+            for r in vendas:
+                uid = str(r["user_id"])
+                if r["ultima"] and r["ultima"]:
+                    try:
+                        dt = datetime.strptime(r["ultima"], "%d/%m/%Y")
+                        dt = dt.replace(tzinfo=BRASIL)
+                        atividades.setdefault(uid, {})
+                        atividades[uid]["ultima_venda_db"] = dt
+                    except:
+                        pass
+
+            # Últimas produções
+            producoes = await conn.fetch("""
+                SELECT user_id, MAX(data) as ultima
+                FROM producoes_finalizadas
+                GROUP BY user_id
+            """)
+            for r in producoes:
+                uid = str(r["user_id"])
+                if r["ultima"]:
+                    atividades.setdefault(uid, {})
+                    atividades[uid]["ultima_producao_db"] = r["ultima"]
+    except Exception as e:
+        logger.error(f"❌ Erro ao carregar atividades: {e}")
+        return None
+
+    # Cargos isentos de análise
+    cargos_isentos = [
+        CARGO_AUSENTE_ID,
+        CARGO_SEM_META_ID,
+        CARGO_GERENTE_ID,
+        CARGO_GERENTE_GERAL_ID,
+    ]
+
+    # Classifica cada membro
+    resultado = {
+        "criticos": [],
+        "inativos": [],
+        "atencao": [],
+        "ativos": [],
+    }
+
+    for member in guild.members:
+        if member.bot:
+            continue
+
+        roles_ids = [r.id for r in member.roles]
+
+        # Não tem cargo da facção
+        if not any(r in CARGOS_FACCAO for r in roles_ids):
+            continue
+
+        # Cargo isento
+        if any(r in roles_ids for r in cargos_isentos):
+            continue
+
+        # Entrou há menos de dias_minimos
+        if member.joined_at:
+            joined = member.joined_at
+            if joined.tzinfo is None:
+                joined = joined.replace(tzinfo=BRASIL)
+            if (agora_br - joined).days < dias_minimos:
+                continue
+
+        # Pega dados de atividade
+        dados = atividades.get(str(member.id), {})
+
+        # Calcula a última atividade REAL
+        datas = []
+        for campo in ["ultima_mensagem", "ultimo_deposito", "ultima_acao", "ultima_venda", "ultima_producao"]:
+            v = dados.get(campo)
+            if v:
+                if v.tzinfo is None:
+                    v = v.replace(tzinfo=BRASIL)
+                datas.append(v)
+
+        for campo in ["ultima_meta_hist", "ultima_acao_db", "ultima_venda_db", "ultima_producao_db"]:
+            v = dados.get(campo)
+            if v:
+                if isinstance(v, datetime):
+                    if v.tzinfo is None:
+                        v = v.replace(tzinfo=BRASIL)
+                    datas.append(v)
+
+        # Se não tem nenhuma data, considera "desde que entrou"
+        if datas:
+            ultima_atividade = max(datas)
+        else:
+            ultima_atividade = member.joined_at
+            if ultima_atividade.tzinfo is None:
+                ultima_atividade = ultima_atividade.replace(tzinfo=BRASIL)
+
+        dias_sem_atividade = (agora_br - ultima_atividade).days
+
+        entry = {
+            "member": member,
+            "user_id": member.id,
+            "nome": member.display_name,
+            "dias": dias_sem_atividade,
+            "ultima_atividade": ultima_atividade,
+        }
+
+        if dias_sem_atividade >= dias_minimos + 14:
+            resultado["criticos"].append(entry)
+        elif dias_sem_atividade >= dias_minimos + 7:
+            resultado["inativos"].append(entry)
+        elif dias_sem_atividade >= dias_minimos:
+            resultado["atencao"].append(entry)
+        else:
+            resultado["ativos"].append(entry)
+
+    # Ordena por dias (mais inativo primeiro)
+    resultado["criticos"].sort(key=lambda x: x["dias"], reverse=True)
+    resultado["inativos"].sort(key=lambda x: x["dias"], reverse=True)
+    resultado["atencao"].sort(key=lambda x: x["dias"], reverse=True)
+
+    return resultado
+
+
+async def gerar_embed_inatividade(resultado, dias_minimos=7):
+    """Gera o embed do relatório de inatividade."""
+    if not resultado:
+        return None
+
+    total = (
+        len(resultado["criticos"]) + len(resultado["inativos"]) +
+        len(resultado["atencao"]) + len(resultado["ativos"])
+    )
+
+    embed = discord.Embed(
+        title="📊 ── RELATÓRIO DE INATIVIDADE ── 📊",
+        description=(
+            f"📅 **{agora().strftime('%d/%m/%Y às %H:%M')}**\n"
+            f"👥 **{total} membros** analisados com cargos da facção\n"
+            f"⏱️ **Base:** {dias_minimos}+ dias sem atividade"
+        ),
+        color=0x3498DB,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Detector de Inatividade",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # CRÍTICOS
+    if resultado["criticos"]:
+        texto = ""
+        for e in resultado["criticos"][:15]:
+            texto += f"🔴 **{e['nome']}** — {e['dias']} dias\n"
+        if len(resultado["criticos"]) > 15:
+            texto += f"*... e mais {len(resultado['criticos']) - 15}*"
+        embed.add_field(
+            name=f"🔴 CRÍTICOS ({dias_minimos + 14}+ dias): {len(resultado['criticos'])}",
+            value=texto[:1024],
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name=f"🔴 CRÍTICOS ({dias_minimos + 14}+ dias): 0",
+            value="```yaml\nNenhum membro crítico\n```",
+            inline=False
+        )
+
+    # INATIVOS
+    if resultado["inativos"]:
+        texto = ""
+        for e in resultado["inativos"][:15]:
+            texto += f"🟠 **{e['nome']}** — {e['dias']} dias\n"
+        if len(resultado["inativos"]) > 15:
+            texto += f"*... e mais {len(resultado['inativos']) - 15}*"
+        embed.add_field(
+            name=f"🟠 INATIVOS ({dias_minimos + 7}+ dias): {len(resultado['inativos'])}",
+            value=texto[:1024],
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name=f"🟠 INATIVOS ({dias_minimos + 7}+ dias): 0",
+            value="```yaml\nNenhum membro inativo\n```",
+            inline=False
+        )
+
+    # ATENÇÃO
+    if resultado["atencao"]:
+        texto = ""
+        for e in resultado["atencao"][:15]:
+            texto += f"🟡 **{e['nome']}** — {e['dias']} dias\n"
+        if len(resultado["atencao"]) > 15:
+            texto += f"*... e mais {len(resultado['atencao']) - 15}*"
+        embed.add_field(
+            name=f"🟡 ATENÇÃO ({dias_minimos}+ dias): {len(resultado['atencao'])}",
+            value=texto[:1024],
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name=f"🟡 ATENÇÃO ({dias_minimos}+ dias): 0",
+            value="```yaml\nNenhum membro em atenção\n```",
+            inline=False
+        )
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    embed.add_field(
+        name="🟢 ATIVOS",
+        value=f"```yaml\n{len(resultado['ativos'])} membros\n```",
+        inline=True
+    )
+    embed.add_field(
+        name="📊 TOTAL ANALISADO",
+        value=f"```yaml\n{total} membros\n```",
+        inline=True
+    )
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    embed.add_field(
+        name="💡 O QUE FAZER",
+        value=(
+            "```yaml\n"
+            "🟡 ATENÇÃO  → mandar DM perguntando se está tudo bem\n"
+            "🟠 INATIVO  → avaliar remoção de cargos\n"
+            "🔴 CRÍTICO  → avaliar expulsão (comunicar antes)\n"
+            "```\n"
+            "⚠️ **A decisão final é SEMPRE da gerência.** "
+            "Este relatório é apenas informativo."
+        ),
+        inline=False
+    )
+
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Sistema de Inatividade",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    return embed
+
+
+@tasks.loop(hours=24)
+async def verificar_inatividade_semanal():
+    """Toda segunda-feira às 10h envia o relatório na gerência."""
+    agora_br = agora()
+    if agora_br.weekday() != 0:  # segunda
+        return
+    if agora_br.hour != 10:
+        return
+
+    try:
+        # Evita duplicata no mesmo dia
+        pool = await get_pool()
+        if not pool:
+            return
+        async with pool.acquire() as conn:
+            ja_enviado = await conn.fetchval("""
+                SELECT 1 FROM metas_avisos
+                WHERE user_id = 'sistema'
+                  AND tipo = 'inatividade_semanal'
+                  AND data::date = CURRENT_DATE
+            """)
+        if ja_enviado:
+            return
+
+        canal = bot.get_channel(CANAL_GERENCIA_ID)
+        if not canal:
+            logger.warning("⚠️ Canal de gerência não encontrado")
+            return
+
+        resultado = await calcular_inatividade(7)
+        embed = await gerar_embed_inatividade(resultado, 7)
+
+        if embed:
+            await canal.send(embed=embed)
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO metas_avisos (user_id, tipo, data)
+                    VALUES ('sistema', 'inatividade_semanal', NOW())
+                """)
+            logger.info("✅ Relatório de inatividade semanal enviado")
+    except Exception as e:
+        logger.error(f"❌ Erro no relatório de inatividade: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: !inatividade
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name="inatividade")
+@commands.has_permissions(administrator=True)
+async def cmd_inatividade(ctx, dias: int = 7):
+    """Consulta inatividade a qualquer momento."""
+    if dias < 3:
+        dias = 3
+    if dias > 60:
+        dias = 60
+
+    await ctx.send(f"🔍 Analisando inatividade (base: {dias}+ dias)...")
+    resultado = await calcular_inatividade(dias)
+    if not resultado:
+        await ctx.send("❌ Erro ao analisar inatividade.")
+        return
+
+    embed = await gerar_embed_inatividade(resultado, dias)
+    if embed:
+        await ctx.send(embed=embed)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DO DETECTOR DE INATIVIDADE
+# ════════════════════════════════════════════════════════════════════════════════
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 19 — SISTEMA DE AUDITORIA                                     ║
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -20134,6 +21719,21 @@ class BotaoPersistente:
                         continue
                     tipo = row["tipo"]
                     dados = json.loads(row["dados"]) if row["dados"] else {}
+
+                    # ─── Caso especial: painel de meta V2 (precisa async) ───
+                    if tipo.startswith("meta_v2_") or tipo.startswith("meta_"):
+                        try:
+                            user_id = int(dados.get("user_id") or tipo.split("_")[-1])
+                            container, cargos_info = await _v2_montar_container(user_id)
+                            if container:
+                                view = V2MetaView(user_id, container, cargos_info)
+                                await msg.edit(view=view)
+                                logger.info(f"🔄 Painel V2 restaurado: user {user_id}")
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao restaurar painel V2 {tipo}: {e}")
+                        continue
+
+                    # ─── Resto dos botões (vendas, ações, produção) ───
                     view = BotaoPersistente.criar_view(tipo, dados)
                     if view:
                         await msg.edit(view=view)
@@ -20276,62 +21876,18 @@ async def verificar_e_mover_paineis(canal):
 # FUNÇÃO: criar_view_por_painel (ISENTO TAMBÉM TEM VIEW)
 # ────────────────────────────────────────────────────────────────────────────────
 def criar_view_por_painel(nome):
+    if nome.startswith("meta_v2_"):
+        try:
+            user_id = int(nome.replace("meta_v2_", ""))
+            # Reconstrói V2 (assíncrono — chamado dentro de restaurar_botoes)
+            return None  # Restauração feita via chamada assíncrona abaixo
+        except:
+            return None
+
     if nome.startswith("meta_"):
         try:
             user_id = int(nome.replace("meta_", ""))
-            guild = bot.get_guild(GUILD_ID)
-            member = guild.get_member(user_id) if guild else None
-            if not member:
-                return None
-            roles_ids = [r.id for r in member.roles]
-
-            # SM não tem painel
-            if CARGO_SEM_META_ID in roles_ids:
-                return None
-
-            tem_soldado = CARGO_SOLDADO_ID in roles_ids
-            tem_mecanico = CARGO_MECANICO_ID in roles_ids
-            tem_isento_lideranca = any(r in roles_ids for r in [
-                CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID,
-                CARGO_01_ID, CARGO_02_ID, CARGO_03_ID
-            ])
-
-            # Isento + mecânico → MecanicoView
-            if tem_isento_lideranca and not tem_soldado and tem_mecanico:
-                view = MecanicoView(user_id)
-                for item in view.children:
-                    if item.custom_id == "mecanico_ponto_dinamico":
-                        item.label = "🟢 Abrir Ponto"
-                        item.style = discord.ButtonStyle.success
-                        item.emoji = "🟢"
-                return view
-            # Isento sem mecânico → MetaView
-            elif tem_isento_lideranca and not tem_soldado:
-                return MetaView(user_id)
-            # Soldado + mecânico → SoldadoMecanicoView
-            elif tem_soldado and tem_mecanico:
-                view = SoldadoMecanicoView(user_id)
-                for item in view.children:
-                    if item.custom_id == "soldado_mecanico_ponto":
-                        item.label = "🟢 Abrir Ponto"
-                        item.style = discord.ButtonStyle.success
-                        item.emoji = "🟢"
-                return view
-            # Só soldado → SoldadoView
-            elif tem_soldado:
-                return SoldadoView(user_id)
-            # Só mecânico → MecanicoView
-            elif tem_mecanico:
-                view = MecanicoView(user_id)
-                for item in view.children:
-                    if item.custom_id == "mecanico_ponto_dinamico":
-                        item.label = "🟢 Abrir Ponto"
-                        item.style = discord.ButtonStyle.success
-                        item.emoji = "🟢"
-                return view
-            # Outros → MetaView
-            else:
-                return MetaView(user_id)
+            return None
         except:
             return None
 
@@ -21291,6 +22847,229 @@ async def cmd_atualizar_vendas_antigas(ctx):
         f"✅ **{contador_atualizadas} vendas atualizadas!**\n"
         f"❌ {contador_ignoradas} erros"
     )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: !previsao_estoque
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name="previsao_estoque")
+@commands.has_permissions(administrator=True)
+async def cmd_previsao_estoque(ctx):
+    await ctx.send("📊 Calculando previsão de estoque...")
+    dados = await calcular_ruptura_estoque()
+
+    if not dados:
+        await ctx.send("❌ Erro ao calcular previsão. Verifique os logs.")
+        return
+
+    pt = dados["pt"]
+    sub = dados["sub"]
+
+    # Emoji de status por urgência
+    def emoji_status(dias):
+        if dias < 1:
+            return "🔴"
+        if dias < 3:
+            return "🟠"
+        if dias < 7:
+            return "🟡"
+        return "🟢"
+
+    embed = discord.Embed(
+        title="📈 ── PREVISÃO DE ESTOQUE ── 📈",
+        description=(
+            f"📅 Baseado no consumo médio dos **últimos 7 dias**\n"
+            f"🕒 Calculado em {agora().strftime('%d/%m/%Y às %H:%M')}"
+        ),
+        color=0x3498DB,
+        timestamp=agora()
+    )
+    embed.set_author(
+        name="🛡 Vida Rasa 442 • Predição de Estoque",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    embed.add_field(
+        name=f"{emoji_status(pt['dias_restantes'])} 🔫 PT",
+        value=(
+            f"```yaml\n"
+            f"Estoque atual: {fmt_num(pt['estoque'])} pacotes\n"
+            f"Consumo/dia:   {pt['media_dia']} pacotes\n"
+            f"Ruptura em:    {pt['dias_restantes']:.1f} dias\n"
+            f"```"
+        ),
+        inline=True
+    )
+    embed.add_field(
+        name=f"{emoji_status(sub['dias_restantes'])} 🔫 SUB",
+        value=(
+            f"```yaml\n"
+            f"Estoque atual: {fmt_num(sub['estoque'])} pacotes\n"
+            f"Consumo/dia:   {sub['media_dia']} pacotes\n"
+            f"Ruptura em:    {sub['dias_restantes']:.1f} dias\n"
+            f"```"
+        ),
+        inline=True
+    )
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # Diagnóstico
+    if pt["dias_restantes"] < 1 or sub["dias_restantes"] < 1:
+        diagnostico = "🚨 **CRÍTICO** — Estoque vai acabar hoje. Produza AGORA!"
+    elif pt["dias_restantes"] < 3 or sub["dias_restantes"] < 3:
+        diagnostico = "⚠️ **URGENTE** — Estoque acaba em menos de 3 dias. Priorize produção."
+    elif pt["dias_restantes"] < 7 or sub["dias_restantes"] < 7:
+        diagnostico = "🟡 **ATENÇÃO** — Estoque acaba em menos de 1 semana. Programe produção."
+    else:
+        diagnostico = "✅ **TRANQUILO** — Estoque em níveis saudáveis."
+
+    embed.add_field(name="📋 DIAGNÓSTICO", value=diagnostico, inline=False)
+    embed.set_footer(
+        text="🛡 Vida Rasa 442 • Previsão baseada em dados reais",
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+
+    await ctx.send(embed=embed)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: !testar_alertas_divida
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name="testar_alertas_divida")
+@commands.has_permissions(administrator=True)
+async def cmd_testar_alertas_divida(ctx):
+    """Testa o sistema de alertas escalonados SEM esperar o ciclo natural."""
+    await ctx.send("🧪 Testando sistema de alertas de dívida...")
+    try:
+        pool = await get_pool()
+        if not pool:
+            await ctx.send("❌ Banco indisponível.")
+            return
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT user_id, tipo, valor_divida, data_criacao
+                FROM metas_dividas
+                WHERE pago = false
+                ORDER BY data_criacao ASC
+            """)
+
+        if not rows:
+            await ctx.send("📭 Nenhuma dívida ativa no momento — não há o que testar.")
+            return
+
+        # Monta resumo do que seria enviado
+        por_usuario = {}
+        for r in rows:
+            uid = r["user_id"]
+            if uid not in por_usuario:
+                por_usuario[uid] = {
+                    "dinheiro": 0,
+                    "polvora": 0,
+                    "data_mais_antiga": r["data_criacao"]
+                }
+            tipo = r["tipo"] or "dinheiro"
+            if tipo == "polvora":
+                por_usuario[uid]["polvora"] += r["valor_divida"] or 0
+            else:
+                por_usuario[uid]["dinheiro"] += r["valor_divida"] or 0
+            if r["data_criacao"] < por_usuario[uid]["data_mais_antiga"]:
+                por_usuario[uid]["data_mais_antiga"] = r["data_criacao"]
+
+        agora_ts = agora()
+        texto = ""
+        contadores = {1: 0, 2: 0, 3: 0}
+
+        for uid, info in por_usuario.items():
+            data = info["data_mais_antiga"]
+            if data.tzinfo is None:
+                data = data.replace(tzinfo=BRASIL)
+            dias = (agora_ts - data).days
+
+            if dias >= 21:
+                nivel_emoji = "🔴"
+                nivel_txt = "Último aviso (21d+)"
+                contadores[3] += 1
+            elif dias >= 14:
+                nivel_emoji = "🟠"
+                nivel_txt = "Atenção (14d)"
+                contadores[2] += 1
+            elif dias >= 7:
+                nivel_emoji = "🟡"
+                nivel_txt = "Lembrete (7d)"
+                contadores[1] += 1
+            else:
+                continue
+
+            member = ctx.guild.get_member(int(uid))
+            nome = member.display_name if member else f"ID: {uid}"
+            texto += f"{nivel_emoji} **{nome}** — {nivel_txt} ({dias} dias)\n"
+
+        embed = discord.Embed(
+            title="🧪 SIMULAÇÃO DE ALERTAS DE DÍVIDA",
+            description="**O que seria enviado se o loop rodasse agora:**",
+            color=0x9B59B6,
+            timestamp=agora()
+        )
+
+        if texto:
+            embed.add_field(
+                name="📋 ALERTAS QUE DISPARARIAM",
+                value=texto[:1024],
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📋 ALERTAS QUE DISPARARIAM",
+                value="Nenhum. Ninguém com dívida há 7+ dias.",
+                inline=False
+            )
+
+        embed.add_field(
+            name="📊 RESUMO",
+            value=(
+                f"```yaml\n"
+                f"🟡 Nível 1 (7d):   {contadores[1]} membros\n"
+                f"🟠 Nível 2 (14d):  {contadores[2]} membros\n"
+                f"🔴 Nível 3 (21d+): {contadores[3]} membros\n"
+                f"```"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="⚠️ IMPORTANTE",
+            value=(
+                "Este comando **NÃO ENVIA** os alertas — apenas simula.\n"
+                "Os alertas reais são enviados pelo loop automático a cada 12h."
+            ),
+            inline=False
+        )
+        embed.set_footer(
+            text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}",
+            icon_url=bot.user.display_avatar.url if bot.user else None
+        )
+
+        await ctx.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Erro no teste de alertas: {e}")
+        await ctx.send(f"❌ Erro: `{str(e)[:150]}`")
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: !forcar_alertas_divida
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name="forcar_alertas_divida")
+@commands.has_permissions(administrator=True)
+async def cmd_forcar_alertas_divida(ctx):
+    """Executa o loop de alertas AGORA (sem esperar 12h)."""
+    await ctx.send("🚀 Executando alertas de dívida AGORA...")
+    try:
+        await alertar_dividas_escalonado()
+        await ctx.send("✅ Ciclo de alertas executado. Confira os canais de gerência/salas.")
+    except Exception as e:
+        logger.error(f"❌ Erro ao forçar alertas: {e}")
+        await ctx.send(f"❌ Erro: `{str(e)[:150]}`")
+
+
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 21 (PARTE 1/3)                                                ║
@@ -22810,26 +24589,28 @@ async def restaurar_botoes_metas():
                 continue
             try:
                 mensagem_encontrada = False
+                eh_v2 = False
+
                 async for msg in canal.history(limit=30):
-                    if msg.author == bot.user and msg.embeds:
-                        if msg.embeds[0].title and "META DE" in msg.embeds[0].title.upper():
-                            mensagem_encontrada = True
-                            if not msg.components:
-                                await atualizar_embed_meta(int(uid))
-                                contador += 1
-                                await asyncio.sleep(1.5)
-                            else:
-                                tem_fixo = False
-                                for component in msg.components:
-                                    for item in component.children:
-                                        if item.custom_id and "fixo" in item.custom_id:
-                                            tem_fixo = True
-                                            break
-                                if not tem_fixo:
-                                    await atualizar_embed_meta(int(uid))
-                                    contador += 1
-                                    await asyncio.sleep(1.5)
-                            break
+                    if msg.author != bot.user:
+                        continue
+
+                    # Detecta V2 (components com custom_id v2_)
+                    if msg.components:
+                        for row_comp in msg.components:
+                            for c in getattr(row_comp, "children", []):
+                                cid = getattr(c, "custom_id", "") or ""
+                                if cid.startswith("v2_"):
+                                    mensagem_encontrada = True
+                                    eh_v2 = True
+                                    break
+                            if eh_v2:
+                                break
+
+                    if eh_v2:
+                        break
+
+                # Se não achou nenhum painel (ou achou V1 legado) → recria V2
                 if not mensagem_encontrada:
                     await atualizar_embed_meta(int(uid))
                     contador += 1
@@ -22990,6 +24771,14 @@ async def on_message(message: discord.Message):
             logger.error(f"❌ Erro ao mover painéis do canal {canal.name}: {e}")
 
     await on_message_lavagem(message)
+    await on_message_bau_ocr(message)
+
+    # Registra atividade (inatividade detector)
+    try:
+        if message.guild and message.guild.id == GUILD_ID:
+            await _registrar_atividade(message.author.id, "mensagem")
+    except Exception as e:
+        logger.error(f"❌ Erro ao registrar atividade mensagem: {e}")
 
     await bot.process_commands(message)
 # ────────────────────────────────────────────────────────────────────────────────
