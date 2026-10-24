@@ -14881,6 +14881,9 @@ async def _v2_montar_container(user_id):
         dinheiro_acoes = meta.get("dinheiro_acoes") or 0
         polvora = meta.get("polvora_atual") or 0
 
+        is_mecanico = CARGO_MECANICO_ID in roles_ids
+        is_isento_lideranca = regra.get("is_isento_lideranca", False) or regra.get("isento", False)
+
         # Define meta e atual
         if regra["tipo"] == "soldado":
             meta_valor = regra["meta_soldado"]
@@ -14936,6 +14939,36 @@ async def _v2_montar_container(user_id):
             f"**{status_emoji} Progresso:** `{barra}` **{int(pct*100)}%**"
         ))
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # MECÂNICO — META DE HORAS (SEMPRE APARECE, INDEPENDENTE DE ISENÇÃO)
+        # ═══════════════════════════════════════════════════════════════════════
+        if is_mecanico:
+            try:
+                segundos_semana = await calcular_horas_semana(user_id)
+            except Exception:
+                segundos_semana = 0
+            meta_horas_segundos = 6 * 3600  # 6 horas
+            pct_horas = min(segundos_semana / meta_horas_segundos, 1.0) if meta_horas_segundos > 0 else 1.0
+            barra_horas = "▓" * int(pct_horas * 20) + "░" * (20 - int(pct_horas * 20))
+
+            if pct_horas >= 1:
+                status_horas = "🟢"
+            elif pct_horas >= 0.5:
+                status_horas = "🟡"
+            else:
+                status_horas = "🔴"
+
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(
+                f"### ⏰ META DE HORAS (MECÂNICA)\n"
+                f"```yaml\n"
+                f"Tempo total: {formatar_horas(segundos_semana)} / 6h\n"
+                f"```"
+            ))
+            container.add_item(discord.ui.TextDisplay(
+                f"**{status_horas} Progresso:** `{barra_horas}` **{int(pct_horas*100)}%**"
+            ))
+
         # Dívidas
         if dividas["dinheiro"] > 0 or dividas["polvora"] > 0:
             container.add_item(discord.ui.Separator())
@@ -14956,7 +14989,6 @@ async def _v2_montar_container(user_id):
 
         # Informações dos cargos
         is_soldado = CARGO_SOLDADO_ID in roles_ids
-        is_mecanico = CARGO_MECANICO_ID in roles_ids
         is_isento = regra.get("isento", False) or regra.get("is_isento_lideranca", False)
         ponto_ativo = await buscar_ponto_ativo(user_id) if is_mecanico else None
 
