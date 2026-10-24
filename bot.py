@@ -14063,7 +14063,6 @@ async def atualizar_embed_meta(user_id):
     """
     Atualiza o painel de meta do membro usando Components V2 (LayoutView).
     Deleta painéis antigos do canal e envia o novo V2.
-    Se V2 falhar por qualquer motivo, não faz fallback (V1 foi removida).
     """
     try:
         if str(user_id) not in metas_cache:
@@ -14093,7 +14092,7 @@ async def atualizar_embed_meta(user_id):
         # Monta LayoutView
         view = V2MetaView(user_id, container, cargos_info)
 
-        # Deleta painéis antigos
+        # Deleta painéis antigos (Garante que o novo apareça no final e atualizado)
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
                 try:
@@ -20181,7 +20180,7 @@ LOGS:
                 "Content-Type": "application/json"
             },
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": "llama3-70b-8192",  # ← MODELO CORRIGIDO AQUI
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 800,
                 "temperature": 0.4
