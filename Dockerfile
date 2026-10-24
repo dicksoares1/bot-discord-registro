@@ -2,9 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Instalar FFmpeg e dependências
+# Instalar FFmpeg (que você já usava) + Tesseract OCR com Português
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    tesseract-ocr \
+    tesseract-ocr-por \
+    libtesseract-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copiar requirements.txt e instalar dependências
