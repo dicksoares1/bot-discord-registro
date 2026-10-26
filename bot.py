@@ -6760,11 +6760,64 @@ async def restaurar_acoes():
 # ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_acoes(guild):
     canal = guild.get_channel(CANAL_ESCALACOES_ID)
-    if not canal: return
+    if not canal:
+        logger.error("❌ Canal ações não encontrado")
+        return
+    pool = await get_pool()
+    if not pool:
+        return
 
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT tipo, COUNT(*) as qtd FROM acoes_semana WHERE status = 'concluida' AND (resultado = 'ganhou' OR resultado = 'perdeu') AND data > NOW() - INTERVAL '7 days' GROUP BY tipo")
+    feitas = {r["tipo"]: r["qtd"] for r in rows}
+
+    total_geral_feitas = 0
+    total_geral_meta = 0
+    
+    # ─── BLOCO 1: LIMITES ESPECÍFICOS (Bahamas / Lan Houses) ───
+    texto_bahamas = ""
+    for acao, limite in LIMITES_ACOES_ESPECIFICOS.items():
+        if "Bahamas" in acao or "Museu" in acao:
+            qtd_feita = feitas.get(acao, 0)
+            restante = max(0, limite - qtd_feita)
+            status = "✅ COMPLETO" if qtd_feita >= limite else f"⏳ {restante} rest."
+            texto_bahamas += f"• {acao[:15]}: {qtd_feita}/{limite} {status}\n"
+            total_geral_feitas += qtd_feita
+            total_geral_meta += limite
+
+    for grupo_nome, grupo_dados in GRUPOS_LIMITE_COMPARTILHADO.items():
+        acoes_grupo = grupo_dados["acoes"]
+        limite = grupo_dados["limite"]
+        qtd_feita = sum(feitas.get(acao, 0) for acao in acoes_grupo)
+        restante = max(0, limite - qtd_feita)
+        status = "✅" if qtd_feita >= limite else f"⏳ {restante} rest."
+        texto_bahamas += f"• {grupo_nome}: {qtd_feita}/{limite} {status}\n"
+        total_geral_feitas += qtd_feita
+        total_geral_meta += limite
+
+    # ─── BLOCO 2: OUTRAS CATEGORIAS (Complexo) ───
+    texto_complexo = ""
+    for categoria, dados in CATEGORIAS_ACOES.items():
+        if categoria == "Bahamas":
+            continue # Já tratamos acima
+        limite = dados["limite"]
+        acoes = dados["acoes"]
+        emoji = dados["emoji"]
+        qtd_feita = sum(feitas.get(acao, 0) for acao in acoes)
+        total_geral_feitas += qtd_feita
+        
+        if limite is None:
+            texto_complexo += f"• {emoji} {categoria[:12]}: {qtd_feita} (ILIMITADO)\n"
+        else:
+            total_geral_meta += limite
+            restante = max(0, limite - qtd_feita)
+            status = "✅" if qtd_feita >= limite else f"⏳ {restante} rest."
+            texto_complexo += f"• {emoji} {categoria[:12]}: {qtd_feita}/{limite} {status}\n"
+
+    # ─── EMBED PREMIUM ───
     embed = discord.Embed(
         title="⚔️ ── CENTRAL DE AÇÕES ── ⚔️",
-        description="**VDR 442 • Escalações e Limites**\n*Organize as ações da facção e veja os limites semanais*",
+        description="**VDR 442 • Escalações e Limites**\n*Acompanhe o progresso das ações da semana*",
         color=0xC0392B,
         timestamp=agora()
     )
@@ -6772,20 +6825,32 @@ async def enviar_painel_acoes(guild):
 
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
-    embed.add_field(
-        name="🏙️ CATEGORIAS DISPONÍVEIS",
-        value=(
-            "**🏙️ Complexo:** Ações de banco, joalheria e lojas.\n"
-            "**🏝️ Bahamas:** Ações específicas das Bahamas.\n"
-            "**🚁 Helicrash:** Eventos de Helicrash (limite por horário).\n\n"
-            "*Clique nos botões abaixo para criar uma nova escalação.*"
-        ),
-        inline=False
-    )
+    # Adiciona os limites em campos separados para não estourar o limite de 1024 do Discord
+    if texto_complexo:
+        embed.add_field(
+            name="🏙️ LIMITES DO COMPLEXO",
+            value=f"```yaml\n{texto_complexo}```",
+            inline=False
+        )
 
+    if texto_bahamas:
+        embed.add_field(
+            name="🏝️ LIMITES DE BAHAMAS",
+            value=f"```yaml\n{texto_bahamas}```",
+            inline=False
+        )
+
+    # Barra de progresso geral
+    texto_progresso = ""
+    if total_geral_meta > 0:
+        porcentagem = int((total_geral_feitas / total_geral_meta) * 100)
+        barra = "▓" * int((porcentagem / 100) * 10) + "░" * (10 - int((porcentagem / 100) * 10))
+        texto_progresso = f"{total_geral_feitas}/{total_geral_meta} ações realizadas\n{barra} {porcentagem}%"
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
     embed.add_field(
-        name="⚠️ AVISO AOS CRIADORES",
-        value="Antes de criar a ação, verifique se o limite semanal da categoria já foi atingido. Ação com limite estourado será cancelada.",
+        name="📊 PROGRESSO GERAL DA SEMANA",
+        value=f"```yaml\n{texto_progresso}```" if texto_progresso else "```yaml\nNenhuma meta de ação definida\n```",
         inline=False
     )
 
