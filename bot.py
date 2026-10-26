@@ -69,7 +69,7 @@ except ImportError:
     PILImage = None
     _OCR_DISPONIVEL = False
 
-from pix_payload import PixPayload
+from pixqrcodegen import Payload
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DOS IMPORTS                                                            ║
@@ -2410,25 +2410,40 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             return
 
         try:
-            # Gera o código PIX
-            pix = PixPayload(
-                key=PIX_CHAVE,
-                name=PIX_NOME,
-                city=PIX_CIDADE,
-                amount=valor_float,
-                description="Doacao VDR"
-            )
-            pix_copia_cola = pix.payload
+            # Gera o código PIX usando a biblioteca pixqrcodegen
+            # O valor precisa ser string com ponto (ex: "50.00")
+            valor_str = f"{valor_float:.2f}"
             
-            # Tenta gerar o QR Code em imagem
+            payload = Payload(
+                PIX_NOME, 
+                PIX_CHAVE, 
+                valor_str, 
+                PIX_CIDADE, 
+                "DOACAO" # ID da transação
+            )
+            
+            # Gera a string "Copia e Cola"
+            pix_copia_cola = payload.gerarPayload()
+            
+            # Tenta gerar o QR Code em imagem (a biblioteca salva num arquivo)
             qr_file = None
             try:
-                qr_buffer = pix.generate_qr_code()
-                qr_file = discord.File(io.BytesIO(qr_buffer), filename="pix_qrcode.png")
-            except:
-                pass
+                # A biblioteca salva o arquivo na pasta do bot
+                nome_arquivo_qr = f"pix_qr_{interaction.user.id}.png"
+                payload.gerarQRCode(nome_arquivo_qr)
+                
+                # Abre o arquivo para enviar no Discord
+                with open(nome_arquivo_qr, "rb") as f:
+                    qr_file = discord.File(io.BytesIO(f.read()), filename="pix_qrcode.png")
+                
+                # Apaga o arquivo do servidor depois de ler
+                import os
+                os.remove(nome_arquivo_qr)
+            except Exception as e:
+                logger.error(f"Erro ao gerar imagem QR: {e}")
+                qr_file = None
 
-            # Monta o Embed para o DM
+            # Monta o Embed para o DM (o resto continua igual)
             embed_dm = discord.Embed(
                 title="💸 ── DOAÇÃO VDR 442 ── 💸",
                 description=f"**Muito obrigado por ajudar a facção, {interaction.user.name}!**\n\nSua doação será usada para melhorar a estrutura e as ações da VDR.",
