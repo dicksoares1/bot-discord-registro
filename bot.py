@@ -20384,6 +20384,14 @@ async def registrar_auditoria(
         except:
             pass
 
+        # TRATAMENTO DE SEGURANÇA: Garante que não ultrapasse o limite do banco
+        if item_id:
+            item_id = str(item_id)[:30] # Corta se for maior que 30 chars
+        if acao:
+            acao = str(acao)[:50]
+        if modulo:
+            modulo = str(modulo)[:50]
+
         pool = await get_pool()
         if pool:
             try:
@@ -20394,11 +20402,11 @@ async def registrar_auditoria(
                             dados_antes, dados_depois, detalhes) 
                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
                         str(user_id),
-                        user_nome,
+                        user_nome[:100] if user_nome else "Desconhecido",
                         acao,
                         modulo,
-                        str(item_id) if item_id else None,
-                        item_nome,
+                        item_id,
+                        item_nome[:100] if item_nome else None,
                         json.dumps(dados_antes) if dados_antes else None,
                         json.dumps(dados_depois) if dados_depois else None,
                         detalhes
@@ -20440,7 +20448,7 @@ async def registrar_auditoria(
                     if item_nome:
                         embed.add_field(
                             name="🎯 ALVO",
-                            value=f"```yaml\n{item_nome}\n```",
+                            value=f"```yaml\n{item_nome[:100]}\n```",
                             inline=True
                         )
 
