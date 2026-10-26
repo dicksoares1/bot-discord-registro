@@ -2410,37 +2410,69 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             return
 
         try:
-            # 1. Cria os dados do PIX
-            dados_pix = PixData(
-                recebedor_nome=PIX_NOME,
-                recebedor_cidade=PIX_CIDADE,
-                pix_key=PIX_CHAVE,
-                valor=valor_float, # Passa em reais (ex: 1.0)
-                transacao_id="DOACAO"
-            )
+            # Converte o valor para string no formato correto (ex: 1.00)
+            valor_str = f"{valor_float:.2f}"
+            
+            # ─── GERADOR DE PIX MANUAL (PADRÃO BANCO CENTRAL) ───
+            def calcular_crc16(payload):
+                crc = 0xFFFF
+                for byte in payload.encode('utf-8'):
+                    crc ^= byte << 8
+                    for _ in range(8):
+                        if crc & 0x8000:
+                            crc = (crc << 1) ^ 0x1021
+                        else:
+                            crc <<= 1
+                return f"{crc & 0xFFFF:04X}"
 
-            # 2. Gera o Payload (Copia e Cola)
-            gerador_pix = Pix(dados_pix)
-            pix_copia_cola = gerador_pix.payload()
+            def formatar_campo(id_campo, valor):
+                tamanho = f"{len(valor):02d}"
+                return f"{id_campo}{tamanho}{valor}"
 
-            # 3. Gera a imagem do QR Code usando arquivo temporário
+            # Limpa caracteres especiais do nome e da cidade
+            nome_limpo = "".join(e for e in PIX_NOME if e.isalnum() or e.isspace())[:25].upper()
+            cidade_limpa = "".join(e for e in PIX_CIDADE if e.isalnum() or e.isspace())[:15].upper()
+            
+            # Monta o Merchant Account Information (Código 26)
+            gui = formatar_campo("00", "BR.GOV.BCB.PIX")
+            chave = formatar_campo("01", PIX_CHAVE)
+            info_conta = gui + chave
+            campo_26 = formatar_campo("26", info_conta)
+
+            # Monta os outros campos
+            campo_52 = formatar_campo("52", "0000")
+            campo_53 = formatar_campo("53", "986")
+            campo_54 = formatar_campo("54", valor_str)
+            campo_58 = formatar_campo("58", "BR")
+            campo_59 = formatar_campo("59", nome_limpo)
+            campo_60 = formatar_campo("60", cidade_limpa)
+            campo_62 = formatar_campo("62", formatar_campo("05", "***")) # TXID
+            
+            # Junta tudo
+            payload_sem_crc = "000201" + campo_26 + campo_52 + campo_53 + campo_54 + campo_58 + campo_59 + campo_60 + campo_62 + "6304"
+            
+            # Calcula o CRC e monta o final
+            crc = calcular_crc16(payload_sem_crc)
+            pix_copia_cola = payload_sem_crc + crc
+
+            # ─── GERAÇÃO DA IMAGEM DO QR CODE ───
             qr_file = None
             try:
-                import tempfile
-                # Cria um arquivo temporário no servidor para salvar a imagem
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                    gerador_pix.save_qrcode(tmp.name)
-                    # Lê o arquivo de volta para a memória
-                    tmp.seek(0)
-                    qr_file = discord.File(io.BytesIO(tmp.read()), filename="pix_qrcode.png")
+                import qrcode
+                qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                qr.add_data(pix_copia_cola)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
                 
-                # Apaga o arquivo temporário do servidor
-                os.unlink(tmp.name) 
+                buffer = io.BytesIO()
+                img.save(buffer, format="PNG")
+                buffer.seek(0)
+                qr_file = discord.File(buffer, filename="pix_qrcode.png")
             except Exception as e:
                 logger.error(f"Erro ao gerar imagem QR: {e}")
                 qr_file = None
 
-            # 4. Monta o Embed para o DM
+            # ─── EMBED DO DM ───
             embed_dm = discord.Embed(
                 title="💸 ── DOAÇÃO VDR 442 ── 💸",
                 description=f"**Muito obrigado por ajudar a facção, {interaction.user.name}!**\n\nSua doação será usada para melhorar a estrutura e as ações da VDR.",
@@ -2461,7 +2493,7 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             )
             embed_dm.set_footer(text="🛡 Vida Rasa 442 • Sistema de Doações", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-            # 5. Envia no DM
+            # ─── ENVIO NO DM ───
             try:
                 if qr_file:
                     embed_dm.set_image(url="attachment://pix_qrcode.png")
