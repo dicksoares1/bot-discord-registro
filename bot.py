@@ -2168,37 +2168,47 @@ async def criar_embed_aviso_supremo(titulo, mensagem, local=None, data_hora=None
     }
     info = tipos.get(tipo_detectado, tipos["informativo"])
     
-    # Se for doação, força a cor verde e o emoji de dinheiro
     if is_doacao:
         info = {"cor": 0x2ecc71, "emoji": "💸"}
         
     cor_final = cor_hex if cor_hex else info["cor"]
 
-    # Título Gigante
-    titulo_final = f"# {info['emoji']} {titulo.upper()} {info['emoji']}"
-    
-    # Bloco de citação para a mensagem
-    corpo_mensagem = f"> {mensagem.replace(chr(10), chr(10) + '> ')}"
-    descricao_final = f"{corpo_mensagem}\n\n"
-    
-    # Campos de Local e Data
-    if local:
-        descricao_final += f"📍 **LOCAL:** `{local}`\n"
-    if data_hora:
-        descricao_final += f"📅 **DATA E HORA:** `{data_hora}`\n"
-
-    # SE FOR DOAÇÃO, adiciona o aviso do canal no final automaticamente
-    if is_doacao:
-        canal_doacao_mention = f"<#{CANAL_DOACOES_ID}>"
-        descricao_final += f"\n\n👉 **Para doar, acesse o canal:** {canal_doacao_mention}"
-
+    # A mensagem principal vira o TÍTULO GIGANTE (Heading 1)
+    # Se o título original for curto, a gente usa ele. Se for a mensagem, usamos a mensagem.
+    # Para causar impacto, vamos colocar a MENSAGEM como título.
     embed = discord.Embed(
-        title=titulo_final,
-        description=descricao_final,
+        title=f"# {info['emoji']} {mensagem.upper()} {info['emoji']}",
         color=cor_final,
         timestamp=agora()
     )
     
+    # Adiciona o "Assunto" como uma descrição menor
+    if titulo:
+        embed.description = f"**{titulo.upper()}**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Bloco de Local e Data com fundo escuro (yaml) para dar destaque
+    if local or data_hora:
+        info_extra = ""
+        if local:
+            info_extra += f"📍 LOCAL:   {local.upper()}\n"
+        if data_hora:
+            info_extra += f"📅 QUANDO:  {data_hora.upper()}\n"
+        
+        embed.add_field(
+            name="\u200b", 
+            value=f"```yaml\n{info_extra.strip()}\n```", 
+            inline=False
+        )
+
+    # Se for doação, adiciona o link do canal de forma chamativa
+    if is_doacao:
+        canal_doacao_mention = f"<#{CANAL_DOACOES_ID}>"
+        embed.add_field(
+            name="💸 COMO AJUDAR?",
+            value=f"👉 Acesse o canal {canal_doacao_mention} e faça sua doação via PIX.",
+            inline=False
+        )
+
     if bot.user:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
 
