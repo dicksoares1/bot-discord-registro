@@ -70,7 +70,6 @@ except ImportError:
     PILImage = None
     _OCR_DISPONIVEL = False
 
-from pixcore import PixData, Pix
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DOS IMPORTS                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
