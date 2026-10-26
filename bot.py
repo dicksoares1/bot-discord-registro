@@ -2430,7 +2430,10 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             try:
                 # A biblioteca salva o arquivo na pasta do bot
                 nome_arquivo_qr = f"pix_qr_{interaction.user.id}.png"
-                payload.gerarQRCode(nome_arquivo_qr)
+                
+                # CORREÇÃO: O método correto é gerarQrcode (com 'c' minúsculo)
+                # e ele PRECISA receber o payload como argumento.
+                payload.gerarQrcode(pix_copia_cola, nome_arquivo_qr)
                 
                 # Abre o arquivo para enviar no Discord
                 with open(nome_arquivo_qr, "rb") as f:
@@ -2442,7 +2445,6 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             except Exception as e:
                 logger.error(f"Erro ao gerar imagem QR: {e}")
                 qr_file = None
-
             # Monta o Embed para o DM (o resto continua igual)
             embed_dm = discord.Embed(
                 title="💸 ── DOAÇÃO VDR 442 ── 💸",
