@@ -2409,9 +2409,16 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             return
 
         try:
-            # Converte o valor para string no formato correto (ex: 1.00)
-            valor_str = f"{valor_float:.2f}"
+            # 1. Pega o valor digitado (ex: "1" ou "1,50") e transforma em float real
+            valor_digitado_str = self.valor.value.replace(",", ".")
+            valor_real = float(valor_digitado_str)
             
+            if valor_real <= 0:
+                raise ValueError("Valor deve ser maior que zero.")
+
+            # 2. Formata o valor para o PIX (SEMPRE com 2 casas decimais e ponto)
+            valor_str = f"{valor_real:.2f}"
+
             # ─── GERADOR DE PIX MANUAL (PADRÃO BANCO CENTRAL) ───
             def calcular_crc16(payload):
                 crc = 0xFFFF
@@ -2441,11 +2448,14 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             # Monta os outros campos
             campo_52 = formatar_campo("52", "0000")
             campo_53 = formatar_campo("53", "986")
-            campo_54 = formatar_campo("54", valor_str)
+            
+            # AQUI ESTÁ O SEGREDO: Usa o valor_str que tem 2 casas decimais
+            campo_54 = formatar_campo("54", valor_str) 
+            
             campo_58 = formatar_campo("58", "BR")
             campo_59 = formatar_campo("59", nome_limpo)
             campo_60 = formatar_campo("60", cidade_limpa)
-            campo_62 = formatar_campo("62", formatar_campo("05", "***")) # TXID
+            campo_62 = formatar_campo("62", formatar_campo("05", "***")) 
             
             # Junta tudo
             payload_sem_crc = "000201" + campo_26 + campo_52 + campo_53 + campo_54 + campo_58 + campo_59 + campo_60 + campo_62 + "6304"
@@ -2479,7 +2489,8 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
                 timestamp=agora()
             )
             
-            embed_dm.add_field(name="💰 VALOR DA DOAÇÃO", value=f"```yaml\n{formatar_dinheiro(valor_centavos)}\n```", inline=False)
+            # Exibe o valor real na tela
+            embed_dm.add_field(name="💰 VALOR DA DOAÇÃO", value=f"```yaml\n{formatar_dinheiro(valor_real)}\n```", inline=False)
             embed_dm.add_field(name="📌 CHAVE PIX (COPIA E COLA)", value=f"```\n{pix_copia_cola}\n```", inline=False)
             
             if self.mensagem.value:
@@ -2515,7 +2526,8 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
                     color=0xF1C40F,
                     timestamp=agora()
                 )
-                embed_log.add_field(name="💰 Valor", value=formatar_dinheiro(valor_centavos), inline=True)
+                # Exibe o valor real no log também
+                embed_log.add_field(name="💰 Valor", value=formatar_dinheiro(valor_real), inline=True)
                 embed_log.add_field(name="👤 Usuário", value=f"{interaction.user.name} ({interaction.user.id})", inline=True)
                 if self.mensagem.value:
                     embed_log.add_field(name="📝 Mensagem", value=f"> {self.mensagem.value}", inline=False)
