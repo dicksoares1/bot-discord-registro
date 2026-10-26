@@ -16800,9 +16800,18 @@ async def buscar_historico_metas(data_inicio, data_fim):
         return []
     try:
         async with pool.acquire() as conn:
-            inicio_dt = data_inicio.replace(tzinfo=None) if hasattr(data_inicio, 'replace') else data_inicio
-            fim_dt = data_fim.replace(tzinfo=None) if hasattr(data_fim, 'replace') else data_fim
-            rows = await conn.fetch("SELECT * FROM metas_historico WHERE data_fechamento >= $1 AND data_fechamento <= $2 ORDER BY data_fechamento DESC", inicio_dt, fim_dt)
+            inicio_dt = data_inicio.replace(hour=0, minute=0, second=0, microsecond=0)
+            fim_dt = data_fim.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            # Usa DISTINCT ON (user_id) para garantir que o mesmo usuário não apareça 2x
+            # Puxa apenas o registro mais recente (ID maior) do período
+            query = """
+                SELECT DISTINCT ON (user_id) *
+                FROM metas_historico 
+                WHERE data_fechamento >= $1 AND data_fechamento <= $2 
+                ORDER BY user_id, id DESC
+            """
+            rows = await conn.fetch(query, inicio_dt, fim_dt)
             return rows
     except Exception as e:
         logger.error(f"❌ Erro ao buscar histórico: {e}")
@@ -17240,10 +17249,15 @@ async def fechar_todas_metas(data_inicio, data_fim):
             data_fechamento = agora_db()
             semana_str = f"{data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
 
+            # Limpa registros duplicados desta mesma semana antes de fechar de novo
+            await conn.execute(
+                "DELETE FROM metas_historico WHERE data_inicio >= $1 AND data_fim <= $2",
+                data_inicio_naive, data_fim_naive
+            )
+
             relatorio = []
             membros_com_bonificacao = []
             guild = bot.get_guild(GUILD_ID)
-            salvos = 0
             horas_mecanicos = {}
             
             if guild:
@@ -17258,27 +17272,20 @@ async def fechar_todas_metas(data_inicio, data_fim):
             total_soldado_semana = await buscar_total_soldado()
             soldados_bateram = total_soldado_semana >= meta_soldado_atual and meta_soldado_atual > 0
 
-            logger.info(f"⚔️ Fechamento soldados: {formatar_dinheiro(total_soldado_semana)} / {formatar_dinheiro(meta_soldado_atual)} — {'BATERAM' if soldados_bateram else 'NÃO BATERAM'}")
-
+            # Paga dívidas automaticamente se a pessoa tiver saldo
             dividas_ativas = await conn.fetch("SELECT * FROM metas_dividas WHERE pago = false")
             for divida in dividas_ativas:
                 user_id = divida["user_id"]
                 tipo_divida = divida["tipo"] or "dinheiro"
                 valor_divida = divida["valor_divida"]
-                member = guild.get_member(int(user_id)) if guild else None
-                if not member:
-                    continue
                 meta = await conn.fetchrow("SELECT dinheiro, dinheiro_acoes, polvora_atual FROM metas WHERE user_id = $1", user_id)
-                if not meta:
-                    continue
-                dinheiro = meta["dinheiro"] or 0
-                polvora = meta["polvora_atual"] or 0
-                dinheiro_acoes = meta["dinheiro_acoes"] or 0
-
-                if tipo_divida == "polvora" and polvora >= valor_divida:
-                    await conn.execute("UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1", divida["id"])
-                elif tipo_divida == "dinheiro" and max(dinheiro, dinheiro_acoes) >= valor_divida:
-                    await conn.execute("UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1", divida["id"])
+                if meta:
+                    dinheiro = meta["dinheiro"] or 0
+                    polvora = meta["polvora_atual"] or 0
+                    if tipo_divida == "polvora" and polvora >= valor_divida:
+                        await conn.execute("UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1", divida["id"])
+                    elif tipo_divida == "dinheiro" and dinheiro >= valor_divida:
+                        await conn.execute("UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE id = $1", divida["id"])
 
             for meta in metas:
                 user_id = meta["user_id"]
@@ -17288,40 +17295,26 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     
                 regra = await obter_regra_meta_membro(member)
                 if not regra or (regra["isento"] and regra["tipo"] != "soldado"):
-                    continue
+                    # Não salva isentos no histórico de dívidas (a menos que seja soldado)
+                    pass
 
                 dinheiro = meta["dinheiro"] or 0
                 polvora = meta.get("polvora_atual") or 0
-                polvora_total_semana = meta.get("polvora_total_semana") or 0
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
                 acao = meta.get("acao") or "N/A"
 
                 tipo_membro = regra["tipo"]
                 is_isento_lideranca = regra.get("is_isento_lideranca", False)
 
-                # ═══════════════════════════════════════════════════════════════
-                # SOLDADO: dívida só se o COLETIVO não bateu E ele não é isento
-                # ═══════════════════════════════════════════════════════════════
                 if tipo_membro == "soldado":
                     if not is_isento_lideranca and not soldados_bateram and meta_soldado_atual > 0:
-                        criou = await criar_divida_meta(user_id, meta_soldado_atual, semana_str)
-                        if criou:
-                            divida_atual = await conn.fetchrow("SELECT valor_original, valor_divida FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro' ORDER BY data_criacao ASC LIMIT 1", user_id)
-                            if divida_atual:
-                                await enviar_aviso_meta_nao_batida(user_id, divida_atual["valor_original"], divida_atual["valor_divida"], motivo="NAO_BATEU", tipo="dinheiro")
+                        await criar_divida_meta(user_id, meta_soldado_atual, semana_str)
 
                 if tipo_membro in ("polvora", "ambos") and not is_isento_lideranca:
                     if regra["meta_polvora"] > 0 and polvora < regra["meta_polvora"]:
-                        criou = await criar_divida_polvora(user_id, regra["meta_polvora"], semana_str)
-                        if criou:
-                            divida_atual = await conn.fetchrow("SELECT valor_original, valor_divida FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'polvora' ORDER BY data_criacao ASC LIMIT 1", user_id)
-                            if divida_atual:
-                                await enviar_aviso_meta_nao_batida(user_id, divida_atual["valor_original"], divida_atual["valor_divida"], motivo="NAO_BATEU", tipo="polvora")
-
-                    if polvora_total_semana > 5000:
-                        membros_com_bonificacao.append({
-                            "user_id": user_id, "nome": member.display_name, "total": polvora_total_semana, "valor": polvora_total_semana * 80
-                        })
+                        await criar_divida_polvora(user_id, regra["meta_polvora"], semana_str)
+                    if polvora > 5000:
+                        membros_com_bonificacao.append({"user_id": user_id, "nome": member.display_name, "total": polvora, "valor": polvora * 80})
 
                 if tipo_membro in ("dinheiro", "ambos", "acoes") and not is_isento_lideranca:
                     if tipo_membro == "acoes":
@@ -17332,11 +17325,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         meta_limite = regra["meta_dinheiro"]
 
                     if meta_limite > 0 and valor_real_meta < meta_limite:
-                        criou = await criar_divida_meta(user_id, meta_limite, semana_str)
-                        if criou:
-                            divida_atual = await conn.fetchrow("SELECT valor_original, valor_divida FROM metas_dividas WHERE user_id = $1 AND pago = false AND tipo = 'dinheiro' ORDER BY data_criacao ASC LIMIT 1", user_id)
-                            if divida_atual:
-                                await enviar_aviso_meta_nao_batida(user_id, divida_atual["valor_original"], divida_atual["valor_divida"], motivo="NAO_BATEU", tipo="dinheiro")
+                        await criar_divida_meta(user_id, meta_limite, semana_str)
 
                 try:
                     horas_salvas = horas_mecanicos.get(str(user_id), 0)
@@ -17344,39 +17333,22 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         INSERT INTO metas_historico 
                         (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento, polvora, tipo_meta, horas_segundos) 
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    """, user_id, min(dinheiro, regra["meta_dinheiro"]), acao, dinheiro_acoes,
-                        data_inicio_naive, data_fim_naive, data_fechamento, polvora, tipo_membro, horas_salvas)
-                    salvos += 1
-                except: pass
+                    """, user_id, dinheiro, acao, dinheiro_acoes,
+                        data_inicio_naive, data_fim_naive, data_fechamento, polvora, tipo_membro or "dinheiro", horas_salvas)
+                except Exception as e:
+                    logger.error(f"Erro ao inserir histórico de {user_id}: {e}")
 
                 relatorio.append({
-                    "user_id": user_id,
-                    "dinheiro": min(dinheiro, regra["meta_dinheiro"]) if regra["meta_dinheiro"] > 0 else 0,
-                    "acao": acao,
-                    "dinheiro_acoes": dinheiro_acoes,
-                    "polvora": polvora,
-                    "total_meta": dinheiro_acoes if tipo_membro == "soldado" else (polvora if tipo_membro == "polvora" else min(dinheiro, regra["meta_dinheiro"])),
-                    "status": "obrigado",
-                    "is_isento": is_isento_lideranca,
-                    "tipo": tipo_membro,
-                    "tipo_meta": tipo_membro
+                    "user_id": user_id, "dinheiro": dinheiro, "acao": acao,
+                    "dinheiro_acoes": dinheiro_acoes, "polvora": polvora, "tipo": tipo_membro
                 })
-
-            membros_sem_meta = []
-            if guild:
-                cargos_meta = [CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID, CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID, CARGO_MECANICO_ID, CARGO_MORADOR_ID]
-                for m in guild.members:
-                    if not m.bot and any(r.id in cargos_meta for r in m.roles):
-                        if not any(x["user_id"] == str(m.id) for x in metas):
-                            membros_sem_meta.append({"user_id": str(m.id), "nome": m.display_name, "menção": m.mention})
 
             if membros_com_bonificacao:
                 canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
                 if canal_gerencia:
                     await gerar_relatorio_bonificacao(membros_com_bonificacao, semana_str, canal_gerencia)
 
-            await verificar_dividas_prolongadas()
-            return relatorio, membros_sem_meta, horas_mecanicos
+            return relatorio, [], horas_mecanicos
     except Exception as e:
         logger.error(f"❌ Erro ao fechar todas as metas: {e}")
         return None, [], {}
