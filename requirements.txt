@@ -4,5 +4,5 @@ aiohttp
 psutil
 pytesseract>=0.3.10
 Pillow>=10.0.0
-pixqrcodegen==0.9.1
+pixcore
 qrcode[pil]
