@@ -4,4 +4,4 @@ aiohttp
 psutil
 pytesseract>=0.3.10
 Pillow>=10.0.0
-pix-payload>=1.0.0
+pixqrcodegen==0.9.1
