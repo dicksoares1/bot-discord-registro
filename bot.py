@@ -16262,6 +16262,98 @@ class VerDividasButton(discord.ui.Button):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RemoverDividaSelect
+# ────────────────────────────────────────────────────────────────────────────────
+class RemoverDividaSelect(discord.ui.Select):
+    def __init__(self, dividas):
+        options = []
+        # Agrupa por usuário para não duplicar no menu
+        usuarios = {}
+        for d in dividas:
+            uid = d["user_id"]
+            if uid not in usuarios:
+                usuarios[uid] = 0
+            usuarios[uid] += d["valor_divida"]
+        
+        for uid, total in list(usuarios.items())[:25]: # Discord limita a 25 opções
+            options.append(discord.SelectOption(
+                label=f"ID: {uid}",
+                description=f"Dívida total: {formatar_dinheiro(total)}",
+                value=str(uid)
+            ))
+        
+        if not options:
+            options.append(discord.SelectOption(label="Nenhuma dívida", value="none"))
+
+        super().__init__(placeholder="Selecione o membro para limpar as dívidas...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.send_message("📭 Nenhuma dívida para remover.", ephemeral=True)
+            return
+
+        user_id = self.values[0]
+        member = interaction.guild.get_member(int(user_id))
+        nome = member.mention if member else f"<@{user_id}>"
+
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE metas_dividas SET pago = true, data_pagamento = NOW() WHERE user_id = $1 AND pago = false", str(user_id))
+        
+        await atualizar_embed_meta(int(user_id))
+        await enviar_painel_relatorio_metas() # Atualiza o painel principal
+
+        embed = discord.Embed(
+            title="✅ DÍVIDAS LIMPADAS",
+            description=f"As dívidas de {nome} foram removidas com sucesso.",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RemoverDividaView
+# ────────────────────────────────────────────────────────────────────────────────
+class RemoverDividaView(discord.ui.View):
+    def __init__(self, dividas):
+        super().__init__(timeout=60)
+        self.add_item(RemoverDividaSelect(dividas))
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: LimparDividasButton
+# ────────────────────────────────────────────────────────────────────────────────
+class LimparDividasButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="🧹 Limpar Dívidas",
+            style=discord.ButtonStyle.danger,
+            custom_id="limpar_dividas_btn",
+            emoji="🧹",
+            row=2
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(
+            r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
+            for r in interaction.user.roles
+        )
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem limpar dívidas!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        dividas = await listar_dividas_ativas()
+        if not dividas:
+            await interaction.followup.send("✅ Não há nenhuma dívida ativa no momento.", ephemeral=True)
+            return
+
+        view = RemoverDividaView(dividas)
+        await interaction.followup.send("Selecione o membro que deseja limpar as dívidas:", view=view, ephemeral=True)
+
+# ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: DefinirMetaSoldadoButton (NOVO — define meta de soldado da semana)
 # ────────────────────────────────────────────────────────────────────────────────
 class DefinirMetaSoldadoButton(discord.ui.Button):
@@ -17993,6 +18085,7 @@ async def enviar_painel_relatorio_metas():
     view.add_item(VerDividasButton())
     view.add_item(ResetarHorasSemanaButton())
     view.add_item(DefinirMetaSoldadoButton())
+    view.add_item(LimparDividasButton())
     
 
     await enviar_ou_atualizar_painel("painel_relatorio_metas", CANAL_RELATORIO_METAS_ID, embed, view)
@@ -21891,6 +21984,7 @@ def criar_view_por_painel(nome):
         view.add_item(TrocarTipoMetaButton())
         view.add_item(VerDividasButton())
         view.add_item(DefinirMetaSoldadoButton())
+        view.add_item(LimparDividasButton())
         return view
     elif nome == "painel_grupos":
         return None
