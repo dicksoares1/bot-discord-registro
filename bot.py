@@ -69,6 +69,8 @@ except ImportError:
     PILImage = None
     _OCR_DISPONIVEL = False
 
+from pix_payload import PixPayload
+
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DOS IMPORTS                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
@@ -264,6 +266,12 @@ CANAL_CRIAR_AVISOS_ID = 1541795328972562513
 CANAL_AVISOS_PRODUCAO_ID = 1356174874921664522
 CANAL_CHAT_PRODUCAO_ID = 1422853066541109338
 CANAL_CHAT_VENDAS_ID = 1365372467723501723
+CANAL_DOACOES_ID = 1564271778266878103
+CANAL_LOG_DOACOES_ID = 1564274094818590720
+PIX_CHAVE = "02912141508"  # Ex: 11999999999
+PIX_NOME = "Dickson Souza Soares" 
+PIX_CIDADE = "Eunapolis" # Sem acentos!
+
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2200,7 +2208,8 @@ class AvisosSelect(discord.ui.Select):
             discord.SelectOption(label="⚔️ Ações", description="Aviso sobre ações e escalações", emoji="⚔️", value="acoes"),
             discord.SelectOption(label="🛒 Vendas", description="Aviso sobre vendas e encomendas", emoji="🛒", value="vendas"),
             discord.SelectOption(label="🎯 Metas", description="Aviso sobre metas semanais", emoji="🎯", value="metas"),
-            discord.SelectOption(label="🏭 Produção", description="Aviso sobre produção e galpões", emoji="🏭", value="producao")
+            discord.SelectOption(label="🏭 Produção", description="Aviso sobre produção e galpões", emoji="🏭", value="producao"),
+            discord.SelectOption(label="💸 Doações", description="Aviso pedindo apoio/doações", emoji="💸", value="doacoes")
         ]
         super().__init__(placeholder="📌 Selecione o canal para o aviso...", min_values=1, max_values=1, options=options)
 
@@ -2211,14 +2220,16 @@ class AvisosSelect(discord.ui.Select):
             "acoes": CANAL_AVISOS_ACOES_ID,
             "vendas": CANAL_AVISOS_VENDAS_ID,
             "metas": CANAL_AVISOS_METAS_ID,
-            "producao": CANAL_AVISOS_PRODUCAO_ID # Novo canal
+            "producao": CANAL_AVISOS_PRODUCAO_ID,
+            "doacoes": CANAL_AVISOS_VIDA_RASA_ID # Aviso de doação vai pro geralzão também
         }
         nomes = {
             "vida_rasa": "📢 Vida Rasa",
             "acoes": "⚔️ Ações",
             "vendas": "🛒 Vendas",
             "metas": "🎯 Metas",
-            "producao": "🏭 Produção"
+            "producao": "🏭 Produção",
+            "doacoes": "💸 Doações (Aviso Geral)"
         }
         canal_id = canais.get(valor)
         nome_canal = nomes.get(valor, "Desconhecido")
@@ -2367,7 +2378,141 @@ async def enviar_painel_avisos():
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 05                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
+# SISTEMA DE DOAÇÕES (PIX MANUAL)
+# ════════════════════════════════════════════════════════════════════════════════
 
+class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
+    valor = discord.ui.TextInput(
+        label="💰 Valor da Doação (R$)",
+        placeholder="Digite apenas números (ex: 50)",
+        required=True,
+        max_length=10
+    )
+    mensagem = discord.ui.TextInput(
+        label="📝 Mensagem de apoio (Opcional)",
+        placeholder="Deixe uma mensagem para a facção!",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=200
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            valor_float = float(self.valor.value.replace(",", "."))
+            valor_centavos = int(valor_float * 100)
+            if valor_centavos <= 0:
+                raise ValueError
+        except:
+            await interaction.followup.send("❌ **Valor inválido!** Digite um número maior que zero.", ephemeral=True)
+            return
+
+        try:
+            # Gera o código PIX
+            pix = PixPayload(
+                key=PIX_CHAVE,
+                name=PIX_NOME,
+                city=PIX_CIDADE,
+                amount=valor_float,
+                description="Doacao VDR"
+            )
+            pix_copia_cola = pix.payload
+            
+            # Tenta gerar o QR Code em imagem
+            qr_file = None
+            try:
+                qr_buffer = pix.generate_qr_code()
+                qr_file = discord.File(io.BytesIO(qr_buffer), filename="pix_qrcode.png")
+            except:
+                pass
+
+            # Monta o Embed para o DM
+            embed_dm = discord.Embed(
+                title="💸 ── DOAÇÃO VDR 442 ── 💸",
+                description=f"**Muito obrigado por ajudar a facção, {interaction.user.name}!**\n\nSua doação será usada para melhorar a estrutura e as ações da VDR.",
+                color=0x2ECC71,
+                timestamp=agora()
+            )
+            
+            embed_dm.add_field(name="💰 VALOR DA DOAÇÃO", value=f"```yaml\n{formatar_dinheiro(valor_centavos)}\n```", inline=False)
+            embed_dm.add_field(name="📌 CHAVE PIX (COPIA E COLA)", value=f"```\n{pix_copia_cola}\n```", inline=False)
+            
+            if self.mensagem.value:
+                embed_dm.add_field(name="📝 SUA MENSAGEM", value=f"> *{self.mensagem.value}*", inline=False)
+                
+            embed_dm.add_field(
+                name="⚠️ IMPORTANTE",
+                value="Após realizar o pagamento no aplicativo do seu banco, **envie o comprovante** nesta conversa para que a gerência aproveite sua doação!",
+                inline=False
+            )
+            embed_dm.set_footer(text="🛡 Vida Rasa 442 • Sistema de Doações", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+            try:
+                if qr_file:
+                    embed_dm.set_image(url="attachment://pix_qrcode.png")
+                    await interaction.user.send(embed=embed_dm, file=qr_file)
+                else:
+                    await interaction.user.send(embed=embed_dm)
+            except discord.Forbidden:
+                await interaction.followup.send("❌ **Não consegui enviar o PIX no seu DM!**\nPor favor, habilite as mensagens diretas de membros do servidor.", ephemeral=True)
+                return
+
+            # Avisa no canal que a DM foi enviada
+            await interaction.followup.send("✅ **PIX gerado com sucesso!**\n📩 Enviei o QR Code e o código Copia e Cola no seu **DM**. Após pagar, mande o comprovante na mesma conversa.", ephemeral=True)
+
+            # Avisa a gerência
+            canal_log = interaction.guild.get_channel(CANAL_DOACOES_ID)
+            if canal_log:
+                embed_log = discord.Embed(
+                    title="🔔 NOVA INTENÇÃO DE DOAÇÃO",
+                    description=f"O membro **{interaction.user.mention}** solicitou um PIX para doação.",
+                    color=0xF1C40F,
+                    timestamp=agora()
+                )
+                embed_log.add_field(name="💰 Valor", value=formatar_dinheiro(valor_centavos), inline=True)
+                embed_log.add_field(name="👤 Usuário", value=f"{interaction.user.name} ({interaction.user.id})", inline=True)
+                if self.mensagem.value:
+                    embed_log.add_field(name="📝 Mensagem", value=f"> {self.mensagem.value}", inline=False)
+                embed_log.set_footer(text="Aguardando comprovante...")
+                await canal_log.send(embed=embed_log)
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao gerar PIX: {e}")
+            await interaction.followup.send(f"❌ **Erro ao gerar o PIX.** Verifique a chave configurada no bot.", ephemeral=True)
+
+class DoacaoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="💸 Fazer Doação via PIX", style=discord.ButtonStyle.success, custom_id="btn_doacao_pix", emoji="💸")
+    async def doar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(DoacaoModal())
+
+async def enviar_painel_doacoes():
+    canal = bot.get_channel(CANAL_DOACOES_ID)
+    if not canal: return
+
+    embed = discord.Embed(
+        title="💸 ── CENTRAL DE DOAÇÕES ── 💸",
+        description="**Ajude a Vida Rasa a crescer!**\n*Toda doação será revertida para melhorias na facção, compra de equipamentos e premiações.*",
+        color=0x2ECC71,
+        timestamp=agora()
+    )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+    
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    embed.add_field(
+        name="📖 COMO DOAR",
+        value="**1️⃣** Clique no botão **💸 Fazer Doação via PIX** abaixo.\n**2️⃣** Digite o valor que deseja doar.\n**3️⃣** O bot enviará um **QR Code PIX** no seu **DM**.\n**4️⃣** Pague pelo app do seu banco e envie o comprovante no DM.\n**5️⃣** A gerência aprovará e sua doação será registrada!",
+        inline=False
+    )
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    embed.add_field(name="⚠️ AVISO", value="As doações são **voluntárias** e não dão isenção de metas ou cargos. É um ato de apoio à facção.", inline=False)
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • Sistema de Doações", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+    await enviar_ou_atualizar_painel("painel_doacoes", CANAL_DOACOES_ID, embed, DoacaoView())
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  BLOCO 06 — SISTEMA FINANCEIRO                                              ║
@@ -24394,6 +24539,7 @@ async def enviar_paineis_iniciais(guild):
             ("Auditoria", enviar_painel_auditoria),
             ("Caixa", enviar_painel_caixa),
             ("Empréstimos", enviar_painel_emprestimos),
+            ("Doações", enviar_painel_doacoes),
         ]
         for i, (nome, func) in enumerate(paineis):
             try:
@@ -24494,6 +24640,32 @@ async def on_message(message: discord.Message):
         return
 
     canal = message.channel
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # DETECÇÃO DE COMPROVANTE DE DOAÇÃO NO DM
+    # ═══════════════════════════════════════════════════════════════════════════
+    if isinstance(canal, discord.DMChannel):
+        if message.attachments:
+            anexo = message.attachments[0]
+            if anexo.content_type and (anexo.content_type.startswith("image/") or anexo.content_type == "application/pdf"):
+                canal_log = bot.get_channel(CANAL_LOG_DOACOES_ID)
+                if canal_log:
+                    embed = discord.Embed(
+                        title="🧾 COMPROVANTE DE DOAÇÃO RECEBIDO",
+                        description=f"O membro **{message.author.mention}** enviou um comprovante no DM.",
+                        color=0x2ECC71,
+                        timestamp=agora()
+                    )
+                    embed.add_field(name="👤 Usuário", value=f"{message.author.name} ({message.author.id})", inline=False)
+                    embed.add_field(name="📎 Arquivo", value=f"[Clique para baixar]({anexo.url})", inline=False)
+                    embed.set_image(url=anexo.url)
+                    embed.set_footer(text="Verifique no extrato bancário e confirme a doação.")
+                    
+                    await canal_log.send(embed=embed)
+                    await message.reply("✅ **Comprovante recebido!**\nA gerência foi notificada e vai verificar o pagamento. Muito obrigado pela doação! ❤️")
+                else:
+                    await message.reply("✅ **Comprovante recebido!**\nMas houve um erro interno ao notificar a gerência. Por favor, envie o print no canal de doações.")
+                return # Para o bot não processar mais nada dessa mensagem
 
     if isinstance(canal, discord.TextChannel):
         # ═══════════════════════════════════════════════════════════════════════
