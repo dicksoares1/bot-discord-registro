@@ -70,9 +70,7 @@ except ImportError:
     PILImage = None
     _OCR_DISPONIVEL = False
 
-from pixqrcodegen import Payload
-
-
+from pixcore import PixData, Pix
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DOS IMPORTS                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
@@ -2412,32 +2410,37 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             return
 
         try:
-            # Gera o código PIX usando a biblioteca pixqrcodegen
-            # O valor precisa ser string com ponto (ex: "50.00")
-            valor_str = f"{valor_float:.2f}"
-            payload = Payload(PIX_NOME, PIX_CHAVE, valor_str, PIX_CIDADE, "DOACAO")
-            
-            # Gera a string "Copia e Cola"
-            pix_copia_cola = payload.gerarPayload()
-            
-            # Tenta gerar o QR Code em imagem usando a biblioteca qrcode
+            # 1. Cria os dados do PIX
+            dados_pix = PixData(
+                recebedor_nome=PIX_NOME,
+                recebedor_cidade=PIX_CIDADE,
+                pix_key=PIX_CHAVE,
+                valor=valor_float, # Passa em reais (ex: 1.0)
+                transacao_id="DOACAO"
+            )
+
+            # 2. Gera o Payload (Copia e Cola)
+            gerador_pix = Pix(dados_pix)
+            pix_copia_cola = gerador_pix.payload()
+
+            # 3. Gera a imagem do QR Code usando arquivo temporário
             qr_file = None
             try:
-                # Gera a imagem do QR Code a partir do texto do PIX
-                qr = qrcode.QRCode(version=1, box_size=10, border=5)
-                qr.add_data(pix_copia_cola)
-                qr.make(fit=True)
-                img = qr.make_image(fill_color="black", back_color="white")
+                import tempfile
+                # Cria um arquivo temporário no servidor para salvar a imagem
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    gerador_pix.save_qrcode(tmp.name)
+                    # Lê o arquivo de volta para a memória
+                    tmp.seek(0)
+                    qr_file = discord.File(io.BytesIO(tmp.read()), filename="pix_qrcode.png")
                 
-                # Salva em memória e envia
-                buffer = io.BytesIO()
-                img.save(buffer, format="PNG")
-                buffer.seek(0)
-                qr_file = discord.File(buffer, filename="pix_qrcode.png")
+                # Apaga o arquivo temporário do servidor
+                os.unlink(tmp.name) 
             except Exception as e:
                 logger.error(f"Erro ao gerar imagem QR: {e}")
                 qr_file = None
-            # Monta o Embed para o DM (o resto continua igual)
+
+            # 4. Monta o Embed para o DM
             embed_dm = discord.Embed(
                 title="💸 ── DOAÇÃO VDR 442 ── 💸",
                 description=f"**Muito obrigado por ajudar a facção, {interaction.user.name}!**\n\nSua doação será usada para melhorar a estrutura e as ações da VDR.",
@@ -2458,6 +2461,7 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             )
             embed_dm.set_footer(text="🛡 Vida Rasa 442 • Sistema de Doações", icon_url=bot.user.display_avatar.url if bot.user else None)
 
+            # 5. Envia no DM
             try:
                 if qr_file:
                     embed_dm.set_image(url="attachment://pix_qrcode.png")
@@ -2490,7 +2494,7 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
         except Exception as e:
             logger.error(f"❌ Erro ao gerar PIX: {e}")
             await interaction.followup.send(f"❌ **Erro ao gerar o PIX.** Verifique a chave configurada no bot.", ephemeral=True)
-
+            
 class DoacaoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
