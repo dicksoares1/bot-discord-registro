@@ -17294,17 +17294,15 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     continue
                     
                 regra = await obter_regra_meta_membro(member)
-                if not regra or (regra["isento"] and regra["tipo"] != "soldado"):
-                    # Não salva isentos no histórico de dívidas (a menos que seja soldado)
-                    pass
+                
+                # Pega o tipo de meta que o CARGO estava configurado nesse fechamento
+                tipo_membro = regra["tipo"] if regra and regra["tipo"] else "dinheiro"
+                is_isento_lideranca = regra.get("is_isento_lideranca", False) if regra else False
 
                 dinheiro = meta["dinheiro"] or 0
                 polvora = meta.get("polvora_atual") or 0
                 dinheiro_acoes = meta.get("dinheiro_acoes") or 0
                 acao = meta.get("acao") or "N/A"
-
-                tipo_membro = regra["tipo"]
-                is_isento_lideranca = regra.get("is_isento_lideranca", False)
 
                 if tipo_membro == "soldado":
                     if not is_isento_lideranca and not soldados_bateram and meta_soldado_atual > 0:
@@ -17334,7 +17332,7 @@ async def fechar_todas_metas(data_inicio, data_fim):
                         (user_id, dinheiro, acao, dinheiro_acoes, data_inicio, data_fim, data_fechamento, polvora, tipo_meta, horas_segundos) 
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     """, user_id, dinheiro, acao, dinheiro_acoes,
-                        data_inicio_naive, data_fim_naive, data_fechamento, polvora, tipo_membro or "dinheiro", horas_salvas)
+                        data_inicio_naive, data_fim_naive, data_fechamento, polvora, tipo_membro, horas_salvas)
                 except Exception as e:
                     logger.error(f"Erro ao inserir histórico de {user_id}: {e}")
 
@@ -17343,6 +17341,17 @@ async def fechar_todas_metas(data_inicio, data_fim):
                     "dinheiro_acoes": dinheiro_acoes, "polvora": polvora, "tipo": tipo_membro
                 })
 
+            # ZERA AS METAS ATUAIS PARA A NOVA SEMANA COMEÇAR LIMPA
+            await conn.execute("""
+                UPDATE metas 
+                SET dinheiro = 0, 
+                    dinheiro_acoes = 0, 
+                    saldo_excedente = 0, 
+                    acao = NULL,
+                    polvora_atual = 0,
+                    polvora_total_semana = 0
+            """)
+            
             if membros_com_bonificacao:
                 canal_gerencia = bot.get_channel(CANAL_GERENCIA_ID)
                 if canal_gerencia:
@@ -17488,7 +17497,7 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             is_isento_por_cargo = any(r in roles_ids for r in CARGOS_ISENTOS_META)
             item_dict["is_isento"] = is_isento_por_cargo
 
-            # Lógica de "cumpriu" segura
+            # Lógica de "cumpriu" baseada no que foi salvo
             cumpriu = True
             if is_isento_por_cargo and tipo_meta != "soldado":
                 cumpriu = True
@@ -17504,7 +17513,7 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             else:
                 cumpriu = (item.get("dinheiro", 0) >= meta_limite_dinheiro) if meta_limite_dinheiro > 0 else True
                 
-            item_dict["cumpriu"] = cumpriu # Garante que a chave sempre exista
+            item_dict["cumpriu"] = cumpriu
 
             if item_dict["is_mecanico"]:
                 item_dict["horas_salvas"] = item.get("horas_segundos", 0)
@@ -17560,8 +17569,10 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                 itens_ordenados = sorted(grupo_data["itens"], key=lambda x: x["nome"].lower())
                 for idx, item in enumerate(itens_ordenados, 1):
                     linhas.append(f"{idx}. {item['nome']}")
-                    linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item.get('dinheiro', 0))}")
-                    linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
+                    if item["tipo_meta"] == "polvora":
+                        linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
+                    else:
+                        linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item.get('dinheiro', 0))}")
                     if item.get("is_mecanico"):
                         linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
                     linhas.append(f"   📌 Status: 🟡 ISENTO (não paga meta, mas contribuiu)")
@@ -17576,8 +17587,10 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                     pagaram_ordenados = sorted(pagaram, key=lambda x: x.get("dinheiro", 0), reverse=True)
                     for idx, item in enumerate(pagaram_ordenados, 1):
                         linhas.append(f"{idx}. {item['nome']}")
-                        linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item.get('dinheiro', 0))}")
-                        linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
+                        if item["tipo_meta"] == "polvora":
+                            linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
+                        else:
+                            linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item.get('dinheiro', 0))}")
                         if item.get("is_mecanico"):
                             linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
                         linhas.append(f"   📌 Status: ✅ CUMPRIU A META")
@@ -17589,8 +17602,10 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                     nao_pagaram_ordenados = sorted(nao_pagaram, key=lambda x: x["nome"].lower())
                     for idx, item in enumerate(nao_pagaram_ordenados, 1):
                         linhas.append(f"{idx}. {item['nome']}")
-                        linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item.get('dinheiro', 0))}")
-                        linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
+                        if item["tipo_meta"] == "polvora":
+                            linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
+                        else:
+                            linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item.get('dinheiro', 0))}")
                         if item.get("is_mecanico"):
                             linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
                         linhas.append(f"   📌 Status: ❌ NÃO CUMPRIU A META")
@@ -17614,22 +17629,14 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
         if not canal_resultados:
             canal_resultados = interaction.channel
 
-        # Envia como ARQUIVO TXT de verdade
         await canal_resultados.send(
             content=f"📊 **Relatório de Metas** — `{data_inicio_str}` a `{data_fim_str}`",
             file=arquivo
         )
 
-        # Tenta responder a interação para não dar o erro do Webhook
         try:
-            await interaction.followup.send(
-                f"✅ **Relatório enviado com sucesso!**\n"
-                f"📊 {len(historico)} metas processadas\n"
-                f"📨 Enviado em {canal_resultados.mention}",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"✅ **Relatório .txt enviado em {canal_resultados.mention}!**", ephemeral=True)
         except discord.NotFound:
-            # Se o webhook da interação expirou (erro 404), ignora silenciosamente
             pass
 
     except Exception as e:
