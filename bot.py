@@ -53,6 +53,7 @@ import signal
 import random
 import io
 import hashlib
+import qrcode
 from discord.ext import commands, tasks
 from discord.utils import escape_markdown
 from datetime import datetime, timedelta
@@ -70,6 +71,7 @@ except ImportError:
     _OCR_DISPONIVEL = False
 
 from pixqrcodegen import Payload
+
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DOS IMPORTS                                                            ║
@@ -2413,35 +2415,25 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             # Gera o código PIX usando a biblioteca pixqrcodegen
             # O valor precisa ser string com ponto (ex: "50.00")
             valor_str = f"{valor_float:.2f}"
-            
-            payload = Payload(
-                PIX_NOME, 
-                PIX_CHAVE, 
-                valor_str, 
-                PIX_CIDADE, 
-                "DOACAO" # ID da transação
-            )
+            payload = Payload(PIX_NOME, PIX_CHAVE, valor_str, PIX_CIDADE, "DOACAO")
             
             # Gera a string "Copia e Cola"
             pix_copia_cola = payload.gerarPayload()
             
-            # Tenta gerar o QR Code em imagem (a biblioteca salva num arquivo)
+            # Tenta gerar o QR Code em imagem usando a biblioteca qrcode
             qr_file = None
             try:
-                # A biblioteca salva o arquivo na pasta do bot
-                nome_arquivo_qr = f"pix_qr_{interaction.user.id}.png"
+                # Gera a imagem do QR Code a partir do texto do PIX
+                qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                qr.add_data(pix_copia_cola)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
                 
-                # CORREÇÃO: O método correto é gerarQrcode (com 'c' minúsculo)
-                # e ele PRECISA receber o payload como argumento.
-                payload.gerarQrcode(pix_copia_cola, nome_arquivo_qr)
-                
-                # Abre o arquivo para enviar no Discord
-                with open(nome_arquivo_qr, "rb") as f:
-                    qr_file = discord.File(io.BytesIO(f.read()), filename="pix_qrcode.png")
-                
-                # Apaga o arquivo do servidor depois de ler
-                import os
-                os.remove(nome_arquivo_qr)
+                # Salva em memória e envia
+                buffer = io.BytesIO()
+                img.save(buffer, format="PNG")
+                buffer.seek(0)
+                qr_file = discord.File(buffer, filename="pix_qrcode.png")
             except Exception as e:
                 logger.error(f"Erro ao gerar imagem QR: {e}")
                 qr_file = None
