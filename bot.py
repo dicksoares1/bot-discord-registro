@@ -17486,52 +17486,13 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
         guild = interaction.guild
 
         grupos = {
-            "soldados": {
-                "cargos": [CARGO_SOLDADO_ID],
-                "nome": "⚔️ SOLDADOS",
-                "is_isento": False,
-                "itens": []
-            },
-            "gerentes": {
-                "cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID, CARGO_GERENTE_GERAL_ID],
-                "nome": "🟢 GERENTES (ISENTOS)",
-                "is_isento": True,
-                "itens": []
-            },
-            "cargos_01_02_03": {
-                "cargos": [CARGO_01_ID, CARGO_02_ID, CARGO_03_ID],
-                "nome": "🟡 CARGOS 01/02/03 (ISENTOS)",
-                "is_isento": True,
-                "itens": []
-            },
-            "responsaveis": {
-                "cargos": [
-                    CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID,
-                    CARGO_RESP_PRODUCAO_ID, CARGO_RESP_P1_ID,
-                    CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID
-                ],
-                "nome": "🔵 RESPONSÁVEIS",
-                "is_isento": False,
-                "itens": []
-            },
-            "membros": {
-                "cargos": [CARGO_MEMBRO_ID],
-                "nome": "🔴 MEMBROS",
-                "is_isento": False,
-                "itens": []
-            },
-            "agregados": {
-                "cargos": [CARGO_AGREGADO_ID, CARGO_MORADOR_ID],
-                "nome": "⚪ AGREGADOS / MORADORES",
-                "is_isento": False,
-                "itens": []
-            },
-            "mecanicos": {
-                "cargos": [CARGO_MECANICO_ID],
-                "nome": "🔧 MECÂNICOS",
-                "is_isento": False,
-                "itens": []
-            }
+            "soldados": {"cargos": [CARGO_SOLDADO_ID], "nome": "⚔️ SOLDADOS", "is_isento": False, "itens": []},
+            "gerentes": {"cargos": [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID, CARGO_GERENTE_GERAL_ID], "nome": "🟢 GERENTES (ISENTOS)", "is_isento": True, "itens": []},
+            "cargos_01_02_03": {"cargos": [CARGO_01_ID, CARGO_02_ID, CARGO_03_ID], "nome": "🟡 CARGOS 01/02/03 (ISENTOS)", "is_isento": True, "itens": []},
+            "responsaveis": {"cargos": [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID], "nome": "🔵 RESPONSÁVEIS", "is_isento": False, "itens": []},
+            "membros": {"cargos": [CARGO_MEMBRO_ID], "nome": "🔴 MEMBROS", "is_isento": False, "itens": []},
+            "agregados": {"cargos": [CARGO_AGREGADO_ID, CARGO_MORADOR_ID], "nome": "⚪ AGREGADOS / MORADORES", "is_isento": False, "itens": []},
+            "mecanicos": {"cargos": [CARGO_MECANICO_ID], "nome": "🔧 MECÂNICOS", "is_isento": False, "itens": []}
         }
 
         for item in historico:
@@ -17555,6 +17516,8 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             is_isento_por_cargo = any(r in roles_ids for r in CARGOS_ISENTOS_META)
             item_dict["is_isento"] = is_isento_por_cargo
 
+            # Lógica de "cumpriu" segura
+            cumpriu = True
             if is_isento_por_cargo and tipo_meta != "soldado":
                 cumpriu = True
             elif tipo_meta == "soldado":
@@ -17567,8 +17530,10 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             elif tipo_meta == "polvora":
                 cumpriu = (item.get("polvora", 0) >= meta_limite_polvora) if meta_limite_polvora > 0 else True
             else:
-                cumpriu = (item["dinheiro"] >= meta_limite_dinheiro) if meta_limite_dinheiro > 0 else True
+                cumpriu = (item.get("dinheiro", 0) >= meta_limite_dinheiro) if meta_limite_dinheiro > 0 else True
                 
+            item_dict["cumpriu"] = cumpriu # Garante que a chave sempre exista
+
             if item_dict["is_mecanico"]:
                 item_dict["horas_salvas"] = item.get("horas_segundos", 0)
             else:
@@ -17610,23 +17575,6 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
         linhas.append(f"📊 Obrigados: {total_obrigados}")
         linhas.append("")
 
-        linhas.append(sep_igual)
-        linhas.append("📊 RESUMO POR CARGO")
-        linhas.append(sep_igual)
-        linhas.append("")
-
-        for grupo_key, grupo_data in grupos.items():
-            if not grupo_data["itens"]:
-                continue
-            qtd = len(grupo_data["itens"])
-            total_grupo_dinheiro = sum(i["dinheiro"] for i in grupo_data["itens"])
-            total_grupo_polvora = sum(i.get("polvora", 0) for i in grupo_data["itens"])
-            if grupo_data.get("is_isento", False):
-                linhas.append(f"{grupo_data['nome']}: {qtd} membros | Contribuíram: {formatar_dinheiro(total_grupo_dinheiro)} | 🧨 {fmt_num(total_grupo_polvora)} (ISENTOS)")
-            else:
-                linhas.append(f"{grupo_data['nome']}: {qtd} membros | {formatar_dinheiro(total_grupo_dinheiro)} | 🧨 {fmt_num(total_grupo_polvora)}")
-        linhas.append("")
-
         for grupo_key, grupo_data in grupos.items():
             if not grupo_data["itens"]:
                 continue
@@ -17640,26 +17588,24 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                 itens_ordenados = sorted(grupo_data["itens"], key=lambda x: x["nome"].lower())
                 for idx, item in enumerate(itens_ordenados, 1):
                     linhas.append(f"{idx}. {item['nome']}")
-                    linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item['dinheiro'])}")
+                    linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item.get('dinheiro', 0))}")
                     linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
-                    linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
                     if item.get("is_mecanico"):
                         linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
                     linhas.append(f"   📌 Status: 🟡 ISENTO (não paga meta, mas contribuiu)")
                     linhas.append("")
             else:
-                pagaram = [i for i in grupo_data["itens"] if i["cumpriu"]]
-                nao_pagaram = [i for i in grupo_data["itens"] if not i["cumpriu"]]
+                pagaram = [i for i in grupo_data["itens"] if i.get("cumpriu", False)]
+                nao_pagaram = [i for i in grupo_data["itens"] if not i.get("cumpriu", False)]
 
                 if pagaram:
                     linhas.append("✅ QUEM PAGOU:")
                     linhas.append("")
-                    pagaram_ordenados = sorted(pagaram, key=lambda x: x["dinheiro"], reverse=True)
+                    pagaram_ordenados = sorted(pagaram, key=lambda x: x.get("dinheiro", 0), reverse=True)
                     for idx, item in enumerate(pagaram_ordenados, 1):
                         linhas.append(f"{idx}. {item['nome']}")
-                        linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item['dinheiro'])}")
+                        linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item.get('dinheiro', 0))}")
                         linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
-                        linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
                         if item.get("is_mecanico"):
                             linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
                         linhas.append(f"   📌 Status: ✅ CUMPRIU A META")
@@ -17671,9 +17617,8 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
                     nao_pagaram_ordenados = sorted(nao_pagaram, key=lambda x: x["nome"].lower())
                     for idx, item in enumerate(nao_pagaram_ordenados, 1):
                         linhas.append(f"{idx}. {item['nome']}")
-                        linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item['dinheiro'])}")
+                        linhas.append(f"   💰 Dinheiro: {formatar_dinheiro(item.get('dinheiro', 0))}")
                         linhas.append(f"   🧨 Pólvora: {fmt_num(item.get('polvora', 0))} unidades")
-                        linhas.append(f"   🎯 Dinheiro de Ações: {formatar_dinheiro(item.get('dinheiro_acoes', 0))}")
                         if item.get("is_mecanico"):
                             linhas.append(f"   ⏰ Horas Mecânica: {formatar_horas(item.get('horas_salvas', 0))}")
                         linhas.append(f"   📌 Status: ❌ NÃO CUMPRIU A META")
@@ -17697,17 +17642,23 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
         if not canal_resultados:
             canal_resultados = interaction.channel
 
+        # Envia como ARQUIVO TXT de verdade
         await canal_resultados.send(
             content=f"📊 **Relatório de Metas** — `{data_inicio_str}` a `{data_fim_str}`",
             file=arquivo
         )
 
-        await interaction.followup.send(
-            f"✅ **Relatório enviado com sucesso!**\n"
-            f"📊 {len(historico)} metas processadas\n"
-            f"📨 Enviado em {canal_resultados.mention}",
-            ephemeral=True
-        )
+        # Tenta responder a interação para não dar o erro do Webhook
+        try:
+            await interaction.followup.send(
+                f"✅ **Relatório enviado com sucesso!**\n"
+                f"📊 {len(historico)} metas processadas\n"
+                f"📨 Enviado em {canal_resultados.mention}",
+                ephemeral=True
+            )
+        except discord.NotFound:
+            # Se o webhook da interação expirou (erro 404), ignora silenciosamente
+            pass
 
     except Exception as e:
         logger.error(f"❌ Erro ao gerar relatório .txt: {e}")
@@ -17715,7 +17666,6 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
             await interaction.followup.send(f"❌ Erro ao gerar relatório: `{str(e)[:150]}`", ephemeral=True)
         except:
             pass
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: gerar_relatorio_metas
 # ────────────────────────────────────────────────────────────────────────────────
