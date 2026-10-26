@@ -261,6 +261,7 @@ CANAL_AVISOS_ACOES_ID = 1366528075621339227
 CANAL_AVISOS_VENDAS_ID = 1448560922019758241
 CANAL_AVISOS_METAS_ID = 1541794867267641404
 CANAL_CRIAR_AVISOS_ID = 1541795328972562513
+CANAL_AVISOS_PRODUCAO_ID = 1356174874921664522
 CANAL_CHAT_PRODUCAO_ID = 1422853066541109338
 CANAL_CHAT_VENDAS_ID = 1365372467723501723
 
@@ -2142,14 +2143,8 @@ async def enviar_painel_registro():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_embed_aviso_supremo
 # ────────────────────────────────────────────────────────────────────────────────
-async def criar_embed_aviso_supremo(titulo, mensagem, cor_hex, canal_nome, tipo_aviso="📢"):
-    tipos = {
-        "urgente": {"cor": 0xe74c3c, "emoji": "🔴", "borda": "🔥"},
-        "importante": {"cor": 0xf1c40f, "emoji": "⭐", "borda": "✨"},
-        "informativo": {"cor": 0x3498db, "emoji": "ℹ️", "borda": "📌"},
-        "sucesso": {"cor": 0x2ecc71, "emoji": "✅", "borda": "🎉"},
-        "aviso": {"cor": 0xe67e22, "emoji": "⚠️", "borda": "📢"}
-    }
+async def criar_embed_aviso_supremo(titulo, mensagem, local=None, data_hora=None, cor_hex=None):
+    # Detecção de tipo (mantida do original)
     tipo_detectado = "informativo"
     titulo_lower = titulo.lower()
     if any(p in titulo_lower for p in ["urgente", "importante", "atenção", "perigo"]):
@@ -2158,27 +2153,43 @@ async def criar_embed_aviso_supremo(titulo, mensagem, cor_hex, canal_nome, tipo_
         tipo_detectado = "sucesso"
     elif any(p in titulo_lower for p in ["aviso", "atenção", "cuidado"]):
         tipo_detectado = "aviso"
-    elif any(p in titulo_lower for p in ["info", "informação", "comunicado"]):
-        tipo_detectado = "informativo"
+        
+    tipos = {
+        "urgente": {"cor": 0xe74c3c, "emoji": "🔴", "borda": "🔥"},
+        "informativo": {"cor": 0x3498db, "emoji": "ℹ️", "borda": "📌"},
+        "sucesso": {"cor": 0x2ecc71, "emoji": "✅", "borda": "🎉"},
+        "aviso": {"cor": 0xe67e22, "emoji": "⚠️", "borda": "📢"}
+    }
     info = tipos.get(tipo_detectado, tipos["informativo"])
     cor_final = cor_hex if cor_hex else info["cor"]
-    emoji_tipo = info["emoji"]
-    borda = info["borda"]
+
     embed = discord.Embed(
-        title=f"{emoji_tipo} {borda} {titulo.upper()} {borda} {emoji_tipo}",
-        description=f"```yaml\n{mensagem}\n```",
+        title=f"{info['emoji']} {titulo.upper()}",
+        description=f"**Atenção, membros da Vida Rasa!**\n\n```yaml\n{mensagem}\n```",
         color=cor_final,
         timestamp=agora()
     )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name="📌 DESTINO", value=f"```yaml\n{canal_nome}\n```", inline=True)
-    embed.add_field(name="📅 DATA E HORA", value=f"```yaml\n{agora().strftime('%d/%m/%Y %H:%M')}\n```", inline=True)
-    embed.add_field(name="📋 STATUS", value=f"```yaml\n{('🔴 URGENTE' if tipo_detectado == 'urgente' else '📢 ATIVO')}\n```", inline=True)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.set_footer(text="🛡 Vida Rasa 442 • Sistema Oficial de Avisos", icon_url=bot.user.display_avatar.url if bot.user else None)
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    return embed
+    
+    # Thumbnail do Bot (Deixa com cara de sistema)
+    if bot.user:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
 
+    # Adiciona o Local e Data/Hora apenas se forem preenchidos
+    if local:
+        embed.add_field(name="📍 LOCAL", value=f"```yaml\n{local}\n```", inline=True)
+    if data_hora:
+        embed.add_field(name="📅 DATA E HORA", value=f"```yaml\n{data_hora}\n```", inline=True)
+        
+    if not local and not data_hora:
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    embed.set_footer(
+        text=f"🛡 Vida Rasa 442 • Comunicado Oficial", 
+        icon_url=bot.user.display_avatar.url if bot.user else None
+    )
+    
+    return embed
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AvisosSelect
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2188,7 +2199,8 @@ class AvisosSelect(discord.ui.Select):
             discord.SelectOption(label="📢 Vida Rasa", description="Aviso geral para toda a facção", emoji="📢", value="vida_rasa"),
             discord.SelectOption(label="⚔️ Ações", description="Aviso sobre ações e escalações", emoji="⚔️", value="acoes"),
             discord.SelectOption(label="🛒 Vendas", description="Aviso sobre vendas e encomendas", emoji="🛒", value="vendas"),
-            discord.SelectOption(label="🎯 Metas", description="Aviso sobre metas semanais", emoji="🎯", value="metas")
+            discord.SelectOption(label="🎯 Metas", description="Aviso sobre metas semanais", emoji="🎯", value="metas"),
+            discord.SelectOption(label="🏭 Produção", description="Aviso sobre produção e galpões", emoji="🏭", value="producao")
         ]
         super().__init__(placeholder="📌 Selecione o canal para o aviso...", min_values=1, max_values=1, options=options)
 
@@ -2198,13 +2210,15 @@ class AvisosSelect(discord.ui.Select):
             "vida_rasa": CANAL_AVISOS_VIDA_RASA_ID,
             "acoes": CANAL_AVISOS_ACOES_ID,
             "vendas": CANAL_AVISOS_VENDAS_ID,
-            "metas": CANAL_AVISOS_METAS_ID
+            "metas": CANAL_AVISOS_METAS_ID,
+            "producao": CANAL_AVISOS_PRODUCAO_ID # Novo canal
         }
         nomes = {
             "vida_rasa": "📢 Vida Rasa",
             "acoes": "⚔️ Ações",
             "vendas": "🛒 Vendas",
-            "metas": "🎯 Metas"
+            "metas": "🎯 Metas",
+            "producao": "🏭 Produção"
         }
         canal_id = canais.get(valor)
         nome_canal = nomes.get(valor, "Desconhecido")
@@ -2213,43 +2227,50 @@ class AvisosSelect(discord.ui.Select):
             return
         modal = AvisoModal(canal_id, nome_canal)
         await interaction.response.send_modal(modal)
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AvisoModal
 # ────────────────────────────────────────────────────────────────────────────────
-class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Supremo"):
+class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Oficial"):
     def __init__(self, canal_id, nome_canal):
         super().__init__(timeout=300)
         self.canal_id = canal_id
         self.nome_canal = nome_canal
 
-    titulo = discord.ui.TextInput(label="📌 Título do Aviso", placeholder="Ex: ATENÇÃO REUNIÃO!", required=True, max_length=100)
-    mensagem = discord.ui.TextInput(label="📝 Mensagem do Aviso", placeholder="Digite o conteúdo do aviso...", style=discord.TextStyle.paragraph, required=True, max_length=2000)
-    cor = discord.ui.TextInput(label="🎨 Cor (opcional)", placeholder="verde, vermelho, amarelo, azul, roxo, laranja", required=False, max_length=20)
-    tipo = discord.ui.TextInput(label="🏷️ Tipo (opcional)", placeholder="urgente, importante, aviso, sucesso, informativo", required=False, max_length=20)
+    titulo = discord.ui.TextInput(label="📌 Título do Aviso", placeholder="Ex: REUNIÃO GERAL DA FACÇÃO", required=True, max_length=100)
+    mensagem = discord.ui.TextInput(label="📝 Mensagem", placeholder="Digite o conteúdo do aviso...", style=discord.TextStyle.paragraph, required=True, max_length=2000)
+    local = discord.ui.TextInput(label="📍 Local (Opcional)", placeholder="Ex: Galpão Norte, Discord, QG...", required=False, max_length=100)
+    data_hora = discord.ui.TextInput(label="📅 Data e Hora (Opcional)", placeholder="Ex: Hoje às 21h, 30/10 às 20:30...", required=False, max_length=50)
+    cor_tipo = discord.ui.TextInput(label="🎨 Cor/Tipo (opcional)", placeholder="urgente, importante, sucesso, info", required=False, max_length=20)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
             cores = {"verde": 0x2ecc71, "vermelho": 0xe74c3c, "amarelo": 0xf1c40f, "azul": 0x3498db, "roxo": 0x9b59b6, "laranja": 0xe67e22}
-            cor_hex = cores.get(self.cor.value.lower().strip(), None)
+            cor_hex = cores.get(self.cor_tipo.value.lower().strip(), None)
+            
+            # Cria o Embed Premium
             embed = await criar_embed_aviso_supremo(
                 titulo=self.titulo.value,
                 mensagem=self.mensagem.value,
-                cor_hex=cor_hex,
-                canal_nome=self.nome_canal
+                local=self.local.value if self.local.value else None,
+                data_hora=self.data_hora.value if self.data_hora.value else None,
+                cor_hex=cor_hex
             )
+            
             canal = interaction.guild.get_channel(self.canal_id)
             if canal:
+                # Envia o aviso com menção
                 await canal.send(
                     content="🔔 @everyone **NOVO AVISO OFICIAL!**",
                     embed=embed,
                     allowed_mentions=discord.AllowedMentions(everyone=True)
                 )
+                
+                # Log do aviso (Anônimo)
                 canal_log = interaction.guild.get_channel(CANAL_CRIAR_AVISOS_ID)
                 if canal_log:
                     embed_log = discord.Embed(
-                        title="✅ AVISO CRIADO (ANÔNIMO)",
+                        title="✅ AVISO ENVIADO (LOG)",
                         description=f"📢 **{self.titulo.value}**",
                         color=0x2ecc71,
                         timestamp=agora()
@@ -2259,7 +2280,8 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Supremo"):
                     embed_log.add_field(name="📝 Conteúdo", value=self.mensagem.value[:500], inline=False)
                     embed_log.set_footer(text="🛡 Vida Rasa 442 • Log de Avisos")
                     await canal_log.send(embed=embed_log)
-                await interaction.followup.send(f"✅ **Aviso supremo enviado com sucesso para {self.nome_canal}!**", ephemeral=True)
+                
+                await interaction.followup.send(f"✅ **Aviso enviado com sucesso para {self.nome_canal}!**", ephemeral=True)
             else:
                 await interaction.followup.send("❌ **Canal não encontrado!**", ephemeral=True)
         except Exception as e:
