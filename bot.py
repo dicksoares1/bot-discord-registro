@@ -3013,15 +3013,25 @@ async def enviar_painel_registrar_compra():
 
     view = RegistrarCompraView()
     
-    # ─── FORÇA A DELEÇÃO DO PAINEL ANTIGO ───
+    # ─── FORÇA A DELEÇÃO DO PAINEL ANTIGO NO BANCO E NO DISCORD ───
     try:
+        # 1. Deleta o registro do banco para não tentar editar a msg velha
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM paineis WHERE nome = 'painel_lancamentos'")
+                await conn.execute("DELETE FROM paineis_ultimos WHERE nome = 'painel_lancamentos'")
+        
+        # 2. Deleta a mensagem velha no canal
         async for msg in canal.history(limit=20):
             if msg.author == bot.user:
                 try:
                     await msg.delete()
+                    await asyncio.sleep(0.5)
                 except:
                     pass
-        # Envia o novo painel
+                    
+        # 3. Envia o painel novo em folha
         await canal.send(embed=embed, view=view)
         logger.info("✅ Painel de Lançamentos recriado com sucesso!")
     except Exception as e:
@@ -24723,7 +24733,7 @@ async def enviar_paineis_iniciais(guild):
             ("Lavagem", enviar_painel_lavagem),
             ("Vendas", enviar_painel_vendas),
             ("Relatório Financeiro", enviar_painel_relatorio_financeiro),
-            ("Registrar Compra", enviar_painel_registrar_compra),
+            ("Lançamentos", enviar_painel_registrar_compra),
             ("Solicitar Sala", enviar_painel_solicitar_sala),
             ("Botão Ausência", enviar_painel_ausencia),
             ("Relatório Metas", enviar_painel_relatorio_metas),
