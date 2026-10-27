@@ -1959,83 +1959,53 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
     indicado = discord.ui.TextInput(label="👤 Indicado por (opcional)", placeholder="Nome de quem te indicou", required=False)
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         membro = interaction.user
         guild = interaction.guild
+        
+        # Formata o nome e o vulgo
         nome_formatado = capitalizar_nome(self.nome.value)
         vulgo_formatado = capitalizar_nome(self.vulgo.value) if self.vulgo.value else None
+        
+        # Define o nick
         if vulgo_formatado:
             nick = f"{self.passaporte.value} - {nome_formatado} | {vulgo_formatado}"
         else:
             nick = f"{self.passaporte.value} - {nome_formatado}"
+            
         try:
             await membro.edit(nick=nick)
         except Exception as e:
             logger.error(f"❌ Erro ao editar nick: {e}")
-        view = TipoRegistroView(
-            nome=nome_formatado,
-            passaporte=self.passaporte.value,
-            vulgo=vulgo_formatado,
-            telefone=self.telefone.value,
-            indicado=self.indicado.value if self.indicado.value else None
-        )
-        await interaction.response.send_message(
-            "**Selecione o tipo de entrada:**\n\n"
-            f"📋 **Passaporte:** {self.passaporte.value}\n"
-            f"👤 **Nome:** {nome_formatado}\n"
-            f"🏷️ **Vulgo:** {vulgo_formatado or 'Não informado'}\n"
-            f"📱 **Telefone:** {self.telefone.value}\n"
-            f"👤 **Indicado por:** {self.indicado.value or 'Não informado'}",
-            view=view, ephemeral=True
-        )
 
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: TipoRegistroSelect
-# ────────────────────────────────────────────────────────────────────────────────
-class TipoRegistroSelect(discord.ui.Select):
-    def __init__(self, nome, passaporte, vulgo, telefone, indicado):
-        self.nome = nome
-        self.passaporte = passaporte
-        self.vulgo = vulgo
-        self.telefone = telefone
-        self.indicado = indicado
-        options = [
-            discord.SelectOption(label="Agregado", description="Se tornar membro da facção", emoji="🕴️")
-        ]
-        super().__init__(placeholder="Confirme seu registro", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        membro = interaction.user
+        # ─── APLICA OS CARGOS AUTOMATICAMENTE ───
         agregado = guild.get_role(AGREGADO_ROLE_ID)
-        convidado = guild.get_role(CONVIDADO_ROLE_ID)
         em_registro = guild.get_role(EM_REGISTRO_ROLE_ID)
+        convidado = guild.get_role(CONVIDADO_ROLE_ID)
 
-        if em_registro:
-            try:
-                await membro.remove_roles(em_registro)
-            except Exception as e:
-                logger.error(f"❌ Erro ao remover cargo 'Em Registro': {e}")
+        if em_registro and em_registro in membro.roles:
+            try: await membro.remove_roles(em_registro)
+            except: pass
+            
+        if convidado and convidado in membro.roles:
+            try: await membro.remove_roles(convidado)
+            except: pass
 
         if agregado:
-            try:
-                await membro.add_roles(agregado)
-            except Exception as e:
-                logger.error(f"❌ Erro ao adicionar cargo 'Agregado': {e}")
+            try: await membro.add_roles(agregado)
+            except Exception as e: logger.error(f"❌ Erro ao adicionar cargo Agregado: {e}")
 
-        if convidado:
-            try:
-                await membro.remove_roles(convidado)
-            except:
-                pass
-
+        # ─── SALVA NO HISTÓRICO ───
         await salvar_registro_historico(
-            membro.id, membro.name, self.passaporte, self.nome,
-            self.vulgo, self.telefone, self.indicado, "Agregado"
+            membro.id, membro.name, self.passaporte.value, nome_formatado,
+            vulgo_formatado, self.telefone.value, self.indicado.value if self.indicado.value else None, "Agregado"
         )
 
+        # ─── CRIA A SALA DE META ───
         await criar_sala_meta(membro)
 
-        canal_log = interaction.guild.get_channel(CANAL_LOG_REGISTRO_ID)
+        # ─── ENVIA PARA O CANAL DE HISTÓRICO ───
+        canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
         if canal_log:
             embed = discord.Embed(
                 title="🎉 NOVO MEMBRO REGISTRADO!",
@@ -2044,45 +2014,33 @@ class TipoRegistroSelect(discord.ui.Select):
             )
             if membro.display_avatar:
                 embed.set_thumbnail(url=membro.display_avatar.url)
+                
             informacoes = (
-                f"**📋 Passaporte:** `{self.passaporte}`\n"
-                f"**👤 Nome:** {self.nome}\n"
-                f"**🏷️ Vulgo:** {self.vulgo or '❌ Não informado'}\n"
-                f"**📱 Telefone:** {self.telefone}\n"
-                f"**👤 Indicado por:** {self.indicado or '❌ Não informado'}\n"
+                f"**📋 Passaporte:** `{self.passaporte.value}`\n"
+                f"**👤 Nome:** {nome_formatado}\n"
+                f"**🏷️ Vulgo:** {vulgo_formatado or '❌ Não informado'}\n"
+                f"**📱 Telefone:** {self.telefone.value}\n"
+                f"**👤 Indicado por:** {self.indicado.value or '❌ Não informado'}\n"
                 f"**🎯 Tipo:** Agregado"
             )
             embed.add_field(name="📋 INFORMAÇÕES DO MEMBRO", value=informacoes, inline=False)
             embed.add_field(name="📌 STATUS", value=f"✅ **Registro concluído**\n🔹 Cargo atribuído: **Agregado**\n🆔 ID: `{membro.id}`", inline=False)
-            embed.add_field(name="🎯 CARGO ATRIBUÍDO", value="🕴️ **Agregado**", inline=False)
-            embed.set_footer(text=f"Registro realizado com sucesso • Sistema Automático")
+            embed.set_footer(text="Sistema Automático • Vida Rasa 442")
+            
             try:
                 await canal_log.send(embed=embed)
-                await interaction.response.send_message(
-                    f"✅ **Registro concluído com sucesso!**\n\n"
-                    f"📋 Você foi registrado como: **Agregado**\n"
-                    f"👤 Nome: {self.nome}\n"
-                    f"📁 Sua sala de meta foi criada automaticamente!\n"
-                    f"📨 Seu registro foi enviado para o histórico!",
-                    ephemeral=True
-                )
-            except:
-                await interaction.response.send_message(
-                    f"✅ **Registro concluído com sucesso!**\n\n"
-                    f"📋 Você foi registrado como: **Agregado**\n"
-                    f"👤 Nome: {self.nome}\n"
-                    f"📁 Sua sala de meta foi criada automaticamente!\n"
-                    f"⚠️ **Mas houve um erro ao enviar para o histórico!**",
-                    ephemeral=True
-                )
+            except Exception as e:
+                logger.error(f"❌ Erro ao enviar para o canal de histórico: {e}")
 
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: TipoRegistroView
-# ────────────────────────────────────────────────────────────────────────────────
-class TipoRegistroView(discord.ui.View):
-    def __init__(self, nome, passaporte, vulgo, telefone, indicado):
-        super().__init__(timeout=300)
-        self.add_item(TipoRegistroSelect(nome, passaporte, vulgo, telefone, indicado))
+        # ─── CONFIRMAÇÃO NO DM/EPHEMERAL ───
+        await interaction.followup.send(
+            f"✅ **Registro concluído com sucesso!**\n\n"
+            f"📋 Você foi registrado como: **Agregado**\n"
+            f"👤 Nome: {nome_formatado}\n"
+            f"📁 Sua sala de meta foi criada automaticamente!\n"
+            f"📨 Seu registro foi enviado para o histórico!",
+            ephemeral=True
+        )
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistroView
@@ -2107,37 +2065,48 @@ class RegistroView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_registro():
     canal = bot.get_channel(CANAL_REGISTRO_ID)
-    if not canal: return
+    if not canal:
+        logger.error("❌ Canal registro não encontrado")
+        return
 
-    embed = discord.Embed(
-        title="🛡 ── REGISTRO VDR 442 ── 🛡",
-        description="**Bem-vindo à Vida Rasa!**\n*Sistema Oficial de Admissão*",
-        color=0x5865F2,
-        timestamp=agora()
-    )
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="🕴️ ENTRAR COMO AGREGADO",
-        value="Se você deseja se tornar um **membro oficial** da facção, escolha esta opção.\n\n✅ Acesso a todas as áreas\n✅ Participação em metas e ações\n✅ Sujeito às regras da facção",
-        inline=False
+    embed = embed_padrao(
+        titulo="REGISTRO VDR 442",
+        descricao="🛡 Sistema de Admissão • Vida Rasa",
+        cor=CoresUX.PRIMARIA,
+        emoji=EmojisUX.ESCUDO,
+        autor="Sistema de Registro"
     )
 
-    embed.add_field(
-        name="🤝 ENTRAR COMO AMIGO",
-        value="Se você é um **visitante ou fã**, escolha esta opção.\n\n✅ Acesso apenas a áreas sociais\n❌ Não participa de metas\n❌ Apenas para resenha",
-        inline=False
+    adicionar_separador(embed)
+
+    adicionar_campo(
+        embed, "BEM-VINDO À VIDA RASA",
+        (
+            "```yaml\n"
+            "🕴️ Ao se registrar, você se tornará um AGREGADO.\n"
+            "✅ Terá acesso a todas as áreas da facção.\n"
+            "✅ Participará de metas semanais e ações.\n"
+            "⚠️ O não cumprimento das metas gerará dívida.\n"
+            "```"
+        ),
+        emoji=EmojisUX.INFO, inline=False
     )
 
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name="📖 COMO SE REGISTRAR", value="**1️⃣** Clique no botão **📋 Fazer Registro** abaixo\n**2️⃣** Preencha seus dados (Passaporte, Nome, etc)\n**3️⃣** Escolha seu tipo de entrada\n**4️⃣** Pronto! Seu acesso será liberado automaticamente.", inline=False)
+    adicionar_separador(embed)
 
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Sistema de Admissão", icon_url=bot.user.display_avatar.url if bot.user else None)
+    adicionar_campo(
+        embed, "COMO FUNCIONA",
+        (
+            "1️⃣ Clique em **'Fazer Registro'**\n"
+            "2️⃣ Preencha seus dados (Passaporte, Nome, etc)\n"
+            "3️⃣ Pronto! Você será liberado automaticamente."
+        ),
+        emoji=EmojisUX.INFO, inline=False
+    )
 
     view = RegistroView()
     await enviar_ou_atualizar_painel("painel_registro", CANAL_REGISTRO_ID, embed, view)
+    logger.info("✅ Painel de registro criado")
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 04                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
