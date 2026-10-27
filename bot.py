@@ -2684,10 +2684,16 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
         required=False, 
         max_length=10
     )
+    brinde = discord.ui.TextInput(
+        label="🎁 Brinde (opcional)", 
+        placeholder="Ex: 50 (entra no estoque, mas não é cobrado)", 
+        required=False, 
+        max_length=10
+    )
     valor = discord.ui.TextInput(
-        label="💰 Valor total do lançamento", 
-        placeholder="Ex: 50000", 
-        required=True
+        label="💰 Valor total (deixe 0 para calcular)", 
+        placeholder="Ex: 0 (calcula automatico) ou 50000", 
+        required=False
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -2699,33 +2705,68 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
             await interaction.followup.send("❌ **Descrição inválida!**", ephemeral=True)
             return
             
-        try:
-            valor_compra = safe_int(self.valor.value)
-            if valor_compra <= 0:
-                raise ValueError
-        except:
-            await interaction.followup.send("❌ **Valor inválido!**", ephemeral=True)
-            return
+        # Pega as quantidades
+        qtd_compra = safe_int(self.quantidade.value) if self.quantidade.value else 0
+        qtd_brinde = safe_int(self.brinde.value) if self.brinde.value else 0
+        qtd_total_estoque = qtd_compra + qtd_brinde
 
-        qtd_compra = 0
-        if self.quantidade.value and self.quantidade.value.strip():
-            try:
-                qtd_compra = safe_int(self.quantidade.value)
-                if qtd_compra < 0:
-                    raise ValueError
-            except:
-                await interaction.followup.send("❌ **Quantidade inválida!**", ephemeral=True)
+        # Pega o valor (ou calcula)
+        valor_input = safe_int(self.valor.value) if self.valor.value else 0
+        valor_compra = valor_input
+
+        # ─── LÓGICA DE CÁLCULO AUTOMÁTICO ───
+        produto_lower = descricao.lower()
+        preco_unitario = 0
+        
+        if "polvora" in produto_lower or "pólvora" in produto_lower:
+            preco_unitario = PRECO_POLVORA
+        elif "embalagem" in produto_lower:
+            preco_unitario = PRECO_EMBALAGEM_POR_UNIDADE
+            
+        if valor_compra <= 0:
+            if preco_unitario > 0 and qtd_compra > 0:
+                valor_compra = int(qtd_compra * preco_unitario)
+            else:
+                await interaction.followup.send("❌ **Valor inválido!** Como não foi possível calcular automaticamente, você precisa digitar o valor.", ephemeral=True)
                 return
 
-        # Chama a função de salvar passando o tipo
-        await salvar_compra_db(descricao, valor_compra, interaction.user.id, qtd_compra, tipo)
+        # Salva no banco
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO compras (produto, valor, comprado_por, data) VALUES ($1, $2, $3, $4)",
+                    f"[{tipo}] {descricao}", valor_compra, str(interaction.user.id), agora_db()
+                )
+
+                # ─── ATUALIZA O ESTOQUE ───
+                if "polvora" in produto_lower or "pólvora" in produto_lower:
+                    if qtd_total_estoque > 0:
+                        await atualizar_estoque_polvora(qtd_total_estoque, "adicionar")
+                elif "embalagem" in produto_lower:
+                    if qtd_total_estoque > 0:
+                        await atualizar_estoque_embalagens(qtd_total_estoque, "adicionar")
+
+        # Movimenta o caixa
+        await movimentar_caixa(
+            tipo="compra",
+            valor=valor_compra,
+            motivo=f"{tipo}: {descricao}",
+            autor=interaction.user.id
+        )
         
         data_atual = agora()
         embed = discord.Embed(title=f"💸 NOVO LANÇAMENTO: {tipo.upper()}", color=0x3498db, timestamp=data_atual)
         embed.add_field(name="📦 Descrição", value=descricao, inline=True)
         embed.add_field(name="💰 Valor", value=formatar_dinheiro(valor_compra), inline=True)
-        if qtd_compra > 0:
-            embed.add_field(name="🔢 Quantidade", value=f"{fmt_num(qtd_compra)} un", inline=True)
+        
+        # Mostra a quantidade detalhada se for pólvora ou embalagem
+        if qtd_total_estoque > 0:
+            texto_qtd = f"{fmt_num(qtd_compra)} un"
+            if qtd_brinde > 0:
+                texto_qtd += f" + {fmt_num(qtd_brinde)} brinde"
+            embed.add_field(name="🔢 Quantidade (Estoque)", value=texto_qtd, inline=True)
+            
         embed.add_field(name="👤 Registrado por", value=interaction.user.mention, inline=True)
         embed.add_field(name="📅 Data", value=f"<t:{int(data_atual.timestamp())}:F>", inline=False)
         embed.set_footer(text=f"🛡 Vida Rasa 442 • Histórico de Lançamentos")
@@ -2740,7 +2781,7 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
             f"🏷️ Tipo: {tipo}\n"
             f"📦 Descrição: {descricao}\n"
             f"💰 Valor: {formatar_dinheiro(valor_compra)}"
-            + (f"\n🔢 Quantidade: {fmt_num(qtd_compra)}" if qtd_compra > 0 else ""),
+            + (f"\n🔢 Estoque: {fmt_num(qtd_total_estoque)} un" if qtd_total_estoque > 0 else ""),
             ephemeral=True
         )
         
