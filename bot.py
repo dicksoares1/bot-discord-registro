@@ -7802,7 +7802,7 @@ class BotaoComprovanteView(discord.ui.View):
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: StatusView
+# CLASSE: StatusView (Original - Sem comprovantes)
 # ────────────────────────────────────────────────────────────────────────────────
 class StatusView(discord.ui.View):
     def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False, valor_total: int = 0, pt: int = 0, sub: int = 0, pedido_numero: int = 0, entregue_ja_clicado: bool = False, is_doacao: bool = False):
@@ -7872,16 +7872,6 @@ class StatusView(discord.ui.View):
                 disabled=self.transferencia_confirmada or (self.valor_total == 0),
                 row=1
             ))
-            
-            # Botão de anexar comprovante via painel
-            self.add_item(discord.ui.Button(
-                label="📎 Anexar Comprovante",
-                style=discord.ButtonStyle.primary,
-                custom_id="btn_anexar_comprovante_painel",
-                emoji="📎",
-                disabled=self.pago_ja_clicado or self.transferencia_confirmada,
-                row=2
-            ))
 
     async def _pedido_ja_finalizado_no_banco(self, pedido_numero: int) -> bool:
         if not pedido_numero:
@@ -7943,10 +7933,6 @@ class StatusView(discord.ui.View):
 
             view = ConfirmarDoacaoView(mensagem_original=interaction.message, pedido_numero=pedido_num, entrega_id=self.entrega_id)
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-            return False
-            
-        if custom_id == "btn_anexar_comprovante_painel":
-            await interaction.response.send_modal(ComprovanteModal(self.pedido_numero))
             return False
 
         if custom_id == "confirmar_transferencia_fixo":
@@ -8572,7 +8558,7 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao criar próxima entrega automaticamente: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: VendaModal
+# CLASSE: VendaModal (Original - Sem DM e sem comprovantes)
 # ────────────────────────────────────────────────────────────────────────────────
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="🏷️ Organização", placeholder="Digite o nome da organização (ex: VDR, POLICIA)", required=True)
@@ -8651,16 +8637,6 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         total = (pt * 50) + (sub * 90)
         
         await salvar_venda_db(str(interaction.user.id), total, numero_pedido)
-
-        # ─── ENVIA O DM COM O BOTÃO DE COMPROVANTE ───
-        try:
-            view_dm = BotaoComprovanteView(numero_pedido)
-            await interaction.user.send(
-                content=f"🧾 **Pedido #{numero_pedido:04d} registrado!**\n\nAssim que o cliente pagar, clique no botão abaixo para enviar o comprovante.",
-                view=view_dm
-            )
-        except discord.Forbidden:
-            await interaction.followup.send("⚠️ Não consegui enviar o DM com o botão de comprovante. Por favor, habilite as mensagens diretas no servidor.", ephemeral=True)
 
         grupo = await buscar_grupo_por_organizacao(org_nome)
         if grupo:
