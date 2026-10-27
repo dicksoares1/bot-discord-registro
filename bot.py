@@ -249,8 +249,8 @@ CANAL_GERENCIA_ID = 1237393478414241854
 CANAL_GRUPOS_ID = 1448563544386961479
 CANAL_RELATORIO_FINANCEIRO_ID = 1498664038559776768
 CANAL_RELATORIO_METAS_ID = 1521495685092999279
-CANAL_REGISTRAR_COMPRA_ID = 1498668853465448560
-CANAL_COMPRAS_REGISTRADAS_ID = 1270467793363669053
+CANAL_LANCAMENTOS_ID = 1498668853465448560
+CANAL_HISTORICO_LANCAMENTOS_ID = 1270467793363669053
 CANAL_LOGS_GERAIS_ID = 1541438570705977564
 CANAL_AUDITORIA_ID = 1557007550996807711
 CANAL_BAU_MEMBROS_ID = 1337358932158578719
@@ -2616,41 +2616,40 @@ async def enviar_painel_doacoes():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_compra_db (Atualizada para receber a quantidade)
 # ────────────────────────────────────────────────────────────────────────────────
-async def salvar_compra_db(produto, valor, comprado_por, quantidade=0):
+async def salvar_compra_db(produto, valor, comprado_por, quantidade=0, tipo="Compra"):
     pool = await get_pool()
     if not pool:
         return
     try:
         async with pool.acquire() as conn:
+            # Salva formatado: [Tipo] Descrição
+            produto_formatado = f"[{tipo}] {produto}"
             await conn.execute(
                 "INSERT INTO compras (produto, valor, comprado_por, data) VALUES ($1, $2, $3, $4)",
-                produto, valor, str(comprado_por), agora_db()
+                produto_formatado, valor, str(comprado_por), agora_db()
             )
 
             # ─── LÓGICA DE ESTOQUE AUTOMÁTICO ───
             produto_lower = produto.lower()
             
-            # Se for pólvora
             if "polvora" in produto_lower or "pólvora" in produto_lower:
-                # Usa a quantidade digitada. Se não digitou, tenta calcular pelo valor.
                 qtd = quantidade if quantidade > 0 else (valor // PRECO_POLVORA)
                 if qtd > 0:
                     await atualizar_estoque_polvora(qtd, "adicionar")
-                    logger.info(f"🧨 Estoque de pólvora atualizado via compra: +{qtd}")
+                    logger.info(f"🧨 Estoque de pólvora atualizado via lançamento: +{qtd}")
 
-            # Se for embalagem
             elif "embalagem" in produto_lower:
                 qtd = quantidade if quantidade > 0 else int(valor / PRECO_EMBALAGEM_POR_UNIDADE)
                 if qtd > 0:
                     await atualizar_estoque_embalagens(qtd, "adicionar")
-                    logger.info(f"📦 Estoque de embalagens atualizado via compra: +{qtd}")
+                    logger.info(f"📦 Estoque de embalagens atualizado via lançamento: +{qtd}")
 
             # Movimenta o caixa
             try:
                 await movimentar_caixa(
                     tipo="compra",
                     valor=valor,
-                    motivo=f"Compra: {produto}",
+                    motivo=f"{tipo}: {produto}",
                     autor=comprado_por
                 )
                 try:
@@ -2658,29 +2657,35 @@ async def salvar_compra_db(produto, valor, comprado_por, quantidade=0):
                 except:
                     pass
             except Exception as e:
-                logger.error(f"⚠️ Erro ao movimentar caixa pela compra: {e}")
+                logger.error(f"⚠️ Erro ao movimentar caixa pelo lançamento: {e}")
 
     except Exception as e:
-        logger.error(f"❌ Erro ao salvar compra: {e}")
+        logger.error(f"❌ Erro ao salvar lançamento: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCompraModal (Atualizada com quantidade)
 # ────────────────────────────────────────────────────────────────────────────────
-class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
-    produto = discord.ui.TextInput(
-        label="📦 Nome do produto", 
-        placeholder="Ex: Pólvora, Embalagens, Munição, etc", 
+class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento"):
+    tipo_lancamento = discord.ui.TextInput(
+        label="🏷️ Tipo de Lançamento", 
+        placeholder="Ex: Compra, Salário, Aluguel, Outros", 
+        required=True, 
+        max_length=50
+    )
+    descricao = discord.ui.TextInput(
+        label="📦 Descrição / Produto", 
+        placeholder="Ex: Pólvora, Salário do Leon, Aluguel Galpão", 
         required=True, 
         max_length=100
     )
     quantidade = discord.ui.TextInput(
         label="🔢 Quantidade (opcional)", 
-        placeholder="Ex: 500 (se for embalagem/pólvora)", 
+        placeholder="Ex: 500 (se for pólvora/embalagem)", 
         required=False, 
         max_length=10
     )
     valor = discord.ui.TextInput(
-        label="💰 Valor total da compra", 
+        label="💰 Valor total do lançamento", 
         placeholder="Ex: 50000", 
         required=True
     )
@@ -2688,9 +2693,10 @@ class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        produto = self.produto.value.strip()
-        if not produto:
-            await interaction.followup.send("❌ **Produto inválido!**", ephemeral=True)
+        tipo = self.tipo_lancamento.value.strip().capitalize()
+        descricao = self.descricao.value.strip()
+        if not descricao:
+            await interaction.followup.send("❌ **Descrição inválida!**", ephemeral=True)
             return
             
         try:
@@ -2701,7 +2707,6 @@ class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
             await interaction.followup.send("❌ **Valor inválido!**", ephemeral=True)
             return
 
-        # Pega a quantidade (se foi digitada)
         qtd_compra = 0
         if self.quantidade.value and self.quantidade.value.strip():
             try:
@@ -2709,34 +2714,39 @@ class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
                 if qtd_compra < 0:
                     raise ValueError
             except:
-                await interaction.followup.send("❌ **Quantidade inválida!** Digite apenas números.", ephemeral=True)
+                await interaction.followup.send("❌ **Quantidade inválida!**", ephemeral=True)
                 return
 
-        # Chama a função passando a quantidade nova
-        await salvar_compra_db(produto, valor_compra, interaction.user.id, qtd_compra)
+        # Chama a função de salvar passando o tipo
+        await salvar_compra_db(descricao, valor_compra, interaction.user.id, qtd_compra, tipo)
         
         data_atual = agora()
-        embed = discord.Embed(title="📦 NOVA COMPRA REGISTRADA", color=0x3498db, timestamp=data_atual)
-        embed.add_field(name="📦 Produto", value=produto, inline=True)
+        embed = discord.Embed(title=f"💸 NOVO LANÇAMENTO: {tipo.upper()}", color=0x3498db, timestamp=data_atual)
+        embed.add_field(name="📦 Descrição", value=descricao, inline=True)
         embed.add_field(name="💰 Valor", value=formatar_dinheiro(valor_compra), inline=True)
         if qtd_compra > 0:
             embed.add_field(name="🔢 Quantidade", value=f"{fmt_num(qtd_compra)} un", inline=True)
-        embed.add_field(name="👤 Comprado por", value=interaction.user.mention, inline=True)
-        embed.add_field(name="📅 Data da compra", value=f"<t:{int(data_atual.timestamp())}:F>", inline=False)
-        embed.set_footer(text=f"Compra registrada no sistema")
+        embed.add_field(name="👤 Registrado por", value=interaction.user.mention, inline=True)
+        embed.add_field(name="📅 Data", value=f"<t:{int(data_atual.timestamp())}:F>", inline=False)
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • Histórico de Lançamentos")
         
-        canal_destino = interaction.guild.get_channel(CANAL_COMPRAS_REGISTRADAS_ID)
+        # Envia para o canal de HISTÓRICO
+        canal_destino = interaction.guild.get_channel(CANAL_HISTORICO_LANCAMENTOS_ID)
         if canal_destino:
             await canal_destino.send(embed=embed)
             
         await interaction.followup.send(
-            f"✅ **Compra registrada com sucesso!**\n"
-            f"📦 Produto: {produto}\n"
+            f"✅ **Lançamento registrado com sucesso!**\n"
+            f"🏷️ Tipo: {tipo}\n"
+            f"📦 Descrição: {descricao}\n"
             f"💰 Valor: {formatar_dinheiro(valor_compra)}"
             + (f"\n🔢 Quantidade: {fmt_num(qtd_compra)}" if qtd_compra > 0 else ""),
             ephemeral=True
         )
-
+        
+        # Atualiza os painéis
+        await enviar_painel_registrar_compra()
+        await enviar_painel_caixa()
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCompraView
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2744,7 +2754,7 @@ class RegistrarCompraView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📝 Registrar Nova Compra", style=discord.ButtonStyle.success, custom_id="registrar_compra_btn", emoji="💰")
+    @discord.ui.button(label="📝 Registrar Lançamento", style=discord.ButtonStyle.success, custom_id="registrar_compra_btn", emoji="💸")
     async def registrar_compra(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarCompraModal())
 
@@ -2754,7 +2764,6 @@ class RegistrarCompraView(discord.ui.View):
 class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEIRO"):
     data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO", placeholder="Ex: 01/04/2026", required=True)
     data_fim = discord.ui.TextInput(label="📅 Data FIM", placeholder="Ex: 30/04/2026", required=True)
-    incluir_compras = discord.ui.TextInput(label="📦 Incluir compras registradas?", placeholder="Digite SIM ou NAO (padrão é SIM)", required=False)
     embalagens = discord.ui.TextInput(label="📦 Embalagens compradas (opcional)", placeholder="Ex: 25000 (deixe em branco se não quiser)", required=False)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -2764,7 +2773,7 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
             fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
             inicio_dt = inicio.replace(hour=0, minute=0, second=0)
             fim_dt = fim.replace(hour=23, minute=59, second=59)
-            incluir_compras = self.incluir_compras.value.strip().upper() != "NAO"
+            
             total_embalagens = 0
             total_gasto_embalagens = 0
             if self.embalagens.value and self.embalagens.value.strip():
@@ -2773,116 +2782,136 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
                     total_gasto_embalagens = int(total_embalagens * PRECO_EMBALAGEM_POR_UNIDADE)
                 except:
                     pass
+
             pool = await get_pool()
             if not pool:
                 await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
                 return
+
             async with pool.acquire() as conn:
+                # Dados de produção
                 polvora_row = await conn.fetchrow(
                     "SELECT COALESCE(SUM(polvora), 0) as total_polvora FROM producoes_finalizadas WHERE data >= $1 AND data <= $2",
                     inicio_dt, fim_dt
                 )
+                
+                # Dados de vendas
                 vendas_row = await conn.fetchrow(
                     "SELECT COALESCE(SUM(valor), 0) as total_vendas FROM vendas WHERE TO_DATE(data, 'DD/MM/YYYY') BETWEEN $1 AND $2",
                     inicio.date(), fim.date()
                 )
+                
+                # Dados de pólvora comprada
                 polvora_comprada_row = await conn.fetchrow(
                     "SELECT COALESCE(SUM(quantidade), 0) as total_quantidade, COALESCE(SUM(valor), 0) as total_valor FROM polvoras WHERE data::date BETWEEN $1::date AND $2::date",
                     inicio, fim
                 )
-                compras_row = None
-                total_gasto_compras = 0
-                lista_compras = []
-                if incluir_compras:
-                    compras_row = await conn.fetch(
-                        "SELECT produto, valor, comprado_por, data FROM compras WHERE data >= $1 AND data <= $2 ORDER BY data DESC",
-                        inicio_dt, fim_dt
-                    )
-                    for compra in compras_row:
-                        total_gasto_compras += compra["valor"] or 0
-                        lista_compras.append(compra)
+                
+                # Lançamentos (Compras, Salários, etc.)
+                compras_row = await conn.fetch(
+                    "SELECT produto, valor, comprado_por, data FROM compras WHERE data >= $1 AND data <= $2 ORDER BY data DESC",
+                    inicio_dt, fim_dt
+                )
+                
+            # Cálculos
             total_polvora_gasta = polvora_row["total_polvora"] or 0
             total_gasto_polvora = total_polvora_gasta * PRECO_POLVORA
             total_vendas = vendas_row["total_vendas"] or 0
             total_polvora_comprada = polvora_comprada_row["total_quantidade"] or 0
             total_gasto_polvora_comprada = polvora_comprada_row["total_valor"] or 0
-            total_gastos = total_gasto_polvora + total_gasto_embalagens + total_gasto_compras
+
+            # Separa lançamentos
+            gastos_por_tipo = {}
+            for compra in compras_row:
+                produto_bruto = compra["produto"]
+                valor = compra["valor"] or 0
+                
+                if produto_bruto.startswith("[") and "]" in produto_bruto:
+                    tipo = produto_bruto.split("]")[0].replace("[", "").strip().capitalize()
+                    descricao = produto_bruto.split("]", 1)[1].strip()
+                else:
+                    tipo = "Compras"
+                    descricao = produto_bruto
+                
+                if tipo not in gastos_por_tipo:
+                    gastos_por_tipo[tipo] = {"total": 0, "itens": []}
+                
+                gastos_por_tipo[tipo]["total"] += valor
+                data_formatada = compra["data"].strftime("%d/%m/%Y")
+                gastos_por_tipo[tipo]["itens"].append((data_formatada, descricao, valor))
+
+            total_gasto_lancamentos = sum(t["total"] for t in gastos_por_tipo.values())
+            total_gastos = total_gasto_polvora + total_gasto_embalagens + total_gasto_lancamentos
             saldo = total_vendas - total_gastos
-            embed = discord.Embed(
-                title="📊 RELATÓRIO FINANCEIRO",
-                description=f"📅 **Período:** {self.data_inicio.value} até {self.data_fim.value}",
-                color=0x1abc9c
-            )
-            embed.add_field(
-                name="💣 PÓLVORA",
-                value=(
-                    f"**Utilizada na produção:** {fmt_num(total_polvora_gasta)} unidades\n"
-                    f"**💰 Gasto com pólvora:** {formatar_dinheiro(total_gasto_polvora)}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"**Comprada no período:** {fmt_num(total_polvora_comprada)} unidades\n"
-                    f"**💰 Gasto na compra:** {formatar_dinheiro(total_gasto_polvora_comprada)}"
-                ),
-                inline=False
-            )
+
+            # ─── MONTA O ARQUIVO TXT ───
+            linhas = []
+            sep = "=" * 80
+            sep_traco = "-" * 80
+
+            linhas.append(sep)
+            linhas.append("📊 RELATÓRIO FINANCEIRO - VIDA RASA 442")
+            linhas.append(sep)
+            linhas.append(f"📅 Período: {self.data_inicio.value} a {self.data_fim.value}")
+            linhas.append("")
+
+            linhas.append(sep_traco)
+            linhas.append("📈 RESUMO FINANCEIRO")
+            linhas.append(sep_traco)
+            linhas.append(f"💰 Total de Vendas:        {formatar_dinheiro(total_vendas)}")
+            linhas.append(f"💸 Total de Gastos:        {formatar_dinheiro(total_gastos)}")
+            linhas.append(f"🟢/🔴 SALDO FINAL:         {formatar_dinheiro(saldo)}")
+            linhas.append("")
+
+            linhas.append(sep_traco)
+            linhas.append("📦 DETALHAMENTO DOS GASTOS")
+            linhas.append(sep_traco)
+            linhas.append(f"• Pólvora Utilizada:       {formatar_dinheiro(total_gasto_polvora)} ({fmt_num(total_polvora_gasta)} un)")
             if total_embalagens > 0:
-                embed.add_field(
-                    name="📦 EMBALAGENS",
-                    value=(
-                        f"**Quantidade comprada:** {fmt_num(total_embalagens)} unidades\n"
-                        f"**💰 Gasto com embalagens:** {formatar_dinheiro(total_gasto_embalagens)}"
-                    ),
-                    inline=False
-                )
-            if incluir_compras and lista_compras:
-                compras_texto = ""
-                for compra in lista_compras[:10]:
-                    data = compra["data"]
-                    if data.tzinfo is None:
-                        data = data.replace(tzinfo=BRASIL)
-                    compras_texto += f"• {compra['produto']} - {formatar_dinheiro(compra['valor'])} - {data.strftime('%d/%m')}\n"
-                if len(lista_compras) > 10:
-                    compras_texto += f"\n*... e mais {len(lista_compras) - 10} compras*"
-                embed.add_field(
-                    name="📦 OUTRAS COMPRAS",
-                    value=(
-                        f"**Total gasto em outras compras:** {formatar_dinheiro(total_gasto_compras)}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"{compras_texto}"
-                    ),
-                    inline=False
-                )
-            elif incluir_compras:
-                embed.add_field(name="📦 OUTRAS COMPRAS", value="Nenhuma compra registrada no período.", inline=False)
-            embed.add_field(name="🛒 VENDAS", value=f"**💰 Total de vendas:** {formatar_dinheiro(total_vendas)}", inline=False)
-            cor_saldo = 0x2ecc71 if saldo >= 0 else 0xe74c3c
-            emoji_saldo = "🟢" if saldo >= 0 else "🔴"
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            detalhe_gastos = f"• Pólvora: {formatar_dinheiro(total_gasto_polvora)}"
-            if total_gasto_embalagens > 0:
-                detalhe_gastos += f"\n• Embalagens: {formatar_dinheiro(total_gasto_embalagens)}"
-            if incluir_compras and total_gasto_compras > 0:
-                detalhe_gastos += f"\n• Outras compras: {formatar_dinheiro(total_gasto_compras)}"
-            detalhe_gastos += f"\n• **TOTAL:** {formatar_dinheiro(total_gastos)}"
-            embed.add_field(
-                name="📊 RESUMO FINANCEIRO",
-                value=(
-                    f"**💰 Total de Vendas:** {formatar_dinheiro(total_vendas)}\n"
-                    f"**💸 Total de Gastos:** {formatar_dinheiro(total_gastos)}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"{emoji_saldo} **SALDO:** {formatar_dinheiro(saldo)}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"**📋 DETALHAMENTO DOS GASTOS:**\n"
-                    f"{detalhe_gastos}"
-                ),
-                inline=False
+                linhas.append(f"• Embalagens Compradas:    {formatar_dinheiro(total_gasto_embalagens)} ({fmt_num(total_embalagens)} un)")
+            if total_gasto_lancamentos > 0:
+                linhas.append(f"• Outros Lançamentos:      {formatar_dinheiro(total_gasto_lancamentos)}")
+            linhas.append(f"• TOTAL GASTO:             {formatar_dinheiro(total_gastos)}")
+            linhas.append("")
+
+            if gastos_por_tipo:
+                linhas.append(sep_traco)
+                linhas.append("💸 DETALHAMENTO POR TIPO DE LANÇAMENTO")
+                linhas.append(sep_traco)
+                for tipo, dados in gastos_por_tipo.items():
+                    linhas.append(f"🔹 {tipo.upper()} (Total: {formatar_dinheiro(dados['total'])})")
+                    for data_item, desc, val in dados["itens"]:
+                        linhas.append(f"   [{data_item}] {desc[:40]}: {formatar_dinheiro(val)}")
+                    linhas.append("")
+
+            # Dados da pólvora
+            linhas.append(sep_traco)
+            linhas.append("🧨 PÓLVORA (DADOS DE COMPRA E PRODUÇÃO)")
+            linhas.append(sep_traco)
+            linhas.append(f"• Pólvora comprada no período: {fmt_num(total_polvora_comprada)} un")
+            linhas.append(f"• Custo da pólvora comprada:   {formatar_dinheiro(total_gasto_polvora_comprada)}")
+            linhas.append("")
+
+            linhas.append(sep)
+            linhas.append(f"Relatório gerado em {agora().strftime('%d/%m/%Y às %H:%M')} por {interaction.user.display_name}")
+            linhas.append(sep)
+
+            texto_final = "\n".join(linhas)
+            arquivo = discord.File(
+                io.BytesIO(texto_final.encode("utf-8")),
+                filename=f"relatorio_financeiro_{self.data_inicio.value.replace('/', '-')}_{self.data_fim.value.replace('/', '-')}.txt"
             )
-            embed.set_footer(text=f"Relatório gerado em {agora().strftime('%d/%m/%Y às %H:%M')}")
+
             canal = interaction.guild.get_channel(CANAL_RELATORIO_FINANCEIRO_ID)
             if canal:
-                await canal.send(embed=embed)
-                await interaction.followup.send(f"✅ Relatório financeiro enviado!", ephemeral=True)
+                await canal.send(
+                    content=f"📊 **Relatório Financeiro** — `{self.data_inicio.value}` a `{self.data_fim.value}`",
+                    file=arquivo
+                )
+                await interaction.followup.send(f"✅ Relatório financeiro enviado em {canal.mention}!", ephemeral=True)
             else:
-                await interaction.followup.send(embed=embed, ephemeral=True)
+                await interaction.followup.send("❌ Canal de relatório financeiro não encontrado!", ephemeral=True)
+                
         except ValueError:
             await interaction.followup.send("❌ **Formato de data inválido!** Use DD/MM/AAAA", ephemeral=True)
         except Exception as e:
@@ -2905,58 +2934,44 @@ class RelatorioFinanceiroView(discord.ui.View):
 # FUNÇÃO: enviar_painel_registrar_compra
 # ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_registrar_compra():
-    canal = bot.get_channel(CANAL_REGISTRAR_COMPRA_ID)
+    canal = bot.get_channel(CANAL_LANCAMENTOS_ID)
     if not canal:
-        logger.error(f"❌ Canal de registrar compra não encontrado: {CANAL_REGISTRAR_COMPRA_ID}")
+        logger.error(f"❌ Canal de lançamentos não encontrado: {CANAL_LANCAMENTOS_ID}")
         return
 
-    embed = embed_padrao(
-        titulo="REGISTRAR COMPRA",
-        descricao="💰 Registre as compras da facção • VDR 442",
-        cor=CoresUX.FINANCEIRO,
-        emoji=EmojisUX.DINHEIRO,
-        autor="Sistema Financeiro"
+    embed = discord.Embed(
+        title="💸 ── LANÇAMENTOS FINANCEIROS ── 💸",
+        description="**VDR 442 • Gestão de Saídas**\n*Registre compras, salários, aluguéis e outras despesas da facção.*",
+        color=0x2ECC71,
+        timestamp=agora()
     )
-
-    adicionar_separador(embed)
-
-    adicionar_campo(
-        embed, "COMO USAR",
-        (
-            "```yaml\n"
-            "1️⃣ Clique em 'Registrar Nova Compra'\n"
-            "2️⃣ Informe o nome do produto\n"
-            "3️⃣ Informe o valor da compra\n"
-            "4️⃣ A compra é registrada no histórico\n"
-            "```"
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+    
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    
+    embed.add_field(
+        name="📋 O QUE PODE SER REGISTRADO?",
+        value=(
+            "🛒 **Compras:** Pólvora, embalagens, armas, veículos, etc.\n"
+            "💼 **Salários:** Pagamentos para gerentes, responsáveis, etc.\n"
+            "🏭 **Aluguéis:** Pagamento de galpões ou salas.\n"
+            "📦 **Outros:** Quaisquer outras despesas da facção."
         ),
-        emoji=EmojisUX.INFO, inline=False
+        inline=False
     )
 
-    adicionar_campo(
-        embed, "EXEMPLO",
-        "**Produto:** Pólvora\n**Valor:** 50000",
-        emoji=EmojisUX.ARQUIVO, inline=False
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    embed.add_field(
+        name="📖 COMO REGISTRAR",
+        value="**1️⃣** Clique em **📝 Registrar Lançamento**\n**2️⃣** Escolha o tipo de saída (Compra, Salário, etc.)\n**3️⃣** Informe a descrição e o valor.\n**4️⃣** O valor será debitado do caixa da facção automaticamente.",
+        inline=False
     )
+    
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-    adicionar_separador(embed)
-
-    adicionar_campo(
-        embed, "OBSERVAÇÃO",
-        "Todas as compras ficam salvas no banco de dados para relatórios futuros.",
-        emoji=EmojisUX.AVISO, inline=False
-    )
-
-    try:
-        async for msg in canal.history(limit=10):
-            if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0 and "REGISTRAR COMPRA" in msg.embeds[0].title:
-                try:
-                    await msg.delete()
-                except:
-                    pass
-        await canal.send(embed=embed, view=RegistrarCompraView())
-    except Exception as e:
-        logger.error(f"❌ Erro ao enviar painel registrar compra: {e}")
+    view = RegistrarCompraView()
+    await enviar_ou_atualizar_painel("painel_lancamentos", CANAL_LANCAMENTOS_ID, embed, view)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_relatorio_financeiro
