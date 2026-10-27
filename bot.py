@@ -3006,7 +3006,7 @@ async def enviar_painel_relatorio_financeiro():
 
 
 async def enviar_painel_registrar_compra():
-    canal = bot.get_channel(CANAL_REGISTRAR_COMPRA_ID)
+    canal = bot.get_channel(CANAL_LANCAMENTOS_ID)
     if not canal: return
 
     embed = discord.Embed(
