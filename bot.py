@@ -3005,15 +3005,27 @@ async def enviar_painel_registrar_compra():
 
     embed.add_field(
         name="📖 COMO REGISTRAR",
-        value="**1️⃣** Clique em **📝 Registrar Lançamento**\n**2️⃣** Escolha o tipo de saída (Compra, Salário, etc.)\n**3️⃣** Informe a descrição e o valor.\n**4️⃣** O valor será debitado do caixa da facção automaticamente.",
+        value="**1️⃣** Clique em **📝 Registrar Lançamento**\n**2️⃣** Escolha o tipo de saída (Compra, Salário, Aluguel, etc.)\n**3️⃣** Informe a descrição, a quantidade (se for pólvora/embalagem) e o valor.\n**4️⃣** O valor será debitado do caixa da facção automaticamente.",
         inline=False
     )
     
     embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = RegistrarCompraView()
-    await enviar_ou_atualizar_painel("painel_lancamentos", CANAL_LANCAMENTOS_ID, embed, view)
-
+    
+    # ─── FORÇA A DELEÇÃO DO PAINEL ANTIGO ───
+    try:
+        async for msg in canal.history(limit=20):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                except:
+                    pass
+        # Envia o novo painel
+        await canal.send(embed=embed, view=view)
+        logger.info("✅ Painel de Lançamentos recriado com sucesso!")
+    except Exception as e:
+        logger.error(f"❌ Erro ao recriar painel de lançamentos: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_relatorio_financeiro
 # ────────────────────────────────────────────────────────────────────────────────
@@ -22040,6 +22052,18 @@ async def cmd_ver_estoque(ctx):
     embed.add_field(name="💊 INSUMOS", value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades", inline=False)
     await ctx.send(embed=embed)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: !atualizar_lancamentos
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name="atualizar_lancamentos")
+@commands.has_permissions(administrator=True)
+async def cmd_atualizar_lancamentos(ctx):
+    await ctx.send("🔄 Atualizando o painel de Lançamentos Financeiros...")
+    try:
+        await enviar_painel_registrar_compra()
+        await ctx.send("✅ Painel atualizado com o novo visual!")
+    except Exception as e:
+        await ctx.send(f"❌ Erro ao atualizar: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !historico_producao
 # ────────────────────────────────────────────────────────────────────────────────
