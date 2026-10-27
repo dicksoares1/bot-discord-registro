@@ -263,10 +263,12 @@ CANAL_AVISOS_VENDAS_ID = 1448560922019758241
 CANAL_AVISOS_METAS_ID = 1541794867267641404
 CANAL_CRIAR_AVISOS_ID = 1541795328972562513
 CANAL_AVISOS_PRODUCAO_ID = 1356174874921664522
+CANAL_CONTROLE_FREQUENCIA_ID = 1555542700667969617
 CANAL_CHAT_PRODUCAO_ID = 1422853066541109338
 CANAL_CHAT_VENDAS_ID = 1365372467723501723
 CANAL_DOACOES_ID = 1564271778266878103
 CANAL_LOG_DOACOES_ID = 1564274094818590720
+CANAL_COMPROVANTES_ID = 1479649961967620106
 PIX_CHAVE = "02912141508"  # Ex: 11999999999
 PIX_NOME = "Dickson Souza Soares" 
 PIX_CIDADE = "Eunapolis" # Sem acentos!
@@ -2612,9 +2614,9 @@ async def enviar_painel_doacoes():
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: salvar_compra_db
+# FUNÇÃO: salvar_compra_db (Atualizada para receber a quantidade)
 # ────────────────────────────────────────────────────────────────────────────────
-async def salvar_compra_db(produto, valor, comprado_por):
+async def salvar_compra_db(produto, valor, comprado_por, quantidade=0):
     pool = await get_pool()
     if not pool:
         return
@@ -2625,36 +2627,72 @@ async def salvar_compra_db(produto, valor, comprado_por):
                 produto, valor, str(comprado_por), agora_db()
             )
 
-        try:
-            await movimentar_caixa(
-                tipo="compra",
-                valor=valor,
-                motivo=f"Compra: {produto}",
-                autor=comprado_por
-            )
+            # ─── LÓGICA DE ESTOQUE AUTOMÁTICO ───
+            produto_lower = produto.lower()
+            
+            # Se for pólvora
+            if "polvora" in produto_lower or "pólvora" in produto_lower:
+                # Usa a quantidade digitada. Se não digitou, tenta calcular pelo valor.
+                qtd = quantidade if quantidade > 0 else (valor // PRECO_POLVORA)
+                if qtd > 0:
+                    await atualizar_estoque_polvora(qtd, "adicionar")
+                    logger.info(f"🧨 Estoque de pólvora atualizado via compra: +{qtd}")
+
+            # Se for embalagem
+            elif "embalagem" in produto_lower:
+                qtd = quantidade if quantidade > 0 else int(valor / PRECO_EMBALAGEM_POR_UNIDADE)
+                if qtd > 0:
+                    await atualizar_estoque_embalagens(qtd, "adicionar")
+                    logger.info(f"📦 Estoque de embalagens atualizado via compra: +{qtd}")
+
+            # Movimenta o caixa
             try:
-                await enviar_painel_caixa()
-            except:
-                pass
-        except Exception as e:
-            logger.error(f"⚠️ Erro ao movimentar caixa pela compra: {e}")
+                await movimentar_caixa(
+                    tipo="compra",
+                    valor=valor,
+                    motivo=f"Compra: {produto}",
+                    autor=comprado_por
+                )
+                try:
+                    await enviar_painel_caixa()
+                except:
+                    pass
+            except Exception as e:
+                logger.error(f"⚠️ Erro ao movimentar caixa pela compra: {e}")
 
     except Exception as e:
         logger.error(f"❌ Erro ao salvar compra: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: RegistrarCompraModal
+# CLASSE: RegistrarCompraModal (Atualizada com quantidade)
 # ────────────────────────────────────────────────────────────────────────────────
 class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
-    produto = discord.ui.TextInput(label="📦 Nome do produto", placeholder="Ex: Pólvora, Embalagens, Munição, etc", required=True, max_length=100)
-    valor = discord.ui.TextInput(label="💰 Valor da compra", placeholder="Ex: 50000", required=True)
+    produto = discord.ui.TextInput(
+        label="📦 Nome do produto", 
+        placeholder="Ex: Pólvora, Embalagens, Munição, etc", 
+        required=True, 
+        max_length=100
+    )
+    quantidade = discord.ui.TextInput(
+        label="🔢 Quantidade (opcional)", 
+        placeholder="Ex: 500 (se for embalagem/pólvora)", 
+        required=False, 
+        max_length=10
+    )
+    valor = discord.ui.TextInput(
+        label="💰 Valor total da compra", 
+        placeholder="Ex: 50000", 
+        required=True
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
         produto = self.produto.value.strip()
         if not produto:
             await interaction.followup.send("❌ **Produto inválido!**", ephemeral=True)
             return
+            
         try:
             valor_compra = safe_int(self.valor.value)
             if valor_compra <= 0:
@@ -2662,30 +2700,42 @@ class RegistrarCompraModal(discord.ui.Modal, title="📝 Registrar Compra"):
         except:
             await interaction.followup.send("❌ **Valor inválido!**", ephemeral=True)
             return
-        await salvar_compra_db(produto, valor_compra, interaction.user.id)
+
+        # Pega a quantidade (se foi digitada)
+        qtd_compra = 0
+        if self.quantidade.value and self.quantidade.value.strip():
+            try:
+                qtd_compra = safe_int(self.quantidade.value)
+                if qtd_compra < 0:
+                    raise ValueError
+            except:
+                await interaction.followup.send("❌ **Quantidade inválida!** Digite apenas números.", ephemeral=True)
+                return
+
+        # Chama a função passando a quantidade nova
+        await salvar_compra_db(produto, valor_compra, interaction.user.id, qtd_compra)
+        
         data_atual = agora()
         embed = discord.Embed(title="📦 NOVA COMPRA REGISTRADA", color=0x3498db, timestamp=data_atual)
         embed.add_field(name="📦 Produto", value=produto, inline=True)
         embed.add_field(name="💰 Valor", value=formatar_dinheiro(valor_compra), inline=True)
+        if qtd_compra > 0:
+            embed.add_field(name="🔢 Quantidade", value=f"{fmt_num(qtd_compra)} un", inline=True)
         embed.add_field(name="👤 Comprado por", value=interaction.user.mention, inline=True)
         embed.add_field(name="📅 Data da compra", value=f"<t:{int(data_atual.timestamp())}:F>", inline=False)
         embed.set_footer(text=f"Compra registrada no sistema")
+        
         canal_destino = interaction.guild.get_channel(CANAL_COMPRAS_REGISTRADAS_ID)
         if canal_destino:
             await canal_destino.send(embed=embed)
-            await interaction.followup.send(
-                f"✅ **Compra registrada com sucesso!**\n"
-                f"📦 Produto: {produto}\n"
-                f"💰 Valor: {formatar_dinheiro(valor_compra)}",
-                ephemeral=True
-            )
-        else:
-            await interaction.followup.send(
-                f"✅ **Compra registrada com sucesso!**\n"
-                f"📦 Produto: {produto}\n"
-                f"💰 Valor: {formatar_dinheiro(valor_compra)}",
-                ephemeral=True
-            )
+            
+        await interaction.followup.send(
+            f"✅ **Compra registrada com sucesso!**\n"
+            f"📦 Produto: {produto}\n"
+            f"💰 Valor: {formatar_dinheiro(valor_compra)}"
+            + (f"\n🔢 Quantidade: {fmt_num(qtd_compra)}" if qtd_compra > 0 else ""),
+            ephemeral=True
+        )
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCompraView
@@ -7692,6 +7742,66 @@ class ConfirmarDoacaoView(discord.ui.View):
             pass
 
 # ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ComprovanteModal (Para enviar o print)
+# ────────────────────────────────────────────────────────────────────────────────
+class ComprovanteModal(discord.ui.Modal, title="📎 Enviar Comprovante"):
+    link_imagem = discord.ui.TextInput(
+        label="🔗 Link da Imagem (Imgur, etc)", 
+        placeholder="Cole o link da foto do comprovante aqui", 
+        required=True
+    )
+
+    def __init__(self, pedido_numero):
+        super().__init__()
+        self.pedido_numero = pedido_numero
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        canal_comprovantes = bot.get_channel(CANAL_COMPROVANTES_ID)
+        if not canal_comprovantes:
+            await interaction.followup.send("❌ Canal de comprovantes não encontrado.", ephemeral=True)
+            return
+
+        # Envia o comprovante para o canal
+        embed = discord.Embed(
+            title=f"🧾 COMPROVANTE RECEBIDO",
+            description=f"**Pedido:** #{self.pedido_numero:04d}\n**Enviado por:** {interaction.user.mention}",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.set_image(url=self.link_imagem.value)
+        await canal_comprovantes.send(embed=embed)
+
+        # Atualiza o banco de dados marcando como Pago
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE vendas SET pago = true, data_pagamento = NOW() WHERE pedido_numero = $1", self.pedido_numero)
+
+        await interaction.followup.send(f"✅ Comprovante do pedido **#{self.pedido_numero:04d}** registrado com sucesso! O pedido foi marcado como **PAGO**.", ephemeral=True)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: BotaoComprovanteView (Para o DM e para o Painel)
+# ────────────────────────────────────────────────────────────────────────────────
+class BotaoComprovanteView(discord.ui.View):
+    def __init__(self, pedido_numero):
+        super().__init__(timeout=None) # Timeout None para não expirar
+        self.pedido_numero = pedido_numero
+
+    @discord.ui.button(label="📎 Anexar Comprovante", style=discord.ButtonStyle.success, custom_id="btn_anexar_comprovante")
+    async def anexar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Verifica se quem clicou é o dono do pedido (opcional, mas seguro)
+        # Aqui ele só abre o modal para colar o link
+        await interaction.response.send_modal(ComprovanteModal(self.pedido_numero))
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ComprovanteLinkView (Alternativa com link direto, sem modal)
+# ────────────────────────────────────────────────────────────────────────────────
+# (Se preferir que a pessoa mande o print direto no chat do painel, use o modal acima)
+
+
+# ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: StatusView
 # ────────────────────────────────────────────────────────────────────────────────
 class StatusView(discord.ui.View):
@@ -7762,6 +7872,16 @@ class StatusView(discord.ui.View):
                 disabled=self.transferencia_confirmada or (self.valor_total == 0),
                 row=1
             ))
+            
+            # Botão de anexar comprovante via painel
+            self.add_item(discord.ui.Button(
+                label="📎 Anexar Comprovante",
+                style=discord.ButtonStyle.primary,
+                custom_id="btn_anexar_comprovante_painel",
+                emoji="📎",
+                disabled=self.pago_ja_clicado or self.transferencia_confirmada,
+                row=2
+            ))
 
     async def _pedido_ja_finalizado_no_banco(self, pedido_numero: int) -> bool:
         if not pedido_numero:
@@ -7823,6 +7943,10 @@ class StatusView(discord.ui.View):
 
             view = ConfirmarDoacaoView(mensagem_original=interaction.message, pedido_numero=pedido_num, entrega_id=self.entrega_id)
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            return False
+            
+        if custom_id == "btn_anexar_comprovante_painel":
+            await interaction.response.send_modal(ComprovanteModal(self.pedido_numero))
             return False
 
         if custom_id == "confirmar_transferencia_fixo":
@@ -8069,7 +8193,6 @@ class StatusView(discord.ui.View):
         if pacotes_sub > 0:
             await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
 
-        # Registrar atividade (fora dos ifs, pra qualquer entrega contar)
         try:
             await _registrar_atividade(interaction.user.id, "venda")
         except Exception as e:
@@ -8471,15 +8594,18 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         except ValueError:
             await interaction.followup.send("❌ Valores inválidos.", ephemeral=True)
             return
+            
         try:
             total_entregas = safe_int(self.total_entregas.value)
             if total_entregas < 1:
                 total_entregas = 1
         except:
             total_entregas = 1
+            
         org_nome = self.organizacao.value.strip().upper()
         config = ORGANIZACOES_CONFIG.get(org_nome, {"emoji": "🏷️", "cor": 0x1e3a8a})
         numero_pedido = await proximo_pedido()
+        
         LIMITE_DIARIO = 8000
         if pt == 0:
             entregas_pt = 0
@@ -8489,11 +8615,13 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             entregas_sub = 0
         else:
             entregas_sub = (sub + LIMITE_DIARIO - 1) // LIMITE_DIARIO
+            
         num_entregas = max(entregas_pt, entregas_sub)
         if num_entregas == 0:
             num_entregas = 1
         if total_entregas > num_entregas:
             num_entregas = total_entregas
+            
         entregas_lista = []
         pt_restante = pt
         sub_restante = sub
@@ -8516,11 +8644,23 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             else:
                 sub_entrega = 0
             entregas_lista.append({"pt": pt_entrega, "sub": sub_entrega})
+            
         entregas_json = json.dumps(entregas_lista)
         pacotes_pt_total = pt // 50
         pacotes_sub_total = sub // 50
         total = (pt * 50) + (sub * 90)
+        
         await salvar_venda_db(str(interaction.user.id), total, numero_pedido)
+
+        # ─── ENVIA O DM COM O BOTÃO DE COMPROVANTE ───
+        try:
+            view_dm = BotaoComprovanteView(numero_pedido)
+            await interaction.user.send(
+                content=f"🧾 **Pedido #{numero_pedido:04d} registrado!**\n\nAssim que o cliente pagar, clique no botão abaixo para enviar o comprovante.",
+                view=view_dm
+            )
+        except discord.Forbidden:
+            await interaction.followup.send("⚠️ Não consegui enviar o DM com o botão de comprovante. Por favor, habilite as mensagens diretas no servidor.", ephemeral=True)
 
         grupo = await buscar_grupo_por_organizacao(org_nome)
         if grupo:
@@ -8565,7 +8705,7 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
             resumo_entregas = ""
             for i, e in enumerate(entregas_lista, 1):
                 resumo_entregas += f"• Entrega {i}/{num_entregas}: PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])} munições\n"
-            msg_resposta = f"✅ **Venda parcelada registrada!**\n\n📦 **Pedido #{numero_pedido:04d}**\n🏷 **Organização:** {org_nome}\n📦 **Total PT:** {fmt_num(pt)} munições\n📦 **Total SUB:** {fmt_num(sub)} munições\n💰 **Total:** {formatar_dinheiro(total)}\n\n📋 **Entregas ({num_entregas} no total):**\n{resumo_entregas}\n✅ **Entrega 1/{num_entregas} criada!**\n⚠️ **O botão ENTREGUE só será liberado após criar a próxima entrega.**"
+            msg_resposta = f"✅ **Venda parcelada registrada!**\n\n📦 **Pedido #{numero_pedido:04d}**\n🏷 **Organização:** {org_nome}\n📦 **Total PT:** {fmt_num(pt)} munições\n📦 **Total SUB:** {fmt_num(sub)} munições\n💰 **Total:** {formatar_dinheiro(total)}\n\n📋 **Entregas ({num_entregas} no total):**\n{resumo_entregas}\n✅ **Entrega 1/{num_entregas} criada!**"
             if grupo:
                 msg_resposta += f"\n📊 **Grupo integrado:** ✅ {org_nome}"
             await interaction.followup.send(msg_resposta, ephemeral=True)
@@ -19928,6 +20068,12 @@ async def iniciar_tarefas_background():
             alertar_estoque_baixo_vendas.start()
     except Exception as e:
         logger.error(f"Erro loop estoque baixo: {e}")
+
+    try:
+        if not relatorio_frequencia_semanal.is_running():
+            relatorio_frequencia_semanal.start()
+    except Exception as e:
+        logger.error(f"Erro loop frequência: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: heartbeat_producao_loop
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21464,7 +21610,6 @@ async def gerar_embed_inatividade(resultado, dias_minimos=7):
     )
     return embed
 
-
 @tasks.loop(hours=24)
 async def verificar_inatividade_semanal():
     """Toda segunda-feira às 10h envia o relatório na gerência."""
@@ -21508,6 +21653,64 @@ async def verificar_inatividade_semanal():
     except Exception as e:
         logger.error(f"❌ Erro no relatório de inatividade: {e}")
 
+
+
+@tasks.loop(hours=168) # Roda uma vez por semana (168 horas)
+async def relatorio_frequencia_semanal():
+    """Envia um resumo de inativos para o canal de controle de frequência."""
+    agora_br = agora()
+    # Roda toda segunda-feira às 09:00
+    if agora_br.weekday() != 0 or agora_br.hour != 9:
+        return
+
+    try:
+        resultado = await calcular_inatividade(dias_minimos=7)
+        if not resultado:
+            return
+
+        canal = bot.get_channel(CANAL_CONTROLE_FREQUENCIA_ID)
+        if not canal:
+            logger.warning("⚠️ Canal de controle de frequência não encontrado.")
+            return
+
+        # Monta o texto
+        texto = "**📊 RESUMO DE FREQUÊNCIA DA SEMANA**\n\n"
+        texto += "Abaixo estão os membros que estão há mais de 7 dias sem interagir (mensagens, vendas, metas, etc):\n\n"
+
+        if resultado["criticos"]:
+            texto += "🔴 **CRÍTICOS (21+ dias):**\n"
+            for e in resultado["criticos"]:
+                texto += f"• {e['nome']} — {e['dias']} dias\n"
+            texto += "\n"
+
+        if resultado["inativos"]:
+            texto += "🟠 **INATIVOS (14+ dias):**\n"
+            for e in resultado["inativos"]:
+                texto += f"• {e['nome']} — {e['dias']} dias\n"
+            texto += "\n"
+
+        if resultado["atencao"]:
+            texto += "🟡 **ATENÇÃO (7+ dias):**\n"
+            for e in resultado["atencao"]:
+                texto += f"• {e['nome']} — {e['dias']} dias\n"
+            texto += "\n"
+
+        if not resultado["criticos"] and not resultado["inativos"] and not resultado["atencao"]:
+            texto += "✅ **Nenhum membro inativo esta semana!** A facção está ativa!"
+
+        embed = discord.Embed(
+            title="📋 Controle de Frequência",
+            description=texto,
+            color=0x3498DB,
+            timestamp=agora()
+        )
+        embed.set_footer(text="🛡 Vida Rasa 442 • Gestão de Membros")
+        
+        await canal.send(embed=embed)
+        logger.info("✅ Relatório de frequência semanal enviado.")
+
+    except Exception as e:
+        logger.error(f"❌ Erro no relatório de frequência: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !inatividade
