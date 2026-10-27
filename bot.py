@@ -778,9 +778,12 @@ async def inicializar_tabelas(pool):
                 telefone TEXT,
                 indicado TEXT,
                 tipo TEXT,
+                status VARCHAR(20) DEFAULT 'Pendente', -- Nova coluna
                 data_registro TIMESTAMP DEFAULT NOW()
             )
         """)
+        # Garante que a coluna exista caso a tabela já tenha sido criada
+        await conn.execute("ALTER TABLE registros_historico ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'Pendente'")
         # ═══════════════ TABELAS DE BAÚ ═══════════════
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS bau_estoque (
@@ -1943,7 +1946,8 @@ async def verificar_registro_existente(user_id):
         return False
     try:
         async with pool.acquire() as conn:
-            return await conn.fetchval("SELECT 1 FROM registros_historico WHERE user_id = $1", str(user_id))
+            # Verifica se já tem um registro APROVADO
+            return await conn.fetchval("SELECT 1 FROM registros_historico WHERE user_id = $1 AND status = 'Aprovado'", str(user_id))
     except Exception as e:
         logger.error(f"❌ Erro ao verificar registro: {e}")
         return False
@@ -1963,11 +1967,9 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
         membro = interaction.user
         guild = interaction.guild
         
-        # Formata o nome e o vulgo
         nome_formatado = capitalizar_nome(self.nome.value)
         vulgo_formatado = capitalizar_nome(self.vulgo.value) if self.vulgo.value else None
         
-        # Define o nick
         if vulgo_formatado:
             nick = f"{self.passaporte.value} - {nome_formatado} | {vulgo_formatado}"
         else:
@@ -1978,39 +1980,23 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
         except Exception as e:
             logger.error(f"❌ Erro ao editar nick: {e}")
 
-        # ─── APLICA OS CARGOS AUTOMATICAMENTE ───
-        agregado = guild.get_role(AGREGADO_ROLE_ID)
-        em_registro = guild.get_role(EM_REGISTRO_ROLE_ID)
-        convidado = guild.get_role(CONVIDADO_ROLE_ID)
+        # Salva no banco como PENDENTE
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO registros_historico 
+                    (user_id, user_name, passaporte, nome, vulgo, telefone, indicado, tipo, status, data_registro) 
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Pendente', $9)
+                """, str(membro.id), membro.name, self.passaporte.value, nome_formatado, vulgo_formatado, self.telefone.value, self.indicado.value, "Agregado", agora_db())
 
-        if em_registro and em_registro in membro.roles:
-            try: await membro.remove_roles(em_registro)
-            except: pass
-            
-        if convidado and convidado in membro.roles:
-            try: await membro.remove_roles(convidado)
-            except: pass
-
-        if agregado:
-            try: await membro.add_roles(agregado)
-            except Exception as e: logger.error(f"❌ Erro ao adicionar cargo Agregado: {e}")
-
-        # ─── SALVA NO HISTÓRICO ───
-        await salvar_registro_historico(
-            membro.id, membro.name, self.passaporte.value, nome_formatado,
-            vulgo_formatado, self.telefone.value, self.indicado.value if self.indicado.value else None, "Agregado"
-        )
-
-        # ─── CRIA A SALA DE META ───
-        await criar_sala_meta(membro)
-
-        # ─── ENVIA PARA O CANAL DE HISTÓRICO ───
-        canal_log = guild.get_channel(CANAL_LOG_REGISTRO_ID)
-        if canal_log:
+        # Envia para a gerência aprovar
+        canal_aprovacao = guild.get_channel(CANAL_LOG_REGISTRO_ID)
+        if canal_aprovacao:
             embed = discord.Embed(
-                title="🎉 NOVO MEMBRO REGISTRADO!",
-                description=f"**{membro.mention}** acabou de se registrar na **Vida Rasa**!",
-                color=0x2ecc71, timestamp=agora()
+                title="⏳ NOVO REGISTRO PENDENTE",
+                description=f"O usuário {membro.mention} solicitou entrada na facção.",
+                color=0xF1C40F, timestamp=agora()
             )
             if membro.display_avatar:
                 embed.set_thumbnail(url=membro.display_avatar.url)
@@ -2021,26 +2007,88 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
                 f"**🏷️ Vulgo:** {vulgo_formatado or '❌ Não informado'}\n"
                 f"**📱 Telefone:** {self.telefone.value}\n"
                 f"**👤 Indicado por:** {self.indicado.value or '❌ Não informado'}\n"
-                f"**🎯 Tipo:** Agregado"
+                f"**🆔 ID:** `{membro.id}`"
             )
-            embed.add_field(name="📋 INFORMAÇÕES DO MEMBRO", value=informacoes, inline=False)
-            embed.add_field(name="📌 STATUS", value=f"✅ **Registro concluído**\n🔹 Cargo atribuído: **Agregado**\n🆔 ID: `{membro.id}`", inline=False)
-            embed.set_footer(text="Sistema Automático • Vida Rasa 442")
+            embed.add_field(name="📋 INFORMAÇÕES DO CANDIDATO", value=informacoes, inline=False)
+            embed.set_footer(text="Aguarde a análise da gerência.")
             
-            try:
-                await canal_log.send(embed=embed)
-            except Exception as e:
-                logger.error(f"❌ Erro ao enviar para o canal de histórico: {e}")
+            # Envia com os botões de aprovar/rejeitar
+            view = AprovarRegistroView(membro.id)
+            await canal_aprovacao.send(embed=embed, view=view)
+        
+        await interaction.followup.send("✅ **Registro enviado!**\nSua solicitação foi enviada para a gerência. Aguarde a aprovação no seu DM.", ephemeral=True)
 
-        # ─── CONFIRMAÇÃO NO DM/EPHEMERAL ───
-        await interaction.followup.send(
-            f"✅ **Registro concluído com sucesso!**\n\n"
-            f"📋 Você foi registrado como: **Agregado**\n"
-            f"👤 Nome: {nome_formatado}\n"
-            f"📁 Sua sala de meta foi criada automaticamente!\n"
-            f"📨 Seu registro foi enviado para o histórico!",
-            ephemeral=True
-        )
+class AprovarRegistroView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+
+    @discord.ui.button(label="✅ Aprovar", style=discord.ButtonStyle.success, custom_id="aprovar_registro")
+    async def aprovar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator and not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
+            await interaction.response.send_message("❌ Apenas Gerentes ou ADM podem aprovar.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        membro = interaction.guild.get_member(self.user_id)
+        if not membro:
+            await interaction.followup.send("❌ O membro não está mais no servidor.", ephemeral=True)
+            return
+
+        # Aplica o cargo de Agregado
+        agregado = interaction.guild.get_role(AGREGADO_ROLE_ID)
+        em_registro = interaction.guild.get_role(EM_REGISTRO_ROLE_ID)
+        convidado = interaction.guild.get_role(CONVIDADO_ROLE_ID)
+
+        if em_registro and em_registro in membro.roles: await membro.remove_roles(em_registro)
+        if convidado and convidado in membro.roles: await membro.remove_roles(convidado)
+        if agregado: await membro.add_roles(agregado)
+
+        # Cria a sala de meta
+        await criar_sala_meta(membro)
+
+        # Atualiza o banco para 'Aprovado'
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE registros_historico SET status = 'Aprovado' WHERE user_id = $1 AND status = 'Pendente'", str(self.user_id))
+
+        # Avisa o membro no DM
+        try:
+            await membro.send(f"🎉 **REGISTRO APROVADO!**\nVocê foi aceito na **Vida Rasa 442**! Seu cargo de Agregado já foi aplicado e sua sala de meta foi criada.")
+        except: pass
+
+        # Edita a mensagem de aprovação
+        embed = interaction.message.embeds[0]
+        embed.color = 0x2ecc71
+        embed.title = "✅ REGISTRO APROVADO"
+        embed.set_footer(text=f"Aprovado por {interaction.user.display_name}")
+        await interaction.message.edit(embed=embed, view=None)
+
+    @discord.ui.button(label="❌ Rejeitar", style=discord.ButtonStyle.danger, custom_id="rejeitar_registro")
+    async def rejeitar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator and not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
+            await interaction.response.send_message("❌ Apenas Gerentes ou ADM podem rejeitar.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE registros_historico SET status = 'Rejeitado' WHERE user_id = $1 AND status = 'Pendente'", str(self.user_id))
+
+        membro = interaction.guild.get_member(self.user_id)
+        if membro:
+            try:
+                await membro.send("❌ **Registro Rejeitado**\nSua solicitação de entrada na Vida Rasa foi negada pela gerência.")
+            except: pass
+
+        embed = interaction.message.embeds[0]
+        embed.color = 0xe74c3c
+        embed.title = "❌ REGISTRO REJEITADO"
+        embed.set_footer(text=f"Rejeitado por {interaction.user.display_name}")
+        await interaction.message.edit(embed=embed, view=None)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistroView
