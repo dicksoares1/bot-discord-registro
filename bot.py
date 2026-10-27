@@ -23155,28 +23155,33 @@ async def cmd_perfil(ctx, member: discord.Member = None):
 
     try:
         async with pool.acquire() as conn:
-            # 1. Metas batidas (Histórico)
+            # 1. Data de Registro
+            registro = await conn.fetchval("SELECT data_registro FROM registros_historico WHERE user_id = $1 ORDER BY id ASC LIMIT 1", str(member.id))
+            data_registro = registro.strftime("%d/%m/%Y") if registro else "Não registrado"
+            
+            # 2. Metas Fechadas
             metas_batidas = await conn.fetchval("SELECT COUNT(*) FROM metas_historico WHERE user_id = $1", str(member.id)) or 0
             
-            # 2. Vendas totais
-            vendas = await conn.fetchval("SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE user_id = $1", str(member.id)) or 0
+            # 3. Vendas Totais e Pedidos
+            # Usamos LIKE para não dar erro de conversão de data do Postgres
+            vendas_valor = await conn.fetchval("SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE user_id = $1", str(member.id)) or 0
             qtd_vendas = await conn.fetchval("SELECT COUNT(*) FROM vendas WHERE user_id = $1", str(member.id)) or 0
             
-            # 3. Ações participadas
+            # 4. Ações Participadas
             acoes = await conn.fetchval("SELECT COUNT(*) FROM participantes_acoes WHERE user_id = $1", str(member.id)) or 0
             
-            # 4. Horas de Mecânica (Semana + Histórico)
+            # 5. Horas de Mecânica
             horas_hist = await conn.fetchval("SELECT COALESCE(SUM(segundos_totais), 0) FROM horas_historico WHERE user_id = $1", str(member.id)) or 0
             horas_semana = await calcular_horas_semana(member.id)
             horas_total = horas_hist + horas_semana
             
-            # 5. Dívidas Ativas
+            # 6. Dívidas Ativas
             dividas = await buscar_dividas_usuario(member.id)
-            total_divida = dividas["dinheiro"] + (dividas["polvora"] * 80) # Estimativa de valor
+            total_divida = dividas["dinheiro"] + (dividas["polvora"] * 80)
 
-            # 6. Registro (Data de Entrada)
-            registro = await conn.fetchval("SELECT data_registro FROM registros_historico WHERE user_id = $1 ORDER BY id ASC LIMIT 1", str(member.id))
-            data_registro = registro.strftime("%d/%m/%Y") if registro else "Não registrado"
+            # 7. Produção (Cápsulas e Galpões)
+            producoes_qtd = await conn.fetchval("SELECT COUNT(*) FROM producoes_finalizadas WHERE user_id = $1", str(member.id)) or 0
+            producoes_capsulas = await conn.fetchval("SELECT COALESCE(SUM(capsulas), 0) FROM producoes_finalizadas WHERE user_id = $1", str(member.id)) or 0
 
         # Monta o visual
         cor_perfil = 0x2ECC71 if total_divida == 0 else 0xE74C3C
@@ -23192,33 +23197,42 @@ async def cmd_perfil(ctx, member: discord.Member = None):
 
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
-        # Cargos Principais (Pega o cargo mais alto da facção)
+        # Pega os cargos e formata
         roles_ids = [r.id for r in member.roles]
-        cargo_nome = "Membro"
+        cargos_faccao = []
         for nome_grupo, cargos_grupo in HIERARQUIA_CARGOS:
             if any(c in roles_ids for c in cargos_grupo):
-                cargo_nome = nome_grupo
-                break
+                cargos_faccao.append(nome_grupo)
+                
+        texto_cargos = " | ".join(cargos_faccao) if cargos_faccao else "Membro"
         
-        embed.add_field(name="🏷️ Cargo Atual", value=f"```yaml\n{cargo_nome}\n```", inline=True)
+        embed.add_field(name="🏷️ Cargo(s) Atual(is)", value=f"```yaml\n{texto_cargos}\n```", inline=True)
         embed.add_field(name="📅 Na Facção Desde", value=f"```yaml\n{data_registro}\n```", inline=True)
         
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
-        # Status Financeiro / Metas
+        # Status Financeiro
         if total_divida > 0:
             status_divida = f"🔴 Devendo (Aprox. {formatar_dinheiro(total_divida)})"
         else:
             status_divida = "🟢 Sem Dívidas"
-
         embed.add_field(name="💰 Status Financeiro", value=f"```yaml\n{status_divida}\n```", inline=False)
         
+        # ─── DADOS GERAIS ───
         embed.add_field(name="📈 Metas Fechadas", value=f"```yaml\n{metas_batidas} semanas\n```", inline=True)
-        embed.add_field(name="🛒 Total em Vendas", value=f"```yaml\n{formatar_dinheiro(vendas)}\n```", inline=True)
+        embed.add_field(name="🛒 Total em Vendas", value=f"```yaml\n{formatar_dinheiro(vendas_valor)}\n```", inline=True)
         embed.add_field(name="📦 Pedidos Realizados", value=f"```yaml\n{qtd_vendas} pedidos\n```", inline=True)
-
         embed.add_field(name="⚔️ Ações Participadas", value=f"```yaml\n{acoes} ações\n```", inline=True)
-        embed.add_field(name="⏰ Horas de Mecânica", value=f"```yaml\n{formatar_horas(horas_total)}\n```", inline=True)
+
+        # ─── DADOS ESPECÍFICOS DE CADA CARGO ───
+        # Verifica se tem cargos específicos para puxar os dados
+        
+        if any(c in roles_ids for c in [CARGO_MECANICO_ID, CARGO_GERENTE_MECANICA_ID, CARGO_RESP_MECANICA_ID]) or horas_total > 0:
+            embed.add_field(name="⏰ Horas de Mecânica", value=f"```yaml\n{formatar_horas(horas_total)}\n```", inline=True)
+
+        if any(c in roles_ids for c in [CARGO_RESP_PRODUCAO_ID]) or producoes_qtd > 0:
+            embed.add_field(name="🏭 Produções", value=f"```yaml\n{producoes_qtd} galpões\n```", inline=True)
+            embed.add_field(name="💊 Cápsulas", value=f"```yaml\n{fmt_num(producoes_capsulas)} un\n```", inline=True)
 
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
         
@@ -23232,7 +23246,6 @@ async def cmd_perfil(ctx, member: discord.Member = None):
     except Exception as e:
         logger.error(f"❌ Erro no comando perfil: {e}")
         await ctx.send(f"❌ Erro ao buscar perfil: `{str(e)[:100]}`")
-
 
 
 # ════════════════════════════════════════════════════════════════════════════════
