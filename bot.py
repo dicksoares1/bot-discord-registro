@@ -23155,31 +23155,55 @@ async def cmd_perfil(ctx, member: discord.Member = None):
 
     try:
         async with pool.acquire() as conn:
-            # 1. Data de Registro
+            # 1. Tenta pegar a data de registro do banco
             registro = await conn.fetchval("SELECT data_registro FROM registros_historico WHERE user_id = $1 ORDER BY id ASC LIMIT 1", str(member.id))
-            data_registro = registro.strftime("%d/%m/%Y") if registro else "Não registrado"
             
-            # 2. Metas Fechadas
+            # 2. Se não tiver no banco, usa a data que entrou no Discord
+            if registro:
+                data_entrada = registro.replace(tzinfo=BRASIL)
+            else:
+                data_entrada = member.joined_at
+                if data_entrada and data_entrada.tzinfo is None:
+                    data_entrada = data_entrada.replace(tzinfo=BRASIL)
+            
+            # Formata a data e o tempo no servidor
+            if data_entrada:
+                data_formatada = data_entrada.strftime("%d/%m/%Y")
+                tempo_no_servidor = agora() - data_entrada
+                dias = tempo_no_servidor.days
+                meses = dias // 30
+                anos = dias // 365
+                
+                if anos > 0:
+                    tempo_formatado = f"{anos} ano(s) e {dias % 365} dias"
+                elif meses > 0:
+                    tempo_formatado = f"{meses} mês(es) e {dias % 30} dias"
+                else:
+                    tempo_formatado = f"{dias} dia(s)"
+            else:
+                data_formatada = "Desconhecido"
+                tempo_formatado = "Desconhecido"
+            
+            # 3. Metas Fechadas
             metas_batidas = await conn.fetchval("SELECT COUNT(*) FROM metas_historico WHERE user_id = $1", str(member.id)) or 0
             
-            # 3. Vendas Totais e Pedidos
-            # Usamos LIKE para não dar erro de conversão de data do Postgres
+            # 4. Vendas Totais e Pedidos
             vendas_valor = await conn.fetchval("SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE user_id = $1", str(member.id)) or 0
             qtd_vendas = await conn.fetchval("SELECT COUNT(*) FROM vendas WHERE user_id = $1", str(member.id)) or 0
             
-            # 4. Ações Participadas
+            # 5. Ações Participadas
             acoes = await conn.fetchval("SELECT COUNT(*) FROM participantes_acoes WHERE user_id = $1", str(member.id)) or 0
             
-            # 5. Horas de Mecânica
+            # 6. Horas de Mecânica
             horas_hist = await conn.fetchval("SELECT COALESCE(SUM(segundos_totais), 0) FROM horas_historico WHERE user_id = $1", str(member.id)) or 0
             horas_semana = await calcular_horas_semana(member.id)
             horas_total = horas_hist + horas_semana
             
-            # 6. Dívidas Ativas
+            # 7. Dívidas Ativas
             dividas = await buscar_dividas_usuario(member.id)
             total_divida = dividas["dinheiro"] + (dividas["polvora"] * 80)
 
-            # 7. Produção (Cápsulas e Galpões)
+            # 8. Produção (Cápsulas e Galpões)
             producoes_qtd = await conn.fetchval("SELECT COUNT(*) FROM producoes_finalizadas WHERE user_id = $1", str(member.id)) or 0
             producoes_capsulas = await conn.fetchval("SELECT COALESCE(SUM(capsulas), 0) FROM producoes_finalizadas WHERE user_id = $1", str(member.id)) or 0
 
@@ -23207,7 +23231,8 @@ async def cmd_perfil(ctx, member: discord.Member = None):
         texto_cargos = " | ".join(cargos_faccao) if cargos_faccao else "Membro"
         
         embed.add_field(name="🏷️ Cargo(s) Atual(is)", value=f"```yaml\n{texto_cargos}\n```", inline=True)
-        embed.add_field(name="📅 Na Facção Desde", value=f"```yaml\n{data_registro}\n```", inline=True)
+        embed.add_field(name="📅 Entrou em", value=f"```yaml\n{data_formatada}\n```", inline=True)
+        embed.add_field(name="⏳ Tempo de Casa", value=f"```yaml\n{tempo_formatado}\n```", inline=True)
         
         embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
@@ -23225,8 +23250,6 @@ async def cmd_perfil(ctx, member: discord.Member = None):
         embed.add_field(name="⚔️ Ações Participadas", value=f"```yaml\n{acoes} ações\n```", inline=True)
 
         # ─── DADOS ESPECÍFICOS DE CADA CARGO ───
-        # Verifica se tem cargos específicos para puxar os dados
-        
         if any(c in roles_ids for c in [CARGO_MECANICO_ID, CARGO_GERENTE_MECANICA_ID, CARGO_RESP_MECANICA_ID]) or horas_total > 0:
             embed.add_field(name="⏰ Horas de Mecânica", value=f"```yaml\n{formatar_horas(horas_total)}\n```", inline=True)
 
