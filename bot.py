@@ -22068,12 +22068,78 @@ async def cmd_ver_estoque(ctx):
 @bot.command(name="atualizar_lancamentos")
 @commands.has_permissions(administrator=True)
 async def cmd_atualizar_lancamentos(ctx):
-    await ctx.send("🔄 Atualizando o painel de Lançamentos Financeiros...")
+    await ctx.send("💣 Forçando atualização manual do painel de Lançamentos...")
+    
+    canal = bot.get_channel(CANAL_LANCAMENTOS_ID)
+    if not canal:
+        await ctx.send("❌ Canal de lançamentos não encontrado.")
+        return
+
+    # ─── APAGA TUDO DO BANCO PRA NÃO TER ERRO ───
+    pool = await get_pool()
+    if pool:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM paineis WHERE nome IN ('painel_lancamentos', 'painel_registrar_compra')")
+            await conn.execute("DELETE FROM paineis_ultimos WHERE nome IN ('painel_lancamentos', 'painel_registrar_compra')")
+
+    # ─── APAGA AS MENSAGENS ANTIGAS DO CANAL ───
+    deletadas = 0
+    async for msg in canal.history(limit=30):
+        if msg.author == bot.user:
+            try:
+                await msg.delete()
+                deletadas += 1
+                await asyncio.sleep(0.5)
+            except:
+                pass
+
+    # ─── MONTA O NOVO EMBED (FORÇADO) ───
+    embed = discord.Embed(
+        title="💸 ── LANÇAMENTOS FINANCEIROS ── 💸",
+        description="**VDR 442 • Gestão de Saídas**\n*Registre compras, salários, aluguéis e outras despesas da facção.*",
+        color=0x2ECC71,
+        timestamp=agora()
+    )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+    
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    
+    embed.add_field(
+        name="📋 O QUE PODE SER REGISTRADO?",
+        value=(
+            "🛒 **Compras:** Pólvora, embalagens, armas, veículos, etc.\n"
+            "💼 **Salários:** Pagamentos para gerentes, responsáveis, etc.\n"
+            "🏭 **Aluguéis:** Pagamento de galpões ou salas.\n"
+            "📦 **Outros:** Quaisquer outras despesas da facção."
+        ),
+        inline=False
+    )
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    embed.add_field(
+        name="📖 COMO REGISTRAR",
+        value="**1️⃣** Clique em **📝 Registrar Lançamento**\n**2️⃣** Escolha o tipo de saída (Compra, Salário, Aluguel, etc.)\n**3️⃣** Informe a descrição, a quantidade (se for pólvora/embalagem) e o valor.\n**4️⃣** O valor será debitado do caixa da facção automaticamente.",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+    view = RegistrarCompraView()
+
+    # ─── ENVIA O NOVO ───
     try:
-        await enviar_painel_registrar_compra()
-        await ctx.send("✅ Painel atualizado com o novo visual!")
+        nova_msg = await canal.send(embed=embed, view=view)
+        await registrar_painel_ultimo("painel_lancamentos", canal.id, nova_msg.id)
+        
+        # Salva o novo no banco
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("INSERT INTO paineis (nome, canal_id, mensagem_id) VALUES ('painel_lancamentos', $1, $2)", str(canal.id), str(nova_msg.id))
+                
+        await ctx.send(f"✅ **Painel recriado com sucesso!**\n🗑️ {deletadas} mensagens antigas apagadas.")
     except Exception as e:
-        await ctx.send(f"❌ Erro ao atualizar: {e}")
+        await ctx.send(f"❌ Erro ao enviar o painel: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !historico_producao
 # ────────────────────────────────────────────────────────────────────────────────
