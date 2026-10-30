@@ -8163,6 +8163,7 @@ class StatusView(discord.ui.View):
         self.pedido_numero = pedido_numero
         self.is_doacao = is_doacao
 
+        # ─── BOTÕES DO CANAL DE ENCOMENDAS (ABERTOS) ───
         if not self.is_doacao:
             self.add_item(discord.ui.Button(
                 label="💰 Pago",
@@ -8198,15 +8199,6 @@ class StatusView(discord.ui.View):
 
         if not self.is_doacao:
             self.add_item(discord.ui.Button(
-                label="📤 Confirmar Transferência",
-                style=discord.ButtonStyle.success,
-                custom_id="confirmar_transferencia_fixo",
-                emoji="📤",
-                disabled=(not self.pago_ja_clicado) or self.transferencia_confirmada,
-                row=1
-            ))
-
-            self.add_item(discord.ui.Button(
                 label="🎁 Transformar em Doação",
                 style=discord.ButtonStyle.secondary,
                 custom_id="transformar_doacao",
@@ -8215,6 +8207,7 @@ class StatusView(discord.ui.View):
                 row=1
             ))
 
+  
     async def _pedido_ja_finalizado_no_banco(self, pedido_numero: int) -> bool:
         if not pedido_numero:
             return False
@@ -8510,12 +8503,16 @@ class StatusView(discord.ui.View):
             except: pass
 
     async def mover_card_para_finalizados(self, interaction, pedido_numero, embed):
+        """
+        Move o card do pedido para Pedidos Finalizados com APENAS o botão de Transferência.
+        """
         canal_final = interaction.guild.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
         if not canal_final:
             logger.error(f"❌ Canal de Pedidos Finalizados não encontrado: {CANAL_PEDIDOS_FINALIZADOS_ID}")
             return False
 
-        embed.color = 0xF1C40F
+        # Ajusta embed pro visual de "finalizados"
+        embed.color = 0xF1C40F  # Amarelo
         titulo = embed.title or ""
         if "AGUARDANDO TRANSFERÊNCIA" not in titulo.upper():
             if "📦" in titulo or "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper() or "VENDA" in titulo.upper():
@@ -8523,8 +8520,9 @@ class StatusView(discord.ui.View):
             else:
                 embed.title = f"💸 Pedido #{pedido_numero:04d} — AGUARDANDO TRANSFERÊNCIA"
 
+        # Corrige o bug do "yaml" quebrado
         for i, field in enumerate(embed.fields):
-            if field.name == "📌 STATUS DO PEDIDO":
+            if field.name == "📌 STATUS DO PEDIDO" or field.name == "📌 Status":
                 embed.set_field_at(
                     i,
                     name="📌 STATUS DO PEDIDO",
@@ -8533,29 +8531,25 @@ class StatusView(discord.ui.View):
                 )
                 break
 
-        view_final = StatusView(
-            disabled=False,
-            entrega_id=self.entrega_id,
-            total_entregas=self.total_entregas,
-            entrega_atual=self.entrega_atual,
-            pago_ja_clicado=True,
-            mensagem_original=None,
-            transferencia_confirmada=False,
-            valor_total=self.valor_total,
-            pt=self.pt,
-            sub=self.sub,
-            pedido_numero=pedido_numero,
-            entregue_ja_clicado=True,
-            is_doacao=self.is_doacao
+        # Cria uma view LIMPA
+        view_final = discord.ui.View(timeout=None)
+        
+        # Adiciona APENAS o botão de transferência
+        btn_transferir = discord.ui.Button(
+            label="📤 Confirmar Transferência",
+            style=discord.ButtonStyle.success,
+            custom_id="confirmar_transferencia_fixo",
+            emoji="📤"
         )
+        view_final.add_item(btn_transferir)
 
+        # Envia o novo card no canal de Finalizados
         novo_card = await safe_request(canal_final.send, embed=embed, view=view_final)
         if not novo_card:
             logger.error(f"❌ Erro ao enviar card no canal de Finalizados (pedido #{pedido_numero})")
             return False
 
-        view_final.mensagem_original = novo_card
-
+        # Salva botão persistente pra sobreviver a restart
         try:
             await BotaoPersistente.salvar_botao(novo_card.id, canal_final.id, "venda", {
                 "entrega_id": self.entrega_id,
@@ -8564,14 +8558,16 @@ class StatusView(discord.ui.View):
                 "valor_total": self.valor_total,
                 "pt": self.pt,
                 "sub": self.sub,
-                "pedido_numero": pedido_numero
+                "pedido_numero": pedido_numero,
+                "pago_ja_clicado": True # Avisa o bot que já foi pago
             })
         except Exception as e:
             logger.error(f"❌ Erro ao salvar botão persistente (pago): {e}")
 
+        # Deleta a mensagem original no canal Encomendas
         try:
             await interaction.message.delete()
-            logger.info(f"🗑️ Card do pedido #{pedido_numero} removido do Encomendas (movido pra Finalizados)")
+            logger.info(f"🗑️ Card do pedido #{pedido_numero} removido do Encomendas")
         except Exception as e:
             logger.warning(f"⚠️ Não foi possível deletar o card antigo do Encomendas: {e}")
 
@@ -22213,14 +22209,14 @@ class BotaoPersistente:
                 valor_total=dados.get("valor_total", 0),
                 pt=dados.get("pt", 0),
                 sub=dados.get("sub", 0),
-                pedido_numero=dados.get("pedido_numero", 0)
+                pedido_numero=dados.get("pedido_numero", 0),
+                pago_ja_clicado=dados.get("pago_ja_clicado", True) # <── ADICIONADO AQUI
             )
         elif tipo == "acao":
             return AcaoView(dados.get("acao_id"), dados.get("criador_id"))
         elif tipo == "producao":
             return SegundaTaskView(dados.get("pid"))
         return None
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_e_mover_paineis (DELETA + RECRIA IMEDIATAMENTE)
 # ────────────────────────────────────────────────────────────────────────────────
