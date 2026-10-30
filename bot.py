@@ -8146,9 +8146,6 @@ class BotaoComprovanteView(discord.ui.View):
 # (Se preferir que a pessoa mande o print direto no chat do painel, use o modal acima)
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: StatusView (Original - Sem comprovantes)
-# ────────────────────────────────────────────────────────────────────────────────
 class StatusView(discord.ui.View):
     def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False, valor_total: int = 0, pt: int = 0, sub: int = 0, pedido_numero: int = 0, entregue_ja_clicado: bool = False, is_doacao: bool = False):
         super().__init__(timeout=None)
@@ -8525,7 +8522,7 @@ class StatusView(discord.ui.View):
                 await interaction.followup.send(f"⚠️ Pago registrado, mas houve erro ao mover para Finalizados: `{str(e)[:100]}`", ephemeral=True)
             except: pass
 
-        async def mover_card_para_finalizados(self, interaction, pedido_numero, embed):
+    async def mover_card_para_finalizados(self, interaction, pedido_numero, embed):
         """
         Move o card do pedido (parcela) do canal Encomendas para Pedidos Finalizados,
         mantendo o botão "📤 Confirmar Transferência" ativo.
@@ -8840,6 +8837,7 @@ class StatusView(discord.ui.View):
                 embed_bau.add_field(name="👤 Cancelado por", value=cancelador_apelido, inline=True)
                 if status_anterior:
                     embed_bau.add_field(name="📌 Status anterior", value=status_anterior, inline=True)
+                if pacotes_pt > 0
                 if pacotes_pt > 0:
                     embed_bau.add_field(name="🔫 PT reabastecido", value=f"+{pacotes_pt} pacotes", inline=True)
                 if pacotes_sub > 0:
