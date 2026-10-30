@@ -659,6 +659,34 @@ async def inicializar_tabelas(pool):
                 data_criacao TIMESTAMP DEFAULT NOW()
             )
         """)
+
+        # ═══════════════ TABELAS DE ENTREGAS_STATUS (controle individual por parcela) ═══════════════
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS entregas_status (
+                id SERIAL PRIMARY KEY,
+                entrega_id INTEGER NOT NULL,
+                numero_parcela INTEGER NOT NULL,
+                pedido_numero INTEGER NOT NULL,
+                entregue BOOLEAN DEFAULT false,
+                entregue_por VARCHAR(30),
+                entregue_em TIMESTAMP,
+                pago BOOLEAN DEFAULT false,
+                pago_por VARCHAR(30),
+                pago_em TIMESTAMP,
+                finalizado BOOLEAN DEFAULT false,
+                finalizado_por VARCHAR(30),
+                finalizado_em TIMESTAMP,
+                transferido_para VARCHAR(100),
+                cancelado BOOLEAN DEFAULT false,
+                cancelado_por VARCHAR(30),
+                cancelado_em TIMESTAMP,
+                UNIQUE(entrega_id, numero_parcela)
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_entregas_status_entrega ON entregas_status(entrega_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_entregas_status_pedido ON entregas_status(pedido_numero)")
+        logger.info("✅ Tabela entregas_status pronta!")
+        
         # ═══════════════ TABELAS DE GRUPOS ═══════════════
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS grupos (
@@ -7406,13 +7434,252 @@ async def salvar_entrega_parcelada(pedido_original, total_entregas, pt_por_entre
             proxima = agora() + timedelta(days=1)
             proxima = proxima.replace(hour=0, minute=0, second=0, microsecond=0)
             proxima_naive = para_db_naive(proxima)
-            return await conn.fetchval(
+            entrega_id = await conn.fetchval(
                 "INSERT INTO entregas_parceladas (pedido_original, entrega_atual, total_entregas, pt_por_entrega, sub_por_entrega, vendedor_id, organizacao, observacoes, proxima_entrega, canal_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
                 pedido_original, 1, total_entregas, pt_por_entrega, sub_por_entrega, vendedor_id, organizacao, observacoes, proxima_naive, canal_id
             )
+
+            # ─── CRIA AS N LINHAS NA entregas_status (1 por parcela) ───
+            if entrega_id:
+                for numero_parcela in range(1, total_entregas + 1):
+                    await conn.execute(
+                        """INSERT INTO entregas_status (entrega_id, numero_parcela, pedido_numero)
+                           VALUES ($1, $2, $3)
+                           ON CONFLICT (entrega_id, numero_parcela) DO NOTHING""",
+                        entrega_id, numero_parcela, pedido_original
+                    )
+                logger.info(f"✅ entregas_status: {total_entregas} parcela(s) criadas para entrega_id={entrega_id} (pedido #{pedido_original})")
+
+            return entrega_id
     except Exception as e:
         logger.error(f"❌ Erro ao salvar entrega parcelada: {e}")
         return None
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: garantir_entrega_status
+# ────────────────────────────────────────────────────────────────────────────────
+async def garantir_entrega_status(entrega_id, numero_parcela, pedido_numero):
+    """
+    Garante que a linha da parcela existe na entregas_status.
+    Útil para pedidos de entrega ÚNICA (que não passam por salvar_entrega_parcelada)
+    e para migração de pedidos antigos.
+    Retorna o id da linha (ou None em erro).
+    """
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO entregas_status (entrega_id, numero_parcela, pedido_numero)
+                   VALUES ($1, $2, $3)
+                   ON CONFLICT (entrega_id, numero_parcela) DO NOTHING""",
+                int(entrega_id) if entrega_id else 0,
+                int(numero_parcela),
+                int(pedido_numero) if pedido_numero else 0
+            )
+            row = await conn.fetchrow(
+                "SELECT * FROM entregas_status WHERE entrega_id = $1 AND numero_parcela = $2",
+                int(entrega_id) if entrega_id else 0,
+                int(numero_parcela)
+            )
+            return row["id"] if row else None
+    except Exception as e:
+        logger.error(f"❌ Erro em garantir_entrega_status: {e}")
+        return None
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_status_parcela
+# ────────────────────────────────────────────────────────────────────────────────
+async def buscar_status_parcela(entrega_id, numero_parcela, pedido_numero):
+    """
+    Retorna a linha da entregas_status daquela parcela,
+    ou cria se não existir (para entrega única e migração).
+    """
+    await garantir_entrega_status(entrega_id, numero_parcela, pedido_numero)
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM entregas_status WHERE entrega_id = $1 AND numero_parcela = $2",
+                int(entrega_id) if entrega_id else 0,
+                int(numero_parcela)
+            )
+    except Exception as e:
+        logger.error(f"❌ Erro em buscar_status_parcela: {e}")
+        return None
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: marcar_status_parcela
+# ────────────────────────────────────────────────────────────────────────────────
+async def marcar_status_parcela(entrega_id, numero_parcela, pedido_numero, campo, autor_id=None, transferido_para=None):
+    """
+    Marca um campo (entregue / pago / finalizado / cancelado) da parcela.
+    campo ∈ {"entregue", "pago", "finalizado", "cancelado"}
+    Retorna True se conseguiu marcar, False se já estava marcado ou deu erro.
+    """
+    campo = campo.lower()
+    if campo not in ("entregue", "pago", "finalizado", "cancelado"):
+        logger.error(f"❌ marcar_status_parcela: campo inválido '{campo}'")
+        return False
+
+    await garantir_entrega_status(entrega_id, numero_parcela, pedido_numero)
+    pool = await get_pool()
+    if not pool:
+        return False
+
+    try:
+        async with pool.acquire() as conn:
+            # Verifica se já estava marcado
+            row = await conn.fetchrow(
+                "SELECT * FROM entregas_status WHERE entrega_id = $1 AND numero_parcela = $2",
+                int(entrega_id) if entrega_id else 0,
+                int(numero_parcela)
+            )
+            if not row:
+                return False
+            if row[campo]:
+                return False  # já marcado
+
+            if campo == "entregue":
+                await conn.execute(
+                    """UPDATE entregas_status
+                       SET entregue = true, entregue_por = $1, entregue_em = NOW()
+                       WHERE entrega_id = $2 AND numero_parcela = $3""",
+                    str(autor_id) if autor_id else None,
+                    int(entrega_id) if entrega_id else 0,
+                    int(numero_parcela)
+                )
+            elif campo == "pago":
+                await conn.execute(
+                    """UPDATE entregas_status
+                       SET pago = true, pago_por = $1, pago_em = NOW()
+                       WHERE entrega_id = $2 AND numero_parcela = $3""",
+                    str(autor_id) if autor_id else None,
+                    int(entrega_id) if entrega_id else 0,
+                    int(numero_parcela)
+                )
+            elif campo == "finalizado":
+                await conn.execute(
+                    """UPDATE entregas_status
+                       SET finalizado = true, finalizado_por = $1, finalizado_em = NOW(), transferido_para = $2
+                       WHERE entrega_id = $3 AND numero_parcela = $4""",
+                    str(autor_id) if autor_id else None,
+                    transferido_para,
+                    int(entrega_id) if entrega_id else 0,
+                    int(numero_parcela)
+                )
+            elif campo == "cancelado":
+                await conn.execute(
+                    """UPDATE entregas_status
+                       SET cancelado = true, cancelado_por = $1, cancelado_em = NOW()
+                       WHERE entrega_id = $2 AND numero_parcela = $3""",
+                    str(autor_id) if autor_id else None,
+                    int(entrega_id) if entrega_id else 0,
+                    int(numero_parcela)
+                )
+            logger.info(f"✅ entregas_status: parcela {numero_parcela} (pedido #{pedido_numero}) marcada como '{campo}'")
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro em marcar_status_parcela: {e}")
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_todas_parcelas_finalizadas
+# ────────────────────────────────────────────────────────────────────────────────
+async def verificar_todas_parcelas_finalizadas(entrega_id):
+    """
+    Retorna True se TODAS as parcelas daquele entrega_id estiverem finalizadas
+    OU canceladas. Serve pra decidir quando marcar vendas.finalizado = true.
+    """
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM entregas_status WHERE entrega_id = $1",
+                int(entrega_id)
+            ) or 0
+            if total == 0:
+                return False
+            encerradas = await conn.fetchval(
+                """SELECT COUNT(*) FROM entregas_status
+                   WHERE entrega_id = $1 AND (finalizado = true OR cancelado = true)""",
+                int(entrega_id)
+            ) or 0
+            return encerradas >= total
+    except Exception as e:
+        logger.error(f"❌ Erro em verificar_todas_parcelas_finalizadas: {e}")
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: migrar_entregas_status_antigas
+# ────────────────────────────────────────────────────────────────────────────────
+async def migrar_entregas_status_antigas():
+    """
+    Cria linhas na entregas_status para pedidos antigos (criados antes da tabela existir).
+    - Para cada entrega em entregas_parceladas, garante as N linhas (1..total_entregas).
+    - Para pedidos de entrega única (sem entrega_id), cria a linha 1/1.
+    """
+    pool = await get_pool()
+    if not pool:
+        return 0
+    criadas = 0
+    try:
+        async with pool.acquire() as conn:
+            # 1) Parcelados
+            entregas = await conn.fetch(
+                "SELECT id, pedido_original, total_entregas FROM entregas_parceladas"
+            )
+            for e in entregas:
+                entrega_id = e["id"]
+                pedido = e["pedido_original"]
+                total = e["total_entregas"] or 1
+                for n in range(1, total + 1):
+                    try:
+                        res = await conn.execute(
+                            """INSERT INTO entregas_status (entrega_id, numero_parcela, pedido_numero)
+                               VALUES ($1, $2, $3)
+                               ON CONFLICT (entrega_id, numero_parcela) DO NOTHING""",
+                            entrega_id, n, pedido
+                        )
+                        if res and res.endswith("1"):
+                            criadas += 1
+                    except Exception as ex:
+                        logger.error(f"❌ Erro migrando entrega {entrega_id} parcela {n}: {ex}")
+
+            # 2) Pedidos de entrega única (sem entrega_id)
+            unicas = await conn.fetch(
+                """SELECT pedido_numero FROM vendas
+                   WHERE pedido_numero NOT IN (
+                       SELECT pedido_original FROM entregas_parceladas
+                   )
+                   AND (finalizado = true OR cancelado = true OR migrado = true)"""
+            )
+            for u in unicas:
+                pedido = u["pedido_numero"]
+                try:
+                    await conn.execute(
+                        """INSERT INTO entregas_status (entrega_id, numero_parcela, pedido_numero)
+                           VALUES (0, 1, $1)
+                           ON CONFLICT (entrega_id, numero_parcela) DO NOTHING""",
+                        pedido
+                    )
+                    criadas += 1
+                except Exception as ex:
+                    logger.error(f"❌ Erro migrando pedido único #{pedido}: {ex}")
+
+        if criadas > 0:
+            logger.info(f"✅ Migração entregas_status: {criadas} linha(s) criada(s)")
+        else:
+            logger.info("✅ Migração entregas_status: nada a migrar (já tudo em dia)")
+        return criadas
+    except Exception as e:
+        logger.error(f"❌ Erro em migrar_entregas_status_antigas: {e}")
+        return criadas
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_entregas_pendentes
@@ -7952,6 +8219,12 @@ class StatusView(discord.ui.View):
             ))
 
     async def _pedido_ja_finalizado_no_banco(self, pedido_numero: int) -> bool:
+        """
+        Verifica se ESTA PARCELA já foi finalizada/cancelada.
+        - Para pedidos parcelados: checa a linha específica na entregas_status
+          (entrega_id + entrega_atual). Não bloqueia outras parcelas do mesmo pedido.
+        - Para entrega única (sem entrega_id): checa vendas.finalizado direto.
+        """
         if not pedido_numero:
             return False
         pool = await get_pool()
@@ -7959,6 +8232,29 @@ class StatusView(discord.ui.View):
             return False
         try:
             async with pool.acquire() as conn:
+                # ─── Se tem entrega_id, checa a PARCELA específica ───
+                if self.entrega_id:
+                    row_parcela = await conn.fetchrow(
+                        """SELECT finalizado, cancelado FROM entregas_status
+                           WHERE entrega_id = $1 AND numero_parcela = $2""",
+                        int(self.entrega_id),
+                        int(self.entrega_atual)
+                    )
+                    if row_parcela:
+                        return bool(row_parcela["finalizado"] or row_parcela["cancelado"])
+                    # Se não existe linha ainda, não bloqueia (deixa seguir)
+                    return False
+
+                # ─── Entrega única: checa a parcela 1/1 na entregas_status ───
+                row_unica = await conn.fetchrow(
+                    """SELECT finalizado, cancelado FROM entregas_status
+                       WHERE entrega_id = 0 AND numero_parcela = 1 AND pedido_numero = $1""",
+                    pedido_numero
+                )
+                if row_unica:
+                    return bool(row_unica["finalizado"] or row_unica["cancelado"])
+
+                # ─── Fallback: se não tem nada na entregas_status, checa vendas ───
                 row = await conn.fetchrow(
                     "SELECT finalizado, cancelado, migrado FROM vendas WHERE pedido_numero = $1",
                     pedido_numero
@@ -8165,39 +8461,152 @@ class StatusView(discord.ui.View):
 
         embed = self.set_status(embed, idx, linhas)
 
+        titulo = embed.title or ""
+        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
+
+        # ─── MARCA A PARCELA COMO PAGA NA entregas_status ───
         try:
-            titulo = embed.title or ""
-            pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
+            await marcar_status_parcela(
+                entrega_id=self.entrega_id if self.entrega_id else 0,
+                numero_parcela=self.entrega_atual,
+                pedido_numero=pedido_numero,
+                campo="pago",
+                autor_id=interaction.user.id
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao marcar parcela paga: {e}")
+
+        try:
             await registrar_auditoria(
                 user_id=str(interaction.user.id),
                 acao=AuditAcao.MARCAR_PAGO,
                 modulo=AuditModulo.VENDAS,
                 item_id=str(pedido_numero) if pedido_numero else None,
-                item_nome=f"Pedido #{pedido_numero:04d}" if pedido_numero else "Pedido desconhecido",
+                item_nome=f"Pedido #{pedido_numero:04d} — Entrega {self.entrega_atual}/{self.total_entregas}" if pedido_numero else "Pedido desconhecido",
                 dados_antes={"status": "Pendente"},
                 dados_depois={"status": "Pago", "recebido_por": pagador_apelido},
-                detalhes=f"Pagamento recebido por {pagador_apelido}"
+                detalhes=f"Pagamento da entrega {self.entrega_atual}/{self.total_entregas} recebido por {pagador_apelido}"
             )
         except Exception as e:
             logger.error(f"❌ Erro ao auditar pagamento: {e}")
 
-        await interaction.message.edit(embed=embed, view=StatusView(
+        # ─── ATUALIZA O EMBED E O VIEW NO CANAL DE ENCOMENDAS (visual) ───
+        try:
+            await interaction.message.edit(embed=embed, view=StatusView(
+                disabled=False,
+                entrega_id=self.entrega_id,
+                total_entregas=self.total_entregas,
+                entrega_atual=self.entrega_atual,
+                pago_ja_clicado=True,
+                mensagem_original=interaction.message,
+                transferencia_confirmada=False,
+                valor_total=self.valor_total,
+                pt=self.pt,
+                sub=self.sub,
+                pedido_numero=pedido_numero,
+                entregue_ja_clicado=self.entrega_ja_entregue,
+                is_doacao=self.is_doacao
+            ))
+        except Exception as e:
+            logger.error(f"❌ Erro ao editar embed no Encomendas: {e}")
+
+        await interaction.followup.send("✅ **Pagamento registrado! Movendo pedido para Finalizados...**", ephemeral=True)
+
+        # ─── MOVE O CARD PARA O CANAL DE PEDIDOS FINALIZADOS (mantendo botão Transferência) ───
+        try:
+            await self.mover_card_para_finalizados(
+                interaction=interaction,
+                pedido_numero=pedido_numero,
+                embed=embed
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao mover card para Finalizados: {e}")
+            try:
+                await interaction.followup.send(f"⚠️ Pago registrado, mas houve erro ao mover para Finalizados: `{str(e)[:100]}`", ephemeral=True)
+            except: pass
+
+        async def mover_card_para_finalizados(self, interaction, pedido_numero, embed):
+        """
+        Move o card do pedido (parcela) do canal Encomendas para Pedidos Finalizados,
+        mantendo o botão "📤 Confirmar Transferência" ativo.
+        """
+        canal_final = interaction.guild.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
+        if not canal_final:
+            logger.error(f"❌ Canal de Pedidos Finalizados não encontrado: {CANAL_PEDIDOS_FINALIZADOS_ID}")
+            return False
+
+        # Ajusta embed pro visual de "finalizados"
+        embed.color = 0xF1C40F  # Amarelo: pago, aguardando transferência
+        titulo = embed.title or ""
+        if "AGUARDANDO TRANSFERÊNCIA" not in titulo.upper():
+            if "📦" in titulo or "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper() or "VENDA" in titulo.upper():
+                embed.title = f"💸 {titulo} — AGUARDANDO TRANSFERÊNCIA"
+            else:
+                embed.title = f"💸 Pedido #{pedido_numero:04d} — AGUARDANDO TRANSFERÊNCIA"
+
+        # Adiciona/atualiza status
+        for i, field in enumerate(embed.fields):
+            if field.name == "📌 STATUS DO PEDIDO":
+                embed.set_field_at(
+                    i,
+                    name="📌 STATUS DO PEDIDO",
+                    value=f"```yaml\n💰 PAGO — Aguardando Transferência\n👤 Recebido por: {interaction.user.display_name}\n📅 {agora().strftime('%d/%m/%Y %H:%M')}\n```",
+                    inline=False
+                )
+                break
+
+        # Cria view com transferência habilitada, entrega desabilitada
+        view_final = StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
             pago_ja_clicado=True,
-            mensagem_original=interaction.message,
+            mensagem_original=None,  # vai ser setado abaixo
             transferencia_confirmada=False,
             valor_total=self.valor_total,
             pt=self.pt,
             sub=self.sub,
-            pedido_numero=self.pedido_numero,
-            entregue_ja_clicado=self.entrega_ja_entregue,
+            pedido_numero=pedido_numero,
+            entregue_ja_clicado=True,
             is_doacao=self.is_doacao
-        ))
+        )
 
-        await interaction.followup.send("✅ **Pagamento registrado!**", ephemeral=True)
+        # Envia o novo card no canal de Finalizados
+        novo_card = await safe_request(canal_final.send, embed=embed, view=view_final)
+        if not novo_card:
+            logger.error(f"❌ Erro ao enviar card no canal de Finalizados (pedido #{pedido_numero})")
+            return False
+
+        # Atualiza a view pra apontar pra mensagem nova (pro botão Transferência funcionar)
+        view_final.mensagem_original = novo_card
+
+        # Salva botão persistente pra sobreviver a restart
+        try:
+            await BotaoPersistente.salvar_botao(novo_card.id, canal_final.id, "venda", {
+                "entrega_id": self.entrega_id,
+                "total_entregas": self.total_entregas,
+                "entrega_atual": self.entrega_atual,
+                "valor_total": self.valor_total,
+                "pt": self.pt,
+                "sub": self.sub,
+                "pedido_numero": pedido_numero
+            })
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar botão persistente (pago): {e}")
+
+        # Deleta a mensagem original no canal Encomendas (já foi movida)
+        try:
+            await interaction.message.delete()
+            logger.info(f"🗑️ Card do pedido #{pedido_numero} removido do Encomendas (movido pra Finalizados)")
+        except Exception as e:
+            logger.warning(f"⚠️ Não foi possível deletar o card antigo do Encomendas: {e}")
+
+        try:
+            await interaction.followup.send(f"✅ **Pedido #{pedido_numero:04d} movido para Pedidos Finalizados!**\n📤 Clique em **Confirmar Transferência** lá para encerrar.", ephemeral=True)
+        except: pass
+
+        return True
 
     async def entregue(self, interaction: discord.Interaction, button):
         if self.entrega_ja_entregue:
@@ -8257,6 +8666,18 @@ class StatusView(discord.ui.View):
         if pacotes_sub > 0:
             await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
 
+        # ─── MARCA A PARCELA COMO ENTREGUE NA entregas_status ───
+        try:
+            await marcar_status_parcela(
+                entrega_id=self.entrega_id if self.entrega_id else 0,
+                numero_parcela=self.entrega_atual,
+                pedido_numero=pedido_numero,
+                campo="entregue",
+                autor_id=interaction.user.id
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao marcar parcela entregue: {e}")
+
         try:
             await _registrar_atividade(interaction.user.id, "venda")
         except Exception as e:
@@ -8277,7 +8698,7 @@ class StatusView(discord.ui.View):
                 acao=AuditAcao.MARCAR_ENTREGUE,
                 modulo=AuditModulo.VENDAS,
                 item_id=str(pedido_numero) if pedido_numero else None,
-                item_nome=f"Pedido #{pedido_numero:04d}" if pedido_numero else "Pedido desconhecido",
+                item_nome=f"Pedido #{pedido_numero:04d} — Entrega {self.entrega_atual}/{self.total_entregas}" if pedido_numero else "Pedido desconhecido",
                 dados_antes={"status": "Pago (aguardando entrega)"},
                 dados_depois={
                     "status": "Entregue",
@@ -8285,7 +8706,7 @@ class StatusView(discord.ui.View):
                     "pt_pacotes": pacotes_pt,
                     "sub_pacotes": pacotes_sub
                 },
-                detalhes=f"Entrega realizada — {pacotes_pt} pacotes PT + {pacotes_sub} pacotes SUB"
+                detalhes=f"Entrega {self.entrega_atual}/{self.total_entregas} realizada — {pacotes_pt} pacotes PT + {pacotes_sub} pacotes SUB"
             )
         except Exception as e:
             logger.error(f"❌ Erro ao auditar entrega: {e}")
@@ -8336,9 +8757,12 @@ class StatusView(discord.ui.View):
 
         await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
+        # ─── Se NÃO for a última, cria a próxima entrega aberta no Encomendas ───
+        # ─── Se FOR a última, NÃO move pra Finalizados (quem move é o "Pago") ───
         if self.entrega_atual < self.total_entregas:
             await self.criar_proxima_entrega(interaction, embed, pedido_numero)
         else:
+            # Última entrega: se for doação, finaliza e move agora (doação não tem "Pago")
             if self.is_doacao:
                 await finalizar_e_mover_pedido(
                     interaction=interaction,
@@ -9146,36 +9570,71 @@ async def finalizar_e_mover_pedido(
         if transferido_para:
             dados["transferido_para"] = transferido_para
 
+        # ─── Descobre entrega_id / parcela atual pela footer ou pelo botão persistente ───
+        entrega_id = None
+        entrega_atual = 1
+        total_entregas = 1
+        if embed_original.footer and embed_original.footer.text:
+            txt = embed_original.footer.text
+            if "ID:" in txt:
+                try:
+                    entrega_id = safe_int(txt.split("ID:")[1].strip().split(" ")[0])
+                except: pass
+        if "ENTREGA" in (embed_original.title or "").upper():
+            try:
+                entrega_atual = safe_int(embed_original.title.split("ENTREGA")[1].strip().split("/")[0].strip())
+            except: pass
+            try:
+                total_entregas = safe_int(embed_original.title.split("/")[1].strip().split(" ")[0].strip())
+            except: pass
+
+        # ─── MARCA SÓ ESSA PARCELA COMO FINALIZADA NA entregas_status ───
+        try:
+            await marcar_status_parcela(
+                entrega_id=entrega_id if entrega_id else 0,
+                numero_parcela=entrega_atual,
+                pedido_numero=dados["pedido_numero"],
+                campo="finalizado",
+                autor_id=interaction.user.id,
+                transferido_para=transferido_para
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao marcar parcela finalizada: {e}")
+
+        # ─── Só marca vendas.finalizado=true se TODAS as parcelas estiverem encerradas ───
+        try:
+            if entrega_id:
+                todas = await verificar_todas_parcelas_finalizadas(entrega_id)
+                if todas:
+                    if tipo == "cancelado":
+                        await marcar_pedido_finalizado(dados["pedido_numero"], tipo="cancelado")
+                        logger.info(f"✅ Pedido #{dados['pedido_numero']} — TODAS as parcelas encerradas. Marcado como CANCELADO no banco.")
+                    else:
+                        await marcar_pedido_finalizado(dados["pedido_numero"], tipo="finalizado")
+                        logger.info(f"✅ Pedido #{dados['pedido_numero']} — TODAS as parcelas encerradas. Marcado como FINALIZADO no banco.")
+                else:
+                    logger.info(f"⏳ Pedido #{dados['pedido_numero']} — parcela {entrega_atual}/{total_entregas} encerrada, ainda há parcelas pendentes. Banco NÃO foi marcado como finalizado.")
+            else:
+                # Entrega única (sem entrega_id no footer) — marca direto
+                if tipo == "cancelado":
+                    await marcar_pedido_finalizado(dados["pedido_numero"], tipo="cancelado")
+                else:
+                    await marcar_pedido_finalizado(dados["pedido_numero"], tipo="finalizado")
+                logger.info(f"✅ Pedido #{dados['pedido_numero']} (único) marcado como {tipo.upper()} no banco.")
+        except Exception as e:
+            logger.error(f"❌ Erro ao marcar pedido no banco: {e}")
+
+        # ─── Deleta a mensagem atual (já está no canal Finalizados) ───
         deletado = False
         try:
             await mensagem_original.delete()
             deletado = True
-            logger.info(f"🗑️ Pedido #{dados['pedido_numero']:04d} removido do canal de encomendas")
         except discord.NotFound:
             deletado = True
         except Exception as e:
-            logger.warning(f"⚠️ Não foi possível deletar mensagem original: {e}")
+            logger.warning(f"⚠️ Não foi possível deletar mensagem: {e}")
 
-        if deletado:
-            if tipo == "cancelado":
-                await marcar_pedido_finalizado(dados["pedido_numero"], tipo="cancelado")
-            else:
-                await marcar_pedido_finalizado(dados["pedido_numero"], tipo="finalizado")
-        else:
-            logger.warning(
-                f"⚠️ Pedido #{dados['pedido_numero']:04d} NÃO foi marcado no banco "
-                f"(deleção da mensagem falhou). Verifique permissões."
-            )
-            try:
-                await interaction.followup.send(
-                    f"⚠️ **Atenção:** não foi possível deletar a mensagem original do pedido "
-                    f"#{dados['pedido_numero']:04d}. O banco NÃO foi marcado como finalizado. "
-                    f"Verifique as permissões do bot no canal Encomendas.",
-                    ephemeral=True
-                )
-            except:
-                pass
-
+        # ─── Envia embed resumo pro canal de Pedidos Finalizados (histórico) ───
         await enviar_embed_pedido_finalizado(
             pedido_numero=dados["pedido_numero"],
             pt=dados["pt"],
@@ -9194,6 +9653,7 @@ async def finalizar_e_mover_pedido(
             tipo=tipo
         )
 
+        # ─── Limpa botões persistentes daquela mensagem ───
         try:
             pool = await get_pool()
             if pool:
@@ -24902,6 +25362,10 @@ async def on_ready():
         bot.loop.create_task(edit_worker())
         bot.edit_worker_started = True
     await carregar_dados_iniciais()
+    try:
+        await migrar_entregas_status_antigas()
+    except Exception as e:
+        logger.error(f"❌ Erro na migração de entregas_status: {e}")
     await enviar_paineis_iniciais(guild)
     await BotaoPersistente.restaurar_botoes()
     await restaurar_botoes_vendas()
