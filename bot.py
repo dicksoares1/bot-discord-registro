@@ -8216,12 +8216,6 @@ class StatusView(discord.ui.View):
             ))
 
     async def _pedido_ja_finalizado_no_banco(self, pedido_numero: int) -> bool:
-        """
-        Verifica se ESTA PARCELA já foi finalizada/cancelada.
-        - Para pedidos parcelados: checa a linha específica na entregas_status
-          (entrega_id + entrega_atual). Não bloqueia outras parcelas do mesmo pedido.
-        - Para entrega única (sem entrega_id): checa vendas.finalizado direto.
-        """
         if not pedido_numero:
             return False
         pool = await get_pool()
@@ -8229,7 +8223,6 @@ class StatusView(discord.ui.View):
             return False
         try:
             async with pool.acquire() as conn:
-                # ─── Se tem entrega_id, checa a PARCELA específica ───
                 if self.entrega_id:
                     row_parcela = await conn.fetchrow(
                         """SELECT finalizado, cancelado FROM entregas_status
@@ -8239,10 +8232,8 @@ class StatusView(discord.ui.View):
                     )
                     if row_parcela:
                         return bool(row_parcela["finalizado"] or row_parcela["cancelado"])
-                    # Se não existe linha ainda, não bloqueia (deixa seguir)
                     return False
 
-                # ─── Entrega única: checa a parcela 1/1 na entregas_status ───
                 row_unica = await conn.fetchrow(
                     """SELECT finalizado, cancelado FROM entregas_status
                        WHERE entrega_id = 0 AND numero_parcela = 1 AND pedido_numero = $1""",
@@ -8251,7 +8242,6 @@ class StatusView(discord.ui.View):
                 if row_unica:
                     return bool(row_unica["finalizado"] or row_unica["cancelado"])
 
-                # ─── Fallback: se não tem nada na entregas_status, checa vendas ───
                 row = await conn.fetchrow(
                     "SELECT finalizado, cancelado, migrado FROM vendas WHERE pedido_numero = $1",
                     pedido_numero
@@ -8461,7 +8451,6 @@ class StatusView(discord.ui.View):
         titulo = embed.title or ""
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
 
-        # ─── MARCA A PARCELA COMO PAGA NA entregas_status ───
         try:
             await marcar_status_parcela(
                 entrega_id=self.entrega_id if self.entrega_id else 0,
@@ -8487,7 +8476,6 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao auditar pagamento: {e}")
 
-        # ─── ATUALIZA O EMBED E O VIEW NO CANAL DE ENCOMENDAS (visual) ───
         try:
             await interaction.message.edit(embed=embed, view=StatusView(
                 disabled=False,
@@ -8509,7 +8497,6 @@ class StatusView(discord.ui.View):
 
         await interaction.followup.send("✅ **Pagamento registrado! Movendo pedido para Finalizados...**", ephemeral=True)
 
-        # ─── MOVE O CARD PARA O CANAL DE PEDIDOS FINALIZADOS (mantendo botão Transferência) ───
         try:
             await self.mover_card_para_finalizados(
                 interaction=interaction,
@@ -8523,17 +8510,12 @@ class StatusView(discord.ui.View):
             except: pass
 
     async def mover_card_para_finalizados(self, interaction, pedido_numero, embed):
-        """
-        Move o card do pedido (parcela) do canal Encomendas para Pedidos Finalizados,
-        mantendo o botão "📤 Confirmar Transferência" ativo.
-        """
         canal_final = interaction.guild.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
         if not canal_final:
             logger.error(f"❌ Canal de Pedidos Finalizados não encontrado: {CANAL_PEDIDOS_FINALIZADOS_ID}")
             return False
 
-        # Ajusta embed pro visual de "finalizados"
-        embed.color = 0xF1C40F  # Amarelo: pago, aguardando transferência
+        embed.color = 0xF1C40F
         titulo = embed.title or ""
         if "AGUARDANDO TRANSFERÊNCIA" not in titulo.upper():
             if "📦" in titulo or "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper() or "VENDA" in titulo.upper():
@@ -8541,7 +8523,6 @@ class StatusView(discord.ui.View):
             else:
                 embed.title = f"💸 Pedido #{pedido_numero:04d} — AGUARDANDO TRANSFERÊNCIA"
 
-        # Adiciona/atualiza status
         for i, field in enumerate(embed.fields):
             if field.name == "📌 STATUS DO PEDIDO":
                 embed.set_field_at(
@@ -8552,14 +8533,13 @@ class StatusView(discord.ui.View):
                 )
                 break
 
-        # Cria view com transferência habilitada, entrega desabilitada
         view_final = StatusView(
             disabled=False,
             entrega_id=self.entrega_id,
             total_entregas=self.total_entregas,
             entrega_atual=self.entrega_atual,
             pago_ja_clicado=True,
-            mensagem_original=None,  # vai ser setado abaixo
+            mensagem_original=None,
             transferencia_confirmada=False,
             valor_total=self.valor_total,
             pt=self.pt,
@@ -8569,16 +8549,13 @@ class StatusView(discord.ui.View):
             is_doacao=self.is_doacao
         )
 
-        # Envia o novo card no canal de Finalizados
         novo_card = await safe_request(canal_final.send, embed=embed, view=view_final)
         if not novo_card:
             logger.error(f"❌ Erro ao enviar card no canal de Finalizados (pedido #{pedido_numero})")
             return False
 
-        # Atualiza a view pra apontar pra mensagem nova (pro botão Transferência funcionar)
         view_final.mensagem_original = novo_card
 
-        # Salva botão persistente pra sobreviver a restart
         try:
             await BotaoPersistente.salvar_botao(novo_card.id, canal_final.id, "venda", {
                 "entrega_id": self.entrega_id,
@@ -8592,7 +8569,6 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao salvar botão persistente (pago): {e}")
 
-        # Deleta a mensagem original no canal Encomendas (já foi movida)
         try:
             await interaction.message.delete()
             logger.info(f"🗑️ Card do pedido #{pedido_numero} removido do Encomendas (movido pra Finalizados)")
@@ -8663,7 +8639,6 @@ class StatusView(discord.ui.View):
         if pacotes_sub > 0:
             await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
 
-        # ─── MARCA A PARCELA COMO ENTREGUE NA entregas_status ───
         try:
             await marcar_status_parcela(
                 entrega_id=self.entrega_id if self.entrega_id else 0,
@@ -8754,12 +8729,9 @@ class StatusView(discord.ui.View):
 
         await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
 
-        # ─── Se NÃO for a última, cria a próxima entrega aberta no Encomendas ───
-        # ─── Se FOR a última, NÃO move pra Finalizados (quem move é o "Pago") ───
         if self.entrega_atual < self.total_entregas:
             await self.criar_proxima_entrega(interaction, embed, pedido_numero)
         else:
-            # Última entrega: se for doação, finaliza e move agora (doação não tem "Pago")
             if self.is_doacao:
                 await finalizar_e_mover_pedido(
                     interaction=interaction,
@@ -8837,7 +8809,6 @@ class StatusView(discord.ui.View):
                 embed_bau.add_field(name="👤 Cancelado por", value=cancelador_apelido, inline=True)
                 if status_anterior:
                     embed_bau.add_field(name="📌 Status anterior", value=status_anterior, inline=True)
-                if pacotes_pt > 0
                 if pacotes_pt > 0:
                     embed_bau.add_field(name="🔫 PT reabastecido", value=f"+{pacotes_pt} pacotes", inline=True)
                 if pacotes_sub > 0:
