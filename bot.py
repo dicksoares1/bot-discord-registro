@@ -10943,7 +10943,42 @@ class FabricacaoView(discord.ui.View):
         await interaction.response.send_modal(ProducaoMunicaoModal())
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: GerenciamentoProducaoView
+# CLASSE: ConfirmarResetComissoesProducaoView (Confirmação do Reset)
+# ────────────────────────────────────────────────────────────────────────────────
+class ConfirmarResetComissoesProducaoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="✅ SIM, RESETAR", style=discord.ButtonStyle.danger, custom_id="conf_reset_comissoes_prod")
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            res = await conn.execute("UPDATE producoes_finalizadas SET comissao_paga = true WHERE comissao_paga = false")
+        
+        afetadas = res.split(" ")[1] if " " in res else "0"
+
+        await enviar_painel_gerenciamento_producao()
+        await interaction.followup.send(f"✅ **Comissões de produção resetadas!**\n💊 {afetadas} produções foram marcadas como pagas.", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+
+    @discord.ui.button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id="cancel_reset_comissoes_prod")
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Reset cancelado.", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: GerenciamentoProducaoView (Seu código com o novo botão)
 # ────────────────────────────────────────────────────────────────────────────────
 class GerenciamentoProducaoView(discord.ui.View):
     def __init__(self):
@@ -11024,7 +11059,6 @@ class GerenciamentoProducaoView(discord.ui.View):
         await enviar_painel_gerenciamento_producao()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
 
-    # ─── NOVO BOTÃO DE PAGAR COMISSÕES DE PRODUÇÃO ───
     @discord.ui.button(label="💸 Pagar Comissões (Caixa)", style=discord.ButtonStyle.success, custom_id="gerenciar_pagar_comissoes", emoji="💸", row=3)
     async def pagar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -11042,7 +11076,6 @@ class GerenciamentoProducaoView(discord.ui.View):
             return
 
         async with pool.acquire() as conn:
-            # Calcula o total de cápsulas a pagar (R$ 1,00 por cápsula)
             total_capsulas = await conn.fetchval("SELECT COALESCE(SUM(capsulas), 0) FROM producoes_finalizadas WHERE comissao_paga = false")
             
             if not total_capsulas or total_capsulas == 0:
@@ -11051,7 +11084,6 @@ class GerenciamentoProducaoView(discord.ui.View):
 
             valor_comissao = int(total_capsulas * 1.00)
             
-            # Verifica se o caixa tem saldo limpo
             caixa = await conn.fetchrow("SELECT valor_limpo FROM caixa WHERE id = 1")
             caixa_limpo = caixa["valor_limpo"] if caixa else 0
 
@@ -11059,7 +11091,6 @@ class GerenciamentoProducaoView(discord.ui.View):
                 await interaction.followup.send(f"❌ **Saldo insuficiente no caixa!**\n\n💰 Saldo Limpo: {formatar_dinheiro(caixa_limpo)}\n💸 Comissão total: {formatar_dinheiro(valor_comissao)}", ephemeral=True)
                 return
 
-            # Desconta do caixa
             await movimentar_caixa(
                 tipo="compra",
                 valor=valor_comissao,
@@ -11068,7 +11099,6 @@ class GerenciamentoProducaoView(discord.ui.View):
                 tipo_dinheiro="limpo"
             )
 
-            # Marca como pago
             await conn.execute("UPDATE producoes_finalizadas SET comissao_paga = true WHERE comissao_paga = false")
 
         await enviar_painel_gerenciamento_producao()
@@ -11087,6 +11117,24 @@ class GerenciamentoProducaoView(discord.ui.View):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ─── BOTÃO DE RESETAR COMISSÕES MANUAL (ADICIONADO) ───
+    @discord.ui.button(label="🔄 Resetar Comissões (Manual)", style=discord.ButtonStyle.danger, custom_id="gerenciar_reset_comissoes", emoji="🔄", row=3)
+    async def resetar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem resetar as comissões!", ephemeral=True)
+            return
+            
+        embed = discord.Embed(
+            title="⚠️ RESETAR COMISSÕES DE PRODUÇÃO",
+            description="**ATENÇÃO!** Esta ação irá marcar **TODAS as produções atuais** como pagas.\n\n"
+                        "As comissões de cápsulas **zerarão** no painel.\n\n"
+                        "⚠️ **Só faça isso se já tiver pago todo mundo!**",
+            color=0xe74c3c
+        )
+        await interaction.response.send_message(embed=embed, view=ConfirmarResetComissoesProducaoView(), ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_gerenciamento_producao
 # ────────────────────────────────────────────────────────────────────────────────
