@@ -10851,6 +10851,8 @@ async def enviar_painel_gerenciamento_producao():
     # Puxa as Produções de HOJE e do MÊS
     prods_hoje_texto = ""
     prods_mes_texto = ""
+    guild = bot.get_guild(GUILD_ID)
+    
     pool = await get_pool()
     if pool:
         async with pool.acquire() as conn:
@@ -10864,8 +10866,7 @@ async def enviar_painel_gerenciamento_producao():
             """)
             if hoje:
                 for r in hoje:
-                    membro = await bot.fetch_user(int(r["user_id"]))
-                    nome = membro.display_name if membro else f"ID: {r['user_id']}"
+                    nome = await pegar_apelido(r["user_id"], guild)
                     task_emoji = "✅" if r["fez_task"] else "❌"
                     prods_hoje_texto += f"👤 **{nome}**\n   💣 {fmt_num(r['polvora'])} pólvoras | 💊 {fmt_num(r['capsulas'])} caps | {task_emoji} 2ª Task\n"
             else:
@@ -10883,14 +10884,7 @@ async def enviar_painel_gerenciamento_producao():
             """)
             if mes:
                 for r in mes:
-                    # CORREÇÃO AQUI: get_user é síncrono, não leva await. O fetch_user leva await.
-                    membro = bot.get_user(int(r["user_id"]))
-                    if not membro:
-                        try:
-                            membro = await bot.fetch_user(int(r["user_id"]))
-                        except:
-                            pass
-                    nome = membro.display_name if membro else f"ID: {r['user_id']}"
+                    nome = await pegar_apelido(r["user_id"], guild)
                     prods_mes_texto += f"👤 **{nome}**\n   💣 {fmt_num(r['polvora'])} pólvoras | 💊 {fmt_num(r['capsulas'])} caps\n   ✅ Task: {r['task_sim']}x | ❌ Sem Task: {r['task_nao']}x\n"
             else:
                 prods_mes_texto = "⚪ Nenhuma produção este mês ainda.\n"
