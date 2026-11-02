@@ -9121,8 +9121,9 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         pacotes_sub_total = sub // 50
         total = (pt * 50) + (sub * 90)
         
-         await salvar_venda_db(str(interaction.user.id), total, numero_pedido, pt, sub)
-        
+        # ─── AQUI ESTÁ A CORREÇÃO (PT E SUB) ───
+        await salvar_venda_db(str(interaction.user.id), total, numero_pedido, pt, sub)
+
         grupo = await buscar_grupo_por_organizacao(org_nome)
         if grupo:
             if pacotes_pt_total > 0:
@@ -9282,8 +9283,11 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
             embed.add_field(name="📝 OBSERVAÇÕES", value=nova_observacao, inline=False)
         titulo = embed.title
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
+        
+        # ─── AQUI ESTÁ A CORREÇÃO (ENVIA PT E SUB) ───
         if pedido_numero > 0:
             await atualizar_valor_venda_db(pedido_numero, total, nova_pt, nova_sub)
+            
         await self.message.edit(embed=embed)
 
         try:
@@ -9320,7 +9324,6 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
         await interaction.followup.send(embed=embed_confirmacao, ephemeral=True)
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarResetComissoesView
 # ────────────────────────────────────────────────────────────────────────────────
