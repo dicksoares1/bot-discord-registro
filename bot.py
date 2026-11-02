@@ -20859,7 +20859,7 @@ LOGS:
 
 async def _executar_resumo_ia(data_inicio=None):
     """
-    Função interna reutilizada pela task automática E pelo comando de teste.
+    Gera o arquivo .txt completo e envia um resumo compacto para a IA.
     """
     pool = await get_pool()
     if not pool:
@@ -20871,45 +20871,103 @@ async def _executar_resumo_ia(data_inicio=None):
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                """SELECT user_nome, user_id, modulo, acao, item_nome, detalhes
+                """SELECT user_nome, user_id, modulo, acao, item_nome, detalhes, data
                    FROM auditoria
                    WHERE data >= $1
                    ORDER BY data DESC
-                   LIMIT 300""",
+                   LIMIT 500""",
                 para_db_naive(data_inicio)
             )
-        logs = [dict(r) for r in rows]
-        data_str = data_inicio.strftime("%d/%m/%Y")
-        return await gerar_resumo_ia(logs, data_str)
-    except Exception as e:
-        logger.error(f"❌ Erro ao executar resumo: {e}")
-        return f"⚠️ Erro: {str(e)[:150]}"
+            
+        if not rows:
+            return "📭 Nenhuma atividade registrada hoje."
 
+        # 1. GERAR O ARQUIVO .TXT COMPLETO
+        linhas = []
+        sep = "=" * 80
+        linhas.append(sep)
+        linhas.append("📋 RELATÓRIO COMPLETO DE AUDITORIA - VIDA RASA 442")
+        linhas.append(sep)
+        linhas.append(f"📅 Data: {data_inicio.strftime('%d/%m/%Y')}")
+        linhas.append("")
+        
+        for r in rows:
+            dt = r["data"].strftime("%H:%M") if r["data"] else "--:--"
+            linha = f"[{dt}] {r['user_nome'] or r['user_id']} | {r['modulo'].upper()} | {r['acao']}"
+            if r['item_nome']: linha += f" | {r['item_nome']}"
+            if r['detalhes']: linha += f" | {r['detalhes']}"
+            linhas.append(linha)
+            
+        texto_txt = "\n".join(linhas)
+        arquivo = discord.File(io.BytesIO(texto_txt.encode("utf-8")), filename=f"logs_{data_inicio.strftime('%d-%m-%Y')}.txt")
+        
+        # Envia o .txt no canal
+        canal = bot.get_channel(CANAL_GERENCIA_ID)
+        if canal:
+            await canal.send(content="📎 **Arquivo completo de logs do dia:**", file=arquivo)
 
-async def _executar_resumo_ia(data_inicio=None):
-    """
-    Função interna reutilizada pela task automática E pelo comando de teste.
-    """
-    pool = await get_pool()
-    if not pool:
-        return "❌ Banco de dados indisponível."
+        # 2. GERAR O RESUMO ESTATÍSTICO PARA A IA (Compacto)
+        vendas = sum(1 for r in rows if r["modulo"] == "vendas")
+        metas = sum(1 for r in rows if r["modulo"] == "metas")
+        acoes = sum(1 for r in rows if r["modulo"] == "acoes")
+        producao = sum(1 for r in rows if r["modulo"] == "producao")
+        bau = sum(1 for r in rows if r["modulo"] == "bau")
+        
+        # Pega os 3 membros que mais fizeram ações
+        autores = {}
+        for r in rows:
+            nome = r["user_nome"] or "Desconhecido"
+            autores[nome] = autores.get(nome, 0) + 1
+        top_autores = sorted(autores.items(), key=lambda x: x[1], reverse=True)[:3]
+        texto_autores = ", ".join([f"{n} ({q}x)" for n, q in top_autores])
 
-    if not data_inicio:
-        data_inicio = agora().replace(hour=0, minute=0, second=0, microsecond=0)
+        # Texto super curto para a IA (não vai estourar o limite de 8000 tokens)
+        resumo_compacto = (
+            f"Data: {data_inicio.strftime('%d/%m/%Y')}\n"
+            f"Total de logs: {len(rows)}\n"
+            f"Vendas registradas: {vendas}\n"
+            f"Movimentações de metas: {metas}\n"
+            f"Ações: {acoes}\n"
+            f"Produções: {producao}\n"
+            f"Movimentações de baú: {bau}\n"
+            f"Top membros ativos: {texto_autores}\n"
+        )
 
-    try:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """SELECT user_nome, user_id, modulo, acao, item_nome, detalhes
-                   FROM auditoria
-                   WHERE data >= $1
-                   ORDER BY data DESC
-                   LIMIT 300""",
-                para_db_naive(data_inicio)
-            )
-        logs = [dict(r) for r in rows]
-        data_str = data_inicio.strftime("%d/%m/%Y")
-        return await gerar_resumo_ia(logs, data_str)
+        # 3. CHAMAR A IA COM O RESUMO COMPACTO
+        prompt = f"""Você é o assistente oficial da facção "Vida Rasa 442" no GTA RP.
+Com base nos dados abaixo, produza um resumo curto em português.
+
+DADOS:
+{resumo_compacto}
+
+FORMATO EXATO:
+## 📊 RESUMO DO DIA — {data_inicio.strftime('%d/%m/%Y')}
+
+**📈 ATIVIDADE GERAL**
+• Total de ações no bot: X
+• Membro mais ativo: X
+
+**💰 VENDAS E METAS**
+• Vendas: X | Metas: X
+
+**⚔️ AÇÕES E PRODUÇÃO**
+• Ações: X | Produções: X
+
+**🔥 DESTAQUE DO DIA**
+<uma frase curta elogiando a equipe>
+"""
+
+        async with http_session.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={"model": "openai/gpt-oss-120b", "messages": [{"role": "user", "content": prompt}], "max_tokens": 500, "temperature": 0.4},
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as r:
+            if r.status == 200:
+                data = await r.json()
+                return data["choices"][0]["message"]["content"]
+            return "⚠️ Erro na IA, mas o arquivo .txt foi gerado."
+            
     except Exception as e:
         logger.error(f"❌ Erro ao executar resumo: {e}")
         return f"⚠️ Erro: {str(e)[:150]}"
