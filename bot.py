@@ -10824,27 +10824,29 @@ async def enviar_painel_gerenciamento_producao():
     estoque_insumos = await carregar_estoque_insumos()
     estoque_polvora = await carregar_estoque_polvora()
     
-    # Puxa os galpões ativos do banco
-    pool = await get_pool()
+    # Puxa os ALUGUÉIS em vez das produções
+    alugueis = await carregar_alugueis()
     galpoes_ativos_texto = ""
-    if pool:
-        async with pool.acquire() as conn:
-            ativos = await conn.fetch("SELECT galpao, inicio, fim FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
-            if ativos:
-                for a in ativos:
-                    fim = a["fim"]
-                    if isinstance(fim, str):
-                        fim = str_para_datetime_completa(fim)
-                    if fim and fim.tzinfo is None:
-                        fim = fim.replace(tzinfo=BRASIL)
-                    
-                    tempo_restante = fim - agora()
-                    if tempo_restante.total_seconds() > 0:
-                        mins = int(tempo_restante.total_seconds() // 60)
-                        segs = int(tempo_restante.total_seconds() % 60)
-                        galpoes_ativos_texto += f"🟢 **{a['galpao']}**: {mins}m {segs}s restantes\n"
+    
+    for galpao, dados in alugueis.items():
+        dias = dados["dias"]
+        inicio = dados["inicio"]
+        if inicio and dias > 0:
+            if isinstance(inicio, datetime) and inicio.tzinfo is None:
+                inicio = inicio.replace(tzinfo=BRASIL)
+            
+            dias_passados = (agora() - inicio).days
+            dias_restantes = max(0, dias - dias_passados)
+            
+            if dias_restantes > 0:
+                galpoes_ativos_texto += f"🟢 **{galpao}**: {dias_restantes} dias restantes\n"
             else:
-                galpoes_ativos_texto = "⚪ Nenhum galpão em produção no momento.\n"
+                galpoes_ativos_texto += f"🔴 **{galpao}**: EXPIRADO\n"
+        else:
+            galpoes_ativos_texto += f"⚪ **{galpao}**: NÃO ALUGADO\n"
+            
+    if not galpoes_ativos_texto:
+        galpoes_ativos_texto = "⚪ Nenhum aluguel registrado.\n"
 
     embed = discord.Embed(
         title="🏭 ── GERENCIAMENTO DE PRODUÇÃO ── 🏭",
@@ -10856,8 +10858,9 @@ async def enviar_painel_gerenciamento_producao():
 
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
     
+    # Nome do campo atualizado para Aluguéis
     embed.add_field(
-        name="⏱️ TEMPO DE GALPÕES ATIVOS",
+        name="⏱️ TEMPO DE ALUGUEL DOS GALPÕES",
         value=f"```yaml\n{galpoes_ativos_texto.strip()}\n```",
         inline=False
     )
