@@ -575,6 +575,9 @@ async def inicializar_tabelas(pool):
                 valor INTEGER,
                 data VARCHAR(20),
                 pedido_numero INTEGER,
+                pt INTEGER DEFAULT 0,
+                sub INTEGER DEFAULT 0,
+                comissao_paga BOOLEAN DEFAULT false,
                 finalizado BOOLEAN DEFAULT false,
                 cancelado BOOLEAN DEFAULT false,
                 finalizado_em TIMESTAMP,
@@ -582,6 +585,9 @@ async def inicializar_tabelas(pool):
                 migrado BOOLEAN DEFAULT false
             )
         """)
+        await conn.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS pt INTEGER DEFAULT 0")
+        await conn.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS sub INTEGER DEFAULT 0")
+        await conn.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS comissao_paga BOOLEAN DEFAULT false")
         await conn.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS finalizado BOOLEAN DEFAULT false")
         await conn.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cancelado BOOLEAN DEFAULT false")
         await conn.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS finalizado_em TIMESTAMP")
@@ -590,6 +596,7 @@ async def inicializar_tabelas(pool):
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_vendas_data ON vendas(data)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_vendas_pedido ON vendas(pedido_numero)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_vendas_user ON vendas(user_id)")
+        
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS pedidos (
                 id INTEGER PRIMARY KEY DEFAULT 1,
@@ -7079,26 +7086,31 @@ async def proximo_pedido():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_venda_db
 # ────────────────────────────────────────────────────────────────────────────────
-async def salvar_venda_db(vendedor_id, valor, pedido_numero):
+async def salvar_venda_db(vendedor_id, valor, pedido_numero, pt=0, sub=0):
     pool = await get_pool()
     if not pool:
         return
     try:
         async with pool.acquire() as conn:
-            await conn.execute("INSERT INTO vendas (user_id, valor, data, pedido_numero) VALUES ($1, $2, $3, $4)", vendedor_id, valor, agora_db().strftime("%d/%m/%Y"), pedido_numero)
+            await conn.execute(
+                "INSERT INTO vendas (user_id, valor, data, pedido_numero, pt, sub) VALUES ($1, $2, $3, $4, $5, $6)", 
+                vendedor_id, valor, agora_db().strftime("%d/%m/%Y"), pedido_numero, pt, sub
+            )
     except Exception as e:
         logger.error(f"❌ Erro ao salvar venda: {e}")
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_valor_venda_db
 # ────────────────────────────────────────────────────────────────────────────────
-async def atualizar_valor_venda_db(pedido_numero, valor):
+async def atualizar_valor_venda_db(pedido_numero, valor, pt=None, sub=None):
     pool = await get_pool()
     if not pool:
         return
     try:
         async with pool.acquire() as conn:
-            await conn.execute("UPDATE vendas SET valor=$1 WHERE pedido_numero=$2", valor, pedido_numero)
+            if pt is not None and sub is not None:
+                await conn.execute("UPDATE vendas SET valor=$1, pt=$2, sub=$3 WHERE pedido_numero=$4", valor, pt, sub, pedido_numero)
+            else:
+                await conn.execute("UPDATE vendas SET valor=$1 WHERE pedido_numero=$2", valor, pedido_numero)
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar venda: {e}")
 
@@ -9109,8 +9121,8 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         pacotes_sub_total = sub // 50
         total = (pt * 50) + (sub * 90)
         
-        await salvar_venda_db(str(interaction.user.id), total, numero_pedido)
-
+         await salvar_venda_db(str(interaction.user.id), total, numero_pedido, pt, sub)
+        
         grupo = await buscar_grupo_por_organizacao(org_nome)
         if grupo:
             if pacotes_pt_total > 0:
@@ -9271,7 +9283,7 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
         titulo = embed.title
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
         if pedido_numero > 0:
-            await atualizar_valor_venda_db(pedido_numero, total)
+            await atualizar_valor_venda_db(pedido_numero, total, nova_pt, nova_sub)
         await self.message.edit(embed=embed)
 
         try:
@@ -9309,6 +9321,41 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarResetComissoesView
+# ────────────────────────────────────────────────────────────────────────────────
+class ConfirmarResetComissoesView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="✅ SIM, RESETAR", style=discord.ButtonStyle.danger, custom_id="conf_reset_comissoes")
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            res = await conn.execute("UPDATE vendas SET comissao_paga = true WHERE comissao_paga = false AND cancelado = false")
+        
+        # Extrai quantas linhas foram afetadas do retorno do postgres (ex: "UPDATE 15")
+        afetadas = res.split(" ")[1] if " " in res else "0"
+
+        await enviar_painel_vendas()
+        await interaction.followup.send(f"✅ **Comissões resetadas!**\n💰 {afetadas} vendas foram marcadas como pagas.", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+
+    @discord.ui.button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id="cancel_reset_comissoes")
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Reset cancelado.", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CalculadoraView
 # ────────────────────────────────────────────────────────────────────────────────
@@ -9376,6 +9423,23 @@ class CalculadoraView(discord.ui.View):
         modal = RelatorioVendasModal()
         await interaction.response.send_modal(modal)
 
+    @discord.ui.button(label="🔄 Resetar Comissões", style=discord.ButtonStyle.danger, custom_id="calc_reset_comissoes", emoji="🔄", row=3)
+    async def resetar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem resetar as comissões!", ephemeral=True)
+            return
+            
+        embed = discord.Embed(
+            title="⚠️ RESETAR COMISSÕES",
+            description="**ATENÇÃO!** Esta ação irá marcar **TODAS as vendas atuais** como pagas.\n\n"
+                        "Os 10% de comissão de cada vendedor **zerarão** no painel.\n\n"
+                        "⚠️ **Só faça isso se já tiver pagado todo mundo!**",
+            color=0xe74c3c
+        )
+        await interaction.response.send_message(embed=embed, view=ConfirmarResetComissoesView(), ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioVendasPeriodoModal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -9838,7 +9902,7 @@ async def enviar_painel_vendas():
     estoque = await carregar_estoque()
 
     # Lógica de cores para a barra de progresso do estoque
-    pct_pt = min(estoque['PT'] / 1000, 1.0) # Considera 1000 pacotes como "cheio"
+    pct_pt = min(estoque['PT'] / 1000, 1.0)
     pct_sub = min(estoque['SUB'] / 1000, 1.0)
     
     barra_pt = "▓" * int(pct_pt * 10) + "░" * (10 - int(pct_pt * 10))
@@ -9846,7 +9910,7 @@ async def enviar_painel_vendas():
 
     embed = discord.Embed(
         title="🛒 ── CENTRAL DE VENDAS ── 🛒",
-        description="**Sistema de Encomendas • VDR 442**\n*Gerencie os pedidos e o estoque da facção*",
+        description="**Sistema de Encomendas • VDR 442**\n*Gerencie os pedidos, o estoque e as comissões*",
         color=0x1ABC9C,
         timestamp=agora()
     )
@@ -9891,6 +9955,38 @@ async def enviar_painel_vendas():
         inline=False
     )
 
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # ─── BUSCA AS COMISSÕES NO BANCO ───
+    comissoes_texto = ""
+    pool = await get_pool()
+    if pool:
+        async with pool.acquire() as conn:
+            comissoes = await conn.fetch("""
+                SELECT user_id, SUM(pt) as pt, SUM(sub) as sub, SUM(valor) as valor
+                FROM vendas 
+                WHERE comissao_paga = false AND cancelado = false
+                GROUP BY user_id
+                ORDER BY valor DESC
+            """)
+            if comissoes:
+                guild = bot.get_guild(GUILD_ID)
+                for r in comissoes:
+                    nome = await pegar_apelido(r["user_id"], guild)
+                    valor_venda = r["valor"] or 0
+                    comissao = int(valor_venda * 0.10)
+                    
+                    if comissao > 0 or valor_venda > 0:
+                        comissoes_texto += f"👤 **{nome}**\n"
+                        comissoes_texto += f"   💊 {fmt_num(r['pt'])} PT | 💊 {fmt_num(r['sub'])} SUB\n"
+                        comissoes_texto += f"   💰 Vendas: {formatar_dinheiro(valor_venda)}\n"
+                        comissoes_texto += f"   💵 Comissão (10%): **{formatar_dinheiro(comissao)}**\n\n"
+            else:
+                comissoes_texto = "⚪ Nenhuma comissão pendente no momento.\n"
+
+    # Limita para não estourar o limite do Discord
+    comissoes_texto = comissoes_texto[:1000] + "..." if len(comissoes_texto) > 1000 else comissoes_texto
+    embed.add_field(name="💸 COMISSÕES A PAGAR (10%)", value=f"```yaml\n{comissoes_texto.strip()}\n```", inline=False)
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
     embed.add_field(
