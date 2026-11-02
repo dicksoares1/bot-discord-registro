@@ -2855,7 +2855,6 @@ class RegistrarCompraView(discord.ui.View):
 class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEIRO"):
     data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO", placeholder="Ex: 01/04/2026", required=True)
     data_fim = discord.ui.TextInput(label="📅 Data FIM", placeholder="Ex: 30/04/2026", required=True)
-    embalagens = discord.ui.TextInput(label="📦 Embalagens compradas (opcional)", placeholder="Ex: 25000 (deixe em branco se não quiser)", required=False)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -2865,22 +2864,13 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
             inicio_dt = inicio.replace(hour=0, minute=0, second=0)
             fim_dt = fim.replace(hour=23, minute=59, second=59)
             
-            total_embalagens = 0
-            total_gasto_embalagens = 0
-            if self.embalagens.value and self.embalagens.value.strip():
-                try:
-                    total_embalagens = safe_int(self.embalagens.value)
-                    total_gasto_embalagens = int(total_embalagens * PRECO_EMBALAGEM_POR_UNIDADE)
-                except:
-                    pass
-
             pool = await get_pool()
             if not pool:
                 await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
                 return
 
             async with pool.acquire() as conn:
-                # Dados de produção
+                # Dados de produção (pólvora gasta nas fabricações)
                 polvora_row = await conn.fetchrow(
                     "SELECT COALESCE(SUM(polvora), 0) as total_polvora FROM producoes_finalizadas WHERE data >= $1 AND data <= $2",
                     inicio_dt, fim_dt
@@ -2904,15 +2894,19 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
                     inicio_dt, fim_dt
                 )
                 
-            # Cálculos
+            # Cálculos iniciais
             total_polvora_gasta = polvora_row["total_polvora"] or 0
             total_gasto_polvora = total_polvora_gasta * PRECO_POLVORA
             total_vendas = vendas_row["total_vendas"] or 0
             total_polvora_comprada = polvora_comprada_row["total_quantidade"] or 0
             total_gasto_polvora_comprada = polvora_comprada_row["total_valor"] or 0
 
-            # Separa lançamentos
+            # Separa lançamentos (identificando as embalagens automaticamente)
             gastos_por_tipo = {}
+            total_embalagens = 0
+            total_gasto_embalagens = 0
+            total_gasto_lancamentos = 0
+            
             for compra in compras_row:
                 produto_bruto = compra["produto"]
                 valor = compra["valor"] or 0
@@ -2924,14 +2918,22 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
                     tipo = "Compras"
                     descricao = produto_bruto
                 
-                if tipo not in gastos_por_tipo:
-                    gastos_por_tipo[tipo] = {"total": 0, "itens": []}
-                
-                gastos_por_tipo[tipo]["total"] += valor
-                data_formatada = compra["data"].strftime("%d/%m/%Y")
-                gastos_por_tipo[tipo]["itens"].append((data_formatada, descricao, valor))
+                # --- CAPTURA AUTOMÁTICA DAS EMBALAGENS ---
+                if "embalagem" in descricao.lower():
+                    total_gasto_embalagens += valor
+                    # Calcula a quantidade com base no valor pago
+                    qtd_est = int(valor / PRECO_EMBALAGEM_POR_UNIDADE) if PRECO_EMBALAGEM_POR_UNIDADE > 0 else 0
+                    total_embalagens += qtd_est
+                else:
+                    # Se não for embalagem, entra nos "outros lançamentos"
+                    total_gasto_lancamentos += valor
+                    if tipo not in gastos_por_tipo:
+                        gastos_por_tipo[tipo] = {"total": 0, "itens": []}
+                    gastos_por_tipo[tipo]["total"] += valor
+                    data_formatada = compra["data"].strftime("%d/%m/%Y")
+                    gastos_por_tipo[tipo]["itens"].append((data_formatada, descricao, valor))
 
-            total_gasto_lancamentos = sum(t["total"] for t in gastos_por_tipo.values())
+            # Cálculo Final
             total_gastos = total_gasto_polvora + total_gasto_embalagens + total_gasto_lancamentos
             saldo = total_vendas - total_gastos
 
@@ -2959,7 +2961,9 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
             linhas.append(sep_traco)
             linhas.append(f"• Pólvora Utilizada:       {formatar_dinheiro(total_gasto_polvora)} ({fmt_num(total_polvora_gasta)} un)")
             if total_embalagens > 0:
-                linhas.append(f"• Embalagens Compradas:    {formatar_dinheiro(total_gasto_embalagens)} ({fmt_num(total_embalagens)} un)")
+                linhas.append(f"• Embalagens Compradas:    {formatar_dinheiro(total_gasto_embalagens)} (Aprox. {fmt_num(total_embalagens)} un)")
+            else:
+                linhas.append(f"• Embalagens Compradas:    R$ 0,00")
             if total_gasto_lancamentos > 0:
                 linhas.append(f"• Outros Lançamentos:      {formatar_dinheiro(total_gasto_lancamentos)}")
             linhas.append(f"• TOTAL GASTO:             {formatar_dinheiro(total_gastos)}")
@@ -2967,7 +2971,7 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
 
             if gastos_por_tipo:
                 linhas.append(sep_traco)
-                linhas.append("💸 DETALHAMENTO POR TIPO DE LANÇAMENTO")
+                linhas.append("💸 DETALHAMENTO DE OUTROS LANÇAMENTOS")
                 linhas.append(sep_traco)
                 for tipo, dados in gastos_por_tipo.items():
                     linhas.append(f"🔹 {tipo.upper()} (Total: {formatar_dinheiro(dados['total'])})")
@@ -2999,7 +3003,7 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
                     content=f"📊 **Relatório Financeiro** — `{self.data_inicio.value}` a `{self.data_fim.value}`",
                     file=arquivo
                 )
-                await interaction.followup.send(f"✅ Relatório financeiro enviado em {canal.mention}!", ephemeral=True)
+                await interaction.followup.send(f"✅ Relatório financeiro gerado e enviado em {canal.mention}!\n*(As embalagens foram calculadas automaticamente com base nos lançamentos do período).*", ephemeral=True)
             else:
                 await interaction.followup.send("❌ Canal de relatório financeiro não encontrado!", ephemeral=True)
                 
