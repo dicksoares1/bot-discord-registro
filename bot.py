@@ -471,10 +471,12 @@ async def inicializar_tabelas(pool):
                 data TIMESTAMP,
                 polvora INTEGER,
                 galpao TEXT,
-                segunda_task BOOLEAN DEFAULT false
+                segunda_task BOOLEAN DEFAULT false,
+                comissao_paga BOOLEAN DEFAULT false
             )
         """)
         await conn.execute("ALTER TABLE producoes_finalizadas ADD COLUMN IF NOT EXISTS segunda_task BOOLEAN DEFAULT false")
+        await conn.execute("ALTER TABLE producoes_finalizadas ADD COLUMN IF NOT EXISTS comissao_paga BOOLEAN DEFAULT false")
         
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS producao_municao (
