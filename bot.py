@@ -2704,7 +2704,7 @@ async def salvar_compra_db(produto, valor, comprado_por, quantidade=0, tipo="Com
         logger.error(f"❌ Erro ao salvar lançamento: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: RegistrarCompraModal (Atualizada com quantidade)
+# CLASSE: RegistrarCompraModal (Atualizada com quantidade automática)
 # ────────────────────────────────────────────────────────────────────────────────
 class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento"):
     tipo_lancamento = discord.ui.TextInput(
@@ -2733,7 +2733,7 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
     )
     valor = discord.ui.TextInput(
         label="💰 Valor total (deixe 0 para calcular)", 
-        placeholder="Ex: 0 (calcula automatico) ou 50000", 
+        placeholder="Ex: 40000 ou 0 (se preencher a quantidade acima)", 
         required=False
     )
 
@@ -2749,7 +2749,6 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
         # Pega as quantidades
         qtd_compra = safe_int(self.quantidade.value) if self.quantidade.value else 0
         qtd_brinde = safe_int(self.brinde.value) if self.brinde.value else 0
-        qtd_total_estoque = qtd_compra + qtd_brinde
 
         # Pega o valor (ou calcula)
         valor_input = safe_int(self.valor.value) if self.valor.value else 0
@@ -2764,14 +2763,22 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
         elif "embalagem" in produto_lower:
             preco_unitario = PRECO_EMBALAGEM_POR_UNIDADE
             
+        # Se não digitou valor, calcula pelo preço unitário
         if valor_compra <= 0:
             if preco_unitario > 0 and qtd_compra > 0:
                 valor_compra = int(qtd_compra * preco_unitario)
             else:
-                await interaction.followup.send("❌ **Valor inválido!** Como não foi possível calcular automaticamente, você precisa digitar o valor.", ephemeral=True)
+                await interaction.followup.send("❌ **Valor inválido!** Como não foi possível calcular automaticamente, você precisa digitar o valor total.", ephemeral=True)
                 return
 
-        # Salva no banco
+        # Se não digitou a quantidade, calcula automaticamente pelo valor gasto
+        if qtd_compra == 0 and preco_unitario > 0:
+            qtd_compra = int(valor_compra / preco_unitario)
+            logger.info(f"🧮 Quantidade calculada automaticamente: {qtd_compra} un (Baseado no valor R$ {valor_compra})")
+
+        qtd_total_estoque = qtd_compra + qtd_brinde
+
+        # Salva no banco de dados financeiro
         pool = await get_pool()
         if pool:
             async with pool.acquire() as conn:
@@ -2780,13 +2787,14 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
                     f"[{tipo}] {descricao}", valor_compra, str(interaction.user.id), agora_db()
                 )
 
-                # ─── ATUALIZA O ESTOQUE ───
-                if "polvora" in produto_lower or "pólvora" in produto_lower:
-                    if qtd_total_estoque > 0:
+                # ─── ATUALIZA O ESTOQUE AUTOMATICAMENTE ───
+                if qtd_total_estoque > 0:
+                    if "polvora" in produto_lower or "pólvora" in produto_lower:
                         await atualizar_estoque_polvora(qtd_total_estoque, "adicionar")
-                elif "embalagem" in produto_lower:
-                    if qtd_total_estoque > 0:
+                        logger.info(f"🧨 Estoque de pólvora atualizado via lançamento: +{qtd_total_estoque}")
+                    elif "embalagem" in produto_lower:
                         await atualizar_estoque_embalagens(qtd_total_estoque, "adicionar")
+                        logger.info(f"📦 Estoque de embalagens atualizado via lançamento: +{qtd_total_estoque}")
 
         # Movimenta o caixa
         await movimentar_caixa(
@@ -2806,7 +2814,7 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
             texto_qtd = f"{fmt_num(qtd_compra)} un"
             if qtd_brinde > 0:
                 texto_qtd += f" + {fmt_num(qtd_brinde)} brinde"
-            embed.add_field(name="🔢 Quantidade (Estoque)", value=texto_qtd, inline=True)
+            embed.add_field(name="🔢 Quantidade (Adicionada ao Estoque)", value=texto_qtd, inline=True)
             
         embed.add_field(name="👤 Registrado por", value=interaction.user.mention, inline=True)
         embed.add_field(name="📅 Data", value=f"<t:{int(data_atual.timestamp())}:F>", inline=False)
@@ -2818,17 +2826,18 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
             await canal_destino.send(embed=embed)
             
         await interaction.followup.send(
-            f"✅ **Lançamento registrado com sucesso!**\n"
+            f"✅ **Lançamento registrado e estoque atualizado!**\n"
             f"🏷️ Tipo: {tipo}\n"
             f"📦 Descrição: {descricao}\n"
             f"💰 Valor: {formatar_dinheiro(valor_compra)}"
-            + (f"\n🔢 Estoque: {fmt_num(qtd_total_estoque)} un" if qtd_total_estoque > 0 else ""),
+            + (f"\n🔢 Estoque: +{fmt_num(qtd_total_estoque)} un" if qtd_total_estoque > 0 else ""),
             ephemeral=True
         )
         
         # Atualiza os painéis
         await enviar_painel_registrar_compra()
         await enviar_painel_caixa()
+        await enviar_painel_gerenciamento_producao() # Atualiza o painel de estoque novo
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCompraView
 # ────────────────────────────────────────────────────────────────────────────────
