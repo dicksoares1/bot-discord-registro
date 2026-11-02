@@ -470,9 +470,12 @@ async def inicializar_tabelas(pool):
                 capsulas INTEGER,
                 data TIMESTAMP,
                 polvora INTEGER,
-                galpao TEXT
+                galpao TEXT,
+                segunda_task BOOLEAN DEFAULT false
             )
         """)
+        await conn.execute("ALTER TABLE producoes_finalizadas ADD COLUMN IF NOT EXISTS segunda_task BOOLEAN DEFAULT false")
+        
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS producao_municao (
                 id SERIAL PRIMARY KEY,
@@ -10324,7 +10327,7 @@ async def carregar_alugueis():
 # ────────────────────────────────────────────────────────────────────────────────
 class SegundaTaskView(discord.ui.View):
     def __init__(self, pid):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None) # <── MUDANÇA AQUI: timeout=None
         self.pid = pid
 
     @discord.ui.button(label="✅ Confirmar 2ª Task", style=discord.ButtonStyle.success, custom_id="segunda_task_btn")
@@ -10367,7 +10370,6 @@ class SegundaTaskView(discord.ui.View):
         except Exception as e:
             logger.error(f"Erro segunda task: {e}")
             await interaction.followup.send(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarProducaoView (Aparece após preencher o modal)
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10824,7 +10826,7 @@ async def enviar_painel_gerenciamento_producao():
     estoque_insumos = await carregar_estoque_insumos()
     estoque_polvora = await carregar_estoque_polvora()
     
-    # Puxa os ALUGUÉIS em vez das produções
+    # Puxa os ALUGUÉIS
     alugueis = await carregar_alugueis()
     galpoes_ativos_texto = ""
     
@@ -10834,10 +10836,8 @@ async def enviar_painel_gerenciamento_producao():
         if inicio and dias > 0:
             if isinstance(inicio, datetime) and inicio.tzinfo is None:
                 inicio = inicio.replace(tzinfo=BRASIL)
-            
             dias_passados = (agora() - inicio).days
             dias_restantes = max(0, dias - dias_passados)
-            
             if dias_restantes > 0:
                 galpoes_ativos_texto += f"🟢 **{galpao}**: {dias_restantes} dias restantes\n"
             else:
@@ -10848,6 +10848,47 @@ async def enviar_painel_gerenciamento_producao():
     if not galpoes_ativos_texto:
         galpoes_ativos_texto = "⚪ Nenhum aluguel registrado.\n"
 
+    # Puxa as Produções de HOJE e do MÊS
+    prods_hoje_texto = ""
+    prods_mes_texto = ""
+    pool = await get_pool()
+    if pool:
+        async with pool.acquire() as conn:
+            # HOJE
+            hoje = await conn.fetch("""
+                SELECT user_id, SUM(polvora) as polvora, SUM(capsulas) as capsulas, bool_or(segunda_task) as fez_task
+                FROM producoes_finalizadas 
+                WHERE data >= CURRENT_DATE
+                GROUP BY user_id
+                ORDER BY capsulas DESC
+            """)
+            if hoje:
+                for r in hoje:
+                    membro = await bot.fetch_user(int(r["user_id"]))
+                    nome = membro.display_name if membro else f"ID: {r['user_id']}"
+                    task_emoji = "✅" if r["fez_task"] else "❌"
+                    prods_hoje_texto += f"👤 **{nome}**\n   💣 {fmt_num(r['polvora'])} pólvoras | 💊 {fmt_num(r['capsulas'])} caps | {task_emoji} 2ª Task\n"
+            else:
+                prods_hoje_texto = "⚪ Nenhuma produção hoje ainda.\n"
+
+            # MÊS
+            mes = await conn.fetch("""
+                SELECT user_id, SUM(polvora) as polvora, SUM(capsulas) as capsulas,
+                SUM(CASE WHEN segunda_task THEN 1 ELSE 0 END) as task_sim,
+                SUM(CASE WHEN NOT segunda_task THEN 1 ELSE 0 END) as task_nao
+                FROM producoes_finalizadas 
+                WHERE data >= date_trunc('month', CURRENT_DATE)
+                GROUP BY user_id
+                ORDER BY capsulas DESC
+            """)
+            if mes:
+                for r in mes:
+                    membro = await bot.get_user(int(r["user_id"])) or await bot.fetch_user(int(r["user_id"]))
+                    nome = membro.display_name if membro else f"ID: {r['user_id']}"
+                    prods_mes_texto += f"👤 **{nome}**\n   💣 {fmt_num(r['polvora'])} pólvoras | 💊 {fmt_num(r['capsulas'])} caps\n   ✅ Task: {r['task_sim']}x | ❌ Sem Task: {r['task_nao']}x\n"
+            else:
+                prods_mes_texto = "⚪ Nenhuma produção este mês ainda.\n"
+
     embed = discord.Embed(
         title="🏭 ── GERENCIAMENTO DE PRODUÇÃO ── 🏭",
         description="**VDR 442 • Controle de Insumos e Galpões**\n*Aqui você gerencia o estoque, aluguéis e relatórios*",
@@ -10857,44 +10898,33 @@ async def enviar_painel_gerenciamento_producao():
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
 
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    
-    # Nome do campo atualizado para Aluguéis
-    embed.add_field(
-        name="⏱️ TEMPO DE ALUGUEL DOS GALPÕES",
-        value=f"```yaml\n{galpoes_ativos_texto.strip()}\n```",
-        inline=False
-    )
-    
+    embed.add_field(name="⏱️ TEMPO DE ALUGUEL DOS GALPÕES", value=f"```yaml\n{galpoes_ativos_texto.strip()}\n```", inline=False)
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
     
     embed.add_field(
         name="🔫 ESTOQUE DE MUNIÇÕES",
-        value=(
-            f"```yaml\n"
-            f"PT:  {fmt_num(estoque_municoes['PT'])} pacotes\n"
-            f"SUB: {fmt_num(estoque_municoes['SUB'])} pacotes\n"
-            f"```"
-        ),
+        value=f"```yaml\nPT:  {fmt_num(estoque_municoes['PT'])} pacotes\nSUB: {fmt_num(estoque_municoes['SUB'])} pacotes\n```",
+        inline=True
+    )
+    embed.add_field(
+        name="💊 ESTOQUE DE INSUMOS",
+        value=f"```yaml\n🧨 Pólvora:    {fmt_num(estoque_polvora)} un\n💊 Cápsulas:   {fmt_num(estoque_insumos['capsulas'])} un\n📦 Embalagens: {fmt_num(estoque_insumos['embalagens'])} un\n```",
         inline=True
     )
 
-    embed.add_field(
-        name="💊 ESTOQUE DE INSUMOS",
-        value=(
-            f"```yaml\n"
-            f"🧨 Pólvora:    {fmt_num(estoque_polvora)} un\n"
-            f"💊 Cápsulas:   {fmt_num(estoque_insumos['capsulas'])} un\n"
-            f"📦 Embalagens: {fmt_num(estoque_insumos['embalagens'])} un\n"
-            f"```"
-        ),
-        inline=True
-    )
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    
+    # Trunca se passar do limite do Discord (1024)
+    prods_hoje_texto = prods_hoje_texto[:1000] + "..." if len(prods_hoje_texto) > 1000 else prods_hoje_texto
+    prods_mes_texto = prods_mes_texto[:1000] + "..." if len(prods_mes_texto) > 1000 else prods_mes_texto
+
+    embed.add_field(name=f"📊 PRODUÇÕES DE HOJE ({agora().strftime('%d/%m')})", value=f"```yaml\n{prods_hoje_texto.strip()}\n```", inline=False)
+    embed.add_field(name=f"📅 PRODUÇÕES DO MÊS ({agora().strftime('%B').capitalize()})", value=f"```yaml\n{prods_mes_texto.strip()}\n```", inline=False)
 
     embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = GerenciamentoProducaoView()
     
-    # Deleta painéis antigos para não acumular
     try:
         async for msg in canal.history(limit=20):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
@@ -10906,7 +10936,6 @@ async def enviar_painel_gerenciamento_producao():
         await canal.send(embed=embed, view=view)
     except Exception as e:
         logger.error(f"❌ Erro ao enviar painel de gerenciamento: {e}")
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarEstoqueCompletoModal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -11383,12 +11412,14 @@ async def finalizar_producao(pid, msg, prod):
         galpao = prod["galpao"]
         qtd_galpoes = prod.get("qtd_galpoes", 1)
         polvora_por_galpao = prod.get("polvora_por_galpao", polvora_total // qtd_galpoes if qtd_galpoes > 0 else polvora_total)
+        
         if "NORTE" in galpao.upper():
             base_por_galpao = 1777 if segunda else 1688
         elif "SUL" in galpao.upper():
             base_por_galpao = 1618 if segunda else 1608
         else:
             base_por_galpao = 1777 if segunda else 1688
+            
         capsulas_por_galpao = (base_por_galpao * polvora_por_galpao) // 400
         capsulas_total = capsulas_por_galpao * qtd_galpoes
         peso_total = capsulas_total * 0.05
@@ -11396,9 +11427,10 @@ async def finalizar_producao(pid, msg, prod):
         pool = await get_pool()
         if pool:
             async with pool.acquire() as conn:
+                # Salva no banco com a nova coluna segunda_task
                 await conn.execute(
-                    "INSERT INTO producoes_finalizadas (user_id, capsulas, data, polvora, galpao) VALUES ($1, $2, $3, $4, $5)",
-                    str(prod["autor"]), capsulas_total, agora_db(), polvora_total, f"{galpao} ({qtd_galpoes} galpões)"
+                    "INSERT INTO producoes_finalizadas (user_id, capsulas, data, polvora, galpao, segunda_task) VALUES ($1, $2, $3, $4, $5, $6)",
+                    str(prod["autor"]), capsulas_total, agora_db(), polvora_total, f"{galpao} ({qtd_galpoes} galpões)", bool(segunda)
                 )
                 await conn.execute("UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1", capsulas_total)
                 await conn.execute("INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) VALUES ($1, $2, $3, $4)", "capsulas", capsulas_total, str(prod["autor"]), f"Produção do {galpao} - {qtd_galpoes} galpões - {polvora_total} pólvora")
@@ -11410,31 +11442,15 @@ async def finalizar_producao(pid, msg, prod):
 
         guild = bot.get_guild(GUILD_ID)
         autor_apelido = await pegar_apelido(prod["autor"], guild)
+        
+        # ─── DELETA A MENSAGEM DO CANAL (Conforme solicitado) ───
         if msg:
             try:
-                embed = discord.Embed(title="🏭 ── PRODUÇÃO FINALIZADA ── 🏭", description="🔫 Sistema de Produção • VDR 442", color=0x2ecc71, timestamp=agora())
-                embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-                embed.set_author(name="🛡 Vida Rasa 442 • Produção Concluída", icon_url=bot.user.display_avatar.url if bot.user else None)
-                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                embed.add_field(name="🏭 GALPÃO", value=f"```yaml\n{galpao}\n```", inline=True)
-                embed.add_field(name="👤 PRODUZIDO POR", value=f"```yaml\n{autor_apelido}\n```", inline=True)
-                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                embed.add_field(name="💊 CÁPSULAS PRODUZIDAS", value=f"```yaml\n{fmt_num(capsulas_total)} unidades\n```", inline=True)
-                embed.add_field(name="📦 POR GALPÃO", value=f"```yaml\n{fmt_num(capsulas_por_galpao)} cápsulas\n```", inline=True)
-                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                embed.add_field(name="🏭 QUANTIDADE", value=f"```yaml\n{qtd_galpoes} galpão(ões)\n```", inline=True)
-                embed.add_field(name="⚖️ PESO TOTAL", value=f"```yaml\n{peso_total:.2f} kg\n```", inline=True)
-                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                embed.add_field(name="💣 PÓLVORA UTILIZADA", value=f"```yaml\nPor galpão: {polvora_por_galpao}\nTotal: {polvora_total}\n```", inline=False)
-                embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                if segunda:
-                    segunda_apelido = await pegar_apelido(segunda["user"], guild)
-                    embed.add_field(name="✅ SEGUNDA TASK", value=f"```yaml\nConcluída por: {segunda_apelido}\n```", inline=False)
-                embed.add_field(name="✅ STATUS", value="💊 **As cápsulas foram adicionadas ao estoque de insumos!**", inline=False)
-                embed.set_footer(text=f"🛡 Vida Rasa 442 • Finalizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}", icon_url=bot.user.display_avatar.url if bot.user else None)
-                await safe_request(msg.edit, embed=embed, view=None)
+                await msg.delete()
+                logger.info(f"🗑️ Mensagem da produção {pid} deletada do canal.")
             except Exception as e:
-                logger.error(f"Erro ao editar mensagem final: {e}")
+                logger.error(f"❌ Erro ao deletar mensagem da produção {pid}: {e}")
+
         await deletar_producao(pid)
         if pid in producoes_tasks:
             del producoes_tasks[pid]
@@ -11446,16 +11462,8 @@ async def finalizar_producao(pid, msg, prod):
                 modulo=AuditModulo.PRODUCAO,
                 item_id=pid,
                 item_nome=f"{galpao} — {autor_apelido}",
-                dados_antes={
-                    "polvora": polvora_total,
-                    "qtd_galpoes": qtd_galpoes
-                },
-                dados_depois={
-                    "capsulas_produzidas": capsulas_total,
-                    "capsulas_por_galpao": capsulas_por_galpao,
-                    "peso_kg": round(peso_total, 2),
-                    "segunda_task": bool(segunda)
-                },
+                dados_antes={"polvora": polvora_total, "qtd_galpoes": qtd_galpoes},
+                dados_depois={"capsulas_produzidas": capsulas_total, "capsulas_por_galpao": capsulas_por_galpao, "peso_kg": round(peso_total, 2), "segunda_task": bool(segunda)},
                 detalhes=f"Produção finalizada — {fmt_num(capsulas_total)} cápsulas produzidas"
             )
         except Exception as e:
@@ -11484,7 +11492,7 @@ async def finalizar_producao(pid, msg, prod):
             await canal_bau.send(embed=embed_bau)
         
         await enviar_painel_fabricacao()
-        await enviar_painel_gerenciamento_producao() # <── ATUALIZA O NOVO PAINEL
+        await enviar_painel_gerenciamento_producao()
         
     except Exception as e:
         logger.error(f"❌ ERRO ao finalizar produção {pid}: {e}")
@@ -11581,6 +11589,17 @@ async def restaurar_producoes():
                     producoes_tasks[pid] = task
                     restauradas += 1
                     logger.info(f"✅ Produção {pid} restaurada (termina em {fim_dt.strftime('%H:%M')})")
+                
+                # Reconecta o botão da 2ª Task se a msg existir
+                prod = await carregar_producao(pid)
+                if prod and not prod.get("segunda_task_confirmada"):
+                    canal = bot.get_channel(prod["canal_id"])
+                    if canal:
+                        try:
+                            msg = await safe_fetch_message(canal, prod["msg_id"])
+                            if msg:
+                                await msg.edit(view=SegundaTaskView(pid))
+                        except: pass
             else:
                 logger.info(f"⏰ Produção {pid} já terminou, finalizando...")
                 prod = await carregar_producao(pid)
@@ -11600,7 +11619,6 @@ async def restaurar_producoes():
             logger.info(f"✅ {restauradas} produções restauradas | {finalizadas} finalizadas automaticamente")
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar produções: {e}")
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_fabricacao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -22337,7 +22355,7 @@ class BotaoPersistente:
                 pt=dados.get("pt", 0),
                 sub=dados.get("sub", 0),
                 pedido_numero=dados.get("pedido_numero", 0),
-                pago_ja_clicado=dados.get("pago_ja_clicado", True) # <── ADICIONADO AQUI
+                pago_ja_clicado=dados.get("pago_ja_clicado", True)
             )
         elif tipo == "acao":
             return AcaoView(dados.get("acao_id"), dados.get("criador_id"))
