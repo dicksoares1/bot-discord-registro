@@ -9471,7 +9471,7 @@ class CalculadoraView(discord.ui.View):
         modal = RelatorioVendasModal()
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="🔄 Resetar Comissões", style=discord.ButtonStyle.danger, custom_id="calc_reset_comissoes", emoji="🔄", row=3)
+    @discord.ui.button(label="🔄 Resetar Comissões (Manual)", style=discord.ButtonStyle.danger, custom_id="calc_reset_comissoes", emoji="🔄", row=3)
     async def resetar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
@@ -9483,11 +9483,71 @@ class CalculadoraView(discord.ui.View):
         embed = discord.Embed(
             title="⚠️ RESETAR COMISSÕES",
             description="**ATENÇÃO!** Esta ação irá marcar **TODAS as vendas atuais** como pagas.\n\n"
-                        "Os 10% de comissão de cada vendedor **zerarão** no painel.\n\n"
+                        "Os 5% de comissão de cada vendedor **zerarão** no painel.\n\n"
                         "⚠️ **Só faça isso se já tiver pagado todo mundo!**",
             color=0xe74c3c
         )
         await interaction.response.send_message(embed=embed, view=ConfirmarResetComissoesView(), ephemeral=True)
+
+    @discord.ui.button(label="💸 Pagar Comissões (Caixa)", style=discord.ButtonStyle.success, custom_id="calc_pagar_comissoes_caixa", emoji="💸", row=3)
+    async def pagar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem pagar as comissões!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            # Calcula o total a pagar
+            total_vendas = await conn.fetchval("SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE comissao_paga = false AND cancelado = false")
+            if not total_vendas or total_vendas == 0:
+                await interaction.followup.send("📭 Não há comissões de vendas pendentes para pagar.", ephemeral=True)
+                return
+
+            valor_comissao = int(total_vendas * 0.05)
+            
+            # Verifica se o caixa tem saldo limpo
+            caixa = await conn.fetchrow("SELECT valor_limpo FROM caixa WHERE id = 1")
+            caixa_limpo = caixa["valor_limpo"] if caixa else 0
+
+            if caixa_limpo < valor_comissao:
+                await interaction.followup.send(f"❌ **Saldo insuficiente no caixa!**\n\n💰 Saldo Limpo: {formatar_dinheiro(caixa_limpo)}\n💸 Comissão total: {formatar_dinheiro(valor_comissao)}", ephemeral=True)
+                return
+
+            # Desconta do caixa
+            await movimentar_caixa(
+                tipo="compra",
+                valor=valor_comissao,
+                motivo="Pagamento de Comissões (Vendas 5%)",
+                autor=interaction.user.id,
+                tipo_dinheiro="limpo"
+            )
+
+            # Marca como pago
+            await conn.execute("UPDATE vendas SET comissao_paga = true WHERE comissao_paga = false AND cancelado = false")
+
+        await enviar_painel_vendas()
+        await enviar_painel_caixa()
+
+        embed = discord.Embed(
+            title="✅ COMISSÕES DE VENDAS PAGAS",
+            description=f"O valor total de **{formatar_dinheiro(valor_comissao)}** foi descontado do caixa e as comissões foram zeradas.",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.add_field(name="💰 Total pago", value=formatar_dinheiro(valor_comissao), inline=True)
+        embed.add_field(name="🏦 Novo saldo do caixa", value=formatar_dinheiro(caixa_limpo - valor_comissao), inline=True)
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • Pago por {interaction.user.display_name}")
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioVendasPeriodoModal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10881,7 +10941,7 @@ class FabricacaoView(discord.ui.View):
         await interaction.response.send_modal(ProducaoMunicaoModal())
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: GerenciamentoProducaoView (Novo Painel)
+# CLASSE: GerenciamentoProducaoView
 # ────────────────────────────────────────────────────────────────────────────────
 class GerenciamentoProducaoView(discord.ui.View):
     def __init__(self):
@@ -10962,6 +11022,69 @@ class GerenciamentoProducaoView(discord.ui.View):
         await enviar_painel_gerenciamento_producao()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
 
+    # ─── NOVO BOTÃO DE PAGAR COMISSÕES DE PRODUÇÃO ───
+    @discord.ui.button(label="💸 Pagar Comissões (Caixa)", style=discord.ButtonStyle.success, custom_id="gerenciar_pagar_comissoes", emoji="💸", row=3)
+    async def pagar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem pagar as comissões!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            # Calcula o total de cápsulas a pagar (R$ 1,00 por cápsula)
+            total_capsulas = await conn.fetchval("SELECT COALESCE(SUM(capsulas), 0) FROM producoes_finalizadas WHERE comissao_paga = false")
+            
+            if not total_capsulas or total_capsulas == 0:
+                await interaction.followup.send("📭 Não há comissões de produção pendentes para pagar.", ephemeral=True)
+                return
+
+            valor_comissao = int(total_capsulas * 1.00)
+            
+            # Verifica se o caixa tem saldo limpo
+            caixa = await conn.fetchrow("SELECT valor_limpo FROM caixa WHERE id = 1")
+            caixa_limpo = caixa["valor_limpo"] if caixa else 0
+
+            if caixa_limpo < valor_comissao:
+                await interaction.followup.send(f"❌ **Saldo insuficiente no caixa!**\n\n💰 Saldo Limpo: {formatar_dinheiro(caixa_limpo)}\n💸 Comissão total: {formatar_dinheiro(valor_comissao)}", ephemeral=True)
+                return
+
+            # Desconta do caixa
+            await movimentar_caixa(
+                tipo="compra",
+                valor=valor_comissao,
+                motivo="Pagamento de Comissões (Produção R$ 1,00/caps)",
+                autor=interaction.user.id,
+                tipo_dinheiro="limpo"
+            )
+
+            # Marca como pago
+            await conn.execute("UPDATE producoes_finalizadas SET comissao_paga = true WHERE comissao_paga = false")
+
+        await enviar_painel_gerenciamento_producao()
+        await enviar_painel_caixa()
+
+        embed = discord.Embed(
+            title="✅ COMISSÕES DE PRODUÇÃO PAGAS",
+            description=f"O valor total de **{formatar_dinheiro(valor_comissao)}** foi descontado do caixa e as comissões foram zeradas.",
+            color=0x2ecc71,
+            timestamp=agora()
+        )
+        embed.add_field(name="💊 Cápsulas pagas", value=f"{fmt_num(total_capsulas)} un", inline=True)
+        embed.add_field(name="💰 Total pago", value=formatar_dinheiro(valor_comissao), inline=True)
+        embed.add_field(name="🏦 Novo saldo do caixa", value=formatar_dinheiro(caixa_limpo - valor_comissao), inline=True)
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • Pago por {interaction.user.display_name}")
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_gerenciamento_producao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10997,9 +11120,10 @@ async def enviar_painel_gerenciamento_producao():
     if not galpoes_ativos_texto:
         galpoes_ativos_texto = "⚪ Nenhum aluguel registrado.\n"
 
-    # Puxa as Produções de HOJE e do MÊS
+    # Puxa as Produções de HOJE, do MÊS e as Comissões a Pagar
     prods_hoje_texto = ""
     prods_mes_texto = ""
+    comissoes_texto = ""
     guild = bot.get_guild(GUILD_ID)
     
     pool = await get_pool()
@@ -11038,6 +11162,22 @@ async def enviar_painel_gerenciamento_producao():
             else:
                 prods_mes_texto = "⚪ Nenhuma produção este mês ainda.\n"
 
+            # COMISSÕES A PAGAR
+            comissoes = await conn.fetch("""
+                SELECT user_id, SUM(capsulas) as capsulas
+                FROM producoes_finalizadas 
+                WHERE comissao_paga = false
+                GROUP BY user_id
+                ORDER BY capsulas DESC
+            """)
+            if comissoes:
+                for r in comissoes:
+                    nome = await pegar_apelido(r["user_id"], guild)
+                    valor_comissao = int(r["capsulas"] * 1.00)
+                    comissoes_texto += f"👤 **{nome}**\n   💊 {fmt_num(r['capsulas'])} caps | 💵 R$ {formatar_dinheiro(valor_comissao)}\n"
+            else:
+                comissoes_texto = "⚪ Nenhuma comissão pendente no momento.\n"
+
     embed = discord.Embed(
         title="🏭 ── GERENCIAMENTO DE PRODUÇÃO ── 🏭",
         description="**VDR 442 • Controle de Insumos e Galpões**\n*Aqui você gerencia o estoque, aluguéis e relatórios*",
@@ -11066,9 +11206,14 @@ async def enviar_painel_gerenciamento_producao():
     # Trunca se passar do limite do Discord (1024)
     prods_hoje_texto = prods_hoje_texto[:1000] + "..." if len(prods_hoje_texto) > 1000 else prods_hoje_texto
     prods_mes_texto = prods_mes_texto[:1000] + "..." if len(prods_mes_texto) > 1000 else prods_mes_texto
+    comissoes_texto = comissoes_texto[:1000] + "..." if len(comissoes_texto) > 1000 else comissoes_texto
 
     embed.add_field(name=f"📊 PRODUÇÕES DE HOJE ({agora().strftime('%d/%m')})", value=f"```yaml\n{prods_hoje_texto.strip()}\n```", inline=False)
     embed.add_field(name=f"📅 PRODUÇÕES DO MÊS ({agora().strftime('%B').capitalize()})", value=f"```yaml\n{prods_mes_texto.strip()}\n```", inline=False)
+    
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    embed.add_field(name="💸 COMISSÕES A PAGAR (R$ 1,00/caps)", value=f"```yaml\n{comissoes_texto.strip()}\n```", inline=False)
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
     embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
