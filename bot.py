@@ -10022,19 +10022,24 @@ async def enviar_painel_vendas():
                 for r in comissoes:
                     nome = await pegar_apelido(r["user_id"], guild)
                     valor_venda = r["valor"] or 0
-                    comissao = int(valor_venda * 0.10)
+                    
+                    # ─── MUDANÇA AQUI: 0.10 virou 0.05 ───
+                    comissao = int(valor_venda * 0.05) 
                     
                     if comissao > 0 or valor_venda > 0:
                         comissoes_texto += f"👤 **{nome}**\n"
                         comissoes_texto += f"   💊 {fmt_num(r['pt'])} PT | 💊 {fmt_num(r['sub'])} SUB\n"
                         comissoes_texto += f"   💰 Vendas: {formatar_dinheiro(valor_venda)}\n"
-                        comissoes_texto += f"   💵 Comissão (10%): **{formatar_dinheiro(comissao)}**\n\n"
+                        # ─── MUDANÇA AQUI: (10%) virou (5%) ───
+                        comissoes_texto += f"   💵 Comissão (5%): **{formatar_dinheiro(comissao)}**\n\n"
             else:
                 comissoes_texto = "⚪ Nenhuma comissão pendente no momento.\n"
 
     # Limita para não estourar o limite do Discord
     comissoes_texto = comissoes_texto[:1000] + "..." if len(comissoes_texto) > 1000 else comissoes_texto
-    embed.add_field(name="💸 COMISSÕES A PAGAR (10%)", value=f"```yaml\n{comissoes_texto.strip()}\n```", inline=False)
+    
+    # ─── MUDANÇA AQUI: Título do campo (10%) virou (5%) ───
+    embed.add_field(name="💸 COMISSÕES A PAGAR (5%)", value=f"```yaml\n{comissoes_texto.strip()}\n```", inline=False)
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
     embed.add_field(
