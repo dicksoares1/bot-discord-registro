@@ -227,6 +227,7 @@ CANAL_SOLICITAR_SALA_ID = 1337374500366450741
 RESULTADOS_METAS_ID = 1341403574483288125
 CANAL_FABRICACAO_ID = 1466421612566810634
 CANAL_REGISTRO_GALPAO_ID = 1356174712337862819
+CANAL_GERENCIAMENTO_PRODUCAO_ID = 1566782890543554711
 CANAL_BAU_GALPAO_ID = 1448561598384963747
 CANAL_BAU_GALPAO_SUL_ID = 1356174937764794521
 CANAL_CALCULO_POLVORA_ID = 1462834441968943157
@@ -460,6 +461,8 @@ async def inicializar_tabelas(pool):
                 polvora_por_galpao INTEGER DEFAULT 400
             )
         """)
+        await conn.execute("ALTER TABLE producoes ADD COLUMN IF NOT EXISTS dm_10min_enviado BOOLEAN DEFAULT false")
+        
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS producoes_finalizadas (
                 id SERIAL PRIMARY KEY,
@@ -10208,7 +10211,8 @@ async def carregar_producao(pid):
             "canal_id": int(r["canal_id"]),
             "polvora": r.get("polvora") or 400,
             "qtd_galpoes": r.get("qtd_galpoes") or 1,
-            "polvora_por_galpao": r.get("polvora_por_galpao") or 400
+            "polvora_por_galpao": r.get("polvora_por_galpao") or 400,
+            "dm_10min_enviado": r.get("dm_10min_enviado") or False
         }
         if r.get("segunda_task_user"):
             dados["segunda_task_confirmada"] = {
@@ -10239,18 +10243,19 @@ async def salvar_producao(pid, dados):
         segunda_time = dados["segunda_task_confirmada"]["time"]
     qtd_galpoes = dados.get("qtd_galpoes", 1)
     polvora_por_galpao = dados.get("polvora_por_galpao", 400)
+    dm_10min_enviado = dados.get("dm_10min_enviado", False)
+    
     pool = await get_pool()
     if not pool:
         return
     try:
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO producoes (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, segunda_task_user, segunda_task_time, polvora, qtd_galpoes, polvora_por_galpao) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (pid) DO UPDATE SET galpao=$2, autor=$3, inicio=$4, fim=$5, obs=$6, msg_id=$7, canal_id=$8, segunda_task_user=$9, segunda_task_time=$10, polvora=$11, qtd_galpoes=$12, polvora_por_galpao=$13",
-                pid, dados["galpao"], str(dados["autor"]), inicio_str, fim_str, dados.get("obs", ""), str(dados["msg_id"]), str(dados["canal_id"]), segunda_user, segunda_time, dados.get("polvora", 400), qtd_galpoes, polvora_por_galpao
+                "INSERT INTO producoes (pid, galpao, autor, inicio, fim, obs, msg_id, canal_id, segunda_task_user, segunda_task_time, polvora, qtd_galpoes, polvora_por_galpao, dm_10min_enviado) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (pid) DO UPDATE SET galpao=$2, autor=$3, inicio=$4, fim=$5, obs=$6, msg_id=$7, canal_id=$8, segunda_task_user=$9, segunda_task_time=$10, polvora=$11, qtd_galpoes=$12, polvora_por_galpao=$13, dm_10min_enviado=$14",
+                pid, dados["galpao"], str(dados["autor"]), inicio_str, fim_str, dados.get("obs", ""), str(dados["msg_id"]), str(dados["canal_id"]), segunda_user, segunda_time, dados.get("polvora", 400), qtd_galpoes, polvora_por_galpao, dm_10min_enviado
             )
     except Exception as e:
         logger.error(f"❌ Erro ao salvar produção {pid}: {e}")
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: deletar_producao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10364,6 +10369,122 @@ class SegundaTaskView(discord.ui.View):
             await interaction.followup.send(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarProducaoView (Aparece após preencher o modal)
+# ────────────────────────────────────────────────────────────────────────────────
+class ConfirmarProducaoView(discord.ui.View):
+    def __init__(self, galpao, tempo_base, qtd_galpoes, polvora_por_galpao, obs):
+        super().__init__(timeout=120)
+        self.galpao = galpao
+        self.tempo_base = tempo_base
+        self.qtd_galpoes = qtd_galpoes
+        self.polvora_por_galpao = polvora_por_galpao
+        self.obs = obs
+
+    @discord.ui.button(label="✅ Confirmar e Iniciar", style=discord.ButtonStyle.success)
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        polvora_total = self.polvora_por_galpao * self.qtd_galpoes
+        tempo_real = max(2, int(self.tempo_base * (self.polvora_por_galpao / 400)))
+        pid = f"{self.galpao}_{self.qtd_galpoes}g_{interaction.id}_{int(time_module.time())}"
+        inicio = agora()
+        fim = inicio + timedelta(minutes=tempo_real)
+
+        estoque_polvora_atual = await carregar_estoque_polvora()
+        aviso_polvora = ""
+        if estoque_polvora_atual < polvora_total:
+            aviso_polvora = f"\n⚠️ **ATENÇÃO:** Estoque tem apenas {fmt_num(estoque_polvora_atual)} pólvoras. Produção vai ficar com estoque negativo!"
+
+        canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
+        if not canal:
+            await interaction.followup.send("❌ Canal de produção não encontrado.", ephemeral=True)
+            return
+
+        desc = f"**Galpão:** {self.galpao}\n**Quantidade de galpões:** {self.qtd_galpoes}\n**Iniciado por:** {interaction.user.mention}\n"
+        if self.obs:
+            desc += f"📝 **Obs:** {self.obs}\n"
+        desc += f"**Pólvora por galpão:** {self.polvora_por_galpao}\n**Pólvora total:** {polvora_total}\nInício: <t:{int(inicio.timestamp())}:t>\nTérmino: <t:{int(fim.timestamp())}:t>\n\n⏳ **Restante:** {tempo_real} min\n{barra(0)}"
+        
+        msg = await safe_request(canal.send, embed=discord.Embed(title=f"🏭 Produção - {self.qtd_galpoes} Galpão(ões)", description=desc, color=0x3498db), view=SegundaTaskView(pid))
+        
+        if not msg:
+            await interaction.followup.send("❌ Erro ao enviar mensagem de produção!", ephemeral=True)
+            return
+
+        dados = {
+            "galpao": f"{self.galpao} ({self.qtd_galpoes} galpões)",
+            "autor": interaction.user.id,
+            "inicio": inicio,
+            "fim": fim,
+            "obs": self.obs,
+            "polvora": polvora_total,
+            "qtd_galpoes": self.qtd_galpoes,
+            "polvora_por_galpao": self.polvora_por_galpao,
+            "msg_id": msg.id,
+            "canal_id": CANAL_REGISTRO_GALPAO_ID,
+            "dm_10min_enviado": False
+        }
+        await salvar_producao(pid, dados)
+        
+        if pid not in producoes_tasks:
+            task = asyncio.create_task(acompanhar_producao(pid))
+            producoes_tasks[pid] = task
+
+        try:
+            await consumir_polvora(polvora_total)
+            estoque_pos = await carregar_estoque_polvora()
+            logger.info(f"🧨 [PRODUÇÃO] Pólvora consumida: -{polvora_total} (Estoque: {estoque_pos})")
+        except Exception as e:
+            logger.error(f"❌ Erro ao consumir pólvora: {e}")
+            estoque_pos = estoque_polvora_atual
+
+        try:
+            await enviar_painel_fabricacao()
+            await enviar_painel_gerenciamento_producao()
+        except Exception as e:
+            logger.error(f"❌ Erro ao atualizar painéis: {e}")
+
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.CRIAR_PRODUCAO,
+                modulo=AuditModulo.PRODUCAO,
+                item_id=pid,
+                item_nome=f"{self.galpao} ({self.qtd_galpoes} galpões)",
+                dados_depois={
+                    "galpao": self.galpao,
+                    "qtd_galpoes": self.qtd_galpoes,
+                    "polvora_por_galpao": self.polvora_por_galpao,
+                    "polvora_total": polvora_total,
+                    "duracao_minutos": tempo_real
+                },
+                detalhes=f"Produção iniciada — {self.qtd_galpoes} galpões, {polvora_total} pólvora total"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar criação de produção: {e}")
+
+        await interaction.followup.send(
+            f"✅ **Produção iniciada com sucesso!**\n\n"
+            f"🏭 **Galpão:** {self.galpao}\n"
+            f"📊 **Quantidade:** {self.qtd_galpoes} galpão(ões)\n"
+            f"💣 **Pólvora por galpão:** {fmt_num(self.polvora_por_galpao)}\n"
+            f"💣 **Pólvora total:** {fmt_num(polvora_total)}\n"
+            f"⏰ **Término previsto:** <t:{int(fim.timestamp())}:t>\n"
+            f"⏱️ **Duração:** {tempo_real} minutos\n"
+            f"\n🧨 **Pólvora retirada do estoque:** -{fmt_num(polvora_total)}\n"
+            f"📦 **Estoque atual de pólvora:** {fmt_num(estoque_pos)} unidades"
+            f"{aviso_polvora}",
+            ephemeral=True
+        )
+        await interaction.message.delete()
+
+    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.danger)
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Produção cancelada.", ephemeral=True)
+        await interaction.message.delete()
+
+
+# ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ProducaoCompletaModal
 # ────────────────────────────────────────────────────────────────────────────────
 class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
@@ -10385,6 +10506,7 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
         except:
             await interaction.followup.send("❌ Quantidade de galpões inválida! Digite 1, 2 ou 3.", ephemeral=True)
             return
+            
         try:
             polvora_por_galpao = safe_int(self.polvora_por_galpao.value)
             if polvora_por_galpao <= 0:
@@ -10392,93 +10514,37 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
         except:
             await interaction.followup.send("❌ Quantidade de pólvora inválida!", ephemeral=True)
             return
-        polvora_total = polvora_por_galpao * qtd
-        tempo_real = max(2, int(self.tempo_base * (polvora_por_galpao / 400)))
-        pid = f"{self.galpao}_{qtd}g_{interaction.id}_{int(time_module.time())}"
-        inicio = agora()
-        fim = inicio + timedelta(minutes=tempo_real)
 
-        estoque_polvora_atual = await carregar_estoque_polvora()
-        aviso_polvora = ""
-        if estoque_polvora_atual < polvora_total:
-            aviso_polvora = f"\n⚠️ **ATENÇÃO:** Estoque tem apenas {fmt_num(estoque_polvora_atual)} pólvoras. Produção vai ficar com estoque negativo!"
+        # Cálculo de peso POR 1 GALPÃO
+        if "NORTE" in self.galpao.upper():
+            base_com = 1777
+            base_sem = 1688
+        else:
+            base_com = 1618
+            base_sem = 1608
 
-        canal = interaction.guild.get_channel(CANAL_REGISTRO_GALPAO_ID)
-        if not canal:
-            await interaction.followup.send("❌ Canal de produção não encontrado.", ephemeral=True)
-            return
-        desc = f"**Galpão:** {self.galpao}\n**Quantidade de galpões:** {qtd}\n**Iniciado por:** {interaction.user.mention}\n"
-        if self.obs.value:
-            desc += f"📝 **Obs:** {self.obs.value}\n"
-        desc += f"**Pólvora por galpão:** {polvora_por_galpao}\n**Pólvora total:** {polvora_total}\nInício: <t:{int(inicio.timestamp())}:t>\nTérmino: <t:{int(fim.timestamp())}:t>\n\n⏳ **Restante:** {tempo_real} min\n{barra(0)}"
-        msg = await safe_request(canal.send, embed=discord.Embed(title=f"🏭 Produção - {qtd} Galpão(ões)", description=desc, color=0x3498db), view=SegundaTaskView(pid))
-        if not msg:
-            await interaction.followup.send("❌ Erro ao enviar mensagem de produção!", ephemeral=True)
-            return
+        capsulas_sem = (base_sem * polvora_por_galpao) // 400
+        peso_sem = capsulas_sem * 0.05
+        
+        capsulas_com = (base_com * polvora_por_galpao) // 400
+        peso_com = capsulas_com * 0.05
 
-        dados = {
-            "galpao": f"{self.galpao} ({qtd} galpões)",
-            "autor": interaction.user.id,
-            "inicio": inicio,
-            "fim": fim,
-            "obs": self.obs.value,
-            "polvora": polvora_total,
-            "qtd_galpoes": qtd,
-            "polvora_por_galpao": polvora_por_galpao,
-            "msg_id": msg.id,
-            "canal_id": CANAL_REGISTRO_GALPAO_ID
-        }
-        await salvar_producao(pid, dados)
-        if pid not in producoes_tasks:
-            task = asyncio.create_task(acompanhar_producao(pid))
-            producoes_tasks[pid] = task
-
-        try:
-            await consumir_polvora(polvora_total)
-            estoque_pos = await carregar_estoque_polvora()
-            logger.info(f"🧨 [PRODUÇÃO] Pólvora consumida: -{polvora_total} (Estoque: {estoque_pos})")
-        except Exception as e:
-            logger.error(f"❌ Erro ao consumir pólvora: {e}")
-            estoque_pos = estoque_polvora_atual
-
-        try:
-            await enviar_painel_fabricacao()
-        except Exception as e:
-            logger.error(f"❌ Erro ao atualizar painel: {e}")
-
-        try:
-            await registrar_auditoria(
-                user_id=str(interaction.user.id),
-                acao=AuditAcao.CRIAR_PRODUCAO,
-                modulo=AuditModulo.PRODUCAO,
-                item_id=pid,
-                item_nome=f"{self.galpao} ({qtd} galpões)",
-                dados_depois={
-                    "galpao": self.galpao,
-                    "qtd_galpoes": qtd,
-                    "polvora_por_galpao": polvora_por_galpao,
-                    "polvora_total": polvora_total,
-                    "duracao_minutos": tempo_real
-                },
-                detalhes=f"Produção iniciada — {qtd} galpões, {polvora_total} pólvora total"
-            )
-        except Exception as e:
-            logger.error(f"❌ Erro ao auditar criação de produção: {e}")
-
-        await interaction.followup.send(
-            f"✅ **Produção iniciada com sucesso!**\n\n"
-            f"🏭 **Galpão:** {self.galpao}\n"
-            f"📊 **Quantidade:** {qtd} galpão(ões)\n"
-            f"💣 **Pólvora por galpão:** {fmt_num(polvora_por_galpao)}\n"
-            f"💣 **Pólvora total:** {fmt_num(polvora_total)}\n"
-            f"⏰ **Término previsto:** <t:{int(fim.timestamp())}:t>\n"
-            f"⏱️ **Duração:** {tempo_real} minutos\n"
-            f"\n🧨 **Pólvora retirada do estoque:** -{fmt_num(polvora_total)}\n"
-            f"📦 **Estoque atual de pólvora:** {fmt_num(estoque_pos)} unidades"
-            f"{aviso_polvora}",
-            ephemeral=True
+        embed = discord.Embed(
+            title="⚖️ CONFIRMAÇÃO DE PRODUÇÃO",
+            description=(
+                f"Você está prestes a iniciar **{qtd} galpão(ões)** com **{polvora_por_galpao} pólvoras** cada.\n\n"
+                f"👇 **Veja o rendimento estimado POR GALPÃO:**\n"
+                f"```yaml\n"
+                f"🔴 Sem 2ª Task: {fmt_num(capsulas_sem)} cápsulas = {peso_sem:.2f} kg\n"
+                f"🟢 Com 2ª Task: {fmt_num(capsulas_com)} cápsulas = {peso_com:.2f} kg\n"
+                f"```\n"
+                f"*(Para saber o total, multiplique pelo número de galpões)*"
+            ),
+            color=0xF1C40F
         )
-
+        
+        view = ConfirmarProducaoView(self.galpao, self.tempo_base, qtd, polvora_por_galpao, self.obs.value)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ProducaoMunicaoModal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10627,7 +10693,7 @@ class AlugarGalpaoModal(discord.ui.Modal, title="📅 Alugar Galpão"):
         await enviar_painel_fabricacao()
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: FabricacaoView
+# CLASSE: FabricacaoView (Painel Abertos)
 # ────────────────────────────────────────────────────────────────────────────────
 class FabricacaoView(discord.ui.View):
     def __init__(self):
@@ -10663,23 +10729,30 @@ class FabricacaoView(discord.ui.View):
     async def produzir_municao(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ProducaoMunicaoModal())
 
-    @discord.ui.button(label="💊 Registrar Cápsulas", style=discord.ButtonStyle.primary, custom_id="registrar_capsulas", emoji="💊", row=1)
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: GerenciamentoProducaoView (Novo Painel)
+# ────────────────────────────────────────────────────────────────────────────────
+class GerenciamentoProducaoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="💊 Registrar Cápsulas", style=discord.ButtonStyle.primary, custom_id="gerenciar_registrar_capsulas", emoji="💊", row=0)
     async def registrar_capsulas(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarCapsulasModal())
 
-    @discord.ui.button(label="📦 Registrar Embalagens", style=discord.ButtonStyle.primary, custom_id="registrar_embalagens", emoji="📦", row=1)
+    @discord.ui.button(label="📦 Registrar Embalagens", style=discord.ButtonStyle.primary, custom_id="gerenciar_registrar_embalagens", emoji="📦", row=0)
     async def registrar_embalagens(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarEmbalagensModal())
 
-    @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.secondary, custom_id="fabricacao_relatorio", emoji="📊", row=1)
+    @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.secondary, custom_id="gerenciar_relatorio", emoji="📊", row=0)
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioProducaoModal())
 
-    @discord.ui.button(label="📅 Alugar Galpão", style=discord.ButtonStyle.primary, custom_id="alugar_galpao", emoji="📅", row=2)
+    @discord.ui.button(label="📅 Alugar Galpão", style=discord.ButtonStyle.primary, custom_id="gerenciar_alugar", emoji="📅", row=1)
     async def alugar_galpao(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AlugarGalpaoModal())
 
-    @discord.ui.button(label="📊 Alugueis", style=discord.ButtonStyle.secondary, custom_id="ver_alugueis", emoji="📊", row=2)
+    @discord.ui.button(label="📊 Alugueis", style=discord.ButtonStyle.secondary, custom_id="gerenciar_ver_alugueis", emoji="📊", row=1)
     async def ver_alugueis(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         alugueis = await carregar_alugueis()
@@ -10701,13 +10774,7 @@ class FabricacaoView(discord.ui.View):
         embed.set_footer(text="🛡 Vida Rasa 442", icon_url=bot.user.display_avatar.url if bot.user else None)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="atualizar_painel_btn", emoji="🔄", row=2)
-    async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        await enviar_painel_fabricacao()
-        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
-
-    @discord.ui.button(label="✏️ Editar Estoque", style=discord.ButtonStyle.primary, custom_id="editar_estoque_btn", emoji="✏️", row=2)
+    @discord.ui.button(label="✏️ Editar Estoque", style=discord.ButtonStyle.primary, custom_id="gerenciar_editar_estoque", emoji="✏️", row=2)
     async def editar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -10727,19 +10794,115 @@ class FabricacaoView(discord.ui.View):
         
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="🧨 Registrar Pólvora Manual", style=discord.ButtonStyle.primary, custom_id="registrar_polvora_manual_btn", emoji="🧨", row=3)
+    @discord.ui.button(label="🧨 Registrar Pólvora Manual", style=discord.ButtonStyle.primary, custom_id="gerenciar_registrar_polvora", emoji="🧨", row=2)
     async def registrar_polvora_manual(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
         if not is_admin and not is_gerente:
-            await interaction.response.send_message(
-                "❌ Apenas **ADM** ou **GERENTES** podem registrar pólvora manualmente!",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem registrar pólvora manualmente!", ephemeral=True)
             return
         estoque_atual = await carregar_estoque_polvora()
         modal = RegistrarPolvoraManualModal(estoque_atual)
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="gerenciar_atualizar", emoji="🔄", row=2)
+    async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_gerenciamento_producao()
+        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_gerenciamento_producao
+# ────────────────────────────────────────────────────────────────────────────────
+async def enviar_painel_gerenciamento_producao():
+    canal = bot.get_channel(CANAL_GERENCIAMENTO_PRODUCAO_ID)
+    if not canal:
+        logger.error(f"❌ Canal de gerenciamento de produção não encontrado: {CANAL_GERENCIAMENTO_PRODUCAO_ID}")
+        return
+
+    estoque_municoes = await carregar_estoque()
+    estoque_insumos = await carregar_estoque_insumos()
+    estoque_polvora = await carregar_estoque_polvora()
+    
+    # Puxa os galpões ativos do banco
+    pool = await get_pool()
+    galpoes_ativos_texto = ""
+    if pool:
+        async with pool.acquire() as conn:
+            ativos = await conn.fetch("SELECT galpao, inicio, fim FROM producoes WHERE CAST(fim AS timestamp) > NOW()")
+            if ativos:
+                for a in ativos:
+                    fim = a["fim"]
+                    if isinstance(fim, str):
+                        fim = str_para_datetime_completa(fim)
+                    if fim and fim.tzinfo is None:
+                        fim = fim.replace(tzinfo=BRASIL)
+                    
+                    tempo_restante = fim - agora()
+                    if tempo_restante.total_seconds() > 0:
+                        mins = int(tempo_restante.total_seconds() // 60)
+                        segs = int(tempo_restante.total_seconds() % 60)
+                        galpoes_ativos_texto += f"🟢 **{a['galpao']}**: {mins}m {segs}s restantes\n"
+            else:
+                galpoes_ativos_texto = "⚪ Nenhum galpão em produção no momento.\n"
+
+    embed = discord.Embed(
+        title="🏭 ── GERENCIAMENTO DE PRODUÇÃO ── 🏭",
+        description="**VDR 442 • Controle de Insumos e Galpões**\n*Aqui você gerencia o estoque, aluguéis e relatórios*",
+        color=0xE67E22,
+        timestamp=agora()
+    )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    
+    embed.add_field(
+        name="⏱️ TEMPO DE GALPÕES ATIVOS",
+        value=f"```yaml\n{galpoes_ativos_texto.strip()}\n```",
+        inline=False
+    )
+    
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    
+    embed.add_field(
+        name="🔫 ESTOQUE DE MUNIÇÕES",
+        value=(
+            f"```yaml\n"
+            f"PT:  {fmt_num(estoque_municoes['PT'])} pacotes\n"
+            f"SUB: {fmt_num(estoque_municoes['SUB'])} pacotes\n"
+            f"```"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="💊 ESTOQUE DE INSUMOS",
+        value=(
+            f"```yaml\n"
+            f"🧨 Pólvora:    {fmt_num(estoque_polvora)} un\n"
+            f"💊 Cápsulas:   {fmt_num(estoque_insumos['capsulas'])} un\n"
+            f"📦 Embalagens: {fmt_num(estoque_insumos['embalagens'])} un\n"
+            f"```"
+        ),
+        inline=True
+    )
+
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+    view = GerenciamentoProducaoView()
+    
+    # Deleta painéis antigos para não acumular
+    try:
+        async for msg in canal.history(limit=20):
+            if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
+                if "GERENCIAMENTO DE PRODUÇÃO" in msg.embeds[0].title:
+                    try:
+                        await msg.delete()
+                    except:
+                        pass
+        await canal.send(embed=embed, view=view)
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar painel de gerenciamento: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarEstoqueCompletoModal
@@ -11097,6 +11260,24 @@ async def acompanhar_producao(pid):
                 await asyncio.sleep(10)
                 continue
             agora_dt = agora()
+            
+            # ─── LÓGICA DO AVISO DE 10 MINUTOS ───
+            tempo_restante_seg = (fim - agora_dt).total_seconds()
+            if 0 < tempo_restante_seg <= 600 and not prod.get("dm_10min_enviado"):
+                try:
+                    membro = await bot.fetch_user(prod["autor"])
+                    if membro:
+                        await membro.send(
+                            f"⚠️ **AVISO DE PRODUÇÃO** ⚠️\n\n"
+                            f"Sua produção no galpão **{prod['galpao']}** vai terminar em **10 minutos**!\n\n"
+                            f"⏰ **Não esqueça de apertar o botão da 2ª Task quando o tempo acabar!**"
+                        )
+                    prod["dm_10min_enviado"] = True
+                    await salvar_producao(pid, prod)
+                    logger.info(f"📩 DM de 10 min enviado para {prod['autor']} (Produção {pid})")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao enviar DM de 10 min para {prod['autor']}: {e}")
+
             if agora_dt >= fim:
                 canal = bot.get_channel(prod["canal_id"])
                 if canal:
@@ -11219,7 +11400,6 @@ async def finalizar_producao(pid, msg, prod):
                 await conn.execute("UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1", capsulas_total)
                 await conn.execute("INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) VALUES ($1, $2, $3, $4)", "capsulas", capsulas_total, str(prod["autor"]), f"Produção do {galpao} - {qtd_galpoes} galpões - {polvora_total} pólvora")
 
-        # Registrar atividade (fora do if pool, sempre tenta)
         try:
             await _registrar_atividade(prod["autor"], "producao")
         except Exception as e:
@@ -11299,7 +11479,10 @@ async def finalizar_producao(pid, msg, prod):
             embed_bau.add_field(name="✅ STATUS", value="💊 **Cápsulas adicionadas ao estoque de insumos!**", inline=False)
             embed_bau.set_footer(text=f"🛡 Vida Rasa 442 • Finalizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}", icon_url=bot.user.display_avatar.url if bot.user else None)
             await canal_bau.send(embed=embed_bau)
+        
         await enviar_painel_fabricacao()
+        await enviar_painel_gerenciamento_producao() # <── ATUALIZA O NOVO PAINEL
+        
     except Exception as e:
         logger.error(f"❌ ERRO ao finalizar produção {pid}: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
@@ -11424,96 +11607,38 @@ async def enviar_painel_fabricacao():
         logger.error("❌ Canal de fabricação não encontrado")
         return
 
-    estoque_municoes = await carregar_estoque()
-    estoque_insumos = await carregar_estoque_insumos()
-    estoque_polvora = await carregar_estoque_polvora()
-    alugueis = await carregar_alugueis()
-
     embed = discord.Embed(
         title="🏭 ── CENTRAL DE FABRICAÇÃO ── 🏭",
-        description="**Produção de Munição e Insumos • VDR 442**\n*Controle os galpões, insumos e a produção da facção*",
+        description=(
+            "# INSTRUÇÕES DE PRODUÇÃO\n\n"
+            "**1️⃣ ESCOLHA O GALPÃO**\n"
+            "Clique em **🏭 Galpões Norte** ou **🏭 Galpões Sul**.\n\n"
+            
+            "**2️⃣ INFORME OS DADOS**\n"
+            "Coloque quantos galpões (1, 2 ou 3) e a quantidade de pólvora por galpão.\n\n"
+
+            "**3️⃣ CONFIRMAÇÃO**\n"
+            "O bot vai te mostrar o **peso estimado** de 1 galpão (com e sem 2ª task). Confirme e a produção começará!\n\n"
+
+            "**4️⃣ ACOMPANHE O TEMPO**\n"
+            "O tempo de produção varia conforme os galpões (Norte 65m / Sul 130m).\n"
+            "Você receberá um **Aviso no DM** quando faltarem **10 minutos** para acabar.\n\n"
+
+            "**5️⃣ FINALIZE**\n"
+            "Quando o tempo acabar, o bot vai liberar as cápsulas automaticamente no estoque de insumos.\n\n"
+            
+            "⚠️ **Atenção:** Se for usar a 2ª task, aperte o botão no aviso da produção quando estiver pronto.\n\n"
+            "👉 **Para gerenciar estoques e aluguéis, use o canal de Gerenciamento de Produção.**"
+        ),
         color=0xE67E22,
         timestamp=agora()
     )
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    texto_alugueis = ""
-    for galpao, dados in alugueis.items():
-        dias = dados["dias"]
-        inicio = dados["inicio"]
-        if inicio and dias > 0:
-            dias_passados = (agora() - inicio.replace(tzinfo=BRASIL)).days
-            dias_restantes = max(0, dias - dias_passados)
-            status = f"🟢 {dias_restantes} dias restantes" if dias_restantes > 0 else "🔴 EXPIRADO"
-        else:
-            status = "⚪ NÃO ALUGADO"
-        texto_alugueis += f"🏭 **{galpao}**\n   Status: {status} (Total: {dias} dias)\n"
-
-    embed.add_field(
-        name="📅 CONTROLE DE GALPÕES",
-        value=f"```yaml\n{texto_alugueis.strip()}\n```" if texto_alugueis else "```yaml\nNenhum aluguel registrado\n```",
-        inline=False
-    )
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="🔫 ESTOQUE DE MUNIÇÕES",
-        value=(
-            f"```yaml\n"
-            f"PT:  {fmt_num(estoque_municoes['PT'])} pacotes ({fmt_num(estoque_municoes['PT'] * 50)} munições)\n"
-            f"SUB: {fmt_num(estoque_municoes['SUB'])} pacotes ({fmt_num(estoque_municoes['SUB'] * 50)} munições)\n"
-            f"```"
-        ),
-        inline=True
-    )
-
-    embed.add_field(
-        name="💊 INSUMOS E PÓLVORA",
-        value=(
-            f"```yaml\n"
-            f"💊 Cápsulas:   {fmt_num(estoque_insumos['capsulas'])} un\n"
-            f"📦 Embalagens: {fmt_num(estoque_insumos['embalagens'])} un\n"
-            f"🧨 Pólvora:    {fmt_num(estoque_polvora)} un\n"
-            f"```"
-        ),
-        inline=True
-    )
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="⏱️ TEMPO DE PRODUÇÃO",
-        value=(
-            "```yaml\n"
-            "🟢 GALPÕES NORTE → 65 min (3 galpões)\n"
-            "🟢 GALPÕES SUL   → 130 min (3 galpões)\n"
-            "```"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="📖 COMO PRODUZIR",
-        value=(
-            "**1️⃣** Clique em **🏭 Galpões Norte** ou **🏭 Galpões Sul**\n"
-            "**2️⃣** Informe quantos galpões (1, 2 ou 3) e a pólvora por galpão\n"
-            "**3️⃣** A produção é iniciada e o tempo começa a contar automaticamente\n"
-            "**4️⃣** Ao final, as cápsulas vão para o estoque de insumos"
-        ),
-        inline=False
-    )
-
-    embed.set_footer(
-        text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}",
-        icon_url=bot.user.display_avatar.url if bot.user else None
-    )
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = FabricacaoView()
     
-    # Deleta painéis antigos para não acumular
+    # Deleta painéis antigos e envia o novo
     try:
         async for msg in canal.history(limit=20):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
@@ -11525,7 +11650,6 @@ async def enviar_painel_fabricacao():
         await canal.send(embed=embed, view=view)
     except Exception as e:
         logger.error(f"❌ Erro ao enviar painel de fabricação: {e}")
-
 # ════════════════════════════════════════════════════════════════════════════════
 # PREDIÇÃO DE RUPTURA DE ESTOQUE
 # ════════════════════════════════════════════════════════════════════════════════
@@ -11622,7 +11746,7 @@ async def alertar_ruptura_estoque():
         )
         embed.add_field(
             name="💡 O QUE FAZER AGORA?",
-            value="Chame os mecânicos e organizem um mutirão de produção imediatamente! O estoque vai acabar e as vendas serão pausadas.",
+            value="Chame os responsáveis de produção e organizem um mutirão de produção imediatamente! O estoque vai acabar e as vendas serão pausadas.",
             inline=False
         )
         embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
@@ -25256,6 +25380,7 @@ async def enviar_paineis_iniciais(guild):
         paineis = [
             ("Registro", enviar_painel_registro),
             ("Fabricação", enviar_painel_fabricacao),
+            ("Gerenciamento de Produção", enviar_painel_gerenciamento_producao), # <── NOVO AQUI
             ("Lives", enviar_painel_lives),
             ("Lavagem", enviar_painel_lavagem),
             ("Vendas", enviar_painel_vendas),
@@ -25294,7 +25419,6 @@ async def enviar_paineis_iniciais(guild):
             logger.error(f"❌ Erro ao forçar atualização grupos: {e}")
     except Exception as e:
         logger.error(f"❌ Erro geral ao enviar painéis: {e}")
-
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_ready
 # ────────────────────────────────────────────────────────────────────────────────
