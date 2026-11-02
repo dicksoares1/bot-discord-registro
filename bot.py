@@ -17300,6 +17300,60 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
         await interaction.followup.send(f"✅ **Relatório de horas gerado e enviado em {canal.mention}!**", ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: resetar_horas_semana_manual
+# ────────────────────────────────────────────────────────────────────────────────
+async def resetar_horas_semana_manual(guild):
+    if not guild:
+        return {"sucesso": False, "erro": "Guild não encontrada"}
+    pool = await get_pool()
+    if not pool:
+        return {"sucesso": False, "erro": "Banco de dados indisponível"}
+    
+    try:
+        cargo_mecanico = guild.get_role(CARGO_MECANICO_ID)
+        if not cargo_mecanico:
+            return {"sucesso": False, "erro": "Cargo de mecânico não encontrado"}
+        
+        atualizados = 0
+        hoje = agora()
+        segunda = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        
+        async with pool.acquire() as conn:
+            for member in guild.members:
+                if member.bot or cargo_mecanico not in member.roles:
+                    continue
+                
+                segundos = await calcular_horas_periodo(member.id, segunda, domingo)
+                
+                if segundos > 0:
+                    # Salva no histórico antes de zerar
+                    await conn.execute("""
+                        INSERT INTO horas_historico (user_id, nome, segundos_totais, data_inicio, data_fim, data_fechamento)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                    """, str(member.id), member.display_name, segundos, para_db_naive(segunda), para_db_naive(domingo), agora_db())
+                    
+                    atualizados += 1
+                
+                # Atualiza o embed
+                try:
+                    if str(member.id) in metas_cache:
+                        await atualizar_embed_meta(member.id)
+                except:
+                    pass
+                    
+            # Deleta os pontos da semana atual para zerar
+            await conn.execute("""
+                DELETE FROM pontos_mecanica 
+                WHERE entrada >= $1 AND entrada <= $2
+            """, para_db_naive(segunda), para_db_naive(domingo))
+            
+        return {"sucesso": True, "atualizados": atualizados}
+    except Exception as e:
+        logger.error(f"Erro ao resetar horas manual: {e}")
+        return {"sucesso": False, "erro": str(e)}
+
+# ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ResetarHorasSemanaButton
 # ────────────────────────────────────────────────────────────────────────────────
 class ResetarHorasSemanaButton(discord.ui.Button):
