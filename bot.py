@@ -8172,10 +8172,43 @@ class BotaoComprovanteView(discord.ui.View):
         await interaction.response.send_modal(ComprovanteModal(self.pedido_numero))
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: ComprovanteLinkView (Alternativa com link direto, sem modal)
+# CLASSE: FinalizadosView (Apenas com o botão de Transferência)
 # ────────────────────────────────────────────────────────────────────────────────
-# (Se preferir que a pessoa mande o print direto no chat do painel, use o modal acima)
+class FinalizadosView(discord.ui.View):
+    def __init__(self, entrega_id, pedido_numero, valor_total, pt, sub, is_doacao=False):
+        super().__init__(timeout=None)
+        self.entrega_id = entrega_id
+        self.pedido_numero = pedido_numero
+        self.valor_total = valor_total
+        self.pt = pt
+        self.sub = sub
+        self.is_doacao = is_doacao
 
+        if not self.is_doacao:
+            btn_transf = discord.ui.Button(
+                label="📤 Confirmar Transferência",
+                style=discord.ButtonStyle.success,
+                custom_id="confirmar_transferencia_fixo",
+                emoji="📤"
+            )
+            btn_transf.callback = self.abrir_modal_transferencia
+            self.add_item(btn_transf)
+
+    async def abrir_modal_transferencia(self, interaction: discord.Interaction):
+        modal = ConfirmarTransferenciaModal(
+            interaction=interaction,
+            mensagem_original=interaction.message,
+            entrega_id=self.entrega_id,
+            pedido_numero=self.pedido_numero,
+            valor=self.valor_total,
+            pt=self.pt,
+            sub=self.sub
+        )
+        await interaction.response.send_modal(modal)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: class StatusView
+# ────────────────────────────────────────────────────────────────────────────────
 
 class StatusView(discord.ui.View):
     def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False, valor_total: int = 0, pt: int = 0, sub: int = 0, pedido_numero: int = 0, entregue_ja_clicado: bool = False, is_doacao: bool = False):
@@ -8562,17 +8595,15 @@ class StatusView(discord.ui.View):
                 )
                 break
 
-        # Cria uma view LIMPA
-        view_final = discord.ui.View(timeout=None)
-        
-        # Adiciona APENAS o botão de transferência
-        btn_transferir = discord.ui.Button(
-            label="📤 Confirmar Transferência",
-            style=discord.ButtonStyle.success,
-            custom_id="confirmar_transferencia_fixo",
-            emoji="📤"
+        # ─── USA A NOVA VIEW LIMPA ───
+        view_final = FinalizadosView(
+            entrega_id=self.entrega_id,
+            pedido_numero=pedido_numero,
+            valor_total=self.valor_total,
+            pt=self.pt,
+            sub=self.sub,
+            is_doacao=self.is_doacao
         )
-        view_final.add_item(btn_transferir)
 
         # Envia o novo card no canal de Finalizados
         novo_card = await safe_request(canal_final.send, embed=embed, view=view_final)
@@ -8590,7 +8621,9 @@ class StatusView(discord.ui.View):
                 "pt": self.pt,
                 "sub": self.sub,
                 "pedido_numero": pedido_numero,
-                "pago_ja_clicado": True # Avisa o bot que já foi pago
+                "pago_ja_clicado": True,
+                "finalizado": True, # <── MARCA COMO FINALIZADO PRO RESTAURADOR SABER
+                "is_doacao": self.is_doacao
             })
         except Exception as e:
             logger.error(f"❌ Erro ao salvar botão persistente (pago): {e}")
@@ -8607,7 +8640,7 @@ class StatusView(discord.ui.View):
         except: pass
 
         return True
-
+        
     async def entregue(self, interaction: discord.Interaction, button):
         if self.entrega_ja_entregue:
             await interaction.followup.send("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
@@ -22570,17 +22603,30 @@ class BotaoPersistente:
         if tipo == "meta":
             return MetaView(dados.get("user_id"))
         elif tipo == "venda":
-            return StatusView(
-                entrega_id=dados.get("entrega_id"),
-                total_entregas=dados.get("total_entregas", 1),
-                entrega_atual=dados.get("entrega_atual", 1),
-                disabled=dados.get("disabled", False),
-                valor_total=dados.get("valor_total", 0),
-                pt=dados.get("pt", 0),
-                sub=dados.get("sub", 0),
-                pedido_numero=dados.get("pedido_numero", 0),
-                pago_ja_clicado=dados.get("pago_ja_clicado", True)
-            )
+            # ─── SE ESTIVER FINALIZADO, CARREGA A VIEW LIMPA ───
+            if dados.get("finalizado"):
+                return FinalizadosView(
+                    entrega_id=dados.get("entrega_id"),
+                    pedido_numero=dados.get("pedido_numero", 0),
+                    valor_total=dados.get("valor_total", 0),
+                    pt=dados.get("pt", 0),
+                    sub=dados.get("sub", 0),
+                    is_doacao=dados.get("is_doacao", False)
+                )
+            # ─── SE AINDA ESTIVER NO ENCOMENDAS, CARREGA A VIEW CHEIA ───
+            else:
+                return StatusView(
+                    entrega_id=dados.get("entrega_id"),
+                    total_entregas=dados.get("total_entregas", 1),
+                    entrega_atual=dados.get("entrega_atual", 1),
+                    disabled=dados.get("disabled", False),
+                    valor_total=dados.get("valor_total", 0),
+                    pt=dados.get("pt", 0),
+                    sub=dados.get("sub", 0),
+                    pedido_numero=dados.get("pedido_numero", 0),
+                    pago_ja_clicado=dados.get("pago_ja_clicado", False),
+                    is_doacao=dados.get("is_doacao", False)
+                )
         elif tipo == "acao":
             return AcaoView(dados.get("acao_id"), dados.get("criador_id"))
         elif tipo == "producao":
