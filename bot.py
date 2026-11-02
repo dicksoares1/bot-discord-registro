@@ -8227,7 +8227,6 @@ class StatusView(discord.ui.View):
         self.pedido_numero = pedido_numero
         self.is_doacao = is_doacao
 
-        # ─── BOTÕES DO CANAL DE ENCOMENDAS (ABERTOS) ───
         if not self.is_doacao:
             self.add_item(discord.ui.Button(
                 label="💰 Pago",
@@ -8261,7 +8260,8 @@ class StatusView(discord.ui.View):
             disabled=self.transferencia_confirmada
         ))
 
-        if not self.is_doacao:
+        # ─── AQUI ESTÁ A CORREÇÃO: Só mostra Doação se NÃO tiver sido pago ───
+        if not self.is_doacao and not self.pago_ja_clicado:
             self.add_item(discord.ui.Button(
                 label="🎁 Transformar em Doação",
                 style=discord.ButtonStyle.secondary,
@@ -8270,7 +8270,6 @@ class StatusView(discord.ui.View):
                 disabled=self.transferencia_confirmada or (self.valor_total == 0),
                 row=1
             ))
-
   
     async def _pedido_ja_finalizado_no_banco(self, pedido_numero: int) -> bool:
         if not pedido_numero:
@@ -22569,7 +22568,7 @@ class BotaoPersistente:
                     tipo = row["tipo"]
                     dados = json.loads(row["dados"]) if row["dados"] else {}
 
-                    # ─── Caso especial: painel de meta V2 (precisa async) ───
+                    # ─── Restaura o painel de meta V2 (precisa async) ───
                     if tipo.startswith("meta_v2_") or tipo.startswith("meta_"):
                         try:
                             user_id = int(dados.get("user_id") or tipo.split("_")[-1])
@@ -22577,16 +22576,15 @@ class BotaoPersistente:
                             if container:
                                 view = V2MetaView(user_id, container, cargos_info)
                                 await msg.edit(view=view)
-                                logger.info(f"🔄 Painel V2 restaurado: user {user_id}")
                         except Exception as e:
                             logger.error(f"❌ Erro ao restaurar painel V2 {tipo}: {e}")
                         continue
 
-                    # ─── Resto dos botões (vendas, ações, produção) ───
-                    view = BotaoPersistente.criar_view(tipo, dados)
+                    # ─── Resto dos botões (AQUI PASSA O CANAL_ID) ───
+                    view = BotaoPersistente.criar_view(tipo, dados, row["canal_id"])
                     if view:
                         await msg.edit(view=view)
-                        logger.info(f"🔄 Botão restaurado: {tipo} - {row['mensagem_id']}")
+                        logger.info(f"🔄 Botão restaurado: {tipo} - {row['mensagem_id']} (Canal: {row['canal_id']})")
                 except discord.NotFound:
                     try:
                         async with pool.acquire() as conn_delete:
@@ -22599,12 +22597,12 @@ class BotaoPersistente:
             logger.error(f"❌ Erro ao restaurar botões: {e}")
 
     @staticmethod
-    def criar_view(tipo, dados):
+    def criar_view(tipo, dados, canal_id=None):
         if tipo == "meta":
             return MetaView(dados.get("user_id"))
         elif tipo == "venda":
-            # ─── SE ESTIVER FINALIZADO, CARREGA A VIEW LIMPA ───
-            if dados.get("finalizado"):
+            # ─── SE ESTIVER NO CANAL DE FINALIZADOS, OBRIGA A USAR A VIEW LIMPA ───
+            if canal_id and int(canal_id) == CANAL_PEDIDOS_FINALIZADOS_ID:
                 return FinalizadosView(
                     entrega_id=dados.get("entrega_id"),
                     pedido_numero=dados.get("pedido_numero", 0),
@@ -22613,7 +22611,7 @@ class BotaoPersistente:
                     sub=dados.get("sub", 0),
                     is_doacao=dados.get("is_doacao", False)
                 )
-            # ─── SE AINDA ESTIVER NO ENCOMENDAS, CARREGA A VIEW CHEIA ───
+            # ─── SE ESTIVER NO ENCOMENDAS, USA A VIEW COMPLETA ───
             else:
                 return StatusView(
                     entrega_id=dados.get("entrega_id"),
