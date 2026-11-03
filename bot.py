@@ -10689,12 +10689,24 @@ class ConfirmarProducaoView(discord.ui.View):
             f"{aviso_polvora}",
             ephemeral=True
         )
-        await interaction.message.delete()
+        
+        # ─── PROTEÇÃO DEFINITIVA CONTRA O ERRO 404 ───
+        try:
+            if interaction.message:
+                await interaction.message.delete()
+        except (discord.NotFound, discord.HTTPException):
+            pass # Ignora completamente se a mensagem já foi apagada
 
     @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.danger)
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Produção cancelada.", ephemeral=True)
-        await interaction.message.delete()
+        
+        # ─── PROTEÇÃO DEFINITIVA CONTRA O ERRO 404 ───
+        try:
+            if interaction.message:
+                await interaction.message.delete()
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
 
 # ────────────────────────────────────────────────────────────────────────────────
