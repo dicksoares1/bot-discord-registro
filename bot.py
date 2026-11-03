@@ -12237,7 +12237,7 @@ async def atualizar_valor_meta_personalizado(user_id, novo_valor):
 # FUNÇÃO: adicionar_dinheiro_meta
 # ────────────────────────────────────────────────────────────────────────────────
 async def adicionar_dinheiro_meta(user_id, valor):
-    pool = get_db()
+    pool = await get_db()
     if not pool:
         return False
     try:
@@ -12245,17 +12245,40 @@ async def adicionar_dinheiro_meta(user_id, valor):
             meta = await conn.fetchrow("SELECT dinheiro, saldo_excedente FROM metas WHERE user_id = $1", str(user_id))
             if not meta:
                 return False
+            
             dinheiro_atual = meta["dinheiro"] or 0
             saldo_excedente = meta["saldo_excedente"] or 0
+            
+            # Busca a meta limite (se for isento, retorna 0)
             meta_limite = await definir_valor_meta_por_id(user_id)
-            falta_para_meta = max(0, meta_limite - dinheiro_atual)
-            if valor <= falta_para_meta:
+            
+            # Se for isento (limite 0), todo valor vai para o saldo excedente
+            if meta_limite == 0:
                 novo_dinheiro = dinheiro_atual + valor
                 await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_dinheiro, str(user_id))
             else:
-                novo_dinheiro = meta_limite
-                novo_excedente = saldo_excedente + (valor - falta_para_meta)
-                await conn.execute("UPDATE metas SET dinheiro = $1, saldo_excedente = $2 WHERE user_id = $3", novo_dinheiro, novo_excedente, str(user_id))
+                falta_para_meta = max(0, meta_limite - dinheiro_atual)
+                if valor <= falta_para_meta:
+                    novo_dinheiro = dinheiro_atual + valor
+                    await conn.execute("UPDATE metas SET dinheiro = $1 WHERE user_id = $2", novo_dinheiro, str(user_id))
+                else:
+                    novo_dinheiro = meta_limite
+                    novo_excedente = saldo_excedente + (valor - falta_para_meta)
+                    await conn.execute("UPDATE metas SET dinheiro = $1, saldo_excedente = $2 WHERE user_id = $3", novo_dinheiro, novo_excedente, str(user_id))
+
+            # ─── ENVIA PARA O CAIXA (SUJO) ───
+            try:
+                await movimentar_caixa(
+                    tipo="deposito_meta",
+                    valor=valor,
+                    motivo=f"Depósito na Meta ({user_id})",
+                    autor=user_id,
+                    tipo_dinheiro="sujo"
+                )
+                logger.info(f"🟥 Caixa (sujo): +{formatar_dinheiro(valor)} (Depósito meta {user_id})")
+            except Exception as e:
+                logger.error(f"⚠️ Erro ao somar depósito de meta no caixa: {e}")
+
             return True
     except Exception as e:
         logger.error(f"❌ Erro ao adicionar dinheiro: {e}")
@@ -15834,7 +15857,6 @@ async def _v2_montar_container(user_id):
 
         # Meta
         if is_isento_lideranca:
-            # Texto de contribuição para isentos
             container.add_item(discord.ui.TextDisplay(
                 f"### 🎯 {label}\n"
                 f"```yaml\n"
@@ -15917,7 +15939,6 @@ async def _v2_montar_container(user_id):
     except Exception as e:
         logger.error(f"❌ Erro ao montar container V2: {e}")
         return None, None
-
 
 class V2MetaView(discord.ui.LayoutView):
     """
