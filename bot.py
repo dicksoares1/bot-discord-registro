@@ -22958,15 +22958,17 @@ async def verificar_e_mover_paineis(canal):
             nome = painel["nome"]
             msg_id = int(painel["mensagem_id"])
 
+            # ─── NÃO MEXER NO PAINEL DE ADVERTÊNCIAS (Deixa ele quieto) ───
+            if nome == "painel_advertencias":
+                continue
+
             try:
                 msg = await safe_fetch_message(canal, msg_id)
                 
-                # Trata painéis V2 (LayoutView não tem "embed")
                 if not msg or (not msg.embeds and not msg.components):
                     logger.warning(f"⚠️ Painel '{nome}' não existe ou está vazio. Tentando recriar...")
                     if nome.startswith("meta_"):
                         try:
-                            # Limpa 'meta_v2_' ou 'meta_' corretamente
                             clean_id = nome.replace("meta_v2_", "").replace("meta_", "")
                             user_id = int(clean_id)
                             await atualizar_embed_meta(user_id)
@@ -22974,11 +22976,9 @@ async def verificar_e_mover_paineis(canal):
                             logger.error(f"❌ Erro ao recriar painel de meta {nome}: {e}")
                     continue
 
-                # Se for um painel V2 com componentes, não precisa mover (já é dinâmico no envio)
                 if msg.components and not msg.embeds:
                     continue
 
-                # Se for um Embed (painéis antigos), move pro final
                 embed_salvo = msg.embeds[0] if msg.embeds else None
                 if embed_salvo:
                     view_nova = criar_view_por_painel(nome)
