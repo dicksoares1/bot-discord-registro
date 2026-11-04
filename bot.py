@@ -23306,6 +23306,7 @@ class PainelAdvertenciasView(discord.ui.View):
                 await inter.response.send_message("❌ Nenhum membro nesta categoria.", ephemeral=True)
                 return
 
+            # Ordena alfabeticamente
             membros_do_grupo.sort(key=lambda m: m.display_name.lower())
             
             await inter.response.send_message(
@@ -23313,10 +23314,9 @@ class PainelAdvertenciasView(discord.ui.View):
                 view=AdvertenciaSelectView(membros_do_grupo), 
                 ephemeral=True
             )
-            try:
-                await interaction.message.delete()
-            except:
-                pass
+            # ─── REMOVIDO O DELETE AQUI! ───
+            # O bot não vai mais tentar apagar nada. A mensagem invisível vai sumir sozinha 
+            # quando o tempo do Discord expirar.
 
         select_grupo.callback = callback_grupo
         view_grupo.add_item(select_grupo)
@@ -23340,7 +23340,6 @@ class PainelAdvertenciasView(discord.ui.View):
             await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
 
-        # Busca todos os membros que possuem advertências ativas
         async with pool.acquire() as conn:
             advs_ativas = await conn.fetch("SELECT DISTINCT user_id FROM advertencias WHERE ativo = true")
 
