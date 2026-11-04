@@ -23406,6 +23406,20 @@ async def enviar_painel_advertencias():
     embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = PainelAdvertenciasView()
+    
+    # ─── A BLINDAGEM: LIMPA O CANAL ANTES DE ENVIAR ───
+    try:
+        async for msg in canal.history(limit=30):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    await asyncio.sleep(0.3) # Pausa para não tomar Rate Limit
+                except:
+                    pass
+    except Exception as e:
+        logger.error(f"❌ Erro ao limpar mensagens antigas do canal de adv: {e}")
+
+    # Envia a mensagem nova e registra
     await enviar_ou_atualizar_painel("painel_advertencias", CANAL_ADVERTENCIAS_ID, embed, view)
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -23657,6 +23671,39 @@ async def cmd_dashboard(ctx):
     embed.set_footer(text=f"🛡 Vida Rasa 442 • Dashboard • {agora().strftime('%d/%m/%Y %H:%M:%S')}", icon_url=bot.user.display_avatar.url if bot.user else None)
     await ctx.send(embed=embed)
 
+
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: !criar_adv (Força a criação do painel de advertências)
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name="criar_adv")
+@commands.has_permissions(administrator=True)
+async def cmd_criar_adv(ctx):
+    await ctx.send("🔄 Forçando a criação do painel de advertências...")
+    
+    # 1. Limpa o banco de dados para o painel não achar a msg antiga
+    pool = await get_pool()
+    if pool:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM paineis WHERE nome = 'painel_advertencias'")
+            await conn.execute("DELETE FROM paineis_ultimos WHERE nome = 'painel_advertencias'")
+    
+    # 2. Limpa as mensagens antigas do bot no canal
+    canal = bot.get_channel(CANAL_ADVERTENCIAS_ID)
+    if canal:
+        deletadas = 0
+        async for msg in canal.history(limit=50):
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                    deletadas += 1
+                    await asyncio.sleep(0.5)
+                except:
+                    pass
+        await ctx.send(f"🗑️ {deletadas} mensagens antigas removidas.")
+
+    # 3. Envia o painel novinho
+    await enviar_painel_advertencias()
+    await ctx.send("✅ Painel de advertências recriado com sucesso!")
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !estoque
 # ────────────────────────────────────────────────────────────────────────────────
