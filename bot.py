@@ -270,6 +270,8 @@ CANAL_CHAT_VENDAS_ID = 1365372467723501723
 CANAL_DOACOES_ID = 1564271778266878103
 CANAL_LOG_DOACOES_ID = 1564274094818590720
 CANAL_COMPROVANTES_ID = 1479649961967620106
+CANAL_ADVERTENCIAS_ID = 1567512659673489408
+CANAL_HISTORICO_ADV_ID = 1567512954176544768
 PIX_CHAVE = "02912141508"  # Ex: 11999999999
 PIX_NOME = "Dickson Souza Soares" 
 PIX_CIDADE = "Eunapolis" # Sem acentos!
@@ -920,6 +922,23 @@ async def inicializar_tabelas(pool):
             )
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_pontos_user_ativo ON pontos_mecanica(user_id, ativo)")
+
+        # ═══════════════ TABELAS DE ADVERTÊNCIAS ═══════════════
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS advertencias (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                user_nome VARCHAR(100),
+                motivo TEXT NOT NULL,
+                aplicado_por VARCHAR(30) NOT NULL,
+                aplicado_por_nome VARCHAR(100),
+                data TIMESTAMP DEFAULT NOW(),
+                ativo BOOLEAN DEFAULT true
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_adv_user ON advertencias(user_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_adv_ativo ON advertencias(ativo)")
+        
         # ═══════════════ TABELAS DE AUDITORIA ═══════════════
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS auditoria (
@@ -1347,6 +1366,48 @@ def extrair_canal(link):
     if "tiktok.com" in link:
         return partes[1].replace("@", "") if len(partes) > 1 else None
     return None
+
+# ═══════════════ ADVERTÊNCIAS ═══════════════
+CARGOS_PODEM_TOMAR_ADV = [
+    CARGO_02_ID, CARGO_03_ID,
+    CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID, CARGO_GERENTE_GERAL_ID,
+    CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID,
+    CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID,
+    CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
+    CARGO_MECANICO_ID, CARGO_SOLDADO_ID, CARGO_MEMBRO_ID,
+    CARGO_MORADOR_ID, CARGO_AGREGADO_ID
+]
+
+TEXTO_MOTIVOS_ADV = """
+⚠️ **CONDUTAS PASSÍVEIS DE ADVERTÊNCIA**
+
+**⚔️ Ações e QRR:**
+• Passar por cima da call (K.O., guivar, posições).
+• Ir para ação, quitar e fazer a facção perder a ação.
+• Abandonar o blindado ou perdê-lo por não ouvir a call.
+• Não ir para a posição correta (ex: Fleeca Praia).
+• Trocou tiro com a polícia sem guivar ou sem ouvir a call.
+• Ficar passando pela polícia e gerar trocação desnecessária.
+• Ser escalado para ação e desaparecer (sumir).
+• Falta de gravação da ação.
+
+**🎙️ Rádio e Hierarquia:**
+• Não dar QRR.
+• Ficar fora da rádio durante ação.
+• Desrespeitar a hierarquia ou uma ordem direta (ex: não ir na Federal).
+• Não ir ajudar um membro que avisou na rádio que ia desmaiar.
+• Discussão ou desrespeito com Gerentes e Braços de Ação.
+
+**📋 Comportamento e Metas:**
+• Perder arma por burrice (2ª vez em diante).
+• Querer ter razão em situação onde o erro foi seu (QRR, DBatendo).
+• Permanecer na discussão com a gerência.
+• Estar dormindo na garagem.
+• Estar sem a roupa da facção durante o QRR.
+• Meta atrasada por 2 semanas seguidas.
+"""
+
+# ═══════════════ FIM ADVERTÊNCIAS ═══════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: pode_remover_ausencia
@@ -23005,6 +23066,233 @@ def criar_view_por_painel(nome):
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 20 — PAINEL GLOBAL + BOTÕES PERSISTENTES                      ║
 # ════════════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SISTEMA DE ADVERTÊNCIAS
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdvertenciaModal
+# ────────────────────────────────────────────────────────────────────────────────
+class AdvertenciaModal(discord.ui.Modal, title="⚠️ Aplicar Advertência"):
+    def __init__(self, membro: discord.Member):
+        super().__init__(timeout=300)
+        self.membro = membro
+        
+        self.motivo = discord.ui.TextInput(
+            label="📝 Motivo da Advertência",
+            placeholder="Descreva o motivo detalhadamente...",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=1000
+        )
+        self.add_item(self.motivo)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        try:
+            # Verifica quantas ADVs ativas o membro já tem
+            async with pool.acquire() as conn:
+                total_advs = await conn.fetchval(
+                    "SELECT COUNT(*) FROM advertencias WHERE user_id = $1 AND ativo = true",
+                    str(self.membro.id)
+                ) or 0
+
+                # Salva a nova advertência
+                await conn.execute("""
+                    INSERT INTO advertencias (user_id, user_nome, motivo, aplicado_por, aplicado_por_nome)
+                    VALUES ($1, $2, $3, $4, $5)
+                """, 
+                    str(self.membro.id), 
+                    self.membro.display_name, 
+                    self.motivo.value, 
+                    str(interaction.user.id), 
+                    interaction.user.display_name
+                )
+
+            # Envia para o canal de histórico
+            canal_hist = interaction.guild.get_channel(CANAL_HISTORICO_ADV_ID)
+            if canal_hist:
+                embed = discord.Embed(
+                    title="⚠️ NOVA ADVERTÊNCIA APLICADA",
+                    color=0xE74C3C,
+                    timestamp=agora()
+                )
+                embed.set_author(name="🛡 Vida Rasa 442 • Advertências", icon_url=bot.user.display_avatar.url if bot.user else None)
+                embed.set_thumbnail(url=self.membro.display_avatar.url)
+                
+                embed.add_field(name="👤 Membro", value=f"{self.membro.mention} (`{self.membro.id}`)", inline=False)
+                embed.add_field(name="🛡️ Aplicada por", value=interaction.user.mention, inline=False)
+                embed.add_field(name="📝 Motivo", value=f"```yaml\n{self.motivo.value}\n```", inline=False)
+                embed.add_field(name="📊 Total de ADVs Ativas", value=f"**{total_advs + 1} / 3**", inline=False)
+                
+                if (total_advs + 1) >= 3:
+                    embed.add_field(name="🚨 ATENÇÃO", value="O membro atingiu o limite de advertências e deve ser avaliado pela gerência.", inline=False)
+
+                embed.set_footer(text=f"ID da ADM: {interaction.user.id} • Data: {agora().strftime('%d/%m/%Y %H:%M')}")
+                await canal_hist.send(embed=embed)
+
+            await interaction.followup.send(
+                f"✅ **Advertência aplicada com sucesso a {self.membro.mention}!**\n"
+                f"📊 Total de ADVs ativas: **{total_advs + 1}/3**", 
+                ephemeral=True
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao aplicar advertência: {e}")
+            await interaction.followup.send(f"❌ Erro ao aplicar advertência: {str(e)[:100]}", ephemeral=True)
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdvertenciaSelectView
+# ────────────────────────────────────────────────────────────────────────────────
+class AdvertenciaSelectView(discord.ui.View):
+    def __init__(self, membros):
+        super().__init__(timeout=180)
+        
+        options = []
+        # Limita a 25 membros por causa do limite do Discord
+        for m in membros[:25]:
+            options.append(discord.SelectOption(
+                label=m.display_name[:100],
+                description=f"ID: {m.id}",
+                value=str(m.id),
+                emoji="👤"
+            ))
+            
+        if not options:
+            options.append(discord.SelectOption(label="Nenhum membro encontrado", value="none"))
+
+        self.select = discord.ui.Select(
+            placeholder="👤 Selecione o membro para advertir...",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        if self.select.values[0] == "none":
+            await interaction.response.send_message("❌ Nenhum membro selecionado.", ephemeral=True)
+            return
+
+        membro_id = int(self.select.values[0])
+        membro = interaction.guild.get_member(membro_id)
+        
+        if not membro:
+            await interaction.response.send_message("❌ Membro não encontrado no servidor.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(AdvertenciaModal(membro))
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: PainelAdvertenciasView
+# ────────────────────────────────────────────────────────────────────────────────
+class PainelAdvertenciasView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="⚠️ Aplicar Advertência", style=discord.ButtonStyle.danger, custom_id="btn_aplicar_adv", emoji="⚠️")
+    async def aplicar_adv(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Verifica permissão (Apenas Gerentes+)
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem aplicar advertências!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Filtra os membros que podem tomar ADV
+        membros_validos = []
+        for member in interaction.guild.members:
+            if member.bot:
+                continue
+            if any(r.id in CARGOS_PODEM_TOMAR_ADV for r in member.roles):
+                membros_validos.append(member)
+
+        # Ordena por nome
+        membros_validos.sort(key=lambda m: m.display_name.lower())
+
+        if not membros_validos:
+            await interaction.followup.send("❌ Nenhum membro com cargo válido encontrado.", ephemeral=True)
+            return
+
+        view = AdvertenciaSelectView(membros_validos)
+        await interaction.followup.send("Selecione o membro que deseja advertir:", view=view, ephemeral=True)
+
+    @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_adv", emoji="🔄")
+    async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem atualizar o painel!", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_advertencias()
+        await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_advertencias
+# ────────────────────────────────────────────────────────────────────────────────
+async def enviar_painel_advertencias():
+    canal = bot.get_channel(CANAL_ADVERTENCIAS_ID)
+    if not canal:
+        logger.error(f"❌ Canal de advertências não encontrado: {CANAL_ADVERTENCIAS_ID}")
+        return
+
+    embed = discord.Embed(
+        title="⚠️ ── CENTRAL DE ADVERTÊNCIAS ── ⚠️",
+        description="**VDR 442 • Disciplina e Conduta**\n*Aqui você pode registrar e consultar as advertências da facção*",
+        color=0xE74C3C,
+        timestamp=agora()
+    )
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    
+    embed.add_field(
+        name="📊 REGRAS GERAIS",
+        value="```yaml\n🚨 Limite de ADVs: 3\n👤 Podem tomar ADV: Todos os membros (exceto 01 e Liderança)\n🛡️ Quem aplica: Gerentes ou ADM\n```",
+        inline=False
+    )
+
+    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+
+    # Adiciona o texto grande com os motivos (Formatado bonitinho)
+    embed.add_field(
+        name="📋 MOTIVOS DE ADVERTÊNCIA",
+        value=TEXTO_MOTIVOS_ADV[:1024], # Limite do Discord por campo
+        inline=False
+    )
+    
+    # Se o texto for maior que 1024, joga o resto em outro campo
+    if len(TEXTO_MOTIVOS_ADV) > 1024:
+        embed.add_field(
+            name="📋 MOTIVOS (Continuação)",
+            value=TEXTO_MOTIVOS_ADV[1024:2048],
+            inline=False
+        )
+        
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+    view = PainelAdvertenciasView()
+    await enviar_ou_atualizar_painel("painel_advertencias", CANAL_ADVERTENCIAS_ID, embed, view)
+
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  BLOCO 21 — COMANDOS (PARTE 1/3)                                           ║
 # ════════════════════════════════════════════════════════════════════════════════
@@ -25903,6 +26191,7 @@ async def enviar_paineis_iniciais(guild):
             ("Registro", enviar_painel_registro),
             ("Fabricação", enviar_painel_fabricacao),
             ("Gerenciamento de Produção", enviar_painel_gerenciamento_producao), # <── NOVO AQUI
+            ("Advertências", enviar_painel_advertencias), # <── NOVO AQUI
             ("Lives", enviar_painel_lives),
             ("Lavagem", enviar_painel_lavagem),
             ("Vendas", enviar_painel_vendas),
