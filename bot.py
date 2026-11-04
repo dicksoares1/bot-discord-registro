@@ -1378,33 +1378,36 @@ CARGOS_PODEM_TOMAR_ADV = [
     CARGO_MORADOR_ID, CARGO_AGREGADO_ID
 ]
 
-TEXTO_MOTIVOS_ADV = """
-⚠️ **CONDUTAS PASSÍVEIS DE ADVERTÊNCIA**
-
-**⚔️ Ações e QRR:**
-• Passar por cima da call (K.O., guivar, posições).
-• Ir para ação, quitar e fazer a facção perder a ação.
-• Abandonar o blindado ou perdê-lo por não ouvir a call.
-• Não ir para a posição correta (ex: Fleeca Praia).
-• Trocou tiro com a polícia sem guivar ou sem ouvir a call.
-• Ficar passando pela polícia e gerar trocação desnecessária.
-• Ser escalado para ação e desaparecer (sumir).
+TEXTO_ADV_ACOES = """
+**⚔️ Ações e QRR**
+• Passar por cima da call de guiar ou posições.
+• Ir para ação, quitar e prejudicar a facção.
+• Abandonar ou perder o blindado.
+• Ocupar posições incorretas durante a ação.
+• Trocas de tiro sem guiar ou sem ouvir a call.
+• Gerar confronto desnecessário com a polícia.
+• Sumir após ser escalado para a ação.
 • Falta de gravação da ação.
+"""
 
-**🎙️ Rádio e Hierarquia:**
-• Não dar QRR.
-• Ficar fora da rádio durante ação.
-• Desrespeitar a hierarquia ou uma ordem direta (ex: não ir na Federal).
-• Não ir ajudar um membro que avisou na rádio que ia desmaiar.
-• Discussão ou desrespeito com Gerentes e Braços de Ação.
+TEXTO_ADV_HIERARQUIA = """
+**🎙️ Rádio e Hierarquia**
+• Não realizar o QRR.
+• Permanecer fora da rádio durante ações.
+• Desrespeitar a hierarquia ou ordens diretas.
+• Ignorar pedidos de ajuda na rádio.
+• Discussões ou desrespeito com Gerentes e responsáveis.
+"""
 
-**📋 Comportamento e Metas:**
-• Perder arma por burrice (2ª vez em diante).
-• Querer ter razão em situação onde o erro foi seu (QRR, DBatendo).
-• Permanecer na discussão com a gerência.
-• Estar dormindo na garagem.
-• Estar sem a roupa da facção durante o QRR.
-• Meta atrasada por 2 semanas seguidas.
+TEXTO_ADV_COMPORTAMENTO = """
+**📋 Comportamento e Metas**
+• Perder armamento por imprudência.
+• Tentar ter razão em erros próprios.
+• Manter discussão com a gerência.
+• Estar ausente ou dormindo o tempo todo.
+• Estar sem a roupa da facção no QRR.
+• Meta atrasada.
+• Quitar de ações perdidas ou guerras.
 """
 
 # ═══════════════ FIM ADVERTÊNCIAS ═══════════════
@@ -23267,32 +23270,21 @@ async def enviar_painel_advertencias():
     
     embed.add_field(
         name="📊 REGRAS GERAIS",
-        value="```yaml\n🚨 Limite de ADVs: 3\n👤 Podem tomar ADV: Todos os membros (exceto 01 e Liderança)\n🛡️ Quem aplica: Gerentes ou ADM\n```",
+        value="```yaml\n🚨 Limite de ADVs: 3\n👤 Podem tomar ADV: Todos (exceto 01 e Liderança)\n🛡️ Quem aplica: Gerentes ou ADM\n```",
         inline=False
     )
 
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
-    # Adiciona o texto grande com os motivos (Formatado bonitinho)
-    embed.add_field(
-        name="📋 MOTIVOS DE ADVERTÊNCIA",
-        value=TEXTO_MOTIVOS_ADV[:1024], # Limite do Discord por campo
-        inline=False
-    )
-    
-    # Se o texto for maior que 1024, joga o resto em outro campo
-    if len(TEXTO_MOTIVOS_ADV) > 1024:
-        embed.add_field(
-            name="📋 MOTIVOS (Continuação)",
-            value=TEXTO_MOTIVOS_ADV[1024:2048],
-            inline=False
-        )
+    # Adiciona os 3 blocos organizados
+    embed.add_field(name="📋 CONDUTAS PASSÍVEIS DE ADVERTÊNCIA", value=TEXTO_ADV_ACOES, inline=False)
+    embed.add_field(name="\u200b", value=TEXTO_ADV_HIERARQUIA, inline=False)
+    embed.add_field(name="\u200b", value=TEXTO_ADV_COMPORTAMENTO, inline=False)
         
     embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = PainelAdvertenciasView()
     await enviar_ou_atualizar_painel("painel_advertencias", CANAL_ADVERTENCIAS_ID, embed, view)
-
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  BLOCO 21 — COMANDOS (PARTE 1/3)                                           ║
 # ════════════════════════════════════════════════════════════════════════════════
