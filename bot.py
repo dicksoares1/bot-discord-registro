@@ -23004,8 +23004,7 @@ def criar_view_por_painel(nome):
     if nome.startswith("meta_v2_"):
         try:
             user_id = int(nome.replace("meta_v2_", ""))
-            # Reconstrói V2 (assíncrono — chamado dentro de restaurar_botoes)
-            return None  # Restauração feita via chamada assíncrona abaixo
+            return None
         except:
             return None
 
@@ -23065,6 +23064,12 @@ def criar_view_por_painel(nome):
         return CaixaView()
     elif nome == "painel_emprestimos":
         return EmprestimosView()
+    elif nome == "painel_doacoes":
+        return DoacaoView()
+    elif nome == "painel_gerenciamento_producao":
+        return GerenciamentoProducaoView()
+    elif nome == "painel_advertencias": # <── ADICIONADO AQUI
+        return PainelAdvertenciasView()
     return None
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 20 — PAINEL GLOBAL + BOTÕES PERSISTENTES                      ║
