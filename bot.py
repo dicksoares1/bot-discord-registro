@@ -162,6 +162,10 @@ CARGO_AUSENTE_ID = 1337420032212336823
 CONVIDADO_ROLE_ID = 1337382961456353342
 EM_REGISTRO_ROLE_ID = 1337382961456353342
 AGREGADO_ROLE_ID = 1422847202937536532
+CARGO_ADV_1_ID = 1567523356134088847
+CARGO_ADV_2_ID = 1567523623294476403
+CARGO_ADV_3_ID = 1567523686834118787
+
 
 CARGOS_PERMITIDOS_REMOVER = [
     CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID,
@@ -23124,6 +23128,29 @@ class AdvertenciaModal(discord.ui.Modal, title="⚠️ Aplicar Advertência"):
                     interaction.user.display_name
                 )
 
+            novo_total = total_advs + 1
+
+            # ─── ATUALIZAR CARGOS DE ADVERTÊNCIA ───
+            try:
+                # Remove todos os cargos de ADV que ele já tenha
+                cargos_adv = [CARGO_ADV_1_ID, CARGO_ADV_2_ID, CARGO_ADV_3_ID]
+                cargos_para_remover = [r for r in self.membro.roles if r.id in cargos_adv]
+                if cargos_para_remover:
+                    await self.membro.remove_roles(*cargos_para_remover)
+
+                # Aplica o novo cargo com base no total
+                if novo_total == 1:
+                    cargo_novo = interaction.guild.get_role(CARGO_ADV_1_ID)
+                    if cargo_novo: await self.membro.add_roles(cargo_novo)
+                elif novo_total == 2:
+                    cargo_novo = interaction.guild.get_role(CARGO_ADV_2_ID)
+                    if cargo_novo: await self.membro.add_roles(cargo_novo)
+                elif novo_total >= 3:
+                    cargo_novo = interaction.guild.get_role(CARGO_ADV_3_ID)
+                    if cargo_novo: await self.membro.add_roles(cargo_novo)
+            except Exception as e:
+                logger.error(f"❌ Erro ao atualizar cargo de ADV: {e}")
+
             # Envia para o canal de histórico
             canal_hist = interaction.guild.get_channel(CANAL_HISTORICO_ADV_ID)
             if canal_hist:
@@ -23138,9 +23165,9 @@ class AdvertenciaModal(discord.ui.Modal, title="⚠️ Aplicar Advertência"):
                 embed.add_field(name="👤 Membro", value=f"{self.membro.mention} (`{self.membro.id}`)", inline=False)
                 embed.add_field(name="🛡️ Aplicada por", value=interaction.user.mention, inline=False)
                 embed.add_field(name="📝 Motivo", value=f"```yaml\n{self.motivo.value}\n```", inline=False)
-                embed.add_field(name="📊 Total de ADVs Ativas", value=f"**{total_advs + 1} / 3**", inline=False)
+                embed.add_field(name="📊 Total de ADVs Ativas", value=f"**{novo_total} / 3**", inline=False)
                 
-                if (total_advs + 1) >= 3:
+                if novo_total >= 3:
                     embed.add_field(name="🚨 ATENÇÃO", value="O membro atingiu o limite de advertências e deve ser avaliado pela gerência.", inline=False)
 
                 embed.set_footer(text=f"ID da ADM: {interaction.user.id} • Data: {agora().strftime('%d/%m/%Y %H:%M')}")
@@ -23148,7 +23175,7 @@ class AdvertenciaModal(discord.ui.Modal, title="⚠️ Aplicar Advertência"):
 
             await interaction.followup.send(
                 f"✅ **Advertência aplicada com sucesso a {self.membro.mention}!**\n"
-                f"📊 Total de ADVs ativas: **{total_advs + 1}/3**", 
+                f"📊 Total de ADVs ativas: **{novo_total}/3**", 
                 ephemeral=True
             )
 
@@ -23211,7 +23238,7 @@ class PainelAdvertenciasView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="⚠️ Aplicar Advertência", style=discord.ButtonStyle.danger, custom_id="btn_aplicar_adv", emoji="⚠️")
+    @discord.ui.button(label="⚠️ Aplicar Advertência", style=discord.ButtonStyle.danger, custom_id="btn_aplicar_adv", emoji="⚠️", row=0)
     async def aplicar_adv(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
@@ -23250,7 +23277,6 @@ class PainelAdvertenciasView(discord.ui.View):
             elif any(r in roles_ids for r in [CARGO_MORADOR_ID, CARGO_AGREGADO_ID]):
                 grupos["moradores_agregados"].append(member)
 
-        # Cria as opções apenas para os grupos que têm membros
         options = []
         if grupos["gerentes"]:
             options.append(discord.SelectOption(label=f"👑 Gerentes ({len(grupos['gerentes'])})", value="gerentes", emoji="👑"))
@@ -23269,7 +23295,6 @@ class PainelAdvertenciasView(discord.ui.View):
             await interaction.followup.send("❌ Nenhum membro com cargo válido encontrado.", ephemeral=True)
             return
 
-        # Monta a View de escolha do grupo
         view_grupo = discord.ui.View(timeout=180)
         select_grupo = discord.ui.Select(placeholder="📂 Selecione a categoria do membro...", options=options)
         
@@ -23281,7 +23306,6 @@ class PainelAdvertenciasView(discord.ui.View):
                 await inter.response.send_message("❌ Nenhum membro nesta categoria.", ephemeral=True)
                 return
 
-            # Ordena alfabeticamente
             membros_do_grupo.sort(key=lambda m: m.display_name.lower())
             
             await inter.response.send_message(
@@ -23299,7 +23323,43 @@ class PainelAdvertenciasView(discord.ui.View):
 
         await interaction.followup.send("Selecione a categoria para filtrar os membros:", view=view_grupo, ephemeral=True)
 
-    @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_adv", emoji="🔄")
+    # ─── BOTÃO DE REMOVER ADV ───
+    @discord.ui.button(label="🗑️ Remover Advertência", style=discord.ButtonStyle.success, custom_id="btn_remover_adv", emoji="🗑️", row=0)
+    async def remover_adv(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem remover advertências!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        # Busca todos os membros que possuem advertências ativas
+        async with pool.acquire() as conn:
+            advs_ativas = await conn.fetch("SELECT DISTINCT user_id FROM advertencias WHERE ativo = true")
+
+        membros_com_adv = []
+        for a in advs_ativas:
+            member = interaction.guild.get_member(int(a["user_id"]))
+            if member:
+                membros_com_adv.append(member)
+
+        if not membros_com_adv:
+            await interaction.followup.send("✅ Nenhum membro possui advertências ativas no momento.", ephemeral=True)
+            return
+
+        membros_com_adv.sort(key=lambda m: m.display_name.lower())
+
+        view = RemoverAdvertenciaView(membros_com_adv)
+        await interaction.followup.send("Selecione o membro que deseja remover a advertência:", view=view, ephemeral=True)
+
+    @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_adv", emoji="🔄", row=1)
     async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
@@ -23347,6 +23407,140 @@ async def enviar_painel_advertencias():
 
     view = PainelAdvertenciasView()
     await enviar_ou_atualizar_painel("painel_advertencias", CANAL_ADVERTENCIAS_ID, embed, view)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RemoverAdvertenciaView
+# ────────────────────────────────────────────────────────────────────────────────
+class RemoverAdvertenciaView(discord.ui.View):
+    def __init__(self, membros):
+        super().__init__(timeout=180)
+        
+        options = []
+        for m in membros[:25]:
+            options.append(discord.SelectOption(
+                label=m.display_name[:100],
+                description=f"ID: {m.id}",
+                value=str(m.id),
+                emoji="👤"
+            ))
+
+        self.select = discord.ui.Select(
+            placeholder="👤 Selecione o membro...",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        user_id = self.select.values[0]
+        pool = await get_pool()
+        
+        async with pool.acquire() as conn:
+            advs = await conn.fetch(
+                "SELECT id, motivo, data FROM advertencias WHERE user_id = $1 AND ativo = true ORDER BY data DESC",
+                user_id
+            )
+
+        if not advs:
+            await interaction.response.send_message("❌ Este membro não possui advertências ativas.", ephemeral=True)
+            return
+
+        membro = interaction.guild.get_member(int(user_id))
+        nome = membro.display_name if membro else f"ID: {user_id}"
+
+        embed = discord.Embed(
+            title=f"🗑️ Remover Advertência — {nome}",
+            description="Selecione abaixo qual advertência deseja remover:",
+            color=0xE74C3C
+        )
+        
+        for i, a in enumerate(advs, 1):
+            data_fmt = a["data"].strftime("%d/%m/%Y") if a["data"] else "N/A"
+            embed.add_field(
+                name=f"ADV #{a['id']} ({data_fmt})",
+                value=f"```yaml\n{a['motivo'][:100]}\n```",
+                inline=False
+            )
+
+        view = ConfirmarRemocaoView(user_id, advs)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarRemocaoView
+# ────────────────────────────────────────────────────────────────────────────────
+class ConfirmarRemocaoView(discord.ui.View):
+    def __init__(self, user_id, advs):
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        
+        options = []
+        for a in advs:
+            data_fmt = a["data"].strftime("%d/%m") if a["data"] else "N/A"
+            options.append(discord.SelectOption(
+                label=f"ADV #{a['id']} - {data_fmt}",
+                description=a["motivo"][:50],
+                value=str(a["id"])
+            ))
+            
+        self.select = discord.ui.Select(placeholder="Selecione a ADV para remover...", options=options)
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        adv_id = self.select.values[0]
+        pool = await get_pool()
+        
+        async with pool.acquire() as conn:
+            await conn.execute("UPDATE advertencias SET ativo = false WHERE id = $1", int(adv_id))
+            total_restante = await conn.fetchval("SELECT COUNT(*) FROM advertencias WHERE user_id = $1 AND ativo = true", self.user_id)
+
+        # ─── ATUALIZAR CARGOS DE ADVERTÊNCIA ───
+        membro = interaction.guild.get_member(int(self.user_id))
+        if membro:
+            try:
+                cargos_adv = [CARGO_ADV_1_ID, CARGO_ADV_2_ID, CARGO_ADV_3_ID]
+                cargos_para_remover = [r for r in membro.roles if r.id in cargos_adv]
+                if cargos_para_remover:
+                    await membro.remove_roles(*cargos_para_remover)
+
+                # Reaplica o cargo referente ao que sobrou
+                if total_restante == 1:
+                    cargo_novo = interaction.guild.get_role(CARGO_ADV_1_ID)
+                    if cargo_novo: await membro.add_roles(cargo_novo)
+                elif total_restante == 2:
+                    cargo_novo = interaction.guild.get_role(CARGO_ADV_2_ID)
+                    if cargo_novo: await membro.add_roles(cargo_novo)
+                elif total_restante >= 3:
+                    cargo_novo = interaction.guild.get_role(CARGO_ADV_3_ID)
+                    if cargo_novo: await membro.add_roles(cargo_novo)
+            except Exception as e:
+                logger.error(f"❌ Erro ao atualizar cargo de ADV na remoção: {e}")
+
+        # Envia para o canal de histórico
+        canal_hist = interaction.guild.get_channel(CANAL_HISTORICO_ADV_ID)
+        if canal_hist:
+            embed = discord.Embed(
+                title="🗑️ ADVERTÊNCIA REMOVIDA",
+                color=0x2ECC71,
+                timestamp=agora()
+            )
+            embed.add_field(name="👤 Membro", value=membro.mention if membro else self.user_id, inline=False)
+            embed.add_field(name="🛡️ Removida por", value=interaction.user.mention, inline=False)
+            embed.add_field(name="📊 ADVs Restantes", value=f"**{total_restante} / 3**", inline=False)
+            embed.set_footer(text=f"ID: {adv_id}")
+            await canal_hist.send(embed=embed)
+
+        await interaction.response.send_message("✅ Advertência removida com sucesso!", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  BLOCO 21 — COMANDOS (PARTE 1/3)                                           ║
 # ════════════════════════════════════════════════════════════════════════════════
