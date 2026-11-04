@@ -23072,8 +23072,8 @@ def criar_view_por_painel(nome):
         return DoacaoView()
     elif nome == "painel_gerenciamento_producao":
         return GerenciamentoProducaoView()
-    elif nome == "painel_advertencias": # <── ADICIONADO AQUI
-        return PainelAdvertenciasView()
+    elif nome == "painel_advertencias":
+        return PainelAdvertenciasView() # <── AQUI ESTÁ A CORREÇÃO
     return None
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 20 — PAINEL GLOBAL + BOTÕES PERSISTENTES                      ║
