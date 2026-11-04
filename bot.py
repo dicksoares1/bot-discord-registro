@@ -23208,7 +23208,6 @@ class PainelAdvertenciasView(discord.ui.View):
 
     @discord.ui.button(label="⚠️ Aplicar Advertência", style=discord.ButtonStyle.danger, custom_id="btn_aplicar_adv", emoji="⚠️")
     async def aplicar_adv(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Verifica permissão (Apenas Gerentes+)
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
         
@@ -23218,23 +23217,82 @@ class PainelAdvertenciasView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True)
 
-        # Filtra os membros que podem tomar ADV
-        membros_validos = []
+        # ─── DIVIDE OS MEMBROS POR GRUPO DE CARGO ───
+        grupos = {
+            "gerentes": [],
+            "responsaveis": [],
+            "mecanicos": [],
+            "soldados": [],
+            "membros": [],
+            "moradores_agregados": []
+        }
+
         for member in interaction.guild.members:
             if member.bot:
                 continue
-            if any(r.id in CARGOS_PODEM_TOMAR_ADV for r in member.roles):
-                membros_validos.append(member)
+            roles_ids = [r.id for r in member.roles]
+            
+            if any(r in roles_ids for r in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]):
+                grupos["gerentes"].append(member)
+            elif any(r in roles_ids for r in [CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID]):
+                grupos["responsaveis"].append(member)
+            elif CARGO_MECANICO_ID in roles_ids:
+                grupos["mecanicos"].append(member)
+            elif CARGO_SOLDADO_ID in roles_ids:
+                grupos["soldados"].append(member)
+            elif CARGO_MEMBRO_ID in roles_ids:
+                grupos["membros"].append(member)
+            elif any(r in roles_ids for r in [CARGO_MORADOR_ID, CARGO_AGREGADO_ID]):
+                grupos["moradores_agregados"].append(member)
 
-        # Ordena por nome
-        membros_validos.sort(key=lambda m: m.display_name.lower())
+        # Cria as opções apenas para os grupos que têm membros
+        options = []
+        if grupos["gerentes"]:
+            options.append(discord.SelectOption(label=f"👑 Gerentes ({len(grupos['gerentes'])})", value="gerentes", emoji="👑"))
+        if grupos["responsaveis"]:
+            options.append(discord.SelectOption(label=f"🛡️ Responsáveis ({len(grupos['responsaveis'])})", value="responsaveis", emoji="🛡️"))
+        if grupos["mecanicos"]:
+            options.append(discord.SelectOption(label=f"🔧 Mecânicos ({len(grupos['mecanicos'])})", value="mecanicos", emoji="🔧"))
+        if grupos["soldados"]:
+            options.append(discord.SelectOption(label=f"⚔️ Soldados ({len(grupos['soldados'])})", value="soldados", emoji="⚔️"))
+        if grupos["membros"]:
+            options.append(discord.SelectOption(label=f"👤 Membros ({len(grupos['membros'])})", value="membros", emoji="👤"))
+        if grupos["moradores_agregados"]:
+            options.append(discord.SelectOption(label=f"🏠 Moradores/Agregados ({len(grupos['moradores_agregados'])})", value="moradores_agregados", emoji="🏠"))
 
-        if not membros_validos:
+        if not options:
             await interaction.followup.send("❌ Nenhum membro com cargo válido encontrado.", ephemeral=True)
             return
 
-        view = AdvertenciaSelectView(membros_validos)
-        await interaction.followup.send("Selecione o membro que deseja advertir:", view=view, ephemeral=True)
+        # Monta a View de escolha do grupo
+        view_grupo = discord.ui.View(timeout=180)
+        select_grupo = discord.ui.Select(placeholder="📂 Selecione a categoria do membro...", options=options)
+        
+        async def callback_grupo(inter: discord.Interaction):
+            escolha = select_grupo.values[0]
+            membros_do_grupo = grupos.get(escolha, [])
+            
+            if not membros_do_grupo:
+                await inter.response.send_message("❌ Nenhum membro nesta categoria.", ephemeral=True)
+                return
+
+            # Ordena alfabeticamente
+            membros_do_grupo.sort(key=lambda m: m.display_name.lower())
+            
+            await inter.response.send_message(
+                f"Selecione o membro da categoria **{escolha.replace('_', ' ').title()}**:", 
+                view=AdvertenciaSelectView(membros_do_grupo), 
+                ephemeral=True
+            )
+            try:
+                await interaction.message.delete()
+            except:
+                pass
+
+        select_grupo.callback = callback_grupo
+        view_grupo.add_item(select_grupo)
+
+        await interaction.followup.send("Selecione a categoria para filtrar os membros:", view=view_grupo, ephemeral=True)
 
     @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_adv", emoji="🔄")
     async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -23248,7 +23306,6 @@ class PainelAdvertenciasView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_advertencias()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_advertencias
 # ────────────────────────────────────────────────────────────────────────────────
