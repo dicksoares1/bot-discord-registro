@@ -8280,10 +8280,7 @@ class FinalizadosView(discord.ui.View):
 # CLASSE: class StatusView
 # ────────────────────────────────────────────────────────────────────────────────
 class StatusView(discord.ui.View):
-    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1,
-                 pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False,
-                 valor_total: int = 0, fuzil: int = 0, escopeta: int = 0, sniper: int = 0, pedido_numero: int = 0,
-                 entregue_ja_clicado: bool = False, is_doacao: bool = False):
+    def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1, pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False, valor_total: int = 0, pt: int = 0, sub: int = 0, pedido_numero: int = 0, entregue_ja_clicado: bool = False, is_doacao: bool = False):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
         self.total_entregas = total_entregas
@@ -8294,178 +8291,586 @@ class StatusView(discord.ui.View):
         self.entrega_criada = False
         self.transferencia_confirmada = transferencia_confirmada
         self.valor_total = valor_total
-        self.fuzil, self.escopeta, self.sniper = fuzil, escopeta, sniper
+        self.pt = pt
+        self.sub = sub
         self.pedido_numero = pedido_numero
         self.is_doacao = is_doacao
 
+        # ─── BOTÕES DO CANAL DE ENCOMENDAS (ABERTOS) ───
         if not self.is_doacao:
-            self.add_item(discord.ui.Button(label="💰 Pago", style=discord.ButtonStyle.primary, custom_id="status_pago_fixo", emoji="💰", disabled=self.pago_ja_clicado or self.transferencia_confirmada))
-            self.add_item(discord.ui.Button(label="❌ Pedido cancelado", style=discord.ButtonStyle.danger, custom_id="status_cancelado_fixo", emoji="❌", disabled=self.transferencia_confirmada))
+            self.add_item(discord.ui.Button(
+                label="💰 Pago",
+                style=discord.ButtonStyle.primary,
+                custom_id="status_pago_fixo",
+                emoji="💰",
+                disabled=self.pago_ja_clicado or self.transferencia_confirmada
+            ))
+            
+            self.add_item(discord.ui.Button(
+                label="❌ Pedido cancelado",
+                style=discord.ButtonStyle.danger,
+                custom_id="status_cancelado_fixo",
+                emoji="❌",
+                disabled=self.transferencia_confirmada
+            ))
 
-        self.add_item(discord.ui.Button(label="✅ Entregue", style=discord.ButtonStyle.success, custom_id="status_entregue_fixo", emoji="✅", disabled=self.entrega_ja_entregue or self.transferencia_confirmada))
-        self.add_item(discord.ui.Button(label="✏️ Editar Venda", style=discord.ButtonStyle.primary, custom_id="editar_venda_fixo", emoji="✏️", disabled=self.transferencia_confirmada))
+        self.add_item(discord.ui.Button(
+            label="✅ Entregue",
+            style=discord.ButtonStyle.success,
+            custom_id="status_entregue_fixo",
+            emoji="✅",
+            disabled=self.entrega_ja_entregue or self.transferencia_confirmada
+        ))
 
-        if not self.is_doacao and not self.pago_ja_clicado and not self.entrega_ja_entregue:
-            self.add_item(discord.ui.Button(label="🎁 Transformar em Doação", style=discord.ButtonStyle.secondary, custom_id="transformar_doacao", emoji="🎁", disabled=(self.valor_total == 0), row=1))
+        self.add_item(discord.ui.Button(
+            label="✏️ Editar Venda",
+            style=discord.ButtonStyle.primary,
+            custom_id="editar_venda_fixo",
+            emoji="✏️",
+            disabled=self.transferencia_confirmada
+        ))
+
+        if not self.is_doacao:
+            self.add_item(discord.ui.Button(
+                label="🎁 Transformar em Doação",
+                style=discord.ButtonStyle.secondary,
+                custom_id="transformar_doacao",
+                emoji="🎁",
+                disabled=self.transferencia_confirmada or (self.valor_total == 0),
+                row=1
+            ))
+
+  
+    async def _pedido_ja_finalizado_no_banco(self, pedido_numero: int) -> bool:
+        if not pedido_numero:
+            return False
+        pool = await get_pool()
+        if not pool:
+            return False
+        try:
+            async with pool.acquire() as conn:
+                if self.entrega_id:
+                    row_parcela = await conn.fetchrow(
+                        """SELECT finalizado, cancelado FROM entregas_status
+                           WHERE entrega_id = $1 AND numero_parcela = $2""",
+                        int(self.entrega_id),
+                        int(self.entrega_atual)
+                    )
+                    if row_parcela:
+                        return bool(row_parcela["finalizado"] or row_parcela["cancelado"])
+                    return False
+
+                row_unica = await conn.fetchrow(
+                    """SELECT finalizado, cancelado FROM entregas_status
+                       WHERE entrega_id = 0 AND numero_parcela = 1 AND pedido_numero = $1""",
+                    pedido_numero
+                )
+                if row_unica:
+                    return bool(row_unica["finalizado"] or row_unica["cancelado"])
+
+                row = await conn.fetchrow(
+                    "SELECT finalizado, cancelado, migrado FROM vendas WHERE pedido_numero = $1",
+                    pedido_numero
+                )
+                if not row:
+                    return False
+                return bool(row["finalizado"] or row["cancelado"] or row["migrado"])
+        except Exception as e:
+            logger.error(f"❌ Erro ao checar pedido {pedido_numero} no banco: {e}")
+            return False
+
+    async def _entrega_ja_criada_no_banco(self, entrega_id: int, proxima_entrega_num: int) -> bool:
+        if not entrega_id:
+            return False
+        pool = await get_pool()
+        if not pool:
+            return False
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT mensagem_ids FROM entregas_parceladas WHERE id = $1",
+                    entrega_id
+                )
+                if not row:
+                    return False
+                mensagens = row["mensagem_ids"] or []
+                return len(mensagens) >= proxima_entrega_num
+        except Exception as e:
+            logger.error(f"❌ Erro ao checar entrega {entrega_id} no banco: {e}")
+            return False
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
+
+        if self.transferencia_confirmada:
+            await interaction.response.send_message("⚠️ Esta venda já foi finalizada (transferência confirmada).", ephemeral=True)
+            return False
+
         if custom_id == "transformar_doacao":
-            embed = discord.Embed(title="⚠️ CONFIRMAR DOAÇÃO", description=f"Transformar o **Pedido #{self.pedido_numero:04d}** em DOAÇÃO?\n\nIsso vai **zerar o valor**.", color=0xE74C3C)
+            embed = discord.Embed(
+                title="⚠️ CONFIRMAR DOAÇÃO",
+                description=f"Tem certeza que deseja transformar o **Pedido #{self.pedido_numero:04d}** em DOAÇÃO?\n\nIsso vai **zerar o valor** de {formatar_dinheiro(self.valor_total)} para **R$ 0,00**.\nO estoque será entregue normalmente, mas o caixa não receberá nada.",
+                color=0xE74C3C
+            )
             pedido_num = self.pedido_numero
+            if not pedido_num:
+                titulo = interaction.message.embeds[0].title or ""
+                if "#" in titulo:
+                    pedido_num = safe_int(titulo.split("#")[1].split(" ")[0].strip())
+
             view = ConfirmarDoacaoView(mensagem_original=interaction.message, pedido_numero=pedido_num, entrega_id=self.entrega_id)
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
             return False
+
+        if custom_id == "confirmar_transferencia_fixo":
+            if not self.pago_ja_clicado:
+                await interaction.response.send_message("⚠️ O pedido precisa estar **PAGO** antes de confirmar a transferência!", ephemeral=True)
+                return False
+
+            pedido_numero_temp = self.pedido_numero
+            if pedido_numero_temp == 0:
+                embed = interaction.message.embeds[0]
+                titulo = embed.title or ""
+                if "#" in titulo:
+                    try:
+                        pedido_numero_temp = safe_int(titulo.split("#")[1].split(" ")[0].strip())
+                        self.pedido_numero = pedido_numero_temp
+                    except: pass
+
+            if self.pt == 0 or self.sub == 0:
+                embed = interaction.message.embeds[0]
+                for field in embed.fields:
+                    if field.name == "🔫 PT" and self.pt == 0:
+                        try: self.pt = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                        except: pass
+                    if field.name == "🔫 SUB" and self.sub == 0:
+                        try: self.sub = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
+                        except: pass
+
+            if self.valor_total == 0:
+                try:
+                    pool = await get_pool()
+                    if pool:
+                        async with pool.acquire() as conn:
+                            row = await conn.fetchrow("SELECT valor FROM vendas WHERE pedido_numero = $1", pedido_numero_temp)
+                            if row: self.valor_total = row["valor"]
+                except Exception as e:
+                    logger.error(f"❌ Erro ao buscar valor do pedido: {e}")
+
+            if self.valor_total == 0:
+                if "DOAÇÃO" in (interaction.message.embeds[0].title or ""):
+                    pass 
+                else:
+                    self.valor_total = (self.pt * 50) + (self.sub * 90)
+                    if self.valor_total == 0:
+                        await interaction.response.send_message("❌ Não foi possível encontrar o valor do pedido!", ephemeral=True)
+                        return False
+
+            ja_finalizado = await self._pedido_ja_finalizado_no_banco(pedido_numero_temp)
+            if ja_finalizado:
+                await interaction.response.send_message("⚠️ Este pedido já foi finalizado no banco de dados! A transferência não será duplicada.", ephemeral=True)
+                return False
+
+            modal = ConfirmarTransferenciaModal(
+                interaction=interaction,
+                mensagem_original=interaction.message,
+                entrega_id=self.entrega_id,
+                pedido_numero=self.pedido_numero,
+                valor=self.valor_total,
+                pt=self.pt,
+                sub=self.sub
+            )
+            await interaction.response.send_modal(modal)
+            return False
+
         elif custom_id == "status_pago_fixo":
             if self.pago_ja_clicado:
-                await interaction.response.send_message("⚠️ Já foi pago!", ephemeral=True); return False
+                await interaction.response.send_message("⚠️ Este pedido já foi marcado como pago!", ephemeral=True)
+                return False
             await interaction.response.defer()
             await self.pago(interaction, None)
             return False
+
         elif custom_id == "status_entregue_fixo":
             if self.entrega_ja_entregue:
-                await interaction.response.send_message("⚠️ Já foi entregue!", ephemeral=True); return False
+                await interaction.response.send_message("⚠️ Esta entrega já foi marcada como entregue!", ephemeral=True)
+                return False
             await interaction.response.defer()
             await self.entregue(interaction, None)
             return False
+
         elif custom_id == "editar_venda_fixo":
             await self.editar_venda(interaction, None)
             return False
+
         elif custom_id == "status_cancelado_fixo":
             await interaction.response.defer()
             await self.cancelado(interaction, None)
             return False
+
         return True
 
     def get_status(self, embed):
         for i, field in enumerate(embed.fields):
-            if field.name in ("📌 Status", "📌 STATUS DO PEDIDO"):
+            if field.name == "📌 Status" or field.name == "📌 STATUS DO PEDIDO":
                 return i, field.value.split("\n")
         return None, ["📦 A entregar"]
 
     def set_status(self, embed, idx, linhas):
-        if not linhas: linhas = ["📦 A entregar"]
+        if not linhas:
+            linhas = ["📦 A entregar"]
         for i, field in enumerate(embed.fields):
             if field.name == "📌 STATUS DO PEDIDO":
-                valor_str = "\n".join(linhas)
-                if "💰" in valor_str and "✅" in valor_str: novo = "✅ Pago e Entregue"
-                elif "💰" in valor_str: novo = "💰 Pago — Aguardando entrega"
-                elif "✅" in valor_str: novo = "✅ Entregue — Aguardando pagamento"
-                elif "❌" in valor_str: novo = "❌ Cancelado"
-                else: novo = "📦 A Entregar\n⏳ Pagamento pendente"
-                embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value=novo, inline=False)
+                if "TRANSFERÊNCIA CONFIRMADA" in "\n".join(linhas):
+                    novo_status = "✅ TRANSFERÊNCIA CONFIRMADA"
+                elif "💰" in "\n".join(linhas) and "✅" in "\n".join(linhas):
+                    novo_status = "✅ Pago e Entregue"
+                elif "💰" in "\n".join(linhas):
+                    novo_status = "💰 Pago"
+                elif "✅" in "\n".join(linhas):
+                    novo_status = "✅ Entregue"
+                elif "❌" in "\n".join(linhas):
+                    novo_status = "❌ Cancelado"
+                else:
+                    novo_status = "📦 A Entregar\n⏳ Pagamento pendente"
+                embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value=novo_status, inline=False)
                 break
         if idx is None:
-            embed.add_field(name="📌 Status", value="\n".join(linhas), inline=False); return embed
-        try: embed.set_field_at(idx, name="📌 Status", value="\n".join(linhas), inline=False)
-        except IndexError: embed.add_field(name="📌 Status", value="\n".join(linhas), inline=False)
+            embed.add_field(name="📌 Status", value="\n".join(linhas), inline=False)
+            return embed
+        try:
+            embed.set_field_at(idx, name="📌 Status", value="\n".join(linhas), inline=False)
+        except IndexError:
+            embed.add_field(name="📌 Status", value="\n".join(linhas), inline=False)
         return embed
 
-    def pedido_pago(self, linhas): return any(l.startswith("💰") for l in linhas)
-    def pedido_cancelado(self, linhas): return any(l.startswith("❌") for l in linhas)
-    def entrega_ja_foi_entregue(self, linhas): return any(l.startswith("✅") for l in linhas)
+    def pedido_pago(self, linhas):
+        return any(l.startswith("💰") for l in linhas)
+
+    def pedido_cancelado(self, linhas):
+        return any(l.startswith("❌") for l in linhas)
+
+    def entrega_ja_foi_entregue(self, linhas):
+        return any(l.startswith("✅") for l in linhas)
 
     async def pago(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
-        if self.pedido_cancelado(linhas): return await interaction.followup.send("⚠️ Pedido cancelado.", ephemeral=True)
-        if self.pedido_pago(linhas): return await interaction.followup.send("⚠️ Já foi pago.", ephemeral=True)
+
+        if self.pedido_cancelado(linhas):
+            await interaction.followup.send("⚠️ Este pedido foi cancelado.", ephemeral=True)
+            return
+
+        if self.pedido_pago(linhas):
+            await interaction.followup.send("⚠️ Este pedido já foi pago.", ephemeral=True)
+            return
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         pagador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
-        linhas = [l for l in linhas if not l.startswith("⏳") and not l.startswith("💰")]
+
+        linhas = [l for l in linhas if not l.startswith("⏳")]
+        linhas = [l for l in linhas if not l.startswith("💰")]
         linhas.append(f"💰 Pago • Recebido por {pagador_apelido} • {agora_str}")
+
         embed = self.set_status(embed, idx, linhas)
 
         titulo = embed.title or ""
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
 
-        try: await marcar_status_parcela(entrega_id=self.entrega_id if self.entrega_id else 0, numero_parcela=self.entrega_atual, pedido_numero=pedido_numero, campo="pago", autor_id=interaction.user.id)
-        except Exception as e: logger.error(f"❌ Erro parcela paga: {e}")
+        try:
+            await marcar_status_parcela(
+                entrega_id=self.entrega_id if self.entrega_id else 0,
+                numero_parcela=self.entrega_atual,
+                pedido_numero=pedido_numero,
+                campo="pago",
+                autor_id=interaction.user.id
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao marcar parcela paga: {e}")
 
         try:
-            await movimentar_caixa(tipo="venda", valor=self.valor_total, motivo=f"Venda #{pedido_numero:04d} (Entrega {self.entrega_atual}/{self.total_entregas})", autor=interaction.user.id, tipo_dinheiro="limpo")
-        except Exception as e: logger.error(f"⚠️ Erro caixa: {e}")
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.MARCAR_PAGO,
+                modulo=AuditModulo.VENDAS,
+                item_id=str(pedido_numero) if pedido_numero else None,
+                item_nome=f"Pedido #{pedido_numero:04d} — Entrega {self.entrega_atual}/{self.total_entregas}" if pedido_numero else "Pedido desconhecido",
+                dados_antes={"status": "Pendente"},
+                dados_depois={"status": "Pago", "recebido_por": pagador_apelido},
+                detalhes=f"Pagamento da entrega {self.entrega_atual}/{self.total_entregas} recebido por {pagador_apelido}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar pagamento: {e}")
 
-        await interaction.message.edit(embed=embed, view=StatusView(entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=True, mensagem_original=interaction.message, valor_total=self.valor_total, fuzil=self.fuzil, escopeta=self.escopeta, sniper=self.sniper, pedido_numero=pedido_numero, entregue_ja_clicado=self.entrega_ja_entregue, is_doacao=self.is_doacao))
+        try:
+            await interaction.message.edit(embed=embed, view=StatusView(
+                disabled=False,
+                entrega_id=self.entrega_id,
+                total_entregas=self.total_entregas,
+                entrega_atual=self.entrega_atual,
+                pago_ja_clicado=True,
+                mensagem_original=interaction.message,
+                transferencia_confirmada=False,
+                valor_total=self.valor_total,
+                pt=self.pt,
+                sub=self.sub,
+                pedido_numero=pedido_numero,
+                entregue_ja_clicado=self.entrega_ja_entregue,
+                is_doacao=self.is_doacao
+            ))
+        except Exception as e:
+            logger.error(f"❌ Erro ao editar embed no Encomendas: {e}")
 
-        if self.entrega_ja_entregue:
-            try: await interaction.message.delete()
+        await interaction.followup.send("✅ **Pagamento registrado! Movendo pedido para Finalizados...**", ephemeral=True)
+
+        try:
+            await self.mover_card_para_finalizados(
+                interaction=interaction,
+                pedido_numero=pedido_numero,
+                embed=embed
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao mover card para Finalizados: {e}")
+            try:
+                await interaction.followup.send(f"⚠️ Pago registrado, mas houve erro ao mover para Finalizados: `{str(e)[:100]}`", ephemeral=True)
             except: pass
-            if self.entrega_atual >= self.total_entregas:
-                try: await marcar_pedido_finalizado(pedido_numero, tipo="finalizado")
-                except: pass
-            await interaction.followup.send(f"✅ **Pagamento registrado no caixa!**\nCard removido (já estava entregue).", ephemeral=True)
-        else:
-            await interaction.followup.send(f"✅ **Pagamento registrado no caixa!**\nAguardando entrega...", ephemeral=True)
-        await enviar_painel_vendas()
+
+    async def mover_card_para_finalizados(self, interaction, pedido_numero, embed):
+        """
+        Move o card do pedido para Pedidos Finalizados com APENAS o botão de Transferência.
+        """
+        canal_final = interaction.guild.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
+        if not canal_final:
+            logger.error(f"❌ Canal de Pedidos Finalizados não encontrado: {CANAL_PEDIDOS_FINALIZADOS_ID}")
+            return False
+
+        # Ajusta embed pro visual de "finalizados"
+        embed.color = 0xF1C40F  # Amarelo
+        titulo = embed.title or ""
+        if "AGUARDANDO TRANSFERÊNCIA" not in titulo.upper():
+            if "📦" in titulo or "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper() or "VENDA" in titulo.upper():
+                embed.title = f"💸 {titulo} — AGUARDANDO TRANSFERÊNCIA"
+            else:
+                embed.title = f"💸 Pedido #{pedido_numero:04d} — AGUARDANDO TRANSFERÊNCIA"
+
+        # Corrige o bug do "yaml" quebrado
+        for i, field in enumerate(embed.fields):
+            if field.name == "📌 STATUS DO PEDIDO" or field.name == "📌 Status":
+                embed.set_field_at(
+                    i,
+                    name="📌 STATUS DO PEDIDO",
+                    value=f"```yaml\n💰 PAGO — Aguardando Transferência\n👤 Recebido por: {interaction.user.display_name}\n📅 {agora().strftime('%d/%m/%Y %H:%M')}\n```",
+                    inline=False
+                )
+                break
+
+        # Cria uma view LIMPA
+        view_final = discord.ui.View(timeout=None)
+        
+        # Adiciona APENAS o botão de transferência
+        btn_transferir = discord.ui.Button(
+            label="📤 Confirmar Transferência",
+            style=discord.ButtonStyle.success,
+            custom_id="confirmar_transferencia_fixo",
+            emoji="📤"
+        )
+        view_final.add_item(btn_transferir)
+
+        # Envia o novo card no canal de Finalizados
+        novo_card = await safe_request(canal_final.send, embed=embed, view=view_final)
+        if not novo_card:
+            logger.error(f"❌ Erro ao enviar card no canal de Finalizados (pedido #{pedido_numero})")
+            return False
+
+        # Salva botão persistente pra sobreviver a restart
+        try:
+            await BotaoPersistente.salvar_botao(novo_card.id, canal_final.id, "venda", {
+                "entrega_id": self.entrega_id,
+                "total_entregas": self.total_entregas,
+                "entrega_atual": self.entrega_atual,
+                "valor_total": self.valor_total,
+                "pt": self.pt,
+                "sub": self.sub,
+                "pedido_numero": pedido_numero,
+                "pago_ja_clicado": True # Avisa o bot que já foi pago
+            })
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar botão persistente (pago): {e}")
+
+        # Deleta a mensagem original no canal Encomendas
+        try:
+            await interaction.message.delete()
+            logger.info(f"🗑️ Card do pedido #{pedido_numero} removido do Encomendas")
+        except Exception as e:
+            logger.warning(f"⚠️ Não foi possível deletar o card antigo do Encomendas: {e}")
+
+        try:
+            await interaction.followup.send(f"✅ **Pedido #{pedido_numero:04d} movido para Pedidos Finalizados!**\n📤 Clique em **Confirmar Transferência** lá para encerrar.", ephemeral=True)
+        except: pass
+
+        return True
 
     async def entregue(self, interaction: discord.Interaction, button):
-        if self.entrega_ja_entregue: return await interaction.followup.send("⚠️ Já entregue!", ephemeral=True)
+        if self.entrega_ja_entregue:
+            await interaction.followup.send("⚠️ **Esta entrega já foi marcada como entregue!**", ephemeral=True)
+            return
+
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
-        if self.pedido_cancelado(linhas): return await interaction.followup.send("⚠️ Pedido cancelado.", ephemeral=True)
-        if self.entrega_ja_foi_entregue(linhas): return await interaction.followup.send("⚠️ Já entregue.", ephemeral=True)
 
-        self.entrega_ja_entregue = True
-        titulo = embed.title
-        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
+        if self.pedido_cancelado(linhas):
+            await interaction.followup.send("⚠️ Este pedido foi cancelado.", ephemeral=True)
+            return
 
-        pacotes_pt, pacotes_sub = 0, 0
+        if self.entrega_ja_foi_entregue(linhas):
+            await interaction.followup.send("⚠️ **Esta entrega já foi entregue!**", ephemeral=True)
+            return
+
+        pacotes_pt = 0
+        pacotes_sub = 0
         for field in embed.fields:
             if field.name == "🔫 PT":
                 try:
-                    for l in field.value.split("\n"):
-                        if "📦" in l: pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
                 except: pass
             if field.name == "🔫 SUB":
                 try:
-                    for l in field.value.split("\n"):
-                        if "📦" in l: pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
                 except: pass
 
         if pacotes_pt > 0:
-            if not await verificar_estoque_suficiente("PT", pacotes_pt):
-                return await interaction.followup.send(f"❌ **Estoque insuficiente de PT!**", ephemeral=True)
+            estoque_suficiente = await verificar_estoque_suficiente("PT", pacotes_pt)
+            if not estoque_suficiente:
+                estoque_atual = await carregar_estoque()
+                await interaction.followup.send(f"❌ **ESTOQUE INSUFICIENTE!**\n\n🔫 PT: {pacotes_pt} pacotes necessários\n📦 Estoque atual: {estoque_atual['PT']} pacotes", ephemeral=True)
+                return
+
         if pacotes_sub > 0:
-            if not await verificar_estoque_suficiente("SUB", pacotes_sub):
-                return await interaction.followup.send(f"❌ **Estoque insuficiente de SUB!**", ephemeral=True)
+            estoque_suficiente = await verificar_estoque_suficiente("SUB", pacotes_sub)
+            if not estoque_suficiente:
+                estoque_atual = await carregar_estoque()
+                await interaction.followup.send(f"❌ **ESTOQUE INSUFICIENTE!**\n\n🔫 SUB: {pacotes_sub} pacotes necessários\n📦 Estoque atual: {estoque_atual['SUB']} pacotes", ephemeral=True)
+                return
 
-        try: await marcar_status_parcela(entrega_id=self.entrega_id if self.entrega_id else 0, numero_parcela=self.entrega_atual, pedido_numero=pedido_numero, campo="entregue", autor_id=interaction.user.id)
-        except Exception as e: logger.error(f"❌ Erro parcela entregue: {e}")
+        self.entrega_ja_entregue = True
 
-        if pacotes_pt > 0: await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
-        if pacotes_sub > 0: await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
-        try: await _registrar_atividade(interaction.user.id, "venda")
-        except: pass
+        titulo = embed.title
+        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
+
+        if pacotes_pt > 0:
+            await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
+        if pacotes_sub > 0:
+            await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
+
+        try:
+            await marcar_status_parcela(
+                entrega_id=self.entrega_id if self.entrega_id else 0,
+                numero_parcela=self.entrega_atual,
+                pedido_numero=pedido_numero,
+                campo="entregue",
+                autor_id=interaction.user.id
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao marcar parcela entregue: {e}")
+
+        try:
+            await _registrar_atividade(interaction.user.id, "venda")
+        except Exception as e:
+            logger.error(f"❌ Erro ao registrar atividade de venda: {e}")
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         entregador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
-        linhas = [l for l in linhas if not l.startswith("📦") and not l.startswith("✅")]
+
+        linhas = [l for l in linhas if not l.startswith("📦")]
+        linhas = [l for l in linhas if not l.startswith("✅")]
         linhas.append(f"✅ Entregue por {entregador_apelido} • {agora_str}")
+
         embed = self.set_status(embed, idx, linhas)
 
-        msg_nova = None
-        if self.entrega_atual < self.total_entregas:
-            msg_nova = await self.criar_proxima_entrega(interaction, embed, pedido_numero)
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.MARCAR_ENTREGUE,
+                modulo=AuditModulo.VENDAS,
+                item_id=str(pedido_numero) if pedido_numero else None,
+                item_nome=f"Pedido #{pedido_numero:04d} — Entrega {self.entrega_atual}/{self.total_entregas}" if pedido_numero else "Pedido desconhecido",
+                dados_antes={"status": "Pago (aguardando entrega)"},
+                dados_depois={
+                    "status": "Entregue",
+                    "entregue_por": entregador_apelido,
+                    "pt_pacotes": pacotes_pt,
+                    "sub_pacotes": pacotes_sub
+                },
+                detalhes=f"Entrega {self.entrega_atual}/{self.total_entregas} realizada — {pacotes_pt} pacotes PT + {pacotes_sub} pacotes SUB"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar entrega: {e}")
 
-        if self.pago_ja_clicado:
-            try: await interaction.message.delete()
-            except: pass
-            if self.entrega_atual < self.total_entregas:
-                if msg_nova: await interaction.followup.send(f"✅ **Entrega {self.entrega_atual}/{self.total_entregas} registrada!**\n📦 **Próxima entrega criada automaticamente!**", ephemeral=True)
-                else: await interaction.followup.send(f"✅ **Entrega registrada!**\n⚠️ **Houve um erro ao gerar a próxima. Avise a gerência!**", ephemeral=True)
-            else:
-                try: await marcar_pedido_finalizado(pedido_numero, tipo="finalizado")
-                except: pass
-                await interaction.followup.send(f"✅ **Última entrega registrada!**\n🎉 **Pedido #{pedido_numero:04d} finalizado!**", ephemeral=True)
+        if pacotes_pt > 0 or pacotes_sub > 0:
+            canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+            if canal_bau:
+                try:
+                    entregador_apelido_bau = await pegar_apelido(interaction.user.id, interaction.guild)
+                    org_retirada = "VDR"
+                    if self.entrega_id:
+                        try:
+                            pool = await get_pool()
+                            if pool:
+                                async with pool.acquire() as conn:
+                                    row = await conn.fetchrow("SELECT organizacao FROM entregas_parceladas WHERE id = $1", self.entrega_id)
+                                    if row: org_retirada = row["organizacao"]
+                        except: pass
+                    itens = ""
+                    if pacotes_pt > 0 and pacotes_sub > 0:
+                        itens = f"PT: {pacotes_pt} pacotes / SUB: {pacotes_sub} pacotes"
+                    elif pacotes_pt > 0:
+                        itens = f"PT: {pacotes_pt} pacotes"
+                    elif pacotes_sub > 0:
+                        itens = f"SUB: {pacotes_sub} pacotes"
+                    else:
+                        itens = "Nenhum item retirado"
+                    texto_bau = f"📦 ── SAÍDA DO BAÚ ── 📦\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n👤 RETIRADO POR: {entregador_apelido_bau}\n🏷️ PARA A ENTREGA DA ORG: {org_retirada}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📦 ITENS RETIRADOS: {itens}"
+                    await canal_bau.send(f"```\n{texto_bau}\n```")
+                except Exception as e:
+                    logger.error(f"Erro envio baú: {e}")
+
+        await interaction.message.edit(embed=embed, view=StatusView(
+            disabled=False,
+            entrega_id=self.entrega_id,
+            total_entregas=self.total_entregas,
+            entrega_atual=self.entrega_atual,
+            pago_ja_clicado=self.pago_ja_clicado,
+            mensagem_original=interaction.message,
+            transferencia_confirmada=False,
+            valor_total=self.valor_total,
+            pt=self.pt,
+            sub=self.sub,
+            pedido_numero=self.pedido_numero,
+            entregue_ja_clicado=True,
+            is_doacao=self.is_doacao
+        ))
+
+        await interaction.followup.send("✅ **Entrega registrada!**", ephemeral=True)
+
+        if self.entrega_atual < self.total_entregas:
+            await self.criar_proxima_entrega(interaction, embed, pedido_numero)
         else:
-            await interaction.message.edit(embed=embed, view=StatusView(entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=False, mensagem_original=interaction.message, valor_total=self.valor_total, fuzil=self.fuzil, escopeta=self.escopeta, sniper=self.sniper, pedido_numero=pedido_numero, entregue_ja_clicado=True, is_doacao=self.is_doacao))
-            if self.entrega_atual < self.total_entregas:
-                if msg_nova: await interaction.followup.send(f"✅ **Entrega registrada!**\n📦 **Próxima entrega gerada!**\n⚠️ Aguardando pagamento.", ephemeral=True)
-                else: await interaction.followup.send(f"✅ **Entrega registrada!**\n⚠️ **Houve um erro ao gerar a próxima.**", ephemeral=True)
-            else:
-                await interaction.followup.send(f"✅ **Última entrega registrada!**\n⚠️ Aguardando pagamento.", ephemeral=True)
+            if self.is_doacao:
+                await finalizar_e_mover_pedido(
+                    interaction=interaction,
+                    mensagem_original=interaction.message,
+                    pedido_numero=pedido_numero,
+                    pt=self.pt,
+                    sub=self.sub,
+                    transferido_para="DOAÇÃO",
+                    tipo="finalizado"
+                )
 
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
@@ -8474,9 +8879,8 @@ class StatusView(discord.ui.View):
         embed = interaction.message.embeds[0]
         dados = self.extrair_dados_venda(embed)
         modal = EditarVendaModal(interaction.message)
-        modal.qtd_fuzil.default = str(dados["fuzil"])
-        modal.qtd_escopeta.default = str(dados["escopeta"])
-        modal.qtd_sniper.default = str(dados["sniper"])
+        modal.qtd_pt.default = str(dados["pt"])
+        modal.qtd_sub.default = str(dados["sub"])
         modal.organizacao.default = dados["organizacao"].replace("🏷️ ", "").strip()
         modal.observacao.default = dados["observacoes"]
         await interaction.response.send_modal(modal)
@@ -8484,97 +8888,276 @@ class StatusView(discord.ui.View):
     async def cancelado(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         idx, linhas = self.get_status(embed)
-        titulo = embed.title
-        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
 
-        pacotes_pt, pacotes_sub = 0, 0
+        pacotes_pt = 0
+        pacotes_sub = 0
         for field in embed.fields:
             if field.name == "🔫 PT":
                 try:
-                    for l in field.value.split("\n"):
-                        if "📦" in l: pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
                 except: pass
             if field.name == "🔫 SUB":
                 try:
-                    for l in field.value.split("\n"):
-                        if "📦" in l: pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
+                    linhas_field = field.value.split("\n")
+                    for l in linhas_field:
+                        if "📦" in l:
+                            pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
                 except: pass
 
+        titulo = embed.title
+        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
+
+        status_anterior = ""
         if self.entrega_ja_entregue or self.pedido_pago(linhas):
-            if pacotes_pt > 0: await atualizar_estoque("PT", pacotes_pt, "adicionar")
-            if pacotes_sub > 0: await atualizar_estoque("SUB", pacotes_sub, "adicionar")
+            if self.entrega_ja_entregue and self.pedido_pago(linhas):
+                status_anterior = "Pago e Entregue"
+            elif self.pedido_pago(linhas):
+                status_anterior = "Pago"
+            elif self.entrega_ja_entregue:
+                status_anterior = "Entregue"
+
+        if self.entrega_ja_entregue or self.pedido_pago(linhas):
+            if pacotes_pt > 0:
+                await atualizar_estoque("PT", pacotes_pt, "adicionar")
+                logger.info(f"🔄 Estoque PT reabastecido: +{pacotes_pt} pacotes (Pedido #{pedido_numero})")
+            if pacotes_sub > 0:
+                await atualizar_estoque("SUB", pacotes_sub, "adicionar")
+                logger.info(f"🔄 Estoque SUB reabastecido: +{pacotes_sub} pacotes (Pedido #{pedido_numero})")
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         cancelador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
+
+        canal_bau = interaction.guild.get_channel(CANAL_BAU_GALPAO_ID)
+        if canal_bau:
+            try:
+                embed_bau = discord.Embed(title="🔄 PEDIDO CANCELADO - REVERSÃO DE ESTOQUE", color=0xe74c3c, timestamp=agora())
+                embed_bau.add_field(name="📦 Pedido", value=f"#{pedido_numero:04d}", inline=True)
+                embed_bau.add_field(name="👤 Cancelado por", value=cancelador_apelido, inline=True)
+                if status_anterior:
+                    embed_bau.add_field(name="📌 Status anterior", value=status_anterior, inline=True)
+                if pacotes_pt > 0:
+                    embed_bau.add_field(name="🔫 PT reabastecido", value=f"+{pacotes_pt} pacotes", inline=True)
+                if pacotes_sub > 0:
+                    embed_bau.add_field(name="🔫 SUB reabastecido", value=f"+{pacotes_sub} pacotes", inline=True)
+                if not pacotes_pt and not pacotes_sub:
+                    embed_bau.add_field(name="📌 Observação", value="Nenhum estoque foi retirado ainda.", inline=False)
+                embed_bau.set_footer(text=f"Cancelado em {agora_str}")
+                await canal_bau.send(embed=embed_bau)
+            except Exception as e:
+                logger.error(f"Erro envio baú reversão: {e}")
+
         linhas = [f"❌ Pedido cancelado por {cancelador_apelido} • {agora_str}"]
+        if status_anterior:
+            linhas.append(f"🔄 **ESTOQUE REVERTIDO** ({status_anterior})")
+
         embed = self.set_status(embed, idx, linhas)
 
-        await interaction.message.edit(embed=embed, view=StatusView(disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=True, mensagem_original=interaction.message, transferencia_confirmada=True, valor_total=self.valor_total, fuzil=self.fuzil, escopeta=self.escopeta, sniper=self.sniper, pedido_numero=self.pedido_numero, entregue_ja_clicado=True, is_doacao=self.is_doacao))
-        if self.entrega_id: await finalizar_entregas(self.entrega_id)
+        await interaction.message.edit(embed=embed, view=StatusView(
+            disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas,
+            entrega_atual=self.entrega_atual, pago_ja_clicado=True,
+            mensagem_original=interaction.message, transferencia_confirmada=True,
+            valor_total=self.valor_total, pt=self.pt, sub=self.sub,
+            pedido_numero=self.pedido_numero, entregue_ja_clicado=True,
+            is_doacao=self.is_doacao
+        ))
+        if self.entrega_id:
+            await finalizar_entregas(self.entrega_id)
 
-        await finalizar_e_mover_pedido(interaction=interaction, mensagem_original=interaction.message, pedido_numero=pedido_numero, fuzil=self.fuzil, escopeta=self.escopeta, sniper=self.sniper, transferido_para=None, tipo="cancelado")
+        try:
+            await registrar_auditoria(
+                user_id=str(interaction.user.id),
+                acao=AuditAcao.CANCELAR_VENDA,
+                modulo=AuditModulo.VENDAS,
+                item_id=str(pedido_numero) if pedido_numero else None,
+                item_nome=f"Pedido #{pedido_numero:04d}" if pedido_numero else "Pedido desconhecido",
+                dados_antes={
+                    "status": status_anterior if status_anterior else "Pendente",
+                    "pt_pacotes": pacotes_pt,
+                    "sub_pacotes": pacotes_sub
+                },
+                dados_depois={"status": "Cancelado"},
+                detalhes=f"Cancelamento de pedido — {status_anterior or 'Sem status'} → Cancelado"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao auditar cancelamento de venda: {e}")
+
+        await finalizar_e_mover_pedido(
+            interaction=interaction,
+            mensagem_original=interaction.message,
+            pedido_numero=pedido_numero,
+            pt=self.pt,
+            sub=self.sub,
+            transferido_para=None,
+            tipo="cancelado"
+        )
+
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
     def extrair_dados_venda(self, embed):
-        dados = {"fuzil": 0, "escopeta": 0, "sniper": 0, "organizacao": "Desconhecida", "vendedor": "", "observacoes": ""}
+        dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "", "observacoes": ""}
         for field in embed.fields:
-            nome = field.name.upper().strip(); valor = field.value or ""
-            if "🔫 FUZIL" in nome or nome == "FUZIL":
-                try: dados["fuzil"] = int(valor.split(" un")[0].replace(".", "").replace(",", "").strip())
+            nome = field.name.upper().strip()
+            valor = field.value or ""
+
+            if "🔫 PT" in nome or nome == "PT":
+                try:
+                    dados["pt"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
                 except: pass
-            elif "🔫 ESCOPETA" in nome or nome == "ESCOPETA":
-                try: dados["escopeta"] = int(valor.split(" un")[0].replace(".", "").replace(",", "").strip())
-                except: pass
-            elif "🎯 SNIPER" in nome or nome == "SNIPER":
-                try: dados["sniper"] = int(valor.split(" un")[0].replace(".", "").replace(",", "").strip())
+            elif "🔫 SUB" in nome or nome == "SUB":
+                try:
+                    dados["sub"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
                 except: pass
             elif "ORGANIZA" in nome:
-                limpo = valor.replace("```yaml", "").replace("```", "").strip(); dados["organizacao"] = limpo.split("\n")[0].strip() or "Desconhecida"
+                limpo = valor.replace("```yaml", "").replace("```", "").strip()
+                dados["organizacao"] = limpo.split("\n")[0].strip() or "Desconhecida"
             elif "VENDEDOR" in nome:
-                limpo = valor.replace("```yaml", "").replace("```", "").strip(); dados["vendedor"] = limpo.split("\n")[0].strip() or ""
+                limpo = valor.replace("```yaml", "").replace("```", "").strip()
+                dados["vendedor"] = limpo.split("\n")[0].strip() or ""
             elif "OBSERVA" in nome:
-                limpo = valor.replace("```yaml", "").replace("```", "").strip(); dados["observacoes"] = limpo
+                limpo = valor.replace("```yaml", "").replace("```", "").strip()
+                dados["observacoes"] = limpo
         return dados
 
-    async def criar_proxima_entrega(self, interaction, embed_anterior, pedido_original):
+    async def criar_proxima_entrega(self, interaction: discord.Interaction, embed_anterior, pedido_original):
         try:
-            if not self.entrega_id: return False
-            if self.entrega_criada: return True
+            if not self.entrega_id:
+                logger.warning("❌ Sem entrega_id para criar próxima")
+                return
+
+            if self.entrega_criada:
+                logger.info(f"⏭️ Próxima entrega já foi criada nesta instância (entrega_id={self.entrega_id})")
+                return
+
             pool = await get_pool()
-            if not pool: return False
+            if not pool:
+                logger.error("❌ Banco de dados indisponível")
+                return
+
             async with pool.acquire() as conn:
-                entrega = await conn.fetchrow("SELECT * FROM entregas_parceladas WHERE id = $1 AND ativo = true", self.entrega_id)
-            if not entrega: return False
+                entrega = await conn.fetchrow(
+                    "SELECT * FROM entregas_parceladas WHERE id = $1 AND ativo = true",
+                    self.entrega_id
+                )
+
+            if not entrega:
+                logger.error(f"❌ Entrega {self.entrega_id} não encontrada")
+                return
 
             total_entregas = entrega["total_entregas"]
-            proxima = self.entrega_atual + 1
-            if proxima > total_entregas: return False
+            proxima_entrega_num = self.entrega_atual + 1
 
-            async with pool.acquire() as conn:
-                detalhes = await conn.fetchrow("SELECT entregas_json FROM entregas_detalhes WHERE entrega_id = $1", self.entrega_id)
-            entregas_lista = json.loads(detalhes["entregas_json"]) if detalhes and detalhes["entregas_json"] else []
-            if not entregas_lista: return False
+            if proxima_entrega_num > total_entregas:
+                logger.info(f"✅ Última entrega ({self.entrega_atual}/{total_entregas}). Nada a criar.")
+                return
 
-            idx = proxima - 1
-            if idx >= len(entregas_lista): return False
-            e_data = entregas_lista[idx]
-            fuzil_e, escopeta_e = e_data.get("fuzil", 0), e_data.get("escopeta", 0)
-            
-            if fuzil_e == 0 and escopeta_e == 0: return False
-
-            organizacao = entrega["organizacao"]
-            config = ORGANIZACOES_CONFIG.get(organizacao, {"emoji": "🏷️", "cor": 0x1a1a2e})
-            
-            msg_nova = await criar_embed_entrega(interaction=interaction, pedido_numero=pedido_original, entrega_atual=proxima, total_entregas=total_entregas, fuzil=fuzil_e, escopeta=escopeta_e, sniper=0, org_nome=organizacao, config=config, observacoes=entrega["observacoes"], entrega_id=self.entrega_id, vendedor_id=entrega["vendedor_id"], grupo=None, entregas_lista=entregas_lista)
-            
-            if msg_nova:
+            ja_criada = await self._entrega_ja_criada_no_banco(self.entrega_id, proxima_entrega_num)
+            if ja_criada:
+                logger.warning(f"⚠️ Entrega {proxima_entrega_num}/{total_entregas} já existe no banco. Bloqueando criação duplicada.")
                 self.entrega_criada = True
-                return True
-            return False
+                return
+
+            async with pool.acquire() as conn2:
+                detalhes = await conn2.fetchrow(
+                    "SELECT entregas_json FROM entregas_detalhes WHERE entrega_id = $1",
+                    self.entrega_id
+                )
+
+            if detalhes and detalhes["entregas_json"]:
+                entregas_lista = json.loads(detalhes["entregas_json"])
+            else:
+                async with pool.acquire() as conn3:
+                    primeira = await conn3.fetchrow(
+                        "SELECT pt_por_entrega, sub_por_entrega FROM entregas_parceladas WHERE pedido_original = $1 ORDER BY id ASC LIMIT 1",
+                        pedido_original
+                    )
+                pt_por_entrega = primeira["pt_por_entrega"] if primeira else entrega["pt_por_entrega"]
+                sub_por_entrega = primeira["sub_por_entrega"] if primeira else entrega["sub_por_entrega"]
+
+                entregas_lista = []
+                LIMITE_DIARIO = 8000
+                pt_total = pt_por_entrega * total_entregas
+                sub_total = sub_por_entrega * total_entregas
+                pt_restante = pt_total
+                sub_restante = sub_total
+
+                for i in range(total_entregas):
+                    entrega_num = i + 1
+                    if pt_restante > 0:
+                        if entrega_num == total_entregas:
+                            pt_valor = pt_restante
+                        else:
+                            pt_valor = min(LIMITE_DIARIO, pt_restante)
+                        pt_restante -= pt_valor
+                    else:
+                        pt_valor = 0
+
+                    if sub_restante > 0:
+                        if entrega_num == total_entregas:
+                            sub_valor = sub_restante
+                        else:
+                            sub_valor = min(LIMITE_DIARIO, sub_restante)
+                        sub_restante -= sub_valor
+                    else:
+                        sub_valor = 0
+
+                    entregas_lista.append({"pt": pt_valor, "sub": sub_valor})
+
+            idx = proxima_entrega_num - 1
+            if idx >= len(entregas_lista):
+                logger.warning(f"❌ Índice {idx} fora do range da lista de entregas")
+                return
+
+            entrega_data = entregas_lista[idx]
+            pt_entrega = entrega_data["pt"]
+            sub_entrega = entrega_data["sub"]
+
+            if pt_entrega == 0 and sub_entrega == 0:
+                logger.info(f"⏭️ Entrega {proxima_entrega_num} vazia (0 PT / 0 SUB). Nada a criar.")
+                return
+
+            vendedor_id = entrega["vendedor_id"]
+            organizacao = entrega["organizacao"]
+            observacoes = entrega["observacoes"]
+            canal_id = int(entrega["canal_id"])
+            canal = bot.get_channel(canal_id)
+
+            if not canal:
+                logger.error(f"❌ Canal {canal_id} não encontrado")
+                return
+
+            config = ORGANIZACOES_CONFIG.get(organizacao, {"emoji": "🏷️", "cor": 0x1a1a2e})
+
+            logger.info(
+                f"📦 Criando Entrega {proxima_entrega_num}/{total_entregas} "
+                f"do pedido #{pedido_original} (PT: {pt_entrega} | SUB: {sub_entrega})"
+            )
+
+            await criar_embed_entrega(
+                interaction=interaction,
+                pedido_numero=pedido_original,
+                entrega_atual=proxima_entrega_num,
+                total_entregas=total_entregas,
+                pt=pt_entrega,
+                sub=sub_entrega,
+                org_nome=organizacao,
+                config=config,
+                observacoes=observacoes,
+                entrega_id=self.entrega_id,
+                vendedor_id=vendedor_id,
+                grupo=None,
+                entregas_lista=entregas_lista
+            )
+
+            self.entrega_criada = True
+            logger.info(f"✅ Entrega {proxima_entrega_num}/{total_entregas} criada com sucesso!")
+
         except Exception as e:
-            logger.error(f"❌ Erro ao criar próxima entrega: {e}")
-            return False
+            logger.error(f"❌ Erro ao criar próxima entrega automaticamente: {e}")
+
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: VendaModal (Original - Sem DM e sem comprovantes)
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8893,115 +9476,91 @@ class ConfirmarResetComissoesView(discord.ui.View):
         except:
             pass
 
-class RelatorioEntregasDataModal(discord.ui.Modal, title="📅 Entregas Pendentes (Por Data)"):
-    data = discord.ui.TextInput(label="📅 Data de Entrega", placeholder="Ex: 06/11/2026", required=True, max_length=10)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        try:
-            data_dt = datetime.strptime(self.data.value.strip(), "%d/%m/%Y").date()
-        except:
-            return await interaction.followup.send("❌ Data inválida!", ephemeral=True)
-
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            res = await conn.fetch("""
-                SELECT 
-                    COALESCE(
-                        (SELECT organizacao FROM entregas_parceladas WHERE id = es.entrega_id LIMIT 1),
-                        (SELECT organizacao FROM entregas_parceladas WHERE pedido_original = es.pedido_numero LIMIT 1),
-                        'Desconhecida'
-                    ) as organizacao, 
-                    es.pedido_numero, 
-                    SUM(es.fuzil) as fuzil, 
-                    SUM(es.escopeta) as escopeta
-                FROM entregas_status es
-                WHERE es.data_entrega = $1 AND es.entregue = false AND es.cancelado = false
-                GROUP BY es.entrega_id, es.pedido_numero
-            """, data_dt)
-
-        if not res:
-            return await interaction.followup.send(f"📭 Nenhuma entrega pendente para o dia {self.data.value}.", ephemeral=True)
-
-        embed = discord.Embed(title="📅 ── ENTREGAS PENDENTES ── 📅", description=f"📅 **Data:** **{self.data.value}**", color=0x1ABC9C, timestamp=agora())
-        for r in res:
-            pacotes_f, pacotes_e = r['fuzil'] // 50, r['escopeta'] // 50
-            texto = ""
-            if r['fuzil'] > 0: texto += f"• 🔫 Fuzil: {pacotes_f} pacotes\n"
-            if r['escopeta'] > 0: texto += f"• 🔫 Escopeta: {pacotes_e} pacotes\n"
-            embed.add_field(name=f"🏢 {r['organizacao']} (P.{r['pedido_numero']})", value=texto if texto else "Nenhum item", inline=False)
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CalculadoraView
 # ────────────────────────────────────────────────────────────────────────────────
 class CalculadoraView(discord.ui.View):
-    def __init__(self): super().__init__(timeout=None)
+    def __init__(self):
+        super().__init__(timeout=None)
 
     @discord.ui.button(label="📝 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calc_registrar_venda", emoji="📝")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.response.is_done(): return
         await interaction.response.send_modal(VendaModal())
 
     @discord.ui.button(label="🔄 Atualizar Estoque", style=discord.ButtonStyle.secondary, custom_id="calc_atualizar_estoque", emoji="🔄", row=1)
     async def atualizar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.response.is_done(): return
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_vendas()
         await interaction.followup.send("✅ Estoque atualizado!", ephemeral=True)
 
-    @discord.ui.button(label="📅 Por Data", style=discord.ButtonStyle.success, custom_id="calc_entregas_pendentes", emoji="📅", row=1)
-    async def entregas_pendentes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RelatorioEntregasDataModal())
+    @discord.ui.button(label="📅 Vendas por Período", style=discord.ButtonStyle.secondary, custom_id="calc_relatorio_vendas_periodo", emoji="📅", row=2)
+    async def relatorio_periodo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = RelatorioVendasPeriodoModal()
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="📋 Todas Pendentes", style=discord.ButtonStyle.secondary, custom_id="calc_todas_entregas_pendentes", emoji="📋", row=2)
-    async def todas_entregas(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="📊 Relatório de Vendas", style=discord.ButtonStyle.success, custom_id="calc_relatorio_vendas", emoji="📊", row=1)
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
+        data_hoje = agora().strftime("%d/%m/%Y")
         pool = await get_pool()
-        async with pool.acquire() as conn:
-            res = await conn.fetch("""
-                SELECT 
-                    COALESCE(
-                        (SELECT organizacao FROM entregas_parceladas WHERE id = es.entrega_id LIMIT 1),
-                        (SELECT organizacao FROM entregas_parceladas WHERE pedido_original = es.pedido_numero LIMIT 1),
-                        'Desconhecida'
-                    ) as organizacao, 
-                    es.pedido_numero, 
-                    es.data_entrega,
-                    SUM(es.fuzil) as fuzil, 
-                    SUM(es.escopeta) as escopeta
-                FROM entregas_status es
-                WHERE es.entregue = false AND es.cancelado = false
-                GROUP BY es.entrega_id, es.pedido_numero, es.data_entrega
-                ORDER BY es.data_entrega ASC
-            """)
-
-        if not res:
-            await interaction.followup.send("📭 Nenhuma entrega pendente no momento.", ephemeral=True)
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
             return
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT user_id, SUM(valor) as total, COUNT(*) as quantidade FROM vendas WHERE data = $1 GROUP BY user_id ORDER BY total DESC",
+                data_hoje
+            )
+            total_geral = await conn.fetchval(
+                "SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE data = $1",
+                data_hoje
+            )
+        if not rows:
+            await interaction.followup.send(f"📭 Nenhuma venda registrada hoje.", ephemeral=True)
+            return
+        embed = discord.Embed(
+            title="📊 RELATÓRIO DE VENDAS - HOJE",
+            description=f"📅 **Data:** {data_hoje}",
+            color=Cores.VENDA,
+            timestamp=agora()
+        )
+        embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Vendas")
+        texto = ""
+        for i, row in enumerate(rows, 1):
+            user = await pegar_usuario(int(row["user_id"]))
+            nome = user.display_name if user else row["user_id"]
+            texto += f"**{i}.** {nome}\n"
+            texto += f"   💰 Vendas: **{formatar_dinheiro(row['total'])}**\n"
+            texto += f"   📦 Pedidos: **{row['quantidade']}**\n\n"
+        embed.add_field(name="👥 VENDEDORES", value=texto, inline=False)
+        embed.add_field(name="💰 TOTAL GERAL", value=formatar_dinheiro(total_geral), inline=True)
+        embed.add_field(name="📦 TOTAL DE PEDIDOS", value=sum(r["quantidade"] for r in rows), inline=True)
+        embed.set_footer(text="Relatório gerado pelo sistema VDR")
+        await interaction.followup.send(embed=embed, ephemeral=False)
 
-        embed = discord.Embed(title="📋 ── TODAS AS ENTREGAS PENDENTES ── 📋", color=0x1ABC9C, timestamp=agora())
+    @discord.ui.button(label="📅 Relatório por Data", style=discord.ButtonStyle.secondary, custom_id="calc_relatorio_vendas_data", emoji="📅", row=2)
+    async def relatorio_data(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = RelatorioVendasModal()
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="🔄 Resetar Comissões", style=discord.ButtonStyle.danger, custom_id="calc_reset_comissoes", emoji="🔄", row=3)
+    async def resetar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
         
-        por_data = {}
-        for r in res:
-            dt = r['data_entrega'].strftime('%d/%m/%Y') if r['data_entrega'] else "Sem Data"
-            if dt not in por_data: por_data[dt] = []
-            por_data[dt].append(r)
-
-        for dt, pedidos in por_data.items():
-            texto = ""
-            for p in pedidos:
-                pacotes_f, pacotes_e = p['fuzil'] // 50, p['escopeta'] // 50
-                itens = []
-                if pacotes_f > 0: itens.append(f"{pacotes_f} FZ")
-                if pacotes_e > 0: itens.append(f"{pacotes_e} ESC")
-                if not itens: continue
-                texto += f"• {p['organizacao']} (P.{p['pedido_numero']}): {', '.join(itens)}\n"
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem resetar as comissões!", ephemeral=True)
+            return
             
-            if texto:
-                embed.add_field(name=f"📅 {dt}", value=f"```yaml\n{texto.strip()[:1000]}\n```", inline=False)
+        embed = discord.Embed(
+            title="⚠️ RESETAR COMISSÕES",
+            description="**ATENÇÃO!** Esta ação irá marcar **TODAS as vendas atuais** como pagas.\n\n"
+                        "Os 10% de comissão de cada vendedor **zerarão** no painel.\n\n"
+                        "⚠️ **Só faça isso se já tiver pagado todo mundo!**",
+            color=0xe74c3c
+        )
+        await interaction.response.send_message(embed=embed, view=ConfirmarResetComissoesView(), ephemeral=True)
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioVendasPeriodoModal
 # ────────────────────────────────────────────────────────────────────────────────
