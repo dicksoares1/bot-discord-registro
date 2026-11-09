@@ -2344,61 +2344,38 @@ async def enviar_painel_registro():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_embed_aviso_supremo
 # ────────────────────────────────────────────────────────────────────────────────
-async def criar_embed_aviso_supremo(titulo, mensagem, local=None, data_hora=None, cor_hex=None, is_doacao=False):
-    tipo_detectado = "informativo"
-    titulo_lower = titulo.lower()
-    if any(p in titulo_lower for p in ["urgente", "importante", "atenção", "perigo"]):
-        tipo_detectado = "urgente"
-    elif any(p in titulo_lower for p in ["sucesso", "concluído", "finalizado", "parabéns"]):
-        tipo_detectado = "sucesso"
-    elif any(p in titulo_lower for p in ["aviso", "atenção", "cuidado"]):
-        tipo_detectado = "aviso"
-        
-    tipos = {
-        "urgente": {"cor": 0xe74c3c, "emoji": "🚨"},
-        "informativo": {"cor": 0x3498db, "emoji": "📢"},
-        "sucesso": {"cor": 0x2ecc71, "emoji": "✅"},
-        "aviso": {"cor": 0xf1c40f, "emoji": "⚠️"}
-    }
-    info = tipos.get(tipo_detectado, tipos["informativo"])
+async def criar_embed_aviso_supremo(titulo, mensagem, local=None, data_hora=None, cor_hex=None, is_doacao=False, destino_nome=None):
+    # Define a cor baseada no tipo
+    cor_final = cor_hex if cor_hex else 0xE74C3C # Padrão vermelho (Urgente)
     
     if is_doacao:
-        info = {"cor": 0x2ecc71, "emoji": "💸"}
-        
-    cor_final = cor_hex if cor_hex else info["cor"]
+        cor_final = 0x2ecc71 # Verde para doações
 
     embed = discord.Embed(
-        title=f"# {info['emoji']} {titulo.upper()}",
-        description=f"### {mensagem}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        title=f"🚨 {titulo.upper()} 🚨" if not is_doacao else f"💸 {titulo.upper()} 💸",
         color=cor_final,
         timestamp=agora()
     )
+    
+    # Corpo da mensagem (caixa escura)
+    embed.description = f"```yaml\n{mensagem.upper()}\n```"
 
-    if local or data_hora:
-        info_extra = ""
-        if local:
-            info_extra += f"📍 **LOCAL:** {local.upper()}\n"
-        if data_hora:
-            info_extra += f"📅 **QUANDO:** {data_hora.upper()}\n"
-        
-        embed.add_field(
-            name="📌 **DETALHES**", 
-            value=f"> {info_extra.replace(chr(10), chr(10) + '> ').strip()}", 
-            inline=False
-        )
-
-    if is_doacao:
-        embed.add_field(
-            name="💸 **COMO AJUDAR?**",
-            value=f"> Acesse o canal <#{CANAL_DOACOES_ID}> e faça sua doação via PIX.",
-            inline=False
-        )
+    # Adiciona os campos na ordem: Destino, Data, Status
+    if destino_nome:
+        embed.add_field(name="📍 DESTINO", value=f"`{destino_nome}`", inline=True)
+    
+    if data_hora:
+        embed.add_field(name="📅 DATA E HORA", value=f"`{data_hora}`", inline=True)
+    
+    # Define o Status (você pode mudar se quiser, mas botei Urgente como padrão do print)
+    status_text = "🔴 URGENTE" if not is_doacao else "🟢 DOAÇÃO"
+    embed.add_field(name="📌 STATUS", value=f"`{status_text}`", inline=True)
 
     if bot.user:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
 
     embed.set_footer(
-        text=f"🛡 VIDA RASA 442 • COMUNICADO OFICIAL • {agora().strftime('%d/%m/%Y')}", 
+        text=f"Vida Rasa 442 • Sistema Oficial de Avisos • {agora().strftime('%d/%m/%Y %H:%M')}", 
         icon_url=bot.user.display_avatar.url if bot.user else None
     )
     
@@ -2453,11 +2430,11 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Oficial"):
         self.nome_canal = nome_canal
         self.is_doacao = is_doacao
 
-    titulo = discord.ui.TextInput(label="📌 Título do Aviso", placeholder="Ex: AJUDA PARA ROUPA DA FAC", required=True, max_length=100)
+    titulo = discord.ui.TextInput(label="📌 Título do Aviso", placeholder="Ex: ATENÇÃO", required=True, max_length=100)
     mensagem = discord.ui.TextInput(label="📝 Mensagem", placeholder="Digite o conteúdo do aviso...", style=discord.TextStyle.paragraph, required=True, max_length=2000)
-    local = discord.ui.TextInput(label="📍 Local (Opcional)", placeholder="Ex: Galpão Norte, Discord, QG...", required=False, max_length=100)
-    data_hora = discord.ui.TextInput(label="📅 Data e Hora (Opcional)", placeholder="Ex: Hoje às 21h, 30/10 às 20:30...", required=False, max_length=50)
-    cor_tipo = discord.ui.TextInput(label="🎨 Cor/Tipo (opcional)", placeholder="urgente, importante, sucesso, info", required=False, max_length=20)
+    local = discord.ui.TextInput(label="📍 Local/Destino (Opcional)", placeholder="Ex: QG, Galpão...", required=False, max_length=100)
+    data_hora = discord.ui.TextInput(label="📅 Data e Hora (Opcional)", placeholder="Ex: 25/08/2026 10:51", required=False, max_length=50)
+    cor_tipo = discord.ui.TextInput(label="🎨 Cor (opcional)", placeholder="vermelho, verde, azul", required=False, max_length=20)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -2465,14 +2442,17 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Oficial"):
             cores = {"verde": 0x2ecc71, "vermelho": 0xe74c3c, "amarelo": 0xf1c40f, "azul": 0x3498db, "roxo": 0x9b59b6, "laranja": 0xe67e22}
             cor_hex = cores.get(self.cor_tipo.value.lower().strip(), None)
             
-            # Passa o is_doacao para a função de criar o embed
+            # Usa o que foi digitado no local ou o nome do canal como Destino
+            destino = self.local.value if self.local.value else self.nome_canal
+            
             embed = await criar_embed_aviso_supremo(
                 titulo=self.titulo.value,
                 mensagem=self.mensagem.value,
                 local=self.local.value if self.local.value else None,
-                data_hora=self.data_hora.value if self.data_hora.value else None,
+                data_hora=self.data_hora.value if self.data_hora.value else agora().strftime('%d/%m/%Y %H:%M'),
                 cor_hex=cor_hex,
-                is_doacao=self.is_doacao
+                is_doacao=self.is_doacao,
+                destino_nome=destino
             )
             
             canal = interaction.guild.get_channel(self.canal_id)
@@ -2482,27 +2462,12 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Oficial"):
                     embed=embed,
                     allowed_mentions=discord.AllowedMentions(everyone=True)
                 )
-                
-                canal_log = interaction.guild.get_channel(CANAL_CRIAR_AVISOS_ID)
-                if canal_log:
-                    embed_log = discord.Embed(
-                        title="✅ AVISO ENVIADO (LOG)",
-                        description=f"📢 **{self.titulo.value}**",
-                        color=0x2ecc71,
-                        timestamp=agora()
-                    )
-                    embed_log.add_field(name="👤 Enviado por (LOG)", value=interaction.user.mention, inline=True)
-                    embed_log.add_field(name="📌 Canal", value=self.nome_canal, inline=True)
-                    embed_log.add_field(name="📝 Conteúdo", value=self.mensagem.value[:500], inline=False)
-                    embed_log.set_footer(text="🛡 Vida Rasa 442 • Log de Avisos")
-                    await canal_log.send(embed=embed_log)
-                
-                await interaction.followup.send(f"✅ **Aviso enviado com sucesso para {self.nome_canal}!**", ephemeral=True)
+                await interaction.followup.send(f"✅ **Aviso enviado para {self.nome_canal}!**", ephemeral=True)
             else:
                 await interaction.followup.send("❌ **Canal não encontrado!**", ephemeral=True)
         except Exception as e:
             logger.error(f"❌ Erro ao enviar aviso: {e}")
-            await interaction.followup.send(f"❌ **Erro ao enviar aviso:** {str(e)[:100]}", ephemeral=True)
+            await interaction.followup.send(f"❌ **Erro:** {str(e)[:100]}", ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AvisosView
 # ────────────────────────────────────────────────────────────────────────────────
@@ -9204,123 +9169,133 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
 # CLASSE: ConfirmarResetComissoesView
 # ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarResetComissoesView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=60)
-
-    @discord.ui.button(label="✅ SIM, RESETAR", style=discord.ButtonStyle.danger, custom_id="conf_reset_comissoes")
-    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+    def __init__(self): super().__init__(timeout=60)
+    @discord.ui.button(label="✅ SIM", style=discord.ButtonStyle.danger, custom_id="conf_reset_com")
+    async def confirmar(self, i, b):
+        await i.response.defer(ephemeral=True)
         pool = await get_pool()
-        if not pool:
-            await interaction.followup.send("❌ Banco indisponível!", ephemeral=True)
-            return
-
         async with pool.acquire() as conn:
-            res = await conn.execute("UPDATE vendas SET comissao_paga = true WHERE comissao_paga = false AND cancelado = false")
-        
-        # Extrai quantas linhas foram afetadas do retorno do postgres (ex: "UPDATE 15")
-        afetadas = res.split(" ")[1] if " " in res else "0"
-
+            await conn.execute("UPDATE vendas SET comissao_paga = true WHERE comissao_paga = false")
         await enviar_painel_vendas()
-        await interaction.followup.send(f"✅ **Comissões resetadas!**\n💰 {afetadas} vendas foram marcadas como pagas.", ephemeral=True)
-        try:
-            await interaction.message.delete()
-        except:
-            pass
+        await i.followup.send("✅ Comissões resetadas no painel.", ephemeral=True)
+    @discord.ui.button(label="❌ NÃO", style=discord.ButtonStyle.secondary, custom_id="cancel_reset_com")
+    async def cancelar(self, i, b):
+        await i.response.send_message("❌ Cancelado.", ephemeral=True)
 
-    @discord.ui.button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id="cancel_reset_comissoes")
-    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("❌ Reset cancelado.", ephemeral=True)
-        try:
-            await interaction.message.delete()
-        except:
-            pass
-
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: CalculadoraView
-# ────────────────────────────────────────────────────────────────────────────────
-class CalculadoraView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📝 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calc_registrar_venda", emoji="📝")
-    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VendaModal())
-
-    @discord.ui.button(label="🔄 Atualizar Estoque", style=discord.ButtonStyle.secondary, custom_id="calc_atualizar_estoque", emoji="🔄", row=1)
-    async def atualizar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
+class RelatorioVendasPeriodoModal(discord.ui.Modal, title="📅 RELATÓRIO DE VENDAS (PERÍODO)"):
+    data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO (DD/MM/AAAA)", placeholder="Ex: 01/10/2026", required=True)
+    data_fim = discord.ui.TextInput(label="📅 Data FIM (DD/MM/AAAA)", placeholder="Ex: 31/10/2026", required=True)
+    async def on_submit(self, interaction):
         await interaction.response.defer(ephemeral=True)
-        await enviar_painel_vendas()
-        await interaction.followup.send("✅ Estoque atualizado!", ephemeral=True)
-
-    @discord.ui.button(label="📅 Vendas por Período", style=discord.ButtonStyle.secondary, custom_id="calc_relatorio_vendas_periodo", emoji="📅", row=2)
-    async def relatorio_periodo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = RelatorioVendasPeriodoModal()
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="📊 Relatório de Vendas", style=discord.ButtonStyle.success, custom_id="calc_relatorio_vendas", emoji="📊", row=1)
-    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        data_hoje = agora().strftime("%d/%m/%Y")
+        try:
+            ini = datetime.strptime(self.data_inicio.value.strip(), "%d/%m/%Y")
+            fim = datetime.strptime(self.data_fim.value.strip(), "%d/%m/%Y")
+        except:
+            return await interaction.followup.send("❌ Data inválida!", ephemeral=True)
         pool = await get_pool()
-        if not pool:
-            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
-            return
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT user_id, SUM(valor) as total, COUNT(*) as quantidade FROM vendas WHERE data = $1 GROUP BY user_id ORDER BY total DESC",
-                data_hoje
-            )
-            total_geral = await conn.fetchval(
-                "SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE data = $1",
-                data_hoje
-            )
-        if not rows:
-            await interaction.followup.send(f"📭 Nenhuma venda registrada hoje.", ephemeral=True)
-            return
-        embed = discord.Embed(
-            title="📊 RELATÓRIO DE VENDAS - HOJE",
-            description=f"📅 **Data:** {data_hoje}",
-            color=Cores.VENDA,
-            timestamp=agora()
-        )
-        embed.set_author(name="🛡 Vida Rasa 442 • Relatório de Vendas")
+            rows = await conn.fetch("""SELECT user_id, SUM(valor) as total, COUNT(*) as qtd FROM vendas 
+                WHERE TO_DATE(data, 'DD/MM/YYYY') BETWEEN $1::date AND $2::date GROUP BY user_id ORDER BY total DESC""", ini, fim)
+            total_geral = await conn.fetchval("SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE TO_DATE(data, 'DD/MM/YYYY') BETWEEN $1::date AND $2::date", ini, fim)
+        if not rows: return await interaction.followup.send("📭 Nenhuma venda no período.", ephemeral=True)
+        embed = discord.Embed(title="📊 RELATÓRIO DE VENDAS", description=f"📅 **Período:** {self.data_inicio.value} a {self.data_fim.value}", color=0x1ABC9C, timestamp=agora())
         texto = ""
         for i, row in enumerate(rows, 1):
             user = await pegar_usuario(int(row["user_id"]))
             nome = user.display_name if user else row["user_id"]
-            texto += f"**{i}.** {nome}\n"
-            texto += f"   💰 Vendas: **{formatar_dinheiro(row['total'])}**\n"
-            texto += f"   📦 Pedidos: **{row['quantidade']}**\n\n"
-        embed.add_field(name="👥 VENDEDORES", value=texto, inline=False)
+            texto += f"**{i}.** {nome}\n   💰 {formatar_dinheiro(row['total'])} | 📦 {row['quantidade']} pedidos\n\n"
+        embed.add_field(name="👥 VENDEDORES", value=texto[:1024], inline=False)
         embed.add_field(name="💰 TOTAL GERAL", value=formatar_dinheiro(total_geral), inline=True)
-        embed.add_field(name="📦 TOTAL DE PEDIDOS", value=sum(r["quantidade"] for r in rows), inline=True)
-        embed.set_footer(text="Relatório gerado pelo sistema VDR")
-        await interaction.followup.send(embed=embed, ephemeral=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CalculadoraView
+# ────────────────────────────────────────────────────────────────────────────────
+class CalculadoraView(discord.ui.View):
+    def __init__(self): super().__init__(timeout=None)
 
-    @discord.ui.button(label="📅 Relatório por Data", style=discord.ButtonStyle.secondary, custom_id="calc_relatorio_vendas_data", emoji="📅", row=2)
-    async def relatorio_data(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = RelatorioVendasModal()
-        await interaction.response.send_modal(modal)
+    @discord.ui.button(label="📝 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calc_registrar_venda", emoji="📝")
+    async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.response.is_done(): return
+        await interaction.response.send_modal(VendaModal())
 
-    @discord.ui.button(label="🔄 Resetar Comissões", style=discord.ButtonStyle.danger, custom_id="calc_reset_comissoes", emoji="🔄", row=3)
+    @discord.ui.button(label="🔄 Atualizar Estoque", style=discord.ButtonStyle.secondary, custom_id="calc_atualizar_estoque", emoji="🔄", row=1)
+    async def atualizar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.response.is_done(): return
+        await interaction.response.defer(ephemeral=True)
+        await enviar_painel_vendas()
+        await interaction.followup.send("✅ Estoque atualizado!", ephemeral=True)
+
+    @discord.ui.button(label="📅 Por Data", style=discord.ButtonStyle.success, custom_id="calc_entregas_pendentes", emoji="📅", row=1)
+    async def entregas_pendentes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RelatorioEntregasDataModal())
+
+    @discord.ui.button(label="📋 Todas Pendentes", style=discord.ButtonStyle.secondary, custom_id="calc_todas_entregas_pendentes", emoji="📋", row=2)
+    async def todas_entregas(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            res = await conn.fetch("""
+                SELECT COALESCE((SELECT organizacao FROM entregas_parceladas WHERE id = es.entrega_id LIMIT 1),
+                                (SELECT organizacao FROM entregas_parceladas WHERE pedido_original = es.pedido_numero LIMIT 1), 'Desconhecida') as organizacao, 
+                       es.pedido_numero, es.data_entrega, SUM(es.pt) as pt, SUM(es.sub) as sub
+                FROM entregas_status es
+                WHERE es.entregue = false AND es.cancelado = false
+                GROUP BY es.entrega_id, es.pedido_numero, es.data_entrega ORDER BY es.data_entrega ASC
+            """)
+        if not res:
+            await interaction.followup.send("📭 Nenhuma entrega pendente.", ephemeral=True); return
+        embed = discord.Embed(title="📋 ── TODAS AS ENTREGAS PENDENTES ── 📋", color=0x1ABC9C, timestamp=agora())
+        por_data = {}
+        for r in res:
+            dt = r['data_entrega'].strftime('%d/%m/%Y') if r['data_entrega'] else "Sem Data"
+            if dt not in por_data: por_data[dt] = []
+            por_data[dt].append(r)
+        for dt, pedidos in por_data.items():
+            texto = ""
+            for p in pedidos:
+                pacotes_pt, pacotes_sub = p['pt'] // 50, p['sub'] // 50
+                itens = []
+                if pacotes_pt > 0: itens.append(f"{pacotes_pt} PT")
+                if pacotes_sub > 0: itens.append(f"{pacotes_sub} SUB")
+                if not itens: continue
+                texto += f"• {p['organizacao']} (P.{p['pedido_numero']}): {', '.join(itens)}\n"
+            if texto: embed.add_field(name=f"📅 {dt}", value=f"```yaml\n{texto.strip()[:1000]}\n```", inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="📊 Relatório de Vendas", style=discord.ButtonStyle.success, custom_id="calc_relatorio_vendas", emoji="📊", row=3)
+    async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RelatorioVendasPeriodoModal())
+
+    @discord.ui.button(label="💸 Pagar Comissões", style=discord.ButtonStyle.success, custom_id="calc_pagar_comissoes", emoji="💸", row=3)
+    async def pagar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
+        if not is_admin and not is_gerente:
+            await interaction.response.send_message("❌ Sem permissão!", ephemeral=True); return
+        await interaction.response.defer(ephemeral=True)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            total_vendas = await conn.fetchval("SELECT COALESCE(SUM(valor), 0) FROM vendas WHERE comissao_paga = false AND cancelado = false")
+            if not total_vendas or total_vendas == 0:
+                await interaction.followup.send("📭 Não há comissões pendentes.", ephemeral=True); return
+            valor_comissao = int(total_vendas * 0.05) # 5%
+            caixa = await conn.fetchrow("SELECT valor_limpo FROM caixa WHERE id = 1")
+            caixa_limpo = caixa["valor_limpo"] if caixa else 0
+            if caixa_limpo < valor_comissao:
+                await interaction.followup.send(f"❌ Saldo insuficiente! Caixa: {formatar_dinheiro(caixa_limpo)} | Comissão: {formatar_dinheiro(valor_comissao)}", ephemeral=True); return
+            await movimentar_caixa("compra", valor_comissao, "Pagamento de Comissões (Vendas 5%)", interaction.user.id, "limpo")
+            await conn.execute("UPDATE vendas SET comissao_paga = true WHERE comissao_paga = false AND cancelado = false")
+        await enviar_painel_vendas(); await enviar_painel_caixa()
+        await interaction.followup.send(f"✅ Comissões pagas!\n💰 Total: {formatar_dinheiro(valor_comissao)}", ephemeral=True)
+
+    @discord.ui.button(label="🔄 Resetar Comissões", style=discord.ButtonStyle.danger, custom_id="calc_reset_comissoes", emoji="🔄", row=4)
     async def resetar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
-        
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
         if not is_admin and not is_gerente:
-            await interaction.response.send_message("❌ Apenas **ADM** ou **GERENTES** podem resetar as comissões!", ephemeral=True)
-            return
-            
-        embed = discord.Embed(
-            title="⚠️ RESETAR COMISSÕES",
-            description="**ATENÇÃO!** Esta ação irá marcar **TODAS as vendas atuais** como pagas.\n\n"
-                        "Os 10% de comissão de cada vendedor **zerarão** no painel.\n\n"
-                        "⚠️ **Só faça isso se já tiver pagado todo mundo!**",
-            color=0xe74c3c
-        )
+            await interaction.response.send_message("❌ Sem permissão!", ephemeral=True); return
+        embed = discord.Embed(title="⚠️ RESETAR COMISSÕES", description="Tem certeza? Isso vai marcar todas as vendas como pagas (não mexe no caixa).", color=0xe74c3c)
         await interaction.response.send_message(embed=embed, view=ConfirmarResetComissoesView(), ephemeral=True)
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioVendasPeriodoModal
 # ────────────────────────────────────────────────────────────────────────────────
