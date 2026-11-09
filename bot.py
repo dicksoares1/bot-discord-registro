@@ -765,6 +765,8 @@ async def inicializar_tabelas(pool):
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_entregas_status_pedido ON entregas_status(pedido_numero)")
         logger.info("✅ Tabela entregas_status pronta!")
         await conn.execute("ALTER TABLE entregas_status ADD COLUMN IF NOT EXISTS data_entrega DATE")
+        await conn.execute("ALTER TABLE entregas_status ADD COLUMN IF NOT EXISTS pt INTEGER DEFAULT 0")
+        await conn.execute("ALTER TABLE entregas_status ADD COLUMN IF NOT EXISTS sub INTEGER DEFAULT 0")
         
         # ═══════════════ TABELAS DE GRUPOS ═══════════════
         await conn.execute("""
