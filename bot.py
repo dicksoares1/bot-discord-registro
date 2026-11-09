@@ -9031,7 +9031,8 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
         entregas_json = json.dumps(entregas_lista)
         total = (pt * 50) + (sub * 90)
         
-        await salvar_venda_db(str(interaction.user.id), total, numero_pedido, pt, sub, 0)
+        # ─── CORREÇÃO AQUI: Removido o "0" extra do final ───
+        await salvar_venda_db(str(interaction.user.id), total, numero_pedido, pt, sub)
 
         grupo = await buscar_grupo_por_organizacao(org_nome)
         if grupo:
