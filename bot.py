@@ -9207,6 +9207,49 @@ class RelatorioVendasPeriodoModal(discord.ui.Modal, title="📅 RELATÓRIO DE VE
         embed.add_field(name="👥 VENDEDORES", value=texto[:1024], inline=False)
         embed.add_field(name="💰 TOTAL GERAL", value=formatar_dinheiro(total_geral), inline=True)
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioEntregasDataModal
+# ────────────────────────────────────────────────────────────────────────────────
+class RelatorioEntregasDataModal(discord.ui.Modal, title="📅 Entregas Pendentes (Por Data)"):
+    data = discord.ui.TextInput(label="📅 Data de Entrega", placeholder="Ex: 06/11/2026", required=True, max_length=10)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            data_dt = datetime.strptime(self.data.value.strip(), "%d/%m/%Y").date()
+        except:
+            return await interaction.followup.send("❌ Data inválida! Use DD/MM/AAAA", ephemeral=True)
+
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            res = await conn.fetch("""
+                SELECT 
+                    COALESCE(
+                        (SELECT organizacao FROM entregas_parceladas WHERE id = es.entrega_id LIMIT 1),
+                        (SELECT organizacao FROM entregas_parceladas WHERE pedido_original = es.pedido_numero LIMIT 1),
+                        'Desconhecida'
+                    ) as organizacao, 
+                    es.pedido_numero, 
+                    SUM(es.pt) as pt, 
+                    SUM(es.sub) as sub
+                FROM entregas_status es
+                WHERE es.data_entrega = $1 AND es.entregue = false AND es.cancelado = false
+                GROUP BY es.entrega_id, es.pedido_numero
+            """, data_dt)
+
+        if not res:
+            return await interaction.followup.send(f"📭 Nenhuma entrega pendente para o dia {self.data.value}.", ephemeral=True)
+
+        embed = discord.Embed(title="📅 ── ENTREGAS PENDENTES ── 📅", description=f"📅 **Data:** **{self.data.value}**", color=0x1ABC9C, timestamp=agora())
+        for r in res:
+            pacotes_pt, pacotes_sub = r['pt'] // 50, r['sub'] // 50
+            texto = ""
+            if r['pt'] > 0: texto += f"• 🔫 PT: {pacotes_pt} pacotes\n"
+            if r['sub'] > 0: texto += f"• 🔫 SUB: {pacotes_sub} pacotes\n"
+            embed.add_field(name=f"🏢 {r['organizacao']} (P.{r['pedido_numero']})", value=texto if texto else "Nenhum item", inline=False)
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CalculadoraView
 # ────────────────────────────────────────────────────────────────────────────────
