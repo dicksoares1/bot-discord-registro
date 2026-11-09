@@ -54,6 +54,7 @@ import random
 import io
 import hashlib
 import qrcode
+import unicodedata
 from discord.ext import commands, tasks
 from discord.utils import escape_markdown
 from datetime import datetime, timedelta
@@ -738,13 +739,15 @@ async def inicializar_tabelas(pool):
             )
         """)
 
-        # ═══════════════ TABELAS DE ENTREGAS_STATUS (controle individual por parcela) ═══════════════
+        # ═══════════════ TABELAS DE ENTREGAS_STATUS ═══════════════
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS entregas_status (
                 id SERIAL PRIMARY KEY,
                 entrega_id INTEGER NOT NULL,
                 numero_parcela INTEGER NOT NULL,
                 pedido_numero INTEGER NOT NULL,
+                pt INTEGER DEFAULT 0,
+                sub INTEGER DEFAULT 0,
                 entregue BOOLEAN DEFAULT false,
                 entregue_por VARCHAR(30),
                 entregue_em TIMESTAMP,
@@ -758,15 +761,14 @@ async def inicializar_tabelas(pool):
                 cancelado BOOLEAN DEFAULT false,
                 cancelado_por VARCHAR(30),
                 cancelado_em TIMESTAMP,
+                data_entrega DATE,
                 UNIQUE(entrega_id, numero_parcela)
             )
         """)
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_entregas_status_entrega ON entregas_status(entrega_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_entregas_status_pedido ON entregas_status(pedido_numero)")
-        logger.info("✅ Tabela entregas_status pronta!")
-        await conn.execute("ALTER TABLE entregas_status ADD COLUMN IF NOT EXISTS data_entrega DATE")
+        # Garante que as colunas existam se a tabela já tiver sido criada antes
         await conn.execute("ALTER TABLE entregas_status ADD COLUMN IF NOT EXISTS pt INTEGER DEFAULT 0")
         await conn.execute("ALTER TABLE entregas_status ADD COLUMN IF NOT EXISTS sub INTEGER DEFAULT 0")
+        await conn.execute("ALTER TABLE entregas_status ADD COLUMN IF NOT EXISTS data_entrega DATE")
         
         # ═══════════════ TABELAS DE GRUPOS ═══════════════
         await conn.execute("""
@@ -1388,6 +1390,20 @@ def capitalizar_nome(texto):
             palavras_capitalizadas.append(palavra.upper())
     return " ".join(palavras_capitalizadas)
 
+def normalizar_texto(texto):
+    """
+    Normaliza texto para comparação:
+    - Remove acentos
+    - Converte para minúsculas
+    - Remove espaços extras no início/fim
+    - Substitui múltiplos espaços internos por um só
+    """
+    if not texto:
+        return ""
+    texto = unicodedata.normalize('NFKD', str(texto)).encode('ASCII', 'ignore').decode('ASCII')
+    texto = texto.lower()
+    texto = ' '.join(texto.split())
+    return texto
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: barra
 # ────────────────────────────────────────────────────────────────────────────────
@@ -9233,13 +9249,12 @@ class RelatorioEntregasDataModal(discord.ui.Modal, title="📅 Entregas Pendente
                         'Desconhecida'
                     ) as organizacao, 
                     es.pedido_numero, 
-                    SUM(es.pt) as pt, 
-                    SUM(es.sub) as sub
+                    SUM(COALESCE(es.pt, 0)) as pt, 
+                    SUM(COALESCE(es.sub, 0)) as sub
                 FROM entregas_status es
                 WHERE es.data_entrega = $1 AND es.entregue = false AND es.cancelado = false
                 GROUP BY es.entrega_id, es.pedido_numero
             """, data_dt)
-
         if not res:
             return await interaction.followup.send(f"📭 Nenhuma entrega pendente para o dia {self.data.value}.", ephemeral=True)
 
@@ -9280,12 +9295,20 @@ class CalculadoraView(discord.ui.View):
         pool = await get_pool()
         async with pool.acquire() as conn:
             res = await conn.fetch("""
-                SELECT COALESCE((SELECT organizacao FROM entregas_parceladas WHERE id = es.entrega_id LIMIT 1),
-                                (SELECT organizacao FROM entregas_parceladas WHERE pedido_original = es.pedido_numero LIMIT 1), 'Desconhecida') as organizacao, 
-                       es.pedido_numero, es.data_entrega, SUM(es.pt) as pt, SUM(es.sub) as sub
+                SELECT 
+                    COALESCE(
+                        (SELECT organizacao FROM entregas_parceladas WHERE id = es.entrega_id LIMIT 1),
+                        (SELECT organizacao FROM entregas_parceladas WHERE pedido_original = es.pedido_numero LIMIT 1),
+                        'Desconhecida'
+                    ) as organizacao, 
+                    es.pedido_numero, 
+                    es.data_entrega,
+                    SUM(COALESCE(es.pt, 0)) as pt,
+                    SUM(COALESCE(es.sub, 0)) as sub
                 FROM entregas_status es
                 WHERE es.entregue = false AND es.cancelado = false
-                GROUP BY es.entrega_id, es.pedido_numero, es.data_entrega ORDER BY es.data_entrega ASC
+                GROUP BY es.entrega_id, es.pedido_numero, es.data_entrega
+                ORDER BY es.data_entrega ASC
             """)
         if not res:
             await interaction.followup.send("📭 Nenhuma entrega pendente.", ephemeral=True); return
@@ -9306,6 +9329,7 @@ class CalculadoraView(discord.ui.View):
                 texto += f"• {p['organizacao']} (P.{p['pedido_numero']}): {', '.join(itens)}\n"
             if texto: embed.add_field(name=f"📅 {dt}", value=f"```yaml\n{texto.strip()[:1000]}\n```", inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
+        
 
     @discord.ui.button(label="📊 Relatório de Vendas", style=discord.ButtonStyle.success, custom_id="calc_relatorio_vendas", emoji="📊", row=3)
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
