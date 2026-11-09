@@ -7380,11 +7380,19 @@ async def salvar_entrega_parcelada(pedido_original, total_entregas, pt_por_entre
             if entrega_id:
                 if entregas_lista:
                     for idx, item in enumerate(entregas_lista, 1):
+                        # ─── CONVERSÃO DA DATA PARA OBJETO DATE ───
                         data_iso = item.get("data_iso")
+                        data_formatada = None
+                        if data_iso:
+                            try:
+                                data_formatada = datetime.strptime(data_iso, "%Y-%m-%d").date()
+                            except:
+                                data_formatada = None
+
                         await conn.execute(
                             """INSERT INTO entregas_status (entrega_id, numero_parcela, pedido_numero, pt, sub, data_entrega)
                                VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (entrega_id, numero_parcela) DO NOTHING""",
-                            entrega_id, idx, pedido_original, item["pt"], item["sub"], data_iso
+                            entrega_id, idx, pedido_original, item["pt"], item["sub"], data_formatada
                         )
                 else:
                     for numero_parcela in range(1, total_entregas + 1):
