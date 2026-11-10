@@ -10107,7 +10107,7 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
             base_com = 1777
             base_sem = 1688
         else:
-            base_com = 1618
+            base_com = 1616
             base_sem = 1608
 
         capsulas_sem = (base_sem * polvora_por_galpao) // 400
@@ -11134,7 +11134,7 @@ async def finalizar_producao(pid, msg, prod):
         if "NORTE" in galpao.upper():
             base_por_galpao = 1777 if segunda else 1688
         elif "SUL" in galpao.upper():
-            base_por_galpao = 1618 if segunda else 1608
+            base_por_galpao = 1616 if segunda else 1608
         else:
             base_por_galpao = 1777 if segunda else 1688
             
