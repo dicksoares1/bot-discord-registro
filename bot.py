@@ -23134,6 +23134,45 @@ async def cmd_limpar_entregas_fantasma(ctx):
             WHERE entregue = false AND pedido_numero < 1046
         """)
     await ctx.send("✅ Entregas antigas (ID < 1046) foram marcadas como entregues e pagas no banco. Verifique o painel agora.")
+
+@bot.command(name="forcar_baixa_pedido")
+@commands.has_permissions(administrator=True)
+async def cmd_forcar_baixa_pedido(ctx, pedido_numero: int):
+    """Marca todas as parcelas de um pedido específico como entregues e pagas, limpando o relatório."""
+    await ctx.send(f"🔄 Forçando baixa total no pedido **#{pedido_numero:04d}**...")
+    pool = await get_pool()
+    if not pool:
+        await ctx.send("❌ Banco de dados indisponível!"); return
+
+    try:
+        async with pool.acquire() as conn:
+            # Atualiza todas as parcelas desse pedido na tabela entregas_status
+            resultado = await conn.execute("""
+                UPDATE entregas_status 
+                SET entregue = true, pago = true, finalizado = true
+                WHERE pedido_numero = $1 AND (entregue = false OR pago = false)
+            """, pedido_numero)
+            
+            # Atualiza a tabela de vendas (marcando como finalizado e pago)
+            await conn.execute("""
+                UPDATE vendas 
+                SET finalizado = true, cancelado = false, comissao_paga = true 
+                WHERE pedido_numero = $1
+            """, pedido_numero)
+
+            # Conta quantas linhas foram afetadas
+            linhas_afetadas = resultado.split(" ")[1] if " " in resultado else "0"
+
+        embed = discord.Embed(
+            title="✅ BAIXA FORÇADA COM SUCESSO",
+            description=f"O pedido **#{pedido_numero:04d}** foi marcado como **Entregue e Pago**.\n\n📌 **{linhas_afetadas} parcelas** foram limpas no banco de dados.\nEle não deve mais aparecer no relatório de pendências.",
+            color=0x2ECC71,
+            timestamp=agora()
+        )
+        await ctx.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Erro ao forçar baixa no pedido {pedido_numero}: {e}")
+        await ctx.send(f"❌ Erro ao forçar baixa: `{str(e)[:150]}`")
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !atualizar_lancamentos
 # ────────────────────────────────────────────────────────────────────────────────
