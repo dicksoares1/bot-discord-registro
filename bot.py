@@ -8807,7 +8807,9 @@ class CalculadoraView(discord.ui.View):
     async def todas_entregas(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         pool = await get_pool()
+        
         async with pool.acquire() as conn:
+            # 1. Pega tudo que está pendente (entregue = false ou pago = false)
             res = await conn.fetch("""
                 SELECT 
                     COALESCE(
@@ -8817,31 +8819,62 @@ class CalculadoraView(discord.ui.View):
                     ) as organizacao, 
                     es.pedido_numero, 
                     es.data_entrega,
+                    es.entregue,
+                    es.pago,
                     SUM(COALESCE(es.pt, 0)) as pt,
                     SUM(COALESCE(es.sub, 0)) as sub
                 FROM entregas_status es
-                WHERE es.entregue = false AND es.cancelado = false
-                GROUP BY es.entrega_id, es.pedido_numero, es.data_entrega
+                WHERE (es.entregue = false OR es.pago = false) AND es.cancelado = false
+                GROUP BY es.entrega_id, es.pedido_numero, es.data_entrega, es.entregue, es.pago
                 ORDER BY es.data_entrega ASC
             """)
+
         if not res:
-            await interaction.followup.send("📭 Nenhuma entrega pendente.", ephemeral=True); return
-        embed = discord.Embed(title="📋 ── TODAS AS ENTREGAS PENDENTES ── 📋", color=0x1ABC9C, timestamp=agora())
-        por_data = {}
-        for r in res:
-            dt = r['data_entrega'].strftime('%d/%m/%Y') if r['data_entrega'] else "Sem Data"
-            if dt not in por_data: por_data[dt] = []
-            por_data[dt].append(r)
-        for dt, pedidos in por_data.items():
-            texto = ""
-            for p in pedidos:
-                pacotes_pt, pacotes_sub = p['pt'] // 50, p['sub'] // 50
+            await interaction.followup.send("📭 Nenhuma pendência no momento.", ephemeral=True); return
+
+        # Separa os dois tipos
+        pendentes_entrega = [r for r in res if not r['entregue']]
+        pendentes_pagamento = [r for r in res if r['entregue'] and not r['pago']]
+
+        embed = discord.Embed(title="📋 ── RELATÓRIO DE PENDÊNCIAS ── 📋", color=0x1ABC9C, timestamp=agora())
+
+        # Bloco 1: Pendentes de Entrega
+        if pendentes_entrega:
+            texto_entrega = ""
+            for r in pendentes_entrega:
+                pacotes_pt, pacotes_sub = r['pt'] // 50, r['sub'] // 50
                 itens = []
                 if pacotes_pt > 0: itens.append(f"{pacotes_pt} PT")
                 if pacotes_sub > 0: itens.append(f"{pacotes_sub} SUB")
                 if not itens: continue
-                texto += f"• {p['organizacao']} (P.{p['pedido_numero']}): {', '.join(itens)}\n"
-            if texto: embed.add_field(name=f"📅 {dt}", value=f"```yaml\n{texto.strip()[:1000]}\n```", inline=False)
+                dt = r['data_entrega'].strftime('%d/%m') if r['data_entrega'] else "S/ Data"
+                texto_entrega += f"• {r['organizacao']} (P.{r['pedido_numero']}) - {dt}: {', '.join(itens)}\n"
+            
+            if texto_entrega:
+                embed.add_field(name="📦 PENDENTES DE ENTREGA", value=f"```yaml\n{texto_entrega.strip()[:1024]}\n```", inline=False)
+            else:
+                embed.add_field(name="📦 PENDENTES DE ENTREGA", value="```yaml\nNenhuma\n```", inline=False)
+        else:
+            embed.add_field(name="📦 PENDENTES DE ENTREGA", value="```yaml\nNenhuma\n```", inline=False)
+
+        # Bloco 2: Pendentes de Pagamento (Já entregues, mas não pagos)
+        if pendentes_pagamento:
+            texto_pag = ""
+            for r in pendentes_pagamento:
+                pacotes_pt, pacotes_sub = r['pt'] // 50, r['sub'] // 50
+                itens = []
+                if pacotes_pt > 0: itens.append(f"{pacotes_pt} PT")
+                if pacotes_sub > 0: itens.append(f"{pacotes_sub} SUB")
+                if not itens: continue
+                texto_pag += f"• {r['organizacao']} (P.{r['pedido_numero']}): {', '.join(itens)}\n"
+            
+            if texto_pag:
+                embed.add_field(name="💰 PENDENTES DE PAGAMENTO (ENTREGUES)", value=f"```yaml\n{texto_pag.strip()[:1024]}\n```", inline=False)
+            else:
+                embed.add_field(name="💰 PENDENTES DE PAGAMENTO (ENTREGUES)", value="```yaml\nNenhuma\n```", inline=False)
+        else:
+            embed.add_field(name="💰 PENDENTES DE PAGAMENTO (ENTREGUES)", value="```yaml\nNenhuma\n```", inline=False)
+
         await interaction.followup.send(embed=embed, ephemeral=True)
         
 
@@ -23087,6 +23120,20 @@ async def cmd_ver_estoque(ctx):
     embed.add_field(name="💊 INSUMOS", value=f"**Cápsulas:** {fmt_num(estoque_insumos['capsulas'])} unidades\n**Embalagens:** {fmt_num(estoque_insumos['embalagens'])} unidades", inline=False)
     await ctx.send(embed=embed)
 
+
+@bot.command(name="limpar_entregas_fantasma")
+@commands.has_permissions(administrator=True)
+async def cmd_limpar_entregas_fantasma(ctx):
+    await ctx.send("🧹 Limpando entregas fantasmas...")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Marca como entregue e pago tudo que é de pedidos antigos (IDs < 1046)
+        await conn.execute("""
+            UPDATE entregas_status 
+            SET entregue = true, pago = true 
+            WHERE entregue = false AND pedido_numero < 1046
+        """)
+    await ctx.send("✅ Entregas antigas (ID < 1046) foram marcadas como entregues e pagas no banco. Verifique o painel agora.")
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !atualizar_lancamentos
 # ────────────────────────────────────────────────────────────────────────────────
