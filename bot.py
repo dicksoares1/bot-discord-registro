@@ -8102,7 +8102,7 @@ class FinalizadosView(discord.ui.View):
 # CLASSE: class StatusView
 # ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: StatusView (Blindada e Corrigida)
+# CLASSE: StatusView (Blindada e Integrada ao Baú do Galpão)
 # ────────────────────────────────────────────────────────────────────────────────
 class StatusView(discord.ui.View):
     def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1,
@@ -8220,7 +8220,6 @@ class StatusView(discord.ui.View):
         titulo = embed.title or ""
         pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
 
-        # 1. Atualiza o Banco de Dados PRIMEIRO
         try: 
             await marcar_status_parcela(entrega_id=self.entrega_id if self.entrega_id else 0, numero_parcela=self.entrega_atual, pedido_numero=pedido_numero, campo="pago", autor_id=interaction.user.id)
         except Exception as e: 
@@ -8231,7 +8230,6 @@ class StatusView(discord.ui.View):
         except Exception as e: 
             logger.error(f"⚠️ Erro caixa: {e}")
 
-        # 2. Tenta editar a mensagem (se ela não existir mais, ignora)
         try:
             await interaction.message.edit(embed=embed, view=StatusView(entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=True, mensagem_original=interaction.message, valor_total=self.valor_total, pt=self.pt, sub=self.sub, pedido_numero=pedido_numero, entregue_ja_clicado=self.entrega_ja_entregue, is_doacao=self.is_doacao))
         except discord.NotFound:
@@ -8239,7 +8237,6 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"Erro ao editar msg pago: {e}")
 
-        # 3. Lógica de finalização
         if self.entrega_ja_entregue:
             try: await interaction.message.delete()
             except: pass
@@ -8287,12 +8284,15 @@ class StatusView(discord.ui.View):
                         if "📦" in l: pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
                 except: pass
 
+        # ─── VERIFICA ESTOQUE NO BAÚ DO GALPÃO ───
         if pacotes_pt > 0:
             if not await verificar_estoque_suficiente("PT", pacotes_pt):
-                return await interaction.followup.send(f"❌ **Estoque insuficiente de PT!**", ephemeral=True)
+                estoque_atual = await carregar_estoque()
+                return await interaction.followup.send(f"❌ **Estoque insuficiente de PT!**\n📦 Estoque atual: {estoque_atual['PT']} pacotes", ephemeral=True)
         if pacotes_sub > 0:
             if not await verificar_estoque_suficiente("SUB", pacotes_sub):
-                return await interaction.followup.send(f"❌ **Estoque insuficiente de SUB!**", ephemeral=True)
+                estoque_atual = await carregar_estoque()
+                return await interaction.followup.send(f"❌ **Estoque insuficiente de SUB!**\n📦 Estoque atual: {estoque_atual['SUB']} pacotes", ephemeral=True)
 
         # 1. Atualiza o Banco de Dados PRIMEIRO
         try: 
@@ -8300,8 +8300,12 @@ class StatusView(discord.ui.View):
         except Exception as e: 
             logger.error(f"❌ Erro parcela entregue: {e}")
 
-        if pacotes_pt > 0: await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
-        if pacotes_sub > 0: await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
+        # ─── RETIRA DO BAÚ DO GALPÃO E REGISTRA SAÍDA ───
+        if pacotes_pt > 0:
+            await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
+        if pacotes_sub > 0:
+            await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
+
         try: await _registrar_atividade(interaction.user.id, "venda")
         except: pass
 
@@ -8339,7 +8343,6 @@ class StatusView(discord.ui.View):
             else:
                 await interaction.followup.send(f"✅ **Última entrega registrada!**\n🎉 **Pedido #{pedido_numero:04d} finalizado!**", ephemeral=True)
         else:
-            # 2. Tenta editar a mensagem (se ela não existir mais, ignora)
             try:
                 await interaction.message.edit(embed=embed, view=StatusView(entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=False, mensagem_original=interaction.message, valor_total=self.valor_total, pt=self.pt, sub=self.sub, pedido_numero=pedido_numero, entregue_ja_clicado=True, is_doacao=self.is_doacao))
             except discord.NotFound:
@@ -8385,9 +8388,12 @@ class StatusView(discord.ui.View):
                         if "📦" in l: pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
                 except: pass
 
+        # ─── SE JÁ FOI ENTREGUE, DEVOLVE AO BAÚ DO GALPÃO ───
         if self.entrega_ja_entregue or self.pedido_pago(linhas):
-            if pacotes_pt > 0: await atualizar_estoque("PT", pacotes_pt, "adicionar")
-            if pacotes_sub > 0: await atualizar_estoque("SUB", pacotes_sub, "adicionar")
+            if pacotes_pt > 0: 
+                await atualizar_estoque("PT", pacotes_pt, "adicionar")
+            if pacotes_sub > 0: 
+                await atualizar_estoque("SUB", pacotes_sub, "adicionar")
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         cancelador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
@@ -8478,6 +8484,7 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao criar próxima entrega: {e}")
             return False
+            
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: VendaModal (Original - Sem DM e sem comprovantes)
 # ────────────────────────────────────────────────────────────────────────────────
@@ -15440,14 +15447,14 @@ class V2MetaView(discord.ui.LayoutView):
             )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # CALLBACKS — Edições
+    # CALLBACKS — Edições (BLOQUEIO DO DONO DA SALA APLICADO)
     # ═══════════════════════════════════════════════════════════════════════════
     async def _editar_meta(self, interaction: discord.Interaction):
-        is_dono = str(interaction.user.id) == str(self.user_id)
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        # REGRA: Apenas gerentes ou ADM. O dono da sala NÃO PODE.
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
-        if not is_dono and not is_gerente and not is_admin:
-            await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+        if not is_gerente and not is_admin:
+            await interaction.response.send_message("❌ Apenas **GERENTES**, **LIDERANÇA** ou **ADM** podem editar a meta!", ephemeral=True)
             return
         pool = await get_pool()
         if not pool:
@@ -15465,19 +15472,20 @@ class V2MetaView(discord.ui.LayoutView):
         await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
 
     async def _editar_valor(self, interaction: discord.Interaction):
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        # REGRA: Apenas gerentes ou ADM. O dono da sala NÃO PODE.
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
         if not is_gerente and not is_admin:
-            await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM**!", ephemeral=True)
+            await interaction.response.send_message("❌ Apenas **GERENTES**, **LIDERANÇA** ou **ADM** podem editar o valor da meta!", ephemeral=True)
             return
         meta_total = await definir_valor_meta_por_id(self.user_id)
         await interaction.response.send_modal(EditarValorMetaModal(self.user_id, meta_total))
 
     async def _editar_acoes(self, interaction: discord.Interaction):
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
         if not is_gerente and not is_admin:
-            await interaction.response.send_message("❌ Apenas **GERENTES** ou **ADM**!", ephemeral=True)
+            await interaction.response.send_message("❌ Apenas **GERENTES**, **LIDERANÇA** ou **ADM**!", ephemeral=True)
             return
         pool = await get_pool()
         if not pool:
@@ -15500,7 +15508,6 @@ class V2MetaView(discord.ui.LayoutView):
             return
         segundos_atuais = await calcular_horas_semana(self.user_id)
         await interaction.response.send_modal(EditarHorasModal(self.user_id, segundos_atuais))
-
 
 # ════════════════════════════════════════════════════════════════════════════════
 class ConfirmarDepositoView(discord.ui.View):
