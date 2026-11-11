@@ -2141,11 +2141,89 @@ async def verificar_registro_existente(user_id):
         return False
     try:
         async with pool.acquire() as conn:
-            # Verifica se já tem um registro APROVADO
             return await conn.fetchval("SELECT 1 FROM registros_historico WHERE user_id = $1 AND status = 'Aprovado'", str(user_id))
     except Exception as e:
         logger.error(f"❌ Erro ao verificar registro: {e}")
         return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AprovarRegistroView (AGORA DEFINIDA ANTES DO MODAL)
+# ────────────────────────────────────────────────────────────────────────────────
+class AprovarRegistroView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+
+    async def _tem_permissao(self, member):
+        cargos_permitidos = [CARGO_DONO_MORRO_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_ID, CARGO_01_ID, CARGO_02_ID]
+        return member.guild_permissions.administrator or any(r.id in cargos_permitidos for r in member.roles)
+
+    @discord.ui.button(label="✅ Aprovar", style=discord.ButtonStyle.success, custom_id="aprovar_registro_malta")
+    async def aprovar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._tem_permissao(interaction.user):
+            await interaction.response.send_message("❌ Apenas Gerentes ou ADM podem aprovar.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        membro = interaction.guild.get_member(self.user_id)
+        if not membro:
+            await interaction.followup.send("❌ O membro não está mais no servidor.", ephemeral=True)
+            return
+
+        agregado = interaction.guild.get_role(AGREGADO_ROLE_ID)
+        em_registro = interaction.guild.get_role(EM_REGISTRO_ROLE_ID)
+        convidado = interaction.guild.get_role(CONVIDADO_ROLE_ID)
+
+        if em_registro and em_registro in membro.roles: 
+            await membro.remove_roles(em_registro)
+        if convidado and convidado in membro.roles: 
+            await membro.remove_roles(convidado)
+        if agregado: 
+            await membro.add_roles(agregado)
+
+        await criar_sala_meta(membro)
+
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE registros_historico SET status = 'Aprovado' WHERE user_id = $1 AND status = 'Pendente'", str(self.user_id))
+
+        try:
+            await membro.send(f"🎉 **REGISTRO APROVADO!**\nVocê foi aceito na **VIDA RASA**! Seu cargo de Agregado já foi aplicado e sua sala de meta foi criada.")
+        except: 
+            pass
+
+        embed = interaction.message.embeds[0]
+        embed.color = 0x2ecc71
+        embed.title = "✅ REGISTRO APROVADO"
+        embed.set_footer(text=f"Aprovado por {interaction.user.display_name}")
+        await interaction.message.edit(embed=embed, view=None)
+
+    @discord.ui.button(label="❌ Rejeitar", style=discord.ButtonStyle.danger, custom_id="rejeitar_registro_malta")
+    async def rejeitar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._tem_permissao(interaction.user):
+            await interaction.response.send_message("❌ Apenas Gerentes ou ADM podem rejeitar.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE registros_historico SET status = 'Rejeitado' WHERE user_id = $1 AND status = 'Pendente'", str(self.user_id))
+
+        membro = interaction.guild.get_member(self.user_id)
+        if membro:
+            try:
+                await membro.send("❌ **Registro Rejeitado**\nSua solicitação de entrada na VIDA RASA foi negada pela gerência.")
+            except: 
+                pass
+
+        embed = interaction.message.embeds[0]
+        embed.color = 0xe74c3c
+        embed.title = "❌ REGISTRO REJEITADO"
+        embed.set_footer(text=f"Rejeitado por {interaction.user.display_name}")
+        await interaction.message.edit(embed=embed, view=None)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistroModal
@@ -2175,7 +2253,7 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
         except Exception as e:
             logger.error(f"❌ Erro ao editar nick: {e}")
 
-        # Salva no banco como PENDENTE
+        # Salva no banco como PENDENTE (sem aplicar cargo)
         pool = await get_pool()
         if pool:
             async with pool.acquire() as conn:
@@ -2213,78 +2291,6 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
         
         await interaction.followup.send("✅ **Registro enviado!**\nSua solicitação foi enviada para a gerência. Aguarde a aprovação no seu DM.", ephemeral=True)
 
-class AprovarRegistroView(discord.ui.View):
-    def __init__(self, user_id):
-        super().__init__(timeout=None)
-        self.user_id = user_id
-
-    @discord.ui.button(label="✅ Aprovar", style=discord.ButtonStyle.success, custom_id="aprovar_registro")
-    async def aprovar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator and not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
-            await interaction.response.send_message("❌ Apenas Gerentes ou ADM podem aprovar.", ephemeral=True)
-            return
-            
-        await interaction.response.defer(ephemeral=True)
-        membro = interaction.guild.get_member(self.user_id)
-        if not membro:
-            await interaction.followup.send("❌ O membro não está mais no servidor.", ephemeral=True)
-            return
-
-        # Aplica o cargo de Agregado
-        agregado = interaction.guild.get_role(AGREGADO_ROLE_ID)
-        em_registro = interaction.guild.get_role(EM_REGISTRO_ROLE_ID)
-        convidado = interaction.guild.get_role(CONVIDADO_ROLE_ID)
-
-        if em_registro and em_registro in membro.roles: await membro.remove_roles(em_registro)
-        if convidado and convidado in membro.roles: await membro.remove_roles(convidado)
-        if agregado: await membro.add_roles(agregado)
-
-        # Cria a sala de meta
-        await criar_sala_meta(membro)
-
-        # Atualiza o banco para 'Aprovado'
-        pool = await get_pool()
-        if pool:
-            async with pool.acquire() as conn:
-                await conn.execute("UPDATE registros_historico SET status = 'Aprovado' WHERE user_id = $1 AND status = 'Pendente'", str(self.user_id))
-
-        # Avisa o membro no DM
-        try:
-            await membro.send(f"🎉 **REGISTRO APROVADO!**\nVocê foi aceito na **Vida Rasa 442**! Seu cargo de Agregado já foi aplicado e sua sala de meta foi criada.")
-        except: pass
-
-        # Edita a mensagem de aprovação
-        embed = interaction.message.embeds[0]
-        embed.color = 0x2ecc71
-        embed.title = "✅ REGISTRO APROVADO"
-        embed.set_footer(text=f"Aprovado por {interaction.user.display_name}")
-        await interaction.message.edit(embed=embed, view=None)
-
-    @discord.ui.button(label="❌ Rejeitar", style=discord.ButtonStyle.danger, custom_id="rejeitar_registro")
-    async def rejeitar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator and not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles):
-            await interaction.response.send_message("❌ Apenas Gerentes ou ADM podem rejeitar.", ephemeral=True)
-            return
-            
-        await interaction.response.defer(ephemeral=True)
-        
-        pool = await get_pool()
-        if pool:
-            async with pool.acquire() as conn:
-                await conn.execute("UPDATE registros_historico SET status = 'Rejeitado' WHERE user_id = $1 AND status = 'Pendente'", str(self.user_id))
-
-        membro = interaction.guild.get_member(self.user_id)
-        if membro:
-            try:
-                await membro.send("❌ **Registro Rejeitado**\nSua solicitação de entrada na Vida Rasa foi negada pela gerência.")
-            except: pass
-
-        embed = interaction.message.embeds[0]
-        embed.color = 0xe74c3c
-        embed.title = "❌ REGISTRO REJEITADO"
-        embed.set_footer(text=f"Rejeitado por {interaction.user.display_name}")
-        await interaction.message.edit(embed=embed, view=None)
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistroView
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2312,44 +2318,39 @@ async def enviar_painel_registro():
         logger.error("❌ Canal registro não encontrado")
         return
 
-    embed = embed_padrao(
-        titulo="REGISTRO VDR 442",
-        descricao="🛡 Sistema de Admissão • Vida Rasa",
-        cor=CoresUX.PRIMARIA,
-        emoji=EmojisUX.ESCUDO,
-        autor="Sistema de Registro"
-    )
-
-    adicionar_separador(embed)
-
-    adicionar_campo(
-        embed, "BEM-VINDO À VIDA RASA",
-        (
+    embed = discord.Embed(
+        title="",
+        description=(
+            "# 🛡️ REGISTRO VDR 442\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `ADMISSÃO`\n"
+            "> 📌 **STATUS:** `🟢 ABERTO`\n"
+            "> 👤 **ACESSO:** `NOVOS MEMBROS`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 👋 BEM-VINDO À VIDA RASA\n"
+            "> Ao se registrar, você se tornará um **AGREGADO**.\n"
+            "> ✅ Terá acesso a todas as áreas da facção.\n"
+            "> ✅ Participará de metas semanais e ações.\n"
+            "> ⚠️ O não cumprimento das metas gerará dívida.\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📋 COMO FUNCIONA\n"
             "```yaml\n"
-            "🕴️ Ao se registrar, você se tornará um AGREGADO.\n"
-            "✅ Terá acesso a todas as áreas da facção.\n"
-            "✅ Participará de metas semanais e ações.\n"
-            "⚠️ O não cumprimento das metas gerará dívida.\n"
-            "```"
+            "1️⃣ Clique em 'Fazer Registro'.\n"
+            "2️⃣ Preencha seus dados (Passaporte, Nome, etc).\n"
+            "3️⃣ Aguarde a aprovação da gerência.\n"
+            "```\n"
         ),
-        emoji=EmojisUX.INFO, inline=False
+        color=0xC0392B, # Vermelho Sangue
+        timestamp=agora()
     )
-
-    adicionar_separador(embed)
-
-    adicionar_campo(
-        embed, "COMO FUNCIONA",
-        (
-            "1️⃣ Clique em **'Fazer Registro'**\n"
-            "2️⃣ Preencha seus dados (Passaporte, Nome, etc)\n"
-            "3️⃣ Pronto! Você será liberado automaticamente."
-        ),
-        emoji=EmojisUX.INFO, inline=False
-    )
+    embed.set_author(name="🕴️ VDR 442 • RECEPÇÃO", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡️ VDR 442 • Sistema de Registro • {agora().strftime('%d/%m/%Y')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = RegistroView()
     await enviar_ou_atualizar_painel("painel_registro", CANAL_REGISTRO_ID, embed, view)
     logger.info("✅ Painel de registro criado")
+
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 04                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
@@ -2362,41 +2363,49 @@ async def enviar_painel_registro():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_embed_aviso_supremo
 # ────────────────────────────────────────────────────────────────────────────────
-async def criar_embed_aviso_supremo(titulo, mensagem, local=None, data_hora=None, cor_hex=None, is_doacao=False, destino_nome=None):
-    # Define a cor baseada no tipo
-    cor_final = cor_hex if cor_hex else 0xE74C3C # Padrão vermelho (Urgente)
+async def criar_embed_aviso_supremo(titulo, mensagem, local=None, data_hora=None, cor_hex=None, is_doacao=False):
+    tipo_detectado = "informativo"
+    titulo_lower = titulo.lower()
+    if any(p in titulo_lower for p in ["urgente", "importante", "atenção", "perigo"]):
+        tipo_detectado = "urgente"
+    elif any(p in titulo_lower for p in ["sucesso", "concluído", "finalizado", "parabéns"]):
+        tipo_detectado = "sucesso"
+    elif any(p in titulo_lower for p in ["aviso", "atenção", "cuidado"]):
+        tipo_detectado = "aviso"
+        
+    tipos = {
+        "urgente": {"cor": 0xC0392B, "emoji": "🚨"}, # Vermelho Sangue
+        "informativo": {"cor": 0x3498DB, "emoji": "ℹ️"},
+        "sucesso": {"cor": 0x2ECC71, "emoji": "✅"},
+        "aviso": {"cor": 0xF39C12, "emoji": "⚠️"} # Laranja
+    }
+    info = tipos.get(tipo_detectado, tipos["informativo"])
     
     if is_doacao:
-        cor_final = 0x2ecc71 # Verde para doações
+        info = {"cor": 0x2ECC71, "emoji": "💸"}
+        
+    cor_final = cor_hex if cor_hex else info["cor"]
 
     embed = discord.Embed(
-        title=f"🚨 {titulo.upper()} 🚨" if not is_doacao else f"💸 {titulo.upper()} 💸",
+        title="",
+        description=f"# {info['emoji']} {titulo.upper()}\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n> {mensagem.upper()}\n",
         color=cor_final,
         timestamp=agora()
     )
-    
-    # Corpo da mensagem (caixa escura)
-    embed.description = f"```yaml\n{mensagem.upper()}\n```"
+    embed.set_author(name="🕴️ VDR 442 • COMUNICADO OFICIAL", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
 
-    # Adiciona os campos na ordem: Destino, Data, Status
-    if destino_nome:
-        embed.add_field(name="📍 DESTINO", value=f"`{destino_nome}`", inline=True)
-    
-    if data_hora:
-        embed.add_field(name="📅 DATA E HORA", value=f"`{data_hora}`", inline=True)
-    
-    # Define o Status (você pode mudar se quiser, mas botei Urgente como padrão do print)
-    status_text = "🔴 URGENTE" if not is_doacao else "🟢 DOAÇÃO"
-    embed.add_field(name="📌 STATUS", value=f"`{status_text}`", inline=True)
+    if local or data_hora:
+        info_extra = ""
+        if local: info_extra += f"📍 **LOCAL:** `{local.upper()}`\n"
+        if data_hora: info_extra += f"📅 **DATA:** `{data_hora.upper()}`\n"
+        embed.description += f"\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n{info_extra}"
 
-    if bot.user:
-        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    if is_doacao:
+        canal_doacao_mention = f"<#{CANAL_DOACOES_ID}>"
+        embed.description += f"\n💸 **COMO AJUDAR?**\n> Acesse o canal {canal_doacao_mention} e faça sua doação via PIX.\n"
 
-    embed.set_footer(
-        text=f"Vida Rasa 442 • Sistema Oficial de Avisos • {agora().strftime('%d/%m/%Y %H:%M')}", 
-        icon_url=bot.user.display_avatar.url if bot.user else None
-    )
-    
+    embed.set_footer(text=f"🛡️ VDR 442 • Comunicado Oficial • {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
     return embed
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AvisosSelect
@@ -3017,20 +3026,48 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
 
         if is_dono:
             await movimentar_caixa("compra", valor_compra, f"{tipo}: {descricao}", interaction.user.id, "limpo")
-            embed = discord.Embed(title=f"💸 NOVO LANÇAMENTO (DONO)", color=0x3498db)
-            embed.add_field(name="📦 Item", value=descricao, inline=True)
-            embed.add_field(name="💰 Valor", value=formatar_dinheiro(valor_compra), inline=True)
-            embed.set_footer(text="🛡 VDR 442 • Caixa Limpo Debitado")
+            
+            embed = discord.Embed(
+                title="",
+                description=(
+                    f"# 💸 NOVO LANÇAMENTO\n"
+                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                    f"> 🏷️ **Tipo:** `{tipo}`\n"
+                    f"> 📦 **Descrição:** `{descricao}`\n"
+                    f"> 💰 **Valor:** `{formatar_dinheiro(valor_compra)}`\n"
+                    f"> 👤 **Registrado por:** {interaction.user.mention}\n\n"
+                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                    f"> 📌 **STATUS:** `✅ CAIXA LIMPO DEBITADO`"
+                ),
+                color=0x3498DB, # Azul para lançamento
+                timestamp=agora()
+            )
+            embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
+            embed.set_footer(text=f"🛡️ VDR 442 • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+            
             canal = interaction.guild.get_channel(CANAL_HISTORICO_LANCAMENTOS_ID)
             if canal: await canal.send(embed=embed)
             await interaction.followup.send("✅ Lançamento registrado e descontado do Caixa!", ephemeral=True)
-            await enviar_painel_registrar_compra(); await enviar_painel_caixa(); await enviar_painel_gerenciamento_producao()
+            await enviar_painel_registrar_compra(); await enviar_painel_caixa()
         else:
-            embed_reembolso = discord.Embed(title="💸 ── SOLICITAÇÃO DE REEMBOLSO ── 💸", description="O membro realizou uma compra e precisa ser reembolsado.", color=0xF1C40F)
-            embed_reembolso.add_field(name="👤 MEMBRO", value=interaction.user.mention, inline=True)
-            embed_reembolso.add_field(name="📦 ITEM", value=descricao, inline=True)
-            embed_reembolso.add_field(name="💰 VALOR", value=formatar_dinheiro(valor_compra), inline=False)
-            embed_reembolso.add_field(name="📌 STATUS", value="⏳ **A REEMBOLSAR** (Pendente)", inline=False)
+            embed_reembolso = discord.Embed(
+                title="",
+                description=(
+                    f"# 💸 SOLICITAÇÃO DE REEMBOLSO\n"
+                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                    f"> 👤 **Membro:** {interaction.user.mention}\n"
+                    f"> 📦 **Item:** `{descricao}`\n"
+                    f"> 💰 **Valor:** `{formatar_dinheiro(valor_compra)}`\n\n"
+                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                    f"> 📌 **STATUS:** `⏳ AGUARDANDO APROVAÇÃO`\n\n"
+                    f"> ⚠️ **Atenção:** O valor **NÃO** foi descontado do caixa ainda."
+                ),
+                color=0xF39C12, # Laranja
+                timestamp=agora()
+            )
+            embed_reembolso.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
+            embed_reembolso.set_footer(text=f"🛡️ VDR 442 • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+            
             canal_reembolso = interaction.guild.get_channel(CANAL_COMPRAS_REEMBOLSO_ID)
             if canal_reembolso:
                 await canal_reembolso.send(content=f"<@&{CARGO_01_ID}> <@&{CARGO_02_ID}>", embed=embed_reembolso, view=ReembolsoView(compra_id, valor_compra, descricao, interaction.user.mention))
@@ -3590,35 +3627,36 @@ async def enviar_painel_ausencia():
     if not canal: return
 
     embed = discord.Embed(
-        title="📋 ── CONTROLE DE AUSÊNCIA ── 📋",
-        description="**VDR 442 • Gestão de Membros**\n*Avise a gerência caso precise se ausentar*",
-        color=0xD35400,
+        title="",
+        description=(
+            "# 📋 CONTROLE DE AUSÊNCIA\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `GESTÃO DE MEMBROS`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `TODOS OS MEMBROS`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📝 SOLICITAR AUSÊNCIA\n"
+            "> Ao se ausentar, você receberá o cargo **Ausente** e ficará isento das obrigações semanais.\n"
+            "> **Atenção:** Ausências de **15 dias ou mais** serão notificadas à gerência para remoção do tablet.\n\n"
+            "### 🔄 RETORNO ANTECIPADO\n"
+            "> Se você voltar antes do previsto, a gerência deve usar o botão **🔄 Remover Ausência** para retirar seu cargo e liberar seu acesso.\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📖 COMO SOLICITAR\n"
+            "```yaml\n"
+            "1️⃣ Clique em 'Solicitar Ausência'.\n"
+            "2️⃣ Informe seu nome, data de início, data de retorno e o motivo.\n"
+            "3️⃣ Pronto! O cargo será aplicado automaticamente.\n"
+            "```\n"
+        ),
+        color=0xD35400, # Laranja Avermelhado
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • GESTÃO", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="📝 SOLICITAR AUSÊNCIA",
-        value="Ao se ausentar, você receberá o cargo **Ausente** e ficará isento das obrigações semanais.\n\n**Atenção:** Ausências de **15 dias ou mais** serão notificadas à gerência para remoção do tablet.",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🔄 RETORNO ANTECIPADO",
-        value="Se você voltar antes do previsto, a gerência deve usar o botão **🔄 Remover Ausência** para retirar seu cargo e liberar seu acesso.",
-        inline=False
-    )
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name="📖 COMO SOLICITAR", value="**1️⃣** Clique em **📝 Solicitar Ausência**\n**2️⃣** Informe seu nome, data de início, data de retorno e o motivo.\n**3️⃣** Pronto! O cargo será aplicado automaticamente.", inline=False)
-
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Sistema de Ausência", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡️ VDR 442 • Sistema de Ausência • {agora().strftime('%d/%m/%Y')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = AusenciaUnificadoView()
     await enviar_ou_atualizar_painel("painel_ausencia", CANAL_BOTAO_AUSENCIA_ID, embed, view)
-
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 07                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
@@ -3918,32 +3956,32 @@ async def enviar_painel_lavagem():
     total_lavagens = len(dados) if dados else 0
     total_repassado = sum(item["liquido"] for item in dados) if dados else 0
     total_sujo = sum(item["valor"] for item in dados) if dados else 0
+    taxa_atual = await buscar_taxa_lavagem_db()
 
     embed = discord.Embed(
-        title="🧼 ── CENTRAL DE LAVAGEM ── 🧼",
-        description="**VDR 442 • Sistema Financeiro**\n*Lave o dinheiro sujo da facção de forma segura*",
-        color=0x1ABC9C,
+        title="",
+        description=(
+            "# 🧼 CENTRAL DE LAVAGEM\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `FINANCEIRO`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `TODOS OS MEMBROS`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📊 ESTATÍSTICAS GERAIS\n"
+            f"```yaml\n📋 Total de lavagens: {total_lavagens}\n💰 Total sujo: {formatar_dinheiro(total_sujo)}\n💵 Total repassado: {formatar_dinheiro(total_repassado)}\n📊 Taxa atual: {taxa_atual}%\n```\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📖 COMO FUNCIONA\n"
+            "> **1️⃣** Clique em **🧼 Iniciar Lavagem**\n"
+            "> **2️⃣** Informe o valor do dinheiro sujo\n"
+            "> **3️⃣** Envie o PRINT da tela neste canal\n"
+            "> **4️⃣** O bot registra automaticamente e calcula sua parte.\n"
+        ),
+        color=0x1ABC9C, # Verde-água
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="📊 ESTATÍSTICAS GERAIS",
-        value=f"```yaml\n📋 Total de lavagens: {total_lavagens}\n💰 Total sujo: {formatar_dinheiro(total_sujo)}\n💵 Total repassado: {formatar_dinheiro(total_repassado)}\n📊 Taxa média: 20%\n```",
-        inline=False
-    )
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="📖 COMO FUNCIONA",
-        value="**1️⃣** Clique em **🧼 Iniciar Lavagem**\n**2️⃣** Informe o valor do dinheiro sujo\n**3️⃣** Envie o PRINT da tela neste canal\n**4️⃣** O bot registra automaticamente e calcula sua parte (80%).",
-        inline=False
-    )
-
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Sistema de Lavagem", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡️ VDR 442 • Sistema de Lavagem • {agora().strftime('%d/%m/%Y')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = LavagemView()
     await enviar_ou_atualizar_painel("painel_lavagem", CANAL_INICIAR_LAVAGEM_ID, embed, view)
@@ -4437,31 +4475,27 @@ async def enviar_painel_lives():
     if not canal: return
 
     embed = discord.Embed(
-        title="🎥 ── CENTRAL DE LIVES ── 🎥",
-        description="**VDR 442 • Divulgação de Streams**\n*Cadastre e anuncie suas lives para a facção*",
-        color=0x9146FF,
+        title="",
+        description=(
+            "# 🎥 CENTRAL DE LIVES\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `DIVULGAÇÃO DE STREAMS`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `TODOS OS MEMBROS`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 🟣 TWITCH (AUTOMÁTICO)\n"
+            "> Cadastre sua live **uma única vez**. Quando você entrar ao vivo, o bot anuncia automaticamente no canal de divulgação.\n\n"
+            "### 🟢 KICK / 📱 TIKTOK / ▶️ YOUTUBE (MANUAL)\n"
+            "> Toda vez que for começar a live, publique manualmente. Preencha os dados e o anúncio vai imediatamente para o canal.\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            f"> 📢 **DESTINO:** <#{CANAL_DIVULGACAO_LIVE_ID}>\n"
+        ),
+        color=0x9146FF, # Roxo Twitch
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • MÍDIA", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="🟣 TWITCH (AUTOMÁTICO)",
-        value="Cadastre sua live **uma única vez**. Quando você entrar ao vivo, o bot anuncia automaticamente no canal de divulgação.",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🟢 KICK / 📱 TIKTOK / ▶️ YOUTUBE (MANUAL)",
-        value="Toda vez que for começar a live, publique manualmente. Preencha os dados e o anúncio vai imediatamente para o canal.",
-        inline=False
-    )
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name="📢 DESTINO", value=f"Todas as lives vão para: <#{CANAL_DIVULGACAO_LIVE_ID}>", inline=False)
-
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Sistema de Lives", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡️ VDR 442 • Sistema de Lives • {agora().strftime('%d/%m/%Y')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     try:
         async for msg in canal.history(limit=30):
@@ -4793,50 +4827,53 @@ async def criar_embed_bau_unificado():
     estoque = await carregar_bau_estoque()
 
     embed = discord.Embed(
-        title="📦 ── CONTROLE DE BAÚ ── 📦",
-        description="**VDR 442 • Estoque Unificado**\n*Armas, munições e itens gerais em um só lugar*",
-        color=0x7F8C8D,
+        title="",
+        description=(
+            "# 📦 CONTROLE DE BAÚ\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `ESTOQUE UNIFICADO`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `TODOS OS MEMBROS`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+        ),
+        color=0x7F8C8D, # Cinza chumbo
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • LOGÍSTICA", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
 
     if estoque:
         texto_estoque = ""
         for item, qtd in estoque.items():
             if qtd > 0 and not is_arma(item):
-                texto_estoque += f"• {item.upper()}: **{qtd} un**\n"
+                texto_estoque += f"• {item.upper()}: {qtd} un\n"
 
         if texto_estoque:
-            embed.add_field(name="📋 ITENS DISPONÍVEIS", value=f"```yaml\n{texto_estoque}\n```", inline=False)
+            embed.description += f"### 📋 ITENS GERAIS\n```yaml\n{texto_estoque.strip()}\n```\n\n"
         else:
-            embed.add_field(name="📋 ITENS DISPONÍVEIS", value="```yaml\n📭 Baú vazio (itens)\n```", inline=False)
+            embed.description += f"### 📋 ITENS GERAIS\n```yaml\n📭 Baú vazio (itens)\n```\n\n"
     else:
-        embed.add_field(name="📋 ITENS DISPONÍVEIS", value="```yaml\n📭 Baú vazio\n```", inline=False)
+        embed.description += f"### 📋 ITENS GERAIS\n```yaml\n📭 Baú vazio\n```\n\n"
 
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
 
     if estoque:
         texto_armas = ""
         for item, qtd in estoque.items():
             if qtd > 0 and is_arma(item):
-                texto_armas += f"• {item.upper()}: **{qtd} un**\n"
+                texto_armas += f"• {item.upper()}: {qtd} un\n"
 
         if texto_armas:
-            embed.add_field(name="🔫 ARSENAL", value=f"```yaml\n{texto_armas}\n```", inline=False)
+            embed.description += f"### 🔫 ARSENAL\n```diff\n{texto_armas.strip()}\n```\n\n"
         else:
-            embed.add_field(name="🔫 ARSENAL", value="```yaml\n📭 Nenhuma arma no estoque\n```", inline=False)
+            embed.description += f"### 🔫 ARSENAL\n```yaml\n📭 Nenhuma arma no estoque\n```\n\n"
     else:
-        embed.add_field(name="🔫 ARSENAL", value="```yaml\n📭 Nenhuma arma no estoque\n```", inline=False)
+        embed.description += f"### 🔫 ARSENAL\n```yaml\n📭 Nenhuma arma no estoque\n```\n\n"
 
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📖 COMO USAR",
-        value="**📥 Entrada:** Guardar itens no baú\n**📤 Saída:** Retirar itens do baú\n\n*Use o formato: `Quantidade Nome` (ex: `100 placas`)*\n*🤖 O bot corrige erros de digitação automaticamente!*",
-        inline=False
-    )
+    embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+    embed.description += "> 📖 **COMO USAR**\n> **📥 Entrada:** Guardar itens no baú.\n> **📤 Saída:** Retirar itens do baú.\n> \n> *Use o formato: `Quantidade Nome` (ex: `100 placas`)*\n> *🤖 O bot corrige erros de digitação automaticamente!*\n"
 
+    embed.set_footer(text=f"🛡️ VDR 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
     return embed
 
 class BauUnificadoModal(discord.ui.Modal):
@@ -4844,13 +4881,10 @@ class BauUnificadoModal(discord.ui.Modal):
         self.tipo = tipo
         titulo = "📥 Registrar Entrada" if tipo == "entrou" else "📤 Registrar Saída"
         super().__init__(title=titulo)
-        
         self.itens = discord.ui.TextInput(
             label="📦 Itens (Quantidade Nome)",
             placeholder="Ex:\n100 placas\n50 c4\n2 fuzil\n10 polvora",
-            style=discord.TextStyle.paragraph,
-            required=True,
-            max_length=500
+            style=discord.TextStyle.paragraph, required=True, max_length=500
         )
         self.observacao = discord.ui.TextInput(
             label="📝 Observação (opcional)",
@@ -4871,32 +4905,28 @@ class BauUnificadoModal(discord.ui.Modal):
                 linha = linha.strip()
                 if not linha: continue
                 
-                # Remove o ":" se o usuário ainda usar o formato antigo
                 linha = linha.replace(":", " ")
                 partes = linha.split()
 
                 if len(partes) < 2:
-                    erros.append(f"❌ Formato inválido na linha: `{linha}`")
+                    erros.append(f"❌ Formato inválido: `{linha}`")
                     continue
 
-                # Tenta pegar a quantidade na primeira palavra
                 try:
                     quantidade = int(partes[0])
-                    item_nome = " ".join(partes[1:]) # O resto é o nome (aceita "municao fuzil")
+                    item_nome = " ".join(partes[1:])
                 except ValueError:
-                    # Se falhou, tenta inverter (formato antigo: "item 100")
                     try:
                         quantidade = int(partes[-1])
                         item_nome = " ".join(partes[:-1])
                     except ValueError:
-                        erros.append(f"❌ Não achei a quantidade na linha: `{linha}`")
+                        erros.append(f"❌ Sem quantidade: `{linha}`")
                         continue
 
-                # Aplica a inteligência para corrigir o nome do item
                 item_final = identificar_item_inteligente(item_nome)
                 
                 if quantidade <= 0:
-                    erros.append(f"❌ Quantidade inválida na linha: `{linha}`")
+                    erros.append(f"❌ Quantidade inválida: `{linha}`")
                     continue
 
                 itens_dict[item_final] = itens_dict.get(item_final, 0) + quantidade
@@ -4904,8 +4934,7 @@ class BauUnificadoModal(discord.ui.Modal):
             if erros:
                 msg_erro = "⚠️ **Algumas linhas não puderam ser lidas:**\n" + "\n".join(erros)
                 await interaction.followup.send(msg_erro, ephemeral=True)
-                if not itens_dict:
-                    return
+                if not itens_dict: return
 
             if not itens_dict:
                 await interaction.followup.send("❌ **Nenhum item válido encontrado!**", ephemeral=True)
@@ -4922,11 +4951,8 @@ class BauUnificadoModal(discord.ui.Modal):
                     else:
                         await atualizar_bau_estoque(item, quantidade, "remover")
                     await registrar_movimentacao_bau(
-                        tipo=self.tipo,
-                        item_nome=item,
-                        quantidade=quantidade,
-                        membro=nome_membro,
-                        observacao=self.observacao.value if self.observacao.value else None
+                        tipo=self.tipo, item_nome=item, quantidade=quantidade,
+                        membro=nome_membro, observacao=self.observacao.value if self.observacao.value else None
                     )
 
             log_mensagens = []
@@ -4950,55 +4976,40 @@ class BauUnificadoModal(discord.ui.Modal):
                 canal_controle = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
                 if canal_controle:
                     itens_texto = ', '.join([f'{item} ({qtd})' for item, qtd in itens_dict.items()])
-
                     if _OCR_DISPONIVEL:
-                        aviso_print = (
-                            f"📎 **{nome_membro}**, anexe o **print da tela do baú** aqui.\n"
-                            f"🤖 O bot vai **ler os itens automaticamente** do print.\n"
-                            f"📝 **Itens declarados (referência):** {itens_texto}\n\n"
-                            f"-# ⚠️ Se o OCR falhar, você recebe uma DM e pode registrar manualmente."
-                        )
+                        aviso_print = f"📎 **{nome_membro}**, anexe o **print da tela do baú** aqui.\n🤖 O bot vai **ler os itens automaticamente**.\n📝 **Itens declarados:** {itens_texto}"
                     else:
-                        aviso_print = (
-                            f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n"
-                            f"📝 **Itens:** {itens_texto}"
-                        )
-
-                    try:
-                        msg_pedido = await canal_controle.send(aviso_print)
-                    except:
-                        msg_pedido = None
+                        aviso_print = f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n📝 **Itens:** {itens_texto}"
+                    
+                    try: msg_pedido = await canal_controle.send(aviso_print)
+                    except: msg_pedido = None
 
                     if msg_pedido:
                         bau_print_pendente[interaction.user.id] = {
-                            "log": texto_log,
-                            "canal_id": CANAL_BAU_LOG_ID,
-                            "msg_pedido_id": msg_pedido.id,
-                            "itens_declarados": itens_dict
+                            "log": texto_log, "canal_id": CANAL_BAU_LOG_ID,
+                            "msg_pedido_id": msg_pedido.id, "itens_declarados": itens_dict
                         }
-
-                    if _OCR_DISPONIVEL:
-                        await interaction.followup.send(f"✅ **Registro enviado!**\n📎 Agora anexe o print no canal <#{CANAL_BAU_MEMBROS_ID}>.\n🤖 O bot vai ler os itens automaticamente em ~3s.", ephemeral=True)
-                    else:
-                        await interaction.followup.send(f"✅ **Registro de entrada enviado!**\n📎 Anexe o print no canal <#{CANAL_BAU_MEMBROS_ID}> para comprovação.", ephemeral=True)
+                    await interaction.followup.send(f"✅ **Registro enviado!**\n📎 Anexe o print no canal <#{CANAL_BAU_MEMBROS_ID}>.", ephemeral=True)
                     return
-
             else:
                 canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
                 if canal_log:
                     try:
-                        await canal_log.send(texto_log)
-                    except:
-                        pass
-                await interaction.followup.send(f"✅ **Registro de saída enviado com sucesso!**", ephemeral=True)
+                        cor_log = 0xC0392B
+                        embed_log = discord.Embed(
+                            title="",
+                            description=f"# 📤 SAÍDA NO BAÚ\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n> 👤 **Membro:** `{nome_membro}`\n> 📝 **Ação:** `{texto_log}`\n\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n> 📅 **Data:** {agora().strftime('%d/%m/%Y %H:%M')}",
+                            color=cor_log, timestamp=agora()
+                        )
+                        embed_log.set_author(name="🕴️ VDR 442 • LOGÍSTICA", icon_url=bot.user.display_avatar.url if bot.user else None)
+                        embed_log.set_footer(text=f"🛡️ VDR 442 • Log de Baú", icon_url=bot.user.display_avatar.url if bot.user else None)
+                        await canal_log.send(embed=embed_log)
+                    except: pass
+                await interaction.followup.send(f"✅ **Registro de saída enviado!**", ephemeral=True)
 
         except Exception as e:
             logger.error(f"❌ Erro no BauUnificadoModal: {e}")
-            try:
-                await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
-            except:
-                pass
-
+            await interaction.followup.send(f"❌ **Erro:** {str(e)[:100]}", ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarZerarBauView
@@ -6757,12 +6768,6 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
 
         guild = interaction.guild
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # DIVISÃO DO VALOR ENTRE PARTICIPANTES
-        # Regra: divide entre TODOS os participantes.
-        # Só quem tem CARGO SOLDADO tem a parte somada no ACUMULADO COLETIVO
-        # dos soldados (não mais no dinheiro_acoes individual).
-        # ═══════════════════════════════════════════════════════════════════════
         total_participantes = len(participantes_botao) + len(participantes_manuais)
         valor_por_participante = valor_total // total_participantes if total_participantes > 0 else 0
 
@@ -6775,7 +6780,6 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         membros_nao_soldados = []
         total_para_soldados = 0
 
-        # Processa participantes do botão
         for p in participantes_botao:
             uid = p["user_id"]
             try:
@@ -6793,7 +6797,6 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
             except Exception as e:
                 logger.error(f"❌ Erro ao processar participante {uid}: {e}")
 
-        # Processa participantes manuais
         for p in participantes_manuais:
             nome_manual = p["nome"]
             if not nome_manual:
@@ -6817,16 +6820,10 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
             else:
                 logger.warning(f"⚠️ Participante manual '{nome_manual}' não encontrado no servidor")
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # SOMA NO ACUMULADO COLETIVO DOS SOLDADOS
-        # ═══════════════════════════════════════════════════════════════════════
         if total_para_soldados > 0:
             await somar_total_soldado(total_para_soldados)
             logger.info(f"⚔️ Total coletivo de soldados somado: +{formatar_dinheiro(total_para_soldados)}")
 
-            # Atualiza o painel de todos os soldados
-            meta_soldado = await buscar_meta_soldado()
-            total_atual = await buscar_total_soldado()
             try:
                 cargo_soldado = guild.get_role(CARGO_SOLDADO_ID)
                 if cargo_soldado:
@@ -6843,9 +6840,6 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
             except Exception as e:
                 logger.error(f"❌ Erro ao atualizar painéis dos soldados: {e}")
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # MONTA LISTA DE PARTICIPANTES PARA O EMBED
-        # ═══════════════════════════════════════════════════════════════════════
         lista_participantes = []
         for p in participantes_botao:
             uid = p["user_id"]
@@ -6874,47 +6868,50 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         participantes_texto = "\n".join(lista_participantes)
 
         embed = discord.Embed(
-            title="🏆 ── RESULTADO DA AÇÃO ── 🏆",
-            description=f"⚔️ **{acao['tipo']}**",
-            color=Cores.SUCESSO,
+            title="",
+            description=(
+                f"# 🏆 RESULTADO DA AÇÃO\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                f"> 🏦 **Ação:** `{acao['tipo']}`\n"
+                f"> 💰 **Total:** `{formatar_dinheiro(valor_total)}`\n"
+                f"> 👥 **Participantes:** `{total_participantes}`\n"
+                f"> 💵 **Por pessoa:** `{formatar_dinheiro(valor_por_participante)}`\n\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                f"### 👥 LISTA DE PARTICIPANTES\n"
+                f"```yaml\n{participantes_texto}\n```\n"
+            ),
+            color=0x2ECC71,
             timestamp=agora()
         )
-
-        embed.set_author(name="🛡 Vida Rasa 442 • Ações", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.set_author(name="🕴️ VDR 442 • AÇÕES", icon_url=bot.user.display_avatar.url if bot.user else None)
         embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(name="🏦 AÇÃO", value=f"```yaml\n{acao['tipo']}\n```", inline=True)
-        embed.add_field(name="💰 TOTAL GANHO", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=True)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(
-            name=f"💵 DIVISÃO ({total_participantes} participantes)",
-            value=f"```yaml\n{formatar_dinheiro(valor_por_participante)} por pessoa\n```",
-            inline=False
-        )
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(name="👥 PARTICIPANTES", value=f"```yaml\n{participantes_texto}\n```", inline=False)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
+        
         if membros_soldados:
-            embed.add_field(
-                name="⚔️ SOLDADOS (SOMADO NA META COLETIVA)",
-                value=f"```yaml\n{chr(10).join(membros_soldados)}\n```\n💵 **+{formatar_dinheiro(total_para_soldados)}** no total coletivo",
-                inline=False
-            )
+            embed.description += f"\n### ⚔️ SOLDADOS (SOMADO NA META COLETIVA)\n```yaml\n{chr(10).join(membros_soldados)}\n```\n> 💵 +{formatar_dinheiro(total_para_soldados)} no total coletivo\n"
         if membros_nao_soldados:
-            embed.add_field(
-                name="👤 OUTROS (NÃO SOLDADOS)",
-                value=f"```yaml\n{chr(10).join(membros_nao_soldados)}\n```",
-                inline=False
-            )
+            embed.description += f"\n### 👤 OUTROS\n```yaml\n{chr(10).join(membros_nao_soldados)}\n```\n"
 
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(name="📌 STATUS", value="```yaml\n✅ AÇÃO FINALIZADA\n🎉 RESULTADO: GANHOU\n```", inline=False)
-        embed.set_footer(text=f"🛡 Vida Rasa 442 • ID: {self.acao_id} • Finalizada por {interaction.user.display_name} • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.description += f"\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n> 📌 **STATUS:** `✅ AÇÃO FINALIZADA (GANHOU)`"
+        embed.set_footer(text=f"🛡️ VDR 442 • ID: {self.acao_id} • Finalizada por {interaction.user.display_name} • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-        await self.mensagem_original.edit(embed=embed, view=None)
+        try:
+            await self.mensagem_original.edit(embed=embed, view=None)
+        except Exception as e:
+            logger.error(f"❌ Erro ao editar mensagem finalizada: {e}")
+
+        try:
+            pool_clean = await get_pool()
+            if pool_clean:
+                async with pool_clean.acquire() as conn_clean:
+                    await conn_clean.execute(
+                        "DELETE FROM botoes_persistentes WHERE mensagem_id = $1",
+                        str(self.mensagem_original.id)
+                    )
+        except Exception as e:
+            logger.error(f"❌ Erro ao limpar botoes persistentes: {e}")
+
         await enviar_painel_acoes(interaction.guild)
-
+        
         msg_extra = ""
         if membros_soldados:
             meta_soldado = await buscar_meta_soldado()
@@ -6930,7 +6927,6 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
             f"📌 **Valor total vai para o caixa da facção (dinheiro sujo).**",
             ephemeral=True
         )
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ResultadoPerdeuModal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -6991,25 +6987,43 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
         participantes_texto = "\n".join(lista_participantes)
 
         embed = discord.Embed(
-            title="💀 ── RESULTADO DA AÇÃO ── 💀",
-            description=f"⚔️ **{acao['tipo']}**",
-            color=Cores.ERRO,
+            title="",
+            description=(
+                f"# 💀 RESULTADO DA AÇÃO\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                f"> 🏦 **Ação:** `{acao['tipo']}`\n"
+                f"> 💰 **Total:** `R$ 0,00`\n"
+                f"> 👥 **Participantes:** `{len(lista_participantes)}`\n\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                f"### 👥 LISTA DE PARTICIPANTES\n"
+                f"```yaml\n{participantes_texto}\n```\n"
+            ),
+            color=0xC0392B,
             timestamp=agora()
         )
-        embed.set_author(name="🛡 Vida Rasa 442 • Ações", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.set_author(name="🕴️ VDR 442 • AÇÕES", icon_url=bot.user.display_avatar.url if bot.user else None)
         embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(name="🏦 AÇÃO", value=f"```yaml\n{acao['tipo']}\n```", inline=True)
-        embed.add_field(name="💰 TOTAL", value=f"```yaml\nR$ 0,00\n```", inline=True)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(name="👥 PARTICIPANTES", value=f"```yaml\n{participantes_texto}\n```", inline=False)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-        embed.add_field(name="📌 STATUS", value="```yaml\n✅ AÇÃO FINALIZADA\n💀 RESULTADO: PERDEU\n```", inline=False)
-        embed.set_footer(text=f"🛡 Vida Rasa 442 • ID: {self.acao_id} • Finalizada por {interaction.user.display_name} • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.description += f"\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n> 📌 **STATUS:** `❌ AÇÃO FINALIZADA (PERDEU)`"
+        embed.set_footer(text=f"🛡️ VDR 442 • ID: {self.acao_id} • Finalizada por {interaction.user.display_name} • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-        await self.mensagem_original.edit(embed=embed, view=None)
+        try:
+            await self.mensagem_original.edit(embed=embed, view=None)
+        except Exception as e:
+            logger.error(f"❌ Erro ao editar mensagem finalizada: {e}")
+
+        try:
+            pool_clean = await get_pool()
+            if pool_clean:
+                async with pool_clean.acquire() as conn_clean:
+                    await conn_clean.execute(
+                        "DELETE FROM botoes_persistentes WHERE mensagem_id = $1",
+                        str(self.mensagem_original.id)
+                    )
+        except Exception as e:
+            logger.error(f"❌ Erro ao limpar botoes persistentes: {e}")
+
         await enviar_painel_acoes(interaction.guild)
-
+        
         await interaction.followup.send(
             f"✅ **Ação registrada como PERDIDA!**\n"
             f"💀 Nenhum valor foi gerado.",
@@ -7197,7 +7211,6 @@ async def enviar_painel_acoes(guild):
     total_geral_feitas = 0
     total_geral_meta = 0
     
-    # ─── BLOCO 1: LIMITES ESPECÍFICOS (Bahamas / Lan Houses) ───
     texto_bahamas = ""
     for acao, limite in LIMITES_ACOES_ESPECIFICOS.items():
         if "Bahamas" in acao or "Museu" in acao:
@@ -7218,11 +7231,10 @@ async def enviar_painel_acoes(guild):
         total_geral_feitas += qtd_feita
         total_geral_meta += limite
 
-    # ─── BLOCO 2: OUTRAS CATEGORIAS (Complexo) ───
     texto_complexo = ""
     for categoria, dados in CATEGORIAS_ACOES.items():
         if categoria == "Bahamas":
-            continue # Já tratamos acima
+            continue
         limite = dados["limite"]
         acoes = dados["acoes"]
         emoji = dados["emoji"]
@@ -7237,51 +7249,40 @@ async def enviar_painel_acoes(guild):
             status = "✅" if qtd_feita >= limite else f"⏳ {restante} rest."
             texto_complexo += f"• {emoji} {categoria[:12]}: {qtd_feita}/{limite} {status}\n"
 
-    # ─── EMBED PREMIUM ───
     embed = discord.Embed(
-        title="⚔️ ── CENTRAL DE AÇÕES ── ⚔️",
-        description="**VDR 442 • Escalações e Limites**\n*Acompanhe o progresso das ações da semana*",
-        color=0xC0392B,
+        title="",
+        description=(
+            "# ⚔️ CENTRAL DE AÇÕES\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `ESCALAÇÕES`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `TODOS OS MEMBROS`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+        ),
+        color=0xC0392B, # Vermelho Sangue
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • AÇÕES", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
 
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    # Adiciona os limites em campos separados para não estourar o limite de 1024 do Discord
     if texto_complexo:
-        embed.add_field(
-            name="🏙️ LIMITES DO COMPLEXO",
-            value=f"```yaml\n{texto_complexo}```",
-            inline=False
-        )
-
+        embed.description += f"### 🏙️ LIMITES DO COMPLEXO\n```yaml\n{texto_complexo.strip()}\n```\n\n"
     if texto_bahamas:
-        embed.add_field(
-            name="🏝️ LIMITES DE BAHAMAS",
-            value=f"```yaml\n{texto_bahamas}```",
-            inline=False
-        )
+        embed.description += f"### 🏝️ LIMITES DE BAHAMAS\n```yaml\n{texto_bahamas.strip()}\n```\n\n"
 
-    # Barra de progresso geral
     texto_progresso = ""
     if total_geral_meta > 0:
         porcentagem = int((total_geral_feitas / total_geral_meta) * 100)
-        barra = "▓" * int((porcentagem / 100) * 10) + "░" * (10 - int((porcentagem / 100) * 10))
-        texto_progresso = f"{total_geral_feitas}/{total_geral_meta} ações realizadas\n{barra} {porcentagem}%"
+        barra_p = "▓" * int((porcentagem / 100) * 10) + "░" * (10 - int((porcentagem / 100) * 10))
+        texto_progresso = f"{total_geral_feitas}/{total_geral_meta} ações realizadas\n{barra_p} {porcentagem}%"
 
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📊 PROGRESSO GERAL DA SEMANA",
-        value=f"```yaml\n{texto_progresso}```" if texto_progresso else "```yaml\nNenhuma meta de ação definida\n```",
-        inline=False
-    )
-
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+    embed.description += f"### 📊 PROGRESSO GERAL DA SEMANA\n```yaml\n{texto_progresso if texto_progresso else 'Nenhuma meta de ação definida'}\n```\n"
+    
+    embed.set_footer(text=f"🛡️ VDR 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = PainelAcoesView()
     await enviar_ou_atualizar_painel("painel_acoes", CANAL_ESCALACOES_ID, embed, view)
-
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 11                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
@@ -7420,23 +7421,7 @@ async def verificar_pedido_finalizado(pedido_numero):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_embed_pedido_finalizado
 # ────────────────────────────────────────────────────────────────────────────────
-async def enviar_embed_pedido_finalizado(
-    pedido_numero,
-    pt,
-    sub,
-    organizacao,
-    vendedor_nome,
-    pago_por,
-    pago_em,
-    entregue_por,
-    entregue_em,
-    transferido_para,
-    transferido_por,
-    transferido_em,
-    cancelado_por=None,
-    cancelado_em=None,
-    tipo="finalizado"
-):
+async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, vendedor_nome, pago_por, pago_em, entregue_por, entregue_em, transferido_para, transferido_por, transferido_em, cancelado_por=None, cancelado_em=None, tipo="finalizado"):
     try:
         canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
         if not canal:
@@ -7444,118 +7429,57 @@ async def enviar_embed_pedido_finalizado(
             return False
 
         valor_total = (pt * 50) + (sub * 90)
-        pacotes_pt = pt // 50
-        pacotes_sub = sub // 50
 
         if tipo == "cancelado":
-            cor = 0xE74C3C
-            titulo = "❌ ── PEDIDO CANCELADO ── ❌"
+            cor = 0xC0392B # Vermelho escuro
+            status_emoji = "❌"
+            status_texto = "PEDIDO CANCELADO"
         else:
-            cor = 0x2ECC71
-            titulo = "🎉 ── PEDIDO FINALIZADO ── 🎉"
+            cor = 0x2ECC71 # Verde
+            status_emoji = "✅"
+            status_texto = "VENDA FINALIZADA"
 
         embed = discord.Embed(
-            title=titulo,
+            title="",
+            description=f"# {status_emoji} {status_texto}\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**",
             color=cor,
             timestamp=agora()
         )
+        embed.set_author(name="🕴️ VDR 442 • COMPROVANTE", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-        embed.set_author(
-            name=f"🏷️ {organizacao} • Sistema de Encomendas",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
-        embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+        # Identificação
+        embed.description += f"\n> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n> 🏢 **ORG:** `{organizacao}`\n> 👤 **VENDEDOR:** `{vendedor_nome}`\n"
+        
+        embed.description += "\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+        
+        # Carga
+        carga = ""
+        if pt > 0: carga += f"+ {fmt_num(pt)} PT ({pt//50} pacotes)\n"
+        if sub > 0: carga += f"+ {fmt_num(sub)} SUB ({sub//50} pacotes)\n"
+        embed.description += f"\n🎯 **CARGA ENTREGUE**\n```diff\n{carga.strip()}\n```\n"
 
-        embed.add_field(
-            name="📦 PEDIDO",
-            value=f"```yaml\n#{pedido_numero:04d}\n```",
-            inline=True
-        )
-        embed.add_field(
-            name="🏷️ ORGANIZAÇÃO",
-            value=f"```yaml\n{organizacao}\n```",
-            inline=True
-        )
-        embed.add_field(
-            name="👤 VENDEDOR",
-            value=f"```yaml\n{vendedor_nome}\n```",
-            inline=True
-        )
+        # Valor
+        embed.description += f"💰 **VALOR TOTAL**\n```fix\n{formatar_dinheiro(valor_total)}\n```\n"
 
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+        embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
 
-        embed.add_field(
-            name="🔫 PT",
-            value=f"```yaml\n{fmt_num(pt)} munições\n📦 {fmt_num(pacotes_pt)} pacotes\n```",
-            inline=True
-        )
-        embed.add_field(
-            name="🔫 SUB",
-            value=f"```yaml\n{fmt_num(sub)} munições\n📦 {fmt_num(pacotes_sub)} pacotes\n```",
-            inline=True
-        )
-        embed.add_field(
-            name="💰 VALOR TOTAL",
-            value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```",
-            inline=True
-        )
-
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-        if tipo == "cancelado":
-            cancelado_info = f"{cancelado_por or 'Desconhecido'}\n📅 {cancelado_em or '—'}"
-            embed.add_field(
-                name="❌ CANCELADO POR",
-                value=f"```yaml\n{cancelado_info}\n```",
-                inline=False
-            )
+        # Detalhes de Pagamento e Entrega (Usando o Apelido)
+        if tipo == "finalizado":
+            if entregue_por:
+                embed.description += f"\n> 🚚 **Entregue por:** `{entregue_por}` ({entregue_em or '—'})\n"
+            if pago_por:
+                embed.description += f"> 💰 **Recebido por:** `{pago_por}` ({pago_em or '—'})\n"
+            if transferido_para:
+                embed.description += f"> 📤 **Transferido para:** `{transferido_para}`\n"
+                if transferido_por:
+                    embed.description += f"> 👤 **Confirmado por:** `{transferido_por}` ({transferido_em or '—'})\n"
         else:
-            pago_info = f"{pago_por or '—'}\n📅 {pago_em or '—'}"
-            embed.add_field(
-                name="✅ PAGO POR",
-                value=f"```yaml\n{pago_info}\n```",
-                inline=True
-            )
-            entregue_info = f"{entregue_por or '—'}\n📅 {entregue_em or '—'}"
-            embed.add_field(
-                name="📦 ENTREGUE POR",
-                value=f"```yaml\n{entregue_info}\n```",
-                inline=True
-            )
-            transferencia_texto = (
-                f"📤 **Transferido para:** {transferido_para or '—'}\n"
-                f"👤 **Confirmado por:** {transferido_por or '—'}\n"
-                f"📅 **Data:** {transferido_em or '—'}"
-            )
-            embed.add_field(
-                name="📤 TRANSFERÊNCIA",
-                value=transferencia_texto,
-                inline=False
-            )
+            if cancelado_por:
+                embed.description += f"\n> ❌ **Cancelado por:** `{cancelado_por}` ({cancelado_em or '—'})\n"
 
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-        if tipo == "cancelado":
-            embed.add_field(
-                name="❌ STATUS FINAL",
-                value="```diff\n- PEDIDO CANCELADO\n```",
-                inline=False
-            )
-        else:
-            embed.add_field(
-                name="🎉 STATUS FINAL",
-                value="```diff\n+ PEDIDO ENCERRADO COM SUCESSO\n```",
-                inline=False
-            )
-
-        timestamp_unix = int(agora().timestamp())
-        embed.set_footer(
-            text=f"🛡 Vida Rasa 442 • Encerrado em <t:{timestamp_unix}:F>",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
+        embed.set_footer(text=f"🛡️ VDR 442 • Encerrado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
         await safe_request(canal.send, embed=embed)
-        logger.info(f"✅ Embed de pedido #{pedido_numero:04d} ({tipo}) enviado para o canal de finalizados")
         return True
 
     except Exception as e:
@@ -8193,9 +8117,8 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
     if not canal:
         await interaction.followup.send("❌ Canal de encomendas não encontrado!", ephemeral=True)
         return
-    pacotes_pt = pt // 50
-    pacotes_sub = sub // 50
-    cor = config.get("cor", Cores.VENDA)
+    
+    cor = config.get("cor", 0xE67E22) # Laranja padrão
     emoji_org = config.get("emoji", "🏷️")
     
     vendedor_nome = "Desconhecido"
@@ -8205,54 +8128,65 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
             if user:
                 guild = interaction.guild
                 member = guild.get_member(int(vendedor_id))
-                if member and member.display_name: vendedor_nome = member.display_name
-                else: vendedor_nome = user.display_name or user.name
-        except: vendedor_nome = str(vendedor_id)
-    else: vendedor_nome = interaction.user.display_name
-
-    data_entrega_atual = "A definir"
-    if entregas_lista:
-        idx = entrega_atual - 1
-        if idx < len(entregas_lista): data_entrega_atual = entregas_lista[idx]["data"]
-
-    if total_entregas > 1:
-        titulo = f"📦 ENTREGA {entrega_atual}/{total_entregas} • Pedido #{pedido_numero:04d}"
-        descricao = f"**🔴 ATENÇÃO! Esta venda tem {total_entregas} entregas no total!**\n📦 **Esta entrega contém:** PT {fmt_num(pt)} + SUB {fmt_num(sub)}"
+                vendedor_nome = member.display_name if member and member.display_name else (user.display_name or user.name)
+        except:
+            vendedor_nome = str(vendedor_id)
     else:
-        titulo = f"📦 NOVA ENCOMENDA • Pedido #{pedido_numero:04d}"
-        descricao = "✅ Entrega única"
+        vendedor_nome = interaction.user.display_name
 
-    embed = discord.Embed(title=titulo, description=descricao, color=cor, timestamp=agora())
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    embed.set_author(name=f"{emoji_org} {org_nome} • Sistema de Encomendas", icon_url=bot.user.display_avatar.url if bot.user else None)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    # ─── ESTRUTURA VISUAL "FOGO E SANGUE" ───
+    if total_entregas > 1:
+        titulo_embed = f"# 📦 ENCOMENDA PARCELADA\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**"
+        descricao = f"> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n> 👤 **VENDEDOR:** `{vendedor_nome}`\n> 🏢 **DESTINO:** `{org_nome}`\n> 📦 **PARCELAS:** `{entrega_atual}/{total_entregas}`"
+        status_inicial = "🟡 **AGUARDANDO ENTREGA**"
+    else:
+        titulo_embed = f"# 🩸 FICHA DE ENCOMENDA\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**"
+        descricao = f"> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n> 👤 **RESPONSÁVEL:** `{vendedor_nome}`\n> 🏢 **DESTINO:** `{org_nome}`"
+        status_inicial = "🔴 **AGUARDANDO PAGAMENTO**"
 
+    embed = discord.Embed(
+        title="",
+        description=f"{titulo_embed}\n\n{descricao}",
+        color=cor,
+        timestamp=agora()
+    )
+    embed.set_author(name=f"{emoji_org} VDR 442 • LOGÍSTICA DE VENDAS", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+    embed.description += "\n\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+
+    # Carga
+    carga_texto = ""
+    if pt > 0: carga_texto += f"+ {fmt_num(pt)} PT ({pt//50} pacotes)\n"
+    if sub > 0: carga_texto += f"+ {fmt_num(sub)} SUB ({sub//50} pacotes)\n"
+    
+    embed.description += f"\n🎯 **CARREGAMENTO**\n```diff\n{carga_texto.strip()}\n```\n"
+
+    # Valor
+    valor_total = (pt * 50) + (sub * 90)
+    embed.description += f"💰 **TRANSAÇÃO**\n```fix\n{formatar_dinheiro(valor_total)}\n```\n"
+
+    embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+
+    # Resumo de entregas
     if total_entregas > 1 and entregas_lista:
         resumo = ""
         for i, e in enumerate(entregas_lista, 1):
-            status = "✅" if i < entrega_atual else "🔴" if i == entrega_atual else "⏳"
-            resumo += f"{status} Entrega {i}/{total_entregas} ({e['data']}): PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])}\n"
-        embed.add_field(name=f"{Emojis.ESTATISTICA} RESUMO DAS ENTREGAS", value=f"```yaml\n{resumo}\n```", inline=False)
-        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+            if i < entrega_atual: status = "✅"
+            elif i == entrega_atual: status = "🔴"
+            else: status = "⏳"
+            resumo += f"{status} {i}/{total_entregas} - {e['data']} (PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])})\n"
+        embed.description += f"\n📊 **RESUMO DAS ENTREGAS**\n```yaml\n{resumo.strip()}\n```\n"
 
-    embed.add_field(name=f"{Emojis.USER} VENDEDOR", value=f"```yaml\n{vendedor_nome}\n```", inline=True)
-    embed.add_field(name=f"{Emojis.LOCAL} ORGANIZAÇÃO", value=f"```yaml\n{emoji_org} {org_nome}\n```", inline=True)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name=f"🔫 PT", value=f"```yaml\n{fmt_num(pt)} munições\n📦 {pacotes_pt} pacotes\n```", inline=True)
-    embed.add_field(name=f"🔫 SUB", value=f"```yaml\n{fmt_num(sub)} munições\n📦 {pacotes_sub} pacotes\n```", inline=True)
-    
-    valor_total = (pt * 50) + (sub * 90)
-    embed.add_field(name=f"{Emojis.FINANCEIRO} VALOR TOTAL", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    if observacoes:
+        embed.description += f"📝 **OBSERVAÇÕES**\n> {observacoes}\n\n"
 
-    embed.add_field(name="📅 DATA DA ENTREGA", value=f"```yaml\n{data_entrega_atual}\n```", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name="📌 STATUS DO PEDIDO", value="```yaml\n📦 A Entregar\n⏳ Pagamento pendente\n```", inline=False)
+    embed.description += f"📅 **DATA:** {entregas_lista[entrega_atual-1]['data'] if entregas_lista else agora().strftime('%d/%m/%Y')}\n"
+    embed.description += f"🚦 **STATUS:** {status_inicial}\n\n"
 
-    if observacoes: embed.add_field(name=f"{Emojis.ARQUIVO} OBSERVAÇÕES", value=f"```yaml\n{observacoes}\n```", inline=False)
-
-    if entrega_id: embed.set_footer(text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas} • ID: {entrega_id}", icon_url=bot.user.display_avatar.url if bot.user else None)
-    else: embed.set_footer(text=f"🛡 Sistema de Encomendas • VDR 442 • Entrega {entrega_atual}/{total_entregas}", icon_url=bot.user.display_avatar.url if bot.user else None)
+    footer_text = f"🛡️ VDR 442 • Gerado por {vendedor_nome} • {agora().strftime('%d/%m/%Y às %H:%M')}"
+    if entrega_id:
+        footer_text += f" • ID: {entrega_id}"
+    embed.set_footer(text=footer_text, icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = StatusView(entrega_id=entrega_id, total_entregas=total_entregas, entrega_atual=entrega_atual, valor_total=valor_total, pt=pt, sub=sub, pedido_numero=pedido_numero)
 
@@ -10951,54 +10885,50 @@ async def enviar_painel_gerenciamento_producao():
                 comissoes_texto = "⚪ Nenhuma comissão pendente no momento.\n"
 
     embed = discord.Embed(
-        title="🏭 ── GERENCIAMENTO DE PRODUÇÃO ── 🏭",
-        description="**VDR 442 • Controle de Insumos e Galpões**\n*Aqui você gerencia o estoque, aluguéis e relatórios*",
-        color=0xE67E22,
+        title="",
+        description=(
+            "# 🏭 GERENCIAMENTO DE PRODUÇÃO\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `CONTROLE DE INSUMOS`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `GERÊNCIA`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+        ),
+        color=0xE67E22, # Laranja
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • LOGÍSTICA", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
 
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name="⏱️ TEMPO DE ALUGUEL DOS GALPÕES", value=f"```yaml\n{galpoes_ativos_texto.strip()}\n```", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    embed.description += f"### ⏱️ TEMPO DE ALUGUEL\n```yaml\n{galpoes_ativos_texto.strip()}\n```\n\n"
+    embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
     
-    embed.add_field(
-        name="🔫 ESTOQUE DE MUNIÇÕES",
-        value=f"```yaml\nPT:  {fmt_num(estoque_municoes['PT'])} pacotes\nSUB: {fmt_num(estoque_municoes['SUB'])} pacotes\n```",
-        inline=True
-    )
-    embed.add_field(
-        name="💊 ESTOQUE DE INSUMOS",
-        value=f"```yaml\n🧨 Pólvora:    {fmt_num(estoque_polvora)} un\n💊 Cápsulas:   {fmt_num(estoque_insumos['capsulas'])} un\n📦 Embalagens: {fmt_num(estoque_insumos['embalagens'])} un\n```",
-        inline=True
-    )
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    embed.description += f"### 📦 ESTOQUE DE MUNIÇÕES\n```diff\n+ PT:  {fmt_num(estoque_municoes['PT'])} pacotes\n+ SUB: {fmt_num(estoque_municoes['SUB'])} pacotes\n```\n"
+    embed.description += f"### 💊 ESTOQUE DE INSUMOS\n```fix\n🧨 Pólvora:    {fmt_num(estoque_polvora)} un\n💊 Cápsulas:   {fmt_num(estoque_insumos['capsulas'])} un\n📦 Embalagens: {fmt_num(estoque_insumos['embalagens'])} un\n```\n\n"
     
-    # Trunca se passar do limite do Discord (1024)
+    embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+    
     prods_hoje_texto = prods_hoje_texto[:1000] + "..." if len(prods_hoje_texto) > 1000 else prods_hoje_texto
     prods_mes_texto = prods_mes_texto[:1000] + "..." if len(prods_mes_texto) > 1000 else prods_mes_texto
     comissoes_texto = comissoes_texto[:1000] + "..." if len(comissoes_texto) > 1000 else comissoes_texto
 
-    embed.add_field(name=f"📊 PRODUÇÕES DE HOJE ({agora().strftime('%d/%m')})", value=f"```yaml\n{prods_hoje_texto.strip()}\n```", inline=False)
-    embed.add_field(name=f"📅 PRODUÇÕES DO MÊS ({agora().strftime('%B').capitalize()})", value=f"```yaml\n{prods_mes_texto.strip()}\n```", inline=False)
+    embed.description += f"### 📊 PRODUÇÕES DE HOJE ({agora().strftime('%d/%m')})\n```yaml\n{prods_hoje_texto.strip()}\n```\n\n"
+    embed.description += f"### 📅 PRODUÇÕES DO MÊS\n```yaml\n{prods_mes_texto.strip()}\n```\n\n"
     
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name="💸 COMISSÕES A PAGAR (R$ 1,00/caps)", value=f"```yaml\n{comissoes_texto.strip()}\n```", inline=False)
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+    embed.description += f"### 💸 COMISSÕES A PAGAR (R$ 1,00/caps)\n```yaml\n{comissoes_texto.strip()}\n```\n"
+    
+    embed.set_footer(text=f"🛡️ VDR 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = GerenciamentoProducaoView()
     
     try:
         async for msg in canal.history(limit=20):
-            if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
-                if "GERENCIAMENTO DE PRODUÇÃO" in msg.embeds[0].title:
-                    try:
-                        await msg.delete()
-                    except:
-                        pass
+            if msg.author == bot.user and msg.embeds and "GERENCIAMENTO DE PRODUÇÃO" in msg.embeds[0].description:
+                try:
+                    await msg.delete()
+                except:
+                    pass
         await canal.send(embed=embed, view=view)
     except Exception as e:
         logger.error(f"❌ Erro ao enviar painel de gerenciamento: {e}")
@@ -11359,22 +11289,22 @@ async def acompanhar_producao(pid):
                 continue
             agora_dt = agora()
             
-            # ─── LÓGICA DO AVISO DE 10 MINUTOS ───
+            # ─── LÓGICA DO AVISO DE 15 MINUTOS ───
             tempo_restante_seg = (fim - agora_dt).total_seconds()
-            if 0 < tempo_restante_seg <= 600 and not prod.get("dm_10min_enviado"):
+            if 0 < tempo_restante_seg <= 900 and not prod.get("dm_10min_enviado"): # 900 segundos = 15 minutos
                 try:
                     membro = await bot.fetch_user(prod["autor"])
                     if membro:
                         await membro.send(
                             f"⚠️ **AVISO DE PRODUÇÃO** ⚠️\n\n"
-                            f"Sua produção no galpão **{prod['galpao']}** vai terminar em **10 minutos**!\n\n"
+                            f"Sua produção no galpão **{prod['galpao']}** vai terminar em **15 minutos**!\n\n"
                             f"⏰ **Não esqueça de apertar o botão da 2ª Task quando o tempo acabar!**"
                         )
                     prod["dm_10min_enviado"] = True
                     await salvar_producao(pid, prod)
-                    logger.info(f"📩 DM de 10 min enviado para {prod['autor']} (Produção {pid})")
+                    logger.info(f"📩 DM de 15 min enviado para {prod['autor']} (Produção {pid})")
                 except Exception as e:
-                    logger.error(f"❌ Erro ao enviar DM de 10 min para {prod['autor']}: {e}")
+                    logger.error(f"❌ Erro ao enviar DM de 15 min para {prod['autor']}: {e}")
 
             if agora_dt >= fim:
                 canal = bot.get_channel(prod["canal_id"])
@@ -11478,90 +11408,64 @@ async def finalizar_producao(pid, msg, prod):
         galpao = prod["galpao"]
         qtd_galpoes = prod.get("qtd_galpoes", 1)
         polvora_por_galpao = prod.get("polvora_por_galpao", polvora_total // qtd_galpoes if qtd_galpoes > 0 else polvora_total)
-        
-        if "NORTE" in galpao.upper():
-            base_por_galpao = 1777 if segunda else 1688
-        elif "SUL" in galpao.upper():
-            base_por_galpao = 1616 if segunda else 1608
-        else:
-            base_por_galpao = 1777 if segunda else 1688
-            
-        capsulas_por_galpao = (base_por_galpao * polvora_por_galpao) // 400
-        capsulas_total = capsulas_por_galpao * qtd_galpoes
-        peso_total = capsulas_total * 0.05
+
+        if "NORTE" in galpao.upper(): base = 1777 if segunda else 1688
+        elif "SUL" in galpao.upper(): base = 1618 if segunda else 1608
+        else: base = 1777 if segunda else 1688
+        caps_por_galpao = (base * polvora_por_galpao) // 400
+        caps_total = caps_por_galpao * qtd_galpoes
+        peso_total = caps_total * 0.05
 
         pool = await get_pool()
         if pool:
             async with pool.acquire() as conn:
-                # Salva no banco com a nova coluna segunda_task
-                await conn.execute(
-                    "INSERT INTO producoes_finalizadas (user_id, capsulas, data, polvora, galpao, segunda_task) VALUES ($1, $2, $3, $4, $5, $6)",
-                    str(prod["autor"]), capsulas_total, agora_db(), polvora_total, f"{galpao} ({qtd_galpoes} galpões)", bool(segunda)
-                )
-                await conn.execute("UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1", capsulas_total)
-                await conn.execute("INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) VALUES ($1, $2, $3, $4)", "capsulas", capsulas_total, str(prod["autor"]), f"Produção do {galpao} - {qtd_galpoes} galpões - {polvora_total} pólvora")
+                await conn.execute("INSERT INTO producoes_finalizadas (user_id, capsulas, data, polvora, galpao, segunda_task) VALUES ($1, $2, $3, $4, $5, $6)",
+                    str(prod["autor"]), caps_total, agora_db(), polvora_total, f"{galpao} ({qtd_galpoes} galpões)", bool(segunda))
+                await conn.execute("UPDATE estoque_capsulas SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1", caps_total)
+                await conn.execute("INSERT INTO entrada_insumos (tipo, quantidade, registrado_por, obs) VALUES ($1, $2, $3, $4)", "capsulas", caps_total, str(prod["autor"]), f"Produção {galpao}")
 
-        try:
-            await _registrar_atividade(prod["autor"], "producao")
-        except Exception as e:
-            logger.error(f"❌ Erro ao registrar atividade de produção: {e}")
+        try: await _registrar_atividade(prod["autor"], "producao")
+        except: pass
 
         guild = bot.get_guild(GUILD_ID)
         autor_apelido = await pegar_apelido(prod["autor"], guild)
-        
-        # ─── DELETA A MENSAGEM DO CANAL (Conforme solicitado) ───
+
         if msg:
-            try:
-                await msg.delete()
-                logger.info(f"🗑️ Mensagem da produção {pid} deletada do canal.")
-            except Exception as e:
-                logger.error(f"❌ Erro ao deletar mensagem da produção {pid}: {e}")
+            try: await msg.delete()
+            except: pass
 
         await deletar_producao(pid)
-        if pid in producoes_tasks:
-            del producoes_tasks[pid]
-
-        try:
-            await registrar_auditoria(
-                user_id=str(prod["autor"]),
-                acao=AuditAcao.FINALIZAR_PRODUCAO,
-                modulo=AuditModulo.PRODUCAO,
-                item_id=pid,
-                item_nome=f"{galpao} — {autor_apelido}",
-                dados_antes={"polvora": polvora_total, "qtd_galpoes": qtd_galpoes},
-                dados_depois={"capsulas_produzidas": capsulas_total, "capsulas_por_galpao": capsulas_por_galpao, "peso_kg": round(peso_total, 2), "segunda_task": bool(segunda)},
-                detalhes=f"Produção finalizada — {fmt_num(capsulas_total)} cápsulas produzidas"
-            )
-        except Exception as e:
-            logger.error(f"❌ Erro ao auditar finalização de produção: {e}")
+        if pid in producoes_tasks: del producoes_tasks[pid]
 
         canal_bau = bot.get_channel(CANAL_BAU_GALPAO_ID)
         if canal_bau:
-            embed_bau = discord.Embed(title="🏭 ── PRODUÇÃO FINALIZADA ── 🏭", description="🔫 Sistema de Produção • VDR 442", color=0x2ecc71, timestamp=agora())
+            embed_bau = discord.Embed(
+                title="",
+                description=(
+                    f"# 🏭 PRODUÇÃO FINALIZADA\n"
+                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                    f"> 🏭 **Galpão:** `{galpao}`\n"
+                    f"> 📦 **Qtd:** `{qtd_galpoes} galpão(ões)`\n"
+                    f"> 💣 **Pólvora:** `{polvora_total}`\n"
+                    f"> 👤 **Por:** `{autor_apelido}`\n\n"
+                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                    f"### 💊 RESULTADO\n"
+                    f"```diff\n+ {fmt_num(caps_total)} cápsulas\n+ {fmt_num(caps_por_galpao)} por galpão\n```\n"
+                ),
+                color=0x2ECC71, timestamp=agora()
+            )
+            embed_bau.set_author(name="🕴️ VDR 442 • PRODUÇÃO", icon_url=bot.user.display_avatar.url if bot.user else None)
             embed_bau.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-            embed_bau.set_author(name="🛡 Vida Rasa 442 • Produção Concluída", icon_url=bot.user.display_avatar.url if bot.user else None)
-            embed_bau.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed_bau.add_field(name="🏭 GALPÃO", value=f"```yaml\n{galpao}\n```", inline=True)
-            embed_bau.add_field(name="🏭 QUANTIDADE", value=f"```yaml\n{qtd_galpoes} galpão(ões)\n```", inline=True)
-            embed_bau.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed_bau.add_field(name="💊 CÁPSULAS PRODUZIDAS", value=f"```yaml\n{fmt_num(capsulas_total)} unidades\n```", inline=True)
-            embed_bau.add_field(name="📦 POR GALPÃO", value=f"```yaml\n{fmt_num(capsulas_por_galpao)} cápsulas\n```", inline=True)
-            embed_bau.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed_bau.add_field(name="💣 PÓLVORA TOTAL", value=f"```yaml\n{polvora_total}\n```", inline=True)
-            embed_bau.add_field(name="👤 PRODUZIDO POR", value=f"```yaml\n{autor_apelido}\n```", inline=True)
-            embed_bau.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
             if segunda:
                 segunda_apelido = await pegar_apelido(segunda["user"], guild)
-                embed_bau.add_field(name="✅ SEGUNDA TASK", value=f"```yaml\nConcluída por: {segunda_apelido}\n```", inline=False)
-            embed_bau.add_field(name="✅ STATUS", value="💊 **Cápsulas adicionadas ao estoque de insumos!**", inline=False)
-            embed_bau.set_footer(text=f"🛡 Vida Rasa 442 • Finalizado em {agora().strftime('%d/%m/%Y %H:%M:%S')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+                embed_bau.description += f"\n> ✅ **2ª Task:** `{segunda_apelido}`\n"
+            embed_bau.description += f"\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n> 💊 **Cápsulas no estoque!**"
+            embed_bau.set_footer(text=f"🛡️ VDR 442 • Finalizado em {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
             await canal_bau.send(embed=embed_bau)
-        
+
         await enviar_painel_fabricacao()
         await enviar_painel_gerenciamento_producao()
-        
-    except Exception as e:
-        logger.error(f"❌ ERRO ao finalizar produção {pid}: {e}")
+    except Exception as e: logger.error(f"❌ ERRO finalizar produção {pid}: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_heartbeat_producoes
 # ────────────────────────────────────────────────────────────────────────────────
@@ -11695,41 +11599,44 @@ async def enviar_painel_fabricacao():
         return
 
     embed = discord.Embed(
-        title="🏭 ── CENTRAL DE FABRICAÇÃO ── 🏭",
+        title="",
         description=(
-            "# INSTRUÇÕES DE PRODUÇÃO\n\n"
-            "**1️⃣ ESCOLHA O GALPÃO**\n"
-            "Clique em **🏭 Galpões Norte** ou **🏭 Galpões Sul**.\n\n"
-            
-            "**2️⃣ INFORME OS DADOS**\n"
-            "Coloque quantos galpões (1, 2 ou 3) e a quantidade de pólvora por galpão.\n\n"
-
-            "**3️⃣ CONFIRMAÇÃO**\n"
-            "O bot vai te mostrar o **peso estimado** de 1 galpão (com e sem 2ª task). Confirme e a produção começará!\n\n"
-
-            "**4️⃣ ACOMPANHE O TEMPO**\n"
-            "O tempo de produção varia conforme os galpões (Norte 65m / Sul 130m).\n"
-            "Você receberá um **Aviso no DM** quando faltarem **10 minutos** para acabar.\n\n"
-
-            "**5️⃣ FINALIZE**\n"
-            "Quando o tempo acabar, o bot vai liberar as cápsulas automaticamente no estoque de insumos.\n\n"
-            
-            "⚠️ **Atenção:** Se for usar a 2ª task, aperte o botão no aviso da produção quando estiver pronto.\n\n"
-            "👉 **Para gerenciar estoques e aluguéis, use o canal de Gerenciamento de Produção.**"
+            "# 🏭 CENTRAL DE FABRICAÇÃO\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `PRODUÇÃO VDR 442`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `MEMBROS`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📋 INSTRUÇÕES DE PRODUÇÃO\n"
+            "```yaml\n"
+            "1️⃣ ESCOLHA O GALPÃO\n"
+            "Clique em Galpões Norte ou Galpões Sul.\n\n"
+            "2️⃣ INFORME OS DADOS\n"
+            "Coloque quantos galpões (1, 2 ou 3) e a pólvora por galpão.\n\n"
+            "3️⃣ CONFIRMAÇÃO\n"
+            "O bot vai te mostrar o peso estimado de 1 galpão (com e sem 2ª task).\n\n"
+            "4️⃣ ACOMPANHE O TEMPO\n"
+            "Norte (65m) / Sul (130m). Você recebe um aviso no DM faltando 10 min.\n\n"
+            "5️⃣ FINALIZE\n"
+            "As cápsulas caem no estoque automaticamente.\n"
+            "```\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> ⚠️ **Atenção:** Se for usar a 2ª task, aperte o botão no aviso da produção quando estiver pronto.\n"
+            "> 👉 *Para gerenciar estoques e aluguéis, use o canal de Gerenciamento de Produção.*"
         ),
-        color=0xE67E22,
+        color=0xE67E22, # Laranja
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • LOGÍSTICA", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡️ VDR 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = FabricacaoView()
     
-    # Deleta painéis antigos e envia o novo
     try:
         async for msg in canal.history(limit=20):
             if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
-                if "CENTRAL DE FABRICAÇÃO" in msg.embeds[0].title:
+                if "CENTRAL DE FABRICAÇÃO" in msg.embeds[0].description:
                     try:
                         await msg.delete()
                     except:
@@ -13033,19 +12940,25 @@ async def gerar_embed_caixa():
     movimentacoes = await buscar_movimentacoes_caixa(5)
 
     embed = discord.Embed(
-        title="💰 ── CAIXA DA FACÇÃO ── 💰",
-        description="**VDR 442 • Gestão Financeira**\n*Acompanhe o saldo e as últimas movimentações*",
-        color=0x2ECC71,
+        title="",
+        description=(
+            "# 💰 CAIXA DA FACÇÃO\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `GESTÃO FINANCEIRA`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `GERÊNCIA`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+        ),
+        color=0x2ECC71, # Verde
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
 
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    embed.description += f"### 🟥 SALDO SUJO\n```diff\n- {formatar_dinheiro(valores['sujo'])}\n```\n"
+    embed.description += f"### 🟩 SALDO LIMPO\n```diff\n+ {formatar_dinheiro(valores['limpo'])}\n```\n\n"
 
-    embed.add_field(name="🟥 SALDO SUJO", value=f"```yaml\n{formatar_dinheiro(valores['sujo'])}\n```", inline=True)
-    embed.add_field(name="🟩 SALDO LIMPO", value=f"```yaml\n{formatar_dinheiro(valores['limpo'])}\n```", inline=True)
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
+    embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
 
     if movimentacoes:
         texto_movs = ""
@@ -13070,11 +12983,11 @@ async def gerar_embed_caixa():
             texto_movs += f"{emoji_tipo} {tag} **{motivo[:30]}**\n"
             texto_movs += f"   └ {sinal}{formatar_dinheiro(valor)} • {data.strftime('%d/%m %H:%M')} • {nome_autor}\n\n"
 
-        embed.add_field(name="📊 ÚLTIMAS 5 MOVIMENTAÇÕES", value=texto_movs[:1024], inline=False)
+        embed.description += f"### 📊 ÚLTIMAS 5 MOVIMENTAÇÕES\n```yaml\n{texto_movs[:1000].strip()}\n```\n"
     else:
-        embed.add_field(name="📊 ÚLTIMAS 5 MOVIMENTAÇÕES", value="```yaml\nNenhuma movimentação registrada\n```", inline=False)
+        embed.description += f"### 📊 ÚLTIMAS 5 MOVIMENTAÇÕES\n```yaml\nNenhuma movimentação registrada\n```\n"
 
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡️ VDR 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
     return embed
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13319,40 +13232,50 @@ async def verificar_parcelas_vencendo():
                 parcela_id = parcela["id"]
 
                 if tipo == "receber":
+                    # ─── NOVO VISUAL FOGO E SANGUE ───
                     embed = discord.Embed(
-                        title="🚨 ── PARCELA A RECEBER ── 🚨",
-                        description=f"📅 Vence hoje: {hoje.strftime('%d/%m/%Y')}",
-                        color=0xE74C3C,
+                        title="",
+                        description=(
+                            f"# 🚨 PARCELA A RECEBER\n"
+                            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                            f"> 📅 **Vence hoje:** `{hoje.strftime('%d/%m/%Y')}`\n"
+                            f"> 🏢 **Cobrar de:** `{nome_faccao or '—'}`\n"
+                            f"> 🆔 **Passaporte:** `{passaporte or '—'}`\n"
+                            f"> 📱 **Telefone:** `{telefone or '—'}`\n\n"
+                            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                            f"> 💵 **Valor da parcela:** `{formatar_dinheiro(valor)}`\n"
+                            f"> 📊 **Parcela:** `{numero_parcela}/{total_parcelas}`\n"
+                            f"> 💰 **Total do empréstimo:** `{formatar_dinheiro(valor_total)}`\n\n"
+                            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                            f"> 📌 **STATUS:** `🔴 COBRANÇA PENDENTE`"
+                        ),
+                        color=0xE74C3C, # Vermelho
                         timestamp=agora()
                     )
-                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                    embed.add_field(name="🏢 COBRAR DE", value=f"```yaml\n{nome_faccao or '—'}\n```", inline=True)
-                    embed.add_field(name="🆔 Passaporte", value=f"```yaml\n{passaporte or '—'}\n```", inline=True)
-                    embed.add_field(name="📱 Telefone", value=f"```yaml\n{telefone or '—'}\n```", inline=True)
-                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                    embed.add_field(name="💵 Valor da parcela", value=f"```yaml\n{formatar_dinheiro(valor)}\n```", inline=True)
-                    embed.add_field(name="📊 Parcela", value=f"```yaml\n{numero_parcela}/{total_parcelas}\n```", inline=True)
-                    embed.add_field(name="💰 Total do empréstimo", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=True)
-                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                    embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id}")
+                    embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
+                    embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id}", icon_url=bot.user.display_avatar.url if bot.user else None)
                 else:
+                    # ─── NOVO VISUAL FOGO E SANGUE ───
                     embed = discord.Embed(
-                        title="🚨 ── PARCELA A PAGAR ── 🚨",
-                        description=f"📅 Vence hoje: {hoje.strftime('%d/%m/%Y')}",
-                        color=0xE67E22,
+                        title="",
+                        description=(
+                            f"# 🚨 PARCELA A PAGAR\n"
+                            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                            f"> 📅 **Vence hoje:** `{hoje.strftime('%d/%m/%Y')}`\n"
+                            f"> 📤 **Pagar para:** `{nome_faccao or '—'}`\n"
+                            f"> 📱 **Telefone:** `{telefone or '—'}`\n\n"
+                            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                            f"> 💵 **Valor da parcela:** `{formatar_dinheiro(valor)}`\n"
+                            f"> 📊 **Parcela:** `{numero_parcela}/{total_parcelas}`\n"
+                            f"> 💰 **Total do empréstimo:** `{formatar_dinheiro(valor_total)}`\n\n"
+                            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                            f"> 📌 **STATUS:** `🟠 PAGAMENTO PENDENTE`"
+                        ),
+                        color=0xE67E22, # Laranja
                         timestamp=agora()
                     )
-                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                    embed.add_field(name="📤 PAGAR PARA", value=f"```yaml\n{nome_faccao or '—'}\n```", inline=True)
-                    embed.add_field(name="📱 Telefone", value=f"```yaml\n{telefone or '—'}\n```", inline=True)
-                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                    embed.add_field(name="💵 Valor da parcela", value=f"```yaml\n{formatar_dinheiro(valor)}\n```", inline=True)
-                    embed.add_field(name="📊 Parcela", value=f"```yaml\n{numero_parcela}/{total_parcelas}\n```", inline=True)
-                    embed.add_field(name="💰 Total do empréstimo", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=True)
-                    if observacoes:
-                        embed.add_field(name="📝 Obs", value=f"```yaml\n{observacoes[:200]}\n```", inline=False)
-                    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-                    embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id}")
+                    embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
+                    embed.set_footer(text=f"🛡 Vida Rasa 442 • Empréstimo #{emprestimo_id}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
                 view = MarcarParcelaPagaView(parcela_id, tipo)
 
@@ -13372,13 +13295,6 @@ async def verificar_parcelas_vencendo():
         logger.info(f"✅ {len(parcelas)} avisos de parcela enviados.")
     except Exception as e:
         logger.error(f"❌ Erro ao verificar parcelas vencendo: {e}")
-
-@tasks.loop(hours=24)
-async def verificar_parcelas_diario():
-    try:
-        await verificar_parcelas_vencendo()
-    except Exception as e:
-        logger.error(f"❌ Loop parcelas: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: gerar_embed_emprestimos
@@ -13496,13 +13412,26 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo (A Receber)"
 
         await enviar_painel_emprestimos()
 
-        embed = discord.Embed(title="✅ EMPRÉSTIMO CRIADO", description=f"📋 **#{eid:04d}**", color=0x2ECC71, timestamp=agora())
-        embed.add_field(name="🏢", value=self.nome_faccao.value.strip().upper(), inline=True)
-        embed.add_field(name="💰", value=formatar_dinheiro(v), inline=True)
-        embed.add_field(name="📈 Juros", value=f"{j}%", inline=True)
-        embed.add_field(name="💵 Total", value=formatar_dinheiro(vt), inline=True)
-        embed.add_field(name="🔢 Parcelas", value=f"{parc}x {formatar_dinheiro(vp)}", inline=True)
-        embed.add_field(name="⏰", value=freq.capitalize(), inline=True)
+        # ─── NOVO VISUAL FOGO E SANGUE ───
+        embed = discord.Embed(
+            title="",
+            description=(
+                f"# ✅ EMPRÉSTIMO CRIADO\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                f"> 🏢 **Facção:** `{self.nome_faccao.value.strip().upper()}`\n"
+                f"> 💰 **Valor Emprestado:** `{formatar_dinheiro(v)}`\n"
+                f"> 📈 **Juros:** `{j}%`\n"
+                f"> 💵 **Total a Receber:** `{formatar_dinheiro(vt)}`\n"
+                f"> 🔢 **Parcelas:** `{parc}x de {formatar_dinheiro(vp)}`\n"
+                f"> ⏰ **Frequência:** `{freq.capitalize()}`\n\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                f"> 📌 **STATUS:** `✅ REGISTRADO (A RECEBER)`"
+            ),
+            color=0x2ECC71,
+            timestamp=agora()
+        )
+        embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • ID: {eid:04d}", icon_url=bot.user.display_avatar.url if bot.user else None)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13565,14 +13494,26 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo (A Pagar)"):
         vp = vt // parc
         await enviar_painel_emprestimos()
 
-        embed = discord.Embed(title="✅ EMPRÉSTIMO CRIADO", description=f"📋 **#{eid:04d}**", color=0xE67E22, timestamp=agora())
-        embed.add_field(name="🏢", value=self.nome_faccao.value.strip().upper(), inline=True)
-        embed.add_field(name="💰 Recebido", value=formatar_dinheiro(vr), inline=True)
-        embed.add_field(name="💵 Total", value=formatar_dinheiro(vt), inline=True)
-        embed.add_field(name="🔢 Parcelas", value=f"{parc}x {formatar_dinheiro(vp)}", inline=True)
-        embed.add_field(name="⏰", value=freq.capitalize(), inline=True)
+        # ─── NOVO VISUAL FOGO E SANGUE ───
+        embed = discord.Embed(
+            title="",
+            description=(
+                f"# ✅ EMPRÉSTIMO CRIADO\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                f"> 🏢 **Facção:** `{self.nome_faccao.value.strip().upper()}`\n"
+                f"> 💰 **Valor Recebido:** `{formatar_dinheiro(vr)}`\n"
+                f"> 💵 **Total a Pagar:** `{formatar_dinheiro(vt)}`\n"
+                f"> 🔢 **Parcelas:** `{parc}x de {formatar_dinheiro(vp)}`\n"
+                f"> ⏰ **Frequência:** `{freq.capitalize()}`\n\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                f"> 📌 **STATUS:** `✅ REGISTRADO (A PAGAR)`"
+            ),
+            color=0xE67E22,
+            timestamp=agora()
+        )
+        embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.set_footer(text=f"🛡 Vida Rasa 442 • ID: {eid:04d}", icon_url=bot.user.display_avatar.url if bot.user else None)
         await interaction.followup.send(embed=embed, ephemeral=True)
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MarcarParcelaPagaView
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13631,9 +13572,15 @@ class MarcarParcelaPagaView(discord.ui.View):
         await enviar_painel_emprestimos()
         await enviar_painel_caixa()
 
+        # ─── NOVO VISUAL FOGO E SANGUE ───
         embed = interaction.message.embeds[0]
+        
+        # Atualiza o visual da mensagem original
         embed.color = 0x2ECC71
-        embed.title = f"✅ {embed.title.replace('🚨','').replace('──','').strip()}"
+        embed.title = ""
+        embed.description = embed.description.replace("🚨 PARCELA A RECEBER", "✅ PARCELA RECEBIDA").replace("🚨 PARCELA A PAGAR", "✅ PARCELA PAGA")
+        embed.description = embed.description.replace("🔴 COBRANÇA PENDENTE", "✅ PAGO").replace("🟠 PAGAMENTO PENDENTE", "✅ PAGO")
+        
         embed.add_field(
             name="✅ PAGO POR",
             value=f"```yaml\n{interaction.user.display_name}\n📅 {agora().strftime('%d/%m/%Y %H:%M')}\n```",
@@ -13646,6 +13593,7 @@ class MarcarParcelaPagaView(discord.ui.View):
             f"✅ **Parcela paga!**\n💵 {formatar_dinheiro(p['valor'])}",
             ephemeral=True
         )
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_emprestimos
@@ -15926,10 +15874,24 @@ class ConfirmarDepositoView(discord.ui.View):
         await carregar_metas_cache()
         await atualizar_embed_meta(self.user_id)
 
-        embed = interaction.message.embeds[0]
-        embed.color = 0x2ECC71
-        embed.title = "✅ DEPÓSITO CONFIRMADO"
-        embed.add_field(name="👤 Confirmado por", value=interaction.user.mention, inline=False)
+        embed = discord.Embed(
+            title="",
+            description=(
+                f"# ✅ DEPÓSITO CONFIRMADO\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                f"> 👤 **Membro:** <@{self.user_id}>\n"
+                f"> 💰 **Tipo:** `{self.tipo.capitalize()}`\n"
+                f"> 💵 **Valor:** `{formatar_dinheiro(self.valor) if self.tipo == 'dinheiro' else fmt_num(self.valor) + ' un'}`\n"
+                f"> 👑 **Confirmado por:** {interaction.user.mention}\n\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                f"> 📌 **STATUS:** `✅ SUCESSO`"
+            ),
+            color=0x2ECC71,
+            timestamp=agora()
+        )
+        embed.set_author(name="🕴️ VDR 442 • METAS", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.set_footer(text=f"🛡️ VDR 442 • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+        
         await interaction.message.edit(embed=embed, view=None)
         await interaction.followup.send(f"✅ Depósito de **{self.tipo}** confirmado!", ephemeral=True)
 
@@ -15943,10 +15905,24 @@ class ConfirmarDepositoView(discord.ui.View):
                 await interaction.followup.send("⚠️ Este depósito já foi processado!", ephemeral=True); return
             await conn.execute("UPDATE metas_confirmacoes SET status = 'rejeitado', confirmado_por = $1, data_confirmacao = NOW() WHERE id = $2", str(interaction.user.id), self.confirmacao_id)
 
-        embed = interaction.message.embeds[0]
-        embed.color = 0xE74C3C
-        embed.title = "❌ DEPÓSITO REJEITADO"
-        embed.add_field(name="👤 Rejeitado por", value=interaction.user.mention, inline=False)
+        embed = discord.Embed(
+            title="",
+            description=(
+                f"# ❌ DEPÓSITO REJEITADO\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                f"> 👤 **Membro:** <@{self.user_id}>\n"
+                f"> 💰 **Tipo:** `{self.tipo.capitalize()}`\n"
+                f"> 💵 **Valor:** `{formatar_dinheiro(self.valor) if self.tipo == 'dinheiro' else fmt_num(self.valor) + ' un'}`\n"
+                f"> 👑 **Rejeitado por:** {interaction.user.mention}\n\n"
+                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                f"> 📌 **STATUS:** `❌ REJEITADO`"
+            ),
+            color=0xC0392B,
+            timestamp=agora()
+        )
+        embed.set_author(name="🕴️ VDR 442 • METAS", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.set_footer(text=f"🛡️ VDR 442 • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+        
         await interaction.message.edit(embed=embed, view=None)
         await interaction.followup.send("❌ Depósito rejeitado.", ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
@@ -18721,45 +18697,38 @@ async def enviar_painel_relatorio_metas():
     if not canal: return
 
     embed = discord.Embed(
-        title="📊 ── GERENCIAMENTO DE METAS ── 📊",
-        description="**VDR 442 • Controle Semanal**\n*Feche as metas e gere relatórios para a facção*",
-        color=0x2ECC71,
+        title="",
+        description=(
+            "# 📊 GERENCIAMENTO DE METAS\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `CONTROLE SEMANAL`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `GERÊNCIA`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 🔒 FECHAR METAS\n"
+            "> Clique no botão verde para fechar a **semana anterior** (Seg-Dom).\n"
+            "> ⚠️ Salva no histórico e **zera os valores**.\n\n"
+            "### 📊 GERAR RELATÓRIO\n"
+            "> Consulte o histórico de metas já fechadas.\n\n"
+            "### ⚙️ CONFIGURAR METAS POR CARGO\n"
+            "> Defina qual **tipo de meta** cada cargo deve cumprir (Dinheiro, Pólvora ou Sem Meta).\n\n"
+            "### 📋 FERRAMENTAS\n"
+            "> • Ver e limpar dívidas\n"
+            "> • Definir meta de soldado\n"
+        ),
+        color=0xC0392B, # Vermelho Sangue
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • METAS", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="🔒 FECHAR METAS (AUTOMÁTICO)",
-        value="Clique no botão verde para fechar a **semana anterior** (Segunda a Domingo).\n\n⚠️ **Aviso:** Isso salva no histórico e **zera os valores** no banco para a nova semana começar limpa.",
-        inline=False
-    )
-
-    embed.add_field(
-        name="📊 GERAR RELATÓRIO",
-        value="Clique no botão de relatório e informe as datas para consultar o histórico de metas já fechadas (não altera nada no banco).",
-        inline=False
-    )
-
-    embed.add_field(
-        name="📋 FERRAMENTAS EXTRAS",
-        value="Use os botões abaixo para:\n• Trocar o tipo da meta da semana\n• Ver e limpar dívidas\n• Definir a meta de soldado\n• Resetar horas da mecânica",
-        inline=False
-    )
-
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Sistema de Metas", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡️ VDR 442 • Sistema de Metas • {agora().strftime('%d/%m/%Y')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = discord.ui.View(timeout=None)
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharMetasAutomaticoButton())
-    view.add_item(RelatorioHorasButton())
-    view.add_item(TrocarTipoMetaButton())
+    view.add_item(ConfigurarMetaCargoButton())
     view.add_item(VerDividasButton())
-    view.add_item(ResetarHorasSemanaButton())
-    view.add_item(DefinirMetaSoldadoButton())
-    view.add_item(LimparDividasButton()) # O botão que você pediu
-
+    view.add_item(LimparDividasButton())
     await enviar_ou_atualizar_painel("painel_relatorio_metas", CANAL_RELATORIO_METAS_ID, embed, view)
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -21942,28 +21911,30 @@ async def enviar_painel_auditoria():
     if not canal: return
 
     embed = discord.Embed(
-        title="🔍 ── PAINEL DE AUDITORIA ── 🔍",
-        description="**VDR 442 • Rastreamento de Ações**\n*Consulte o histórico de tudo que acontece no bot*",
-        color=0x8E44AD,
+        title="",
+        description=(
+            "# 🔍 PAINEL DE AUDITORIA\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `RASTREAMENTO`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `GERÊNCIA`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📋 O QUE É AUDITADO?\n"
+            "```yaml\n"
+            "📊 Metas        ⏰ Horas (Mecânica)\n"
+            "🛒 Vendas       📦 Estoque\n"
+            "👥 Grupos       ⚔️ Ações\n"
+            "🏭 Produção\n"
+            "```\n\n"
+            "### 🔒 PERMISSÃO\n"
+            "> Apenas **ADM** ou **GERENTES** podem acessar os registros abaixo.\n"
+        ),
+        color=0x8E44AD, # Roxo
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • SEGURANÇA", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="📋 O QUE É AUDITADO?",
-        value="```yaml\n📊 Metas        ⏰ Horas (Mecânica)\n🛒 Vendas       📦 Estoque\n👥 Grupos       ⚔️ Ações\n🏭 Produção\n```",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🔒 PERMISSÃO",
-        value="Apenas **ADM** ou **GERENTES** podem acessar os registros abaixo.",
-        inline=False
-    )
-
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡️ VDR 442 • Sistema de Auditoria • {agora().strftime('%d/%m/%Y')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = PainelAuditoriaView()
     await enviar_ou_atualizar_painel("painel_auditoria", CANAL_AUDITORIA_ID, embed, view)
@@ -26446,23 +26417,31 @@ async def on_message(message: discord.Message):
             if anexo.content_type and (anexo.content_type.startswith("image/") or anexo.content_type == "application/pdf"):
                 canal_log = bot.get_channel(CANAL_LOG_DOACOES_ID)
                 if canal_log:
+                    # ─── NOVO VISUAL FOGO E SANGUE ───
                     embed = discord.Embed(
-                        title="🧾 COMPROVANTE DE DOAÇÃO RECEBIDO",
-                        description=f"O membro **{message.author.mention}** enviou um comprovante no DM.",
+                        title="",
+                        description=(
+                            f"# 🧾 COMPROVANTE DE DOAÇÃO\n"
+                            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                            f"> 👤 **Doador:** {message.author.mention}\n"
+                            f"> 🆔 **ID:** `{message.author.id}`\n"
+                            f"> 📎 **Arquivo:** [Clique para baixar]({anexo.url})\n\n"
+                            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                            f"> 📌 **AÇÃO:** Verifique no extrato bancário e confirme a doação."
+                        ),
                         color=0x2ECC71,
                         timestamp=agora()
                     )
-                    embed.add_field(name="👤 Usuário", value=f"{message.author.name} ({message.author.id})", inline=False)
-                    embed.add_field(name="📎 Arquivo", value=f"[Clique para baixar]({anexo.url})", inline=False)
                     embed.set_image(url=anexo.url)
-                    embed.set_footer(text="Verifique no extrato bancário e confirme a doação.")
+                    embed.set_author(name="🕴️ VDR 442 • DOAÇÕES", icon_url=bot.user.display_avatar.url if bot.user else None)
+                    embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
                     
                     await canal_log.send(embed=embed)
                     await message.reply("✅ **Comprovante recebido!**\nA gerência foi notificada e vai verificar o pagamento. Muito obrigado pela doação! ❤️")
                 else:
                     await message.reply("✅ **Comprovante recebido!**\nMas houve um erro interno ao notificar a gerência. Por favor, envie o print no canal de doações.")
                 return # Para o bot não processar mais nada dessa mensagem
-
+                
     if isinstance(canal, discord.TextChannel):
         # ═══════════════════════════════════════════════════════════════════════
         # PRIORIDADE 1: canal de meta (de um membro)
