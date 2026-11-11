@@ -4984,20 +4984,17 @@ class BauUnificadoModal(discord.ui.Modal):
                 await interaction.followup.send("❌ **Nenhum item válido encontrado!**", ephemeral=True)
                 return
 
-            registrar_manual = True
-            if self.tipo == "entrou" and _OCR_DISPONIVEL:
-                registrar_manual = False
-
-            if registrar_manual:
-                for item, quantidade in itens_dict.items():
-                    if self.tipo == "entrou":
-                        await atualizar_bau_estoque(item, quantidade, "adicionar")
-                    else:
-                        await atualizar_bau_estoque(item, quantidade, "remover")
-                    await registrar_movimentacao_bau(
-                        tipo=self.tipo, item_nome=item, quantidade=quantidade,
-                        membro=nome_membro, observacao=self.observacao.value if self.observacao.value else None
-                    )
+            # ─── ATUALIZA O BANCO DE DADOS DIRETAMENTE ───
+            for item, quantidade in itens_dict.items():
+                if self.tipo == "entrou":
+                    await atualizar_bau_estoque(item, quantidade, "adicionar")
+                else:
+                    await atualizar_bau_estoque(item, quantidade, "remover")
+                
+                await registrar_movimentacao_bau(
+                    tipo=self.tipo, item_nome=item, quantidade=quantidade,
+                    membro=nome_membro, observacao=self.observacao.value if self.observacao.value else None
+                )
 
             log_mensagens = []
             for item, quantidade in itens_dict.items():
@@ -5007,6 +5004,7 @@ class BauUnificadoModal(discord.ui.Modal):
                     log_mensagens.append(f"📤 **{nome_membro}** pegou **{quantidade}** {item}.")
             texto_log = "\n".join(log_mensagens)
 
+            # ─── ATUALIZA O PAINEL NO CANAL ───
             canal_bau = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
             if canal_bau:
                 try:
@@ -5016,40 +5014,49 @@ class BauUnificadoModal(discord.ui.Modal):
                 except Exception as e:
                     logger.error(f"❌ Erro ao atualizar painel do baú: {e}")
 
-            if self.tipo == "entrou":
-                canal_controle = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
-                if canal_controle:
-                    itens_texto = ', '.join([f'{item} ({qtd})' for item, qtd in itens_dict.items()])
-                    if _OCR_DISPONIVEL:
-                        aviso_print = f"📎 **{nome_membro}**, anexe o **print da tela do baú** aqui.\n🤖 O bot vai **ler os itens automaticamente**.\n📝 **Itens declarados:** {itens_texto}"
-                    else:
-                        aviso_print = f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n📝 **Itens:** {itens_texto}"
-                    
-                    try: msg_pedido = await canal_controle.send(aviso_print)
-                    except: msg_pedido = None
-
-                    if msg_pedido:
-                        bau_print_pendente[interaction.user.id] = {
-                            "log": texto_log, "canal_id": CANAL_BAU_LOG_ID,
-                            "msg_pedido_id": msg_pedido.id, "itens_declarados": itens_dict
-                        }
-                    await interaction.followup.send(f"✅ **Registro enviado!**\n📎 Anexe o print no canal <#{CANAL_BAU_MEMBROS_ID}>.", ephemeral=True)
-                    return
-            else:
-                canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
-                if canal_log:
-                    try:
-                        cor_log = 0xC0392B
+            # ─── ENVIA O LOG PARA O CANAL (ENTRADA OU SAÍDA) ───
+            canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
+            if canal_log:
+                try:
+                    if self.tipo == "entrou":
                         embed_log = discord.Embed(
                             title="",
-                            description=f"# 📤 SAÍDA NO BAÚ\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n> 👤 **Membro:** `{nome_membro}`\n> 📝 **Ação:** `{texto_log}`\n\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n> 📅 **Data:** {agora().strftime('%d/%m/%Y %H:%M')}",
-                            color=cor_log, timestamp=agora()
+                            description=(
+                                f"# 📥 ENTRADA NO BAÚ\n"
+                                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                                f"> 👤 **Membro:** `{nome_membro}`\n"
+                                f"> 📝 **Ação:**\n"
+                                f"```diff\n{texto_log}\n```\n"
+                                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                                f"> 📅 **Data:** `{agora().strftime('%d/%m/%Y %H:%M')}`"
+                            ),
+                            color=0x2ECC71, # Verde
+                            timestamp=agora()
                         )
-                        embed_log.set_author(name="🕴️ VDR 442 • LOGÍSTICA", icon_url=bot.user.display_avatar.url if bot.user else None)
-                        embed_log.set_footer(text=f"🛡️ VDR 442 • Log de Baú", icon_url=bot.user.display_avatar.url if bot.user else None)
-                        await canal_log.send(embed=embed_log)
-                    except: pass
-                await interaction.followup.send(f"✅ **Registro de saída enviado!**", ephemeral=True)
+                    else:
+                        embed_log = discord.Embed(
+                            title="",
+                            description=(
+                                f"# 📤 SAÍDA NO BAÚ\n"
+                                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                                f"> 👤 **Membro:** `{nome_membro}`\n"
+                                f"> 📝 **Ação:**\n"
+                                f"```diff\n{texto_log}\n```\n"
+                                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                                f"> 📅 **Data:** `{agora().strftime('%d/%m/%Y %H:%M')}`"
+                            ),
+                            color=0xC0392B, # Vermelho
+                            timestamp=agora()
+                        )
+                    embed_log.set_author(name="🕴️ VDR 442 • LOGÍSTICA", icon_url=bot.user.display_avatar.url if bot.user else None)
+                    embed_log.set_footer(text=f"🛡️ VDR 442 • Log de Baú", icon_url=bot.user.display_avatar.url if bot.user else None)
+                    await canal_log.send(embed=embed_log)
+                except Exception as e:
+                    logger.error(f"❌ Erro ao enviar log do baú: {e}")
+
+            # ─── AVISO DE SUCESSO ───
+            tipo_msg = "entrada" if self.tipo == "entrou" else "saída"
+            await interaction.followup.send(f"✅ **Registro de {tipo_msg} enviado com sucesso!**\n📦 Os itens já foram atualizados no banco.", ephemeral=True)
 
         except Exception as e:
             logger.error(f"❌ Erro no BauUnificadoModal: {e}")
@@ -7465,7 +7472,7 @@ async def verificar_pedido_finalizado(pedido_numero):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_embed_pedido_finalizado
 # ────────────────────────────────────────────────────────────────────────────────
-async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, vendedor_nome, pago_por, pago_em, entregue_por, entregue_em, transferido_para, transferido_por, transferido_em, cancelado_por=None, cancelado_em=None, tipo="finalizado"):
+async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, vendedor_nome, pago_por, pago_em, entregue_por, entregue_em, transferido_para, transferido_por, transferido_em, cancelado_por=None, cancelado_em=None, tipo="finalizado", entrega_id=None):
     try:
         canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
         if not canal:
@@ -7475,7 +7482,7 @@ async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, ve
         valor_total = (pt * 50) + (sub * 90)
 
         if tipo == "cancelado":
-            cor = 0xC0392B # Vermelho escuro
+            cor = 0xC0392B # Vermelho
             status_emoji = "❌"
             status_texto = "PEDIDO CANCELADO"
         else:
@@ -7489,7 +7496,7 @@ async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, ve
             color=cor,
             timestamp=agora()
         )
-        embed.set_author(name="🕴️ VDR 442 • COMPROVANTE", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.set_author(name="🕴️ VDR 442 • LOGÍSTICA DE VENDAS", icon_url=bot.user.display_avatar.url if bot.user else None)
 
         # Identificação
         embed.description += f"\n> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n> 🏢 **ORG:** `{organizacao}`\n> 👤 **VENDEDOR:** `{vendedor_nome}`\n"
@@ -7503,11 +7510,11 @@ async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, ve
         embed.description += f"\n🎯 **CARGA ENTREGUE**\n```diff\n{carga.strip()}\n```\n"
 
         # Valor
-        embed.description += f"💰 **VALOR TOTAL**\n```fix\n{formatar_dinheiro(valor_total)}\n```\n"
+        embed.description += f"💰 **TRANSAÇÃO**\n```fix\n{formatar_dinheiro(valor_total)}\n```\n"
 
         embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
 
-        # Detalhes de Pagamento e Entrega (Usando o Apelido)
+        # Detalhes de Pagamento e Entrega
         if tipo == "finalizado":
             if entregue_por:
                 embed.description += f"\n> 🚚 **Entregue por:** `{entregue_por}` ({entregue_em or '—'})\n"
@@ -7521,15 +7528,25 @@ async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, ve
             if cancelado_por:
                 embed.description += f"\n> ❌ **Cancelado por:** `{cancelado_por}` ({cancelado_em or '—'})\n"
 
-        embed.set_footer(text=f"🛡️ VDR 442 • Encerrado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.set_footer(text=f"🛡️ VDR 442 • Finalizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-        await safe_request(canal.send, embed=embed)
+        # ─── AQUI ESTÁ A MÁGICA: ADICIONA O BOTÃO SE FOR FINALIZADO E AINDA NÃO TIVER TRANSFERIDO ───
+        view = None
+        if tipo == "finalizado" and not transferido_para:
+            view = FinalizadosView(
+                entrega_id=entrega_id,
+                pedido_numero=pedido_numero,
+                valor_total=valor_total,
+                pt=pt,
+                sub=sub
+            )
+
+        await safe_request(canal.send, embed=embed, view=view)
         return True
 
     except Exception as e:
         logger.error(f"❌ Erro ao enviar embed de pedido finalizado: {e}")
         return False
-
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: extrair_dados_pedido_do_embed
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8451,20 +8468,13 @@ class StatusView(discord.ui.View):
             disabled=self.transferencia_confirmada
         ))
 
-        # Linha 2: Transferência e Doação
         if not self.is_doacao:
-            self.add_item(discord.ui.Button(
-                label="📤 Confirmar Transferência", style=discord.ButtonStyle.success,
-                custom_id="confirmar_transferencia_fixo", emoji="📤",
-                disabled=(not self.pago_ja_clicado) or self.transferencia_confirmada, row=1
-            ))
             self.add_item(discord.ui.Button(
                 label="🎁 Transformar em Doação", style=discord.ButtonStyle.secondary,
                 custom_id="transformar_doacao", emoji="🎁",
                 disabled=self.transferencia_confirmada or (self.valor_total == 0) or self.pago_ja_clicado or self.entrega_ja_entregue, row=1
             ))
 
-    # ─── INTERCEPTA O CLIQUE ANTES DE CHAMAR OS MÉTODOS ───
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         
@@ -8490,10 +8500,6 @@ class StatusView(discord.ui.View):
             elif custom_id == "status_cancelado_fixo":
                 await interaction.response.defer()
                 await self.cancelado(interaction, None)
-            elif custom_id == "confirmar_transferencia_fixo":
-                if not self.pago_ja_clicado:
-                    await interaction.response.send_message("⚠️ O pedido precisa estar **PAGO** antes de confirmar a transferência!", ephemeral=True); return False
-                await self.transferir(interaction, None)
         except Exception as e:
             logger.error(f"❌ Erro no botão {custom_id}: {e}")
             try:
@@ -8573,7 +8579,8 @@ class StatusView(discord.ui.View):
                 pedido_numero=pedido_numero, pt=self.pt, sub=self.sub,
                 organizacao=dados.get("organizacao", "Desconhecida"), vendedor_nome=dados.get("vendedor", "Desconhecido"),
                 pago_por=pagador_apelido, pago_em=agora_str, entregue_por=dados.get("entregue_por"), entregue_em=dados.get("entregue_em"),
-                transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado"
+                transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado",
+                entrega_id=self.entrega_id
             )
             
             if self.entrega_atual >= self.total_entregas:
@@ -8649,7 +8656,8 @@ class StatusView(discord.ui.View):
                     organizacao=dados.get("organizacao", "Desconhecida"), vendedor_nome=dados.get("vendedor", "Desconhecido"),
                     pago_por=dados.get("pago_por"), pago_em=dados.get("pago_em"),
                     entregue_por=entregador_apelido, entregue_em=agora_str,
-                    transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado"
+                    transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado",
+                    entrega_id=self.entrega_id
                 )
                 try: await marcar_pedido_finalizado(pedido_numero, tipo="finalizado")
                 except: pass
@@ -8732,7 +8740,8 @@ class StatusView(discord.ui.View):
             pago_por=dados.get("pago_por"), pago_em=dados.get("pago_em"),
             entregue_por=dados.get("entregue_por"), entregue_em=dados.get("entregue_em"),
             transferido_para=None, transferido_por=None, transferido_em=None,
-            cancelado_por=cancelador_apelido, cancelado_em=agora_str, tipo="cancelado"
+            cancelado_por=cancelador_apelido, cancelado_em=agora_str, tipo="cancelado",
+            entrega_id=self.entrega_id
         )
         
         try: await interaction.message.delete()
@@ -8741,18 +8750,6 @@ class StatusView(discord.ui.View):
         await interaction.followup.send(f"✅ **Pedido #{pedido_numero:04d} cancelado!**", ephemeral=True)
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
-
-    async def transferir(self, interaction: discord.Interaction, button):
-        try:
-            modal = ConfirmarTransferenciaModal(
-                interaction=interaction, mensagem_original=interaction.message,
-                entrega_id=self.entrega_id, pedido_numero=self.pedido_numero,
-                valor=self.valor_total, pt=self.pt, sub=self.sub
-            )
-            await interaction.response.send_modal(modal)
-        except Exception as e:
-            logger.error(f"❌ Erro ao abrir modal de transferência: {e}")
-            await interaction.response.send_message("❌ Erro ao abrir transferência.", ephemeral=True)
 
     def extrair_dados_venda(self, embed):
         dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "", "observacoes": ""}
@@ -9483,7 +9480,8 @@ async def finalizar_e_mover_pedido(
             transferido_em=dados["transferido_em"],
             cancelado_por=dados["cancelado_por"],
             cancelado_em=dados["cancelado_em"],
-            tipo=tipo
+            tipo=tipo,
+            entrega_id=entrega_id # <── ADICIONADO AQUI
         )
 
         # ─── Limpa botões persistentes daquela mensagem ───
