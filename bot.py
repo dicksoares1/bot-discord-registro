@@ -4998,20 +4998,108 @@ class BauUnificadoModal(discord.ui.Modal):
                 await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
             except:
                 pass
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarZerarBauView
+# ────────────────────────────────────────────────────────────────────────────────
+class ConfirmarZerarBauView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="✅ SIM, ZERAR TUDO", style=discord.ButtonStyle.danger, custom_id="conf_zerar_bau")
+    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Verifica novamente se é o 01 ou ADM
+        is_admin = interaction.user.guild_permissions.administrator
+        is_01 = any(r.id == CARGO_01_ID for r in interaction.user.roles)
+        if not is_admin and not is_01:
+            await interaction.response.send_message("❌ Apenas o **01** ou **ADM** podem fazer isso!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        try:
+            async with pool.acquire() as conn:
+                # Conta quantos itens tinham antes de apagar
+                total_antes = await conn.fetchval("SELECT COUNT(*) FROM bau_estoque") or 0
+                # Apaga tudo
+                await conn.execute("DELETE FROM bau_estoque")
+
+            # Atualiza o painel do baú
+            await enviar_painel_bau()
+
+            embed = discord.Embed(
+                title="🗑️ BAÚ ZERADO COM SUCESSO!",
+                description=f"O baú foi **completamente esvaziado**.\n\n📦 **{total_antes} itens** foram apagados do banco de dados.",
+                color=0x2ECC71,
+                timestamp=agora()
+            )
+            embed.set_footer(text=f"🛡 VDR 442 • Zerado por {interaction.user.display_name}")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+            try:
+                await interaction.message.delete()
+            except:
+                pass
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao zerar baú: {e}")
+            await interaction.followup.send(f"❌ Erro ao zerar o baú: `{str(e)[:150]}`", ephemeral=True)
+
+    @discord.ui.button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id="cancel_zerar_bau")
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Ação cancelada. O baú está a salvo.", ephemeral=True)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
                 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: BauUnificadoView
+# ────────────────────────────────────────────────────────────────────────────────
 class BauUnificadoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📥 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="bau_entrada_btn", emoji="📥")
+    @discord.ui.button(label="📥 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="bau_entrada_btn", emoji="📥", row=0)
     async def registrar_entrada(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = BauUnificadoModal("entrou")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="📤 Registrar Saída", style=discord.ButtonStyle.danger, custom_id="bau_saida_btn", emoji="📤")
+    @discord.ui.button(label="📤 Registrar Saída", style=discord.ButtonStyle.danger, custom_id="bau_saida_btn", emoji="📤", row=0)
     async def registrar_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = BauUnificadoModal("saiu")
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="🗑️ Zerar Baú", style=discord.ButtonStyle.danger, custom_id="bau_zerar_btn", emoji="🗑️", row=1)
+    async def zerar_bau(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # VERIFICAÇÃO DE PERMISSÃO: Apenas o 01 ou ADM do Discord
+        is_admin = interaction.user.guild_permissions.administrator
+        is_01 = any(r.id == CARGO_01_ID for r in interaction.user.roles)
+        
+        if not is_admin and not is_01:
+            await interaction.response.send_message(
+                "❌ **Apenas o Dono do Morro (01) ou ADM podem zerar o baú!**", 
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="⚠️ ATENÇÃO: ZERAR O BAÚ",
+            description=(
+                "Você tem certeza que deseja **APAGAR TODOS OS ITENS** do baú?\n\n"
+                "📦 *Isso vai remover todas as armas, drogas, munições e equipamentos registrados.*\n\n"
+                "⚠️ **Esta ação é IRREVERSÍVEL!**"
+            ),
+            color=0xE74C3C,
+            timestamp=agora()
+        )
+        view = ConfirmarZerarBauView()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
     canal = bot.get_channel(canal_id)
