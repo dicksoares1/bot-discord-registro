@@ -2491,17 +2491,17 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Oficial"):
 # ────────────────────────────────────────────────────────────────────────────────
 class AvisosView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None) # <-- Adicionado timeout=None
         self.add_item(AvisosSelect())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         tem_permissao = (
             interaction.user.guild_permissions.administrator or
-            any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
+            any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
         )
         if not tem_permissao:
             await interaction.response.send_message(
-                "❌ **Apenas Gerentes, ADM, Cargo 01 e Cargo 02 podem criar avisos!**",
+                "❌ **Apenas Gerentes, ADM, Dono do Morro e Cargo 01/02 podem criar avisos!**",
                 ephemeral=True
             )
             return False
