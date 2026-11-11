@@ -2785,7 +2785,57 @@ async def enviar_painel_doacoes():
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  BLOCO 06 — SISTEMA FINANCEIRO                                              ║
 # ════════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_relatorio_financeiro
+# ────────────────────────────────────────────────────────────────────────────────
+async def enviar_painel_relatorio_financeiro():
+    canal = bot.get_channel(CANAL_RELATORIO_FINANCEIRO_ID)
+    if not canal: 
+        return
 
+    # ─── NOVO VISUAL FOGO E SANGUE ───
+    embed = discord.Embed(
+        title="",
+        description=(
+            "# 📊 RELATÓRIO FINANCEIRO\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `GESTÃO FINANCEIRA`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `GERÊNCIA`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📋 O QUE O RELATÓRIO INCLUI?\n"
+            "```yaml\n"
+            "💣 Gasto com pólvora utilizada\n"
+            "🛒 Total de vendas no período\n"
+            "📦 Gastos com embalagens e outras compras\n"
+            "📊 Saldo final (vendas - gastos)\n"
+            "```\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📖 COMO GERAR\n"
+            "**1️⃣** Clique no botão **📊 Gerar Relatório Financeiro** abaixo.\n"
+            "**2️⃣** Informe a Data Inicial e Final (ex: `01/10/2026`).\n"
+            "**3️⃣** O bot calculará tudo e enviará o resultado neste canal.\n"
+        ),
+        color=0x27AE60, # Verde financeiro
+        timestamp=agora()
+    )
+    embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • Sistema Financeiro", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+    view = RelatorioFinanceiroView()
+    
+    # ─── LIMPA MENSAGENS ANTIGAS E ENVIA O NOVO ───
+    try:
+        async for msg in canal.history(limit=20):
+            if msg.author == bot.user and msg.embeds and "RELATÓRIO FINANCEIRO" in msg.embeds[0].description:
+                try:
+                    await msg.delete()
+                except:
+                    pass
+        await canal.send(embed=embed, view=view)
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar painel de relatório financeiro: {e}")
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_compra_db (Atualizada para receber a quantidade)
 # ────────────────────────────────────────────────────────────────────────────────
