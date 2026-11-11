@@ -2410,6 +2410,9 @@ async def criar_embed_aviso_supremo(titulo, mensagem, local=None, data_hora=None
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AvisosSelect
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# SUBSTITUIR: Classe AvisosSelect
+# ────────────────────────────────────────────────────────────────────────────────
 class AvisosSelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -2420,7 +2423,8 @@ class AvisosSelect(discord.ui.Select):
             discord.SelectOption(label="🏭 Produção", description="Aviso sobre produção e galpões", emoji="🏭", value="producao"),
             discord.SelectOption(label="💸 Doações", description="Aviso pedindo apoio/doações", emoji="💸", value="doacoes")
         ]
-        super().__init__(placeholder="📌 Selecione o canal para o aviso...", min_values=1, max_values=1, options=options)
+        # O segredo é colocar o custom_id aqui
+        super().__init__(placeholder="📌 Selecione o canal para o aviso...", min_values=1, max_values=1, options=options, custom_id="aviso_select_fixo")
 
     async def callback(self, interaction: discord.Interaction):
         valor = self.values[0]
@@ -2443,7 +2447,6 @@ class AvisosSelect(discord.ui.Select):
         canal_id = canais.get(valor)
         nome_canal = nomes.get(valor, "Desconhecido")
         
-        # Ativa a flag se for doação
         is_doacao = (valor == "doacoes")
         
         await interaction.response.send_modal(AvisoModal(canal_id, nome_canal, is_doacao=is_doacao))
@@ -3760,6 +3763,60 @@ class LavagemModal(discord.ui.Modal, title="🧼 Iniciar Lavagem"):
             f"📎 Envie o print no canal.",
             ephemeral=True
         )
+
+class ConfigurarTaxaModal(discord.ui.Modal, title="⚙️ Configurar Taxa de Lavagem"):
+    nova_taxa = discord.ui.TextInput(label="Nova Taxa (%)", placeholder="Ex: 15", required=True, max_length=3)
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            t = safe_int(self.nova_taxa.value)
+            if t < 0 or t > 100: raise ValueError
+        except:
+            await interaction.followup.send("❌ Taxa inválida! Use um número de 0 a 100.", ephemeral=True); return
+        await salvar_taxa_lavagem_db(t, interaction.user.id)
+        await interaction.followup.send(f"✅ Taxa de lavagem alterada para **{t}%**.", ephemeral=True)
+        await enviar_painel_lavagem()
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÕES DE TAXA DE LAVAGEM (FALTAVAM NO CÓDIGO)
+# ────────────────────────────────────────────────────────────────────────────────
+async def buscar_taxa_lavagem_db():
+    pool = await get_pool()
+    if not pool:
+        return 20  # Taxa padrão
+    try:
+        async with pool.acquire() as conn:
+            # Tenta buscar de uma tabela de configuração, se não existir, retorna 20
+            row = await conn.fetchrow("SELECT valor FROM configuracoes WHERE chave = 'taxa_lavagem'")
+            if row:
+                return row["valor"]
+            return 20
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar taxa de lavagem: {e}")
+        return 20
+
+async def salvar_taxa_lavagem_db(nova_taxa, user_id):
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS configuracoes (
+                    chave VARCHAR(50) PRIMARY KEY,
+                    valor BIGINT,
+                    data_atualizacao TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            await conn.execute("""
+                INSERT INTO configuracoes (chave, valor, data_atualizacao) 
+                VALUES ('taxa_lavagem', $1, NOW())
+                ON CONFLICT (chave) DO UPDATE SET valor = $1, data_atualizacao = NOW()
+            """, nova_taxa)
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao salvar taxa de lavagem: {e}")
+        return False
 
 class ConfigurarTaxaModal(discord.ui.Modal, title="⚙️ Configurar Taxa de Lavagem"):
     nova_taxa = discord.ui.TextInput(label="Nova Taxa (%)", placeholder="Ex: 15", required=True, max_length=3)
@@ -22330,6 +22387,15 @@ async def verificar_inatividade_semanal():
     except Exception as e:
         logger.error(f"❌ Erro no relatório de inatividade: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_parcelas_diario
+# ────────────────────────────────────────────────────────────────────────────────
+@tasks.loop(hours=24)
+async def verificar_parcelas_diario():
+    try:
+        await verificar_parcelas_vencendo()
+    except Exception as e:
+        logger.error(f"❌ Erro no loop de parcelas: {e}")
 
 
 @tasks.loop(hours=168) # Roda uma vez por semana (168 horas)
