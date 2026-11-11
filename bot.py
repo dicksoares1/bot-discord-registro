@@ -469,6 +469,8 @@ async def inicializar_tabelas(pool):
                 mensagem_id VARCHAR(30)
             )
         """)
+
+        
         # ═══════════════ TABELAS DE PRODUÇÃO ═══════════════
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS producoes (
@@ -1200,6 +1202,16 @@ async def inicializar_tabelas(pool):
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_parcelas_emprestimo ON emprestimos_parcelas(emprestimo_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_parcelas_vencimento ON emprestimos_parcelas(data_vencimento)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_parcelas_pago ON emprestimos_parcelas(pago)")
+
+
+        # ═══════════════ TABELAS DE CONFIGURAÇÃO GERAL ═══════════════
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS configuracoes (
+                chave VARCHAR(50) PRIMARY KEY,
+                valor BIGINT,
+                data_atualizacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
 
     logger.info("✅ Todas as tabelas criadas/verificadas com sucesso!")
     logger.info("✅ Tabela horas_historico pronta!")
@@ -3270,127 +3282,55 @@ class RelatorioFinanceiroView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_registrar_compra():
     canal = bot.get_channel(CANAL_LANCAMENTOS_ID)
-    if not canal:
-        logger.error(f"❌ Canal de lançamentos não encontrado: {CANAL_LANCAMENTOS_ID}")
+    if not canal: 
         return
 
+    # ─── NOVO VISUAL FOGO E SANGUE UNIFICADO ───
     embed = discord.Embed(
-        title="💸 ── LANÇAMENTOS FINANCEIROS ── 💸",
-        description="**VDR 442 • Gestão de Saídas**\n*Registre compras, salários, aluguéis e outras despesas da facção.*",
+        title="",
+        description=(
+            "# 💸 LANÇAMENTOS FINANCEIROS\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `GESTÃO DE SAÍDAS`\n"
+            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
+            "> 👤 **ACESSO:** `GERÊNCIA`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📋 O QUE PODE SER REGISTRADO?\n"
+            "```yaml\n"
+            "🛒 Compras: Pólvora, embalagens, armas, veículos, etc.\n"
+            "💼 Salários: Pagamentos para gerentes, responsáveis, etc.\n"
+            "🏭 Aluguéis: Pagamento de galpões ou salas.\n"
+            "📦 Outros: Quaisquer outras despesas da facção.\n"
+            "```\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📖 COMO REGISTRAR\n"
+            "**1️⃣** Clique no botão **📝 Registrar Lançamento** abaixo.\n"
+            "**2️⃣** Escolha o tipo de saída (Compra, Salário, Aluguel, etc).\n"
+            "**3️⃣** Informe a descrição, a quantidade (se for pólvora/embalagem) e o valor.\n"
+            "**4️⃣** O valor será debitado do caixa da facção automaticamente.\n"
+        ),
         color=0x2ECC71,
         timestamp=agora()
     )
+    embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    
-    embed.add_field(
-        name="📋 O QUE PODE SER REGISTRADO?",
-        value=(
-            "🛒 **Compras:** Pólvora, embalagens, armas, veículos, etc.\n"
-            "💼 **Salários:** Pagamentos para gerentes, responsáveis, etc.\n"
-            "🏭 **Aluguéis:** Pagamento de galpões ou salas.\n"
-            "📦 **Outros:** Quaisquer outras despesas da facção."
-        ),
-        inline=False
-    )
-
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-
-    embed.add_field(
-        name="📖 COMO REGISTRAR",
-        value="**1️⃣** Clique em **📝 Registrar Lançamento**\n**2️⃣** Escolha o tipo de saída (Compra, Salário, Aluguel, etc.)\n**3️⃣** Informe a descrição, a quantidade (se for pólvora/embalagem) e o valor.\n**4️⃣** O valor será debitado do caixa da facção automaticamente.",
-        inline=False
-    )
-    
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡️ VDR 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     view = RegistrarCompraView()
     
-    # ─── FORÇA A DELEÇÃO DO PAINEL ANTIGO NO BANCO E NO DISCORD ───
+    # ─── LIMPA O CANAL E ENVIA O NOVO PAINEL ───
     try:
-        # 1. Deleta o registro do banco para não tentar editar a msg velha
-        pool = await get_pool()
-        if pool:
-            async with pool.acquire() as conn:
-                await conn.execute("DELETE FROM paineis WHERE nome = 'painel_lancamentos'")
-                await conn.execute("DELETE FROM paineis_ultimos WHERE nome = 'painel_lancamentos'")
-        
-        # 2. Deleta a mensagem velha no canal
-        async for msg in canal.history(limit=20):
+        async for msg in canal.history(limit=50):
             if msg.author == bot.user:
-                try:
+                try: 
                     await msg.delete()
-                    await asyncio.sleep(0.5)
-                except:
+                    await asyncio.sleep(0.3)
+                except: 
                     pass
-                    
-        # 3. Envia o painel novo em folha
         await canal.send(embed=embed, view=view)
         logger.info("✅ Painel de Lançamentos recriado com sucesso!")
     except Exception as e:
-        logger.error(f"❌ Erro ao recriar painel de lançamentos: {e}")
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: enviar_painel_relatorio_financeiro
-# ────────────────────────────────────────────────────────────────────────────────
-async def enviar_painel_relatorio_financeiro():
-    canal = bot.get_channel(CANAL_RELATORIO_FINANCEIRO_ID)
-    if not canal: return
-
-    embed = discord.Embed(
-        title="📊 ── RELATÓRIO FINANCEIRO ── 📊",
-        description="**VDR 442 • Gestão Financeira**\n*Gere relatórios completos de vendas, gastos e saldo*",
-        color=0x27AE60,
-        timestamp=agora()
-    )
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📋 O QUE O RELATÓRIO INCLUI?",
-        value="💣 Gasto com pólvora utilizada\n🛒 Total de vendas no período\n📦 Gastos com embalagens e outras compras\n📊 Saldo final (vendas - gastos)",
-        inline=False
-    )
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📖 COMO GERAR",
-        value="**1️⃣** Clique em **📊 Gerar Relatório Financeiro**\n**2️⃣** Informe a Data Inicial e Final (ex: `01/10/2026`)\n**3️⃣** O bot calculará tudo e enviará o resultado neste canal.",
-        inline=False
-    )
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Sistema Financeiro", icon_url=bot.user.display_avatar.url if bot.user else None)
-
-    await enviar_ou_atualizar_painel("painel_relatorio_financeiro", CANAL_RELATORIO_FINANCEIRO_ID, embed, RelatorioFinanceiroView())
-
-
-async def enviar_painel_registrar_compra():
-    canal = bot.get_channel(CANAL_LANCAMENTOS_ID)
-    if not canal: return
-
-    embed = discord.Embed(
-        title="🛒 ── REGISTRAR COMPRA ── 🛒",
-        description="**VDR 442 • Gestão Financeira**\n*Registre os gastos e compras da facção*",
-        color=0x27AE60,
-        timestamp=agora()
-    )
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    
-    embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(
-        name="📖 COMO REGISTRAR",
-        value="**1️⃣** Clique em **📝 Registrar Nova Compra**\n**2️⃣** Informe o nome do produto (ex: Pólvora, Embalagens)\n**3️⃣** Informe o valor gasto\n**4️⃣** A compra será debitada do caixa e registrada no histórico.",
-        inline=False
-    )
-    embed.set_footer(text=f"🛡 Vida Rasa 442 • Sistema Financeiro", icon_url=bot.user.display_avatar.url if bot.user else None)
-
-    try:
-        async for msg in canal.history(limit=10):
-            if msg.author == bot.user and msg.embeds and "REGISTRAR COMPRA" in msg.embeds[0].title:
-                try: await msg.delete()
-                except: pass
-        await canal.send(embed=embed, view=RegistrarCompraView())
-    except Exception as e:
-        logger.error(f"❌ Erro ao enviar painel registrar compra: {e}")
-
+        logger.error(f"❌ Erro ao enviar painel de lançamentos: {e}")
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 06                                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
@@ -3780,13 +3720,15 @@ class ConfigurarTaxaModal(discord.ui.Modal, title="⚙️ Configurar Taxa de Lav
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÕES DE TAXA DE LAVAGEM (FALTAVAM NO CÓDIGO)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÕES DE TAXA DE LAVAGEM (VERSÃO LIMPA E DEFINITIVA)
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_taxa_lavagem_db():
     pool = await get_pool()
     if not pool:
         return 20  # Taxa padrão
     try:
         async with pool.acquire() as conn:
-            # Tenta buscar de uma tabela de configuração, se não existir, retorna 20
             row = await conn.fetchrow("SELECT valor FROM configuracoes WHERE chave = 'taxa_lavagem'")
             if row:
                 return row["valor"]
@@ -3802,13 +3744,6 @@ async def salvar_taxa_lavagem_db(nova_taxa, user_id):
     try:
         async with pool.acquire() as conn:
             await conn.execute("""
-                CREATE TABLE IF NOT EXISTS configuracoes (
-                    chave VARCHAR(50) PRIMARY KEY,
-                    valor BIGINT,
-                    data_atualizacao TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            await conn.execute("""
                 INSERT INTO configuracoes (chave, valor, data_atualizacao) 
                 VALUES ('taxa_lavagem', $1, NOW())
                 ON CONFLICT (chave) DO UPDATE SET valor = $1, data_atualizacao = NOW()
@@ -3820,6 +3755,7 @@ async def salvar_taxa_lavagem_db(nova_taxa, user_id):
 
 class ConfigurarTaxaModal(discord.ui.Modal, title="⚙️ Configurar Taxa de Lavagem"):
     nova_taxa = discord.ui.TextInput(label="Nova Taxa (%)", placeholder="Ex: 15", required=True, max_length=3)
+    
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -3827,6 +3763,7 @@ class ConfigurarTaxaModal(discord.ui.Modal, title="⚙️ Configurar Taxa de Lav
             if t < 0 or t > 100: raise ValueError
         except:
             await interaction.followup.send("❌ Taxa inválida! Use um número de 0 a 100.", ephemeral=True); return
+        
         await salvar_taxa_lavagem_db(t, interaction.user.id)
         await interaction.followup.send(f"✅ Taxa de lavagem alterada para **{t}%**.", ephemeral=True)
         await enviar_painel_lavagem()
