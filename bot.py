@@ -4511,9 +4511,220 @@ async def verificar_lives():
     except Exception as e:
         logger.error(f"❌ Erro no loop de lives: {e}")
 
-# ════════════════════════════════════════════════════════════════════════════════
-# ║  FIM DO BLOCO 09                                                            ║
-# ════════════════════════════════════════════════════════════════════════════════
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# INTELIGÊNCIA DE TEXTO E CORREÇÃO AUTOMÁTICA DO BAÚ
+# ────────────────────────────────────────────────────────────────────────────────
+def identificar_item_inteligente(texto):
+    texto = texto.lower().strip()
+    
+    # DICIONÁRIO GLOBAL DEFINITIVO (VDR 442)
+    dicionario = {
+        # ── DROGAS E SUBSTÂNCIAS (FIVEM BR) ──
+        "balao": "balao", "balão": "balao", "balaum": "balao", "balãozinho": "balao", "balaozinho": "balao",
+        "rtx": "rtx", "rtxzin": "rtx",
+        "aquablitz": "aquablitz", "aqua blitz": "aquablitz", "aqua": "aquablitz", "blitz": "aquablitz",
+        "tadala": "tadala", "tadala": "tadala", "tadalafila": "tadala",
+        "trexalin": "trexalin", "trexalina": "trexalin", "trex": "trexalin",
+        "k9": "k9", "k-9": "k9", "k9zin": "k9",
+        "lança": "lança", "lanca": "lança", "lança perfume": "lança", "lanca perfume": "lança",
+        "lean": "lean", "lin": "lean", "xarope": "lean",
+        "maconha": "maconha", "maconha": "maconha", "baseado": "maconha", "beck": "maconha", "bec": "maconha", "weed": "maconha",
+        "haxixe": "haxixe", "hax": "haxixe", "haxixe": "haxixe", "hash": "haxixe",
+        "coca": "coca", "cocaina": "coca", "cocaina": "coca", "pó": "coca", "po": "coca", "farinha": "coca",
+        "md": "md", "mdma": "md", "mda": "md", "ecstasy": "md", "bala": "md",
+        "crack": "crack", "crackzin": "crack",
+        "metanfetamina": "metanfetamina", "meth": "metanfetamina", "meta": "metanfetamina",
+        "lsd": "lsd", "doce": "lsd", "ácido": "lsd", "acido": "lsd",
+        "ketamina": "ketamina", "ket": "ketamina", "keta": "ketamina",
+        "cogumelo": "cogumelo", "mushroom": "cogumelo", "shrooms": "cogumelo",
+        "heroina": "heroina", "heroína": "heroina", "heroy": "heroina",
+        "opio": "opio", "ópio": "opio",
+        "fentanil": "fentanil", "fenta": "fentanil",
+        "anfetamina": "anfetamina", "anf": "anfetamina", "speed": "anfetamina",
+        "xanax": "xanax", "xan": "xanax", "calmante": "xanax",
+        "diazepam": "diazepam", "diaz": "diazepam",
+        "morfina": "morfina", "morf": "morfina",
+        "codeina": "codeina", "codein": "codeina",
+        "ghb": "ghb", "boa noite cinderela": "ghb",
+        "poppers": "poppers", "pop": "poppers",
+        "ayahuasca": "ayahuasca", "aya": "ayahuasca",
+        "dmt": "dmt", "dimitri": "dmt",
+        "mescalina": "mescalina", "mesc": "mescalina",
+        "2cb": "2cb", "2-cb": "2cb",
+        
+        # ── ARMAS ──
+        "fuzil": "fuzil", "fuzi": "fuzil", "fuzio": "fuzil", "fz": "fuzil", "fuzis": "fuzil", "ak": "fuzil", "ak47": "fuzil", "ak-47": "fuzil", "m4": "fuzil", "m16": "fuzil", "ar15": "fuzil", "parafal": "fuzil", "g36": "fuzil", "fal": "fuzil", "g3": "fuzil", "tar-21": "fuzil", "mtar": "fuzil", "carabina": "fuzil", "rifle": "fuzil",
+        "escopeta": "escopeta", "escopta": "escopeta", "escopetas": "escopeta", "12": "escopeta", "shotgun": "escopeta", "pump": "escopeta",
+        "sniper": "sniper", "snippers": "sniper", "snipa": "sniper", "snipers": "sniper", "snp": "sniper", "awp": "sniper", "hunting": "sniper",
+        "pistola": "pistola", "pistolinha": "pistola", "pistolas": "pistola", "glock": "pistola", "glk": "pistola", "pt": "pistola", "five-seven": "pistola", "fiveseven": "pistola", "ap-pistol": "pistola", "appistol": "pistola", "magnum": "pistola", "revolver": "pistola", "heavy pistol": "pistola", "pistola .50": "pistola",
+        "sub": "sub", "subs": "sub", "submetralhadora": "sub", "submetralhadoras": "sub", "smg": "sub", "uzi": "sub", "mp5": "sub", "p90": "sub", "tec-9": "sub", "tec9": "sub", "micro smg": "sub", "skorpion": "sub", "evo": "sub", "kriss": "sub",
+        "metralhadora": "metralhadora", "mg": "metralhadora", "minigun": "metralhadora", "combat mg": "metralhadora",
+        "lança-granadas": "lança-granadas", "lancagranadas": "lança-granadas", "grenade launcher": "lança-granadas",
+        "lança-foguetes": "lança-foguetes", "lancafoguetes": "lança-foguetes", "rpg": "lança-foguetes",
+        "faca": "faca", "knife": "faca", "canivete": "faca",
+        "bastao": "bastao", "bastão": "bastao", "cassetete": "bastao",
+        "taco": "taco", "taco de beisebol": "taco",
+        "machado": "machado", "machadinha": "machado",
+        "katana": "katana", "espada": "katana",
+        "soco ingles": "soco ingles", "soqueira": "soco ingles",
+        
+        # ── MUNIÇÕES ──
+        "municao": "municao", "municoes": "municao", "muni": "municao", "muni pt": "municao pt", "muni sub": "municao sub", "munição": "municao", "munições": "municao",
+        "municao fuzil": "municao fuzil", "muni fuzil": "municao fuzil", "municao de fuzil": "municao fuzil",
+        "municao pistola": "municao pistola", "muni pistola": "municao pistola",
+        "municao sub": "municao sub", "muni sub": "municao sub",
+        "municao escopeta": "municao escopeta", "muni escopeta": "municao escopeta", "cartucho": "municao escopeta", "cartuchos": "municao escopeta",
+        "municao sniper": "municao sniper", "muni sniper": "municao sniper",
+        "pt": "pt", "pts": "pt", "pistola": "pt",
+        "sub": "sub", "subs": "sub",
+        "fuzil": "fuzil", "fuzis": "fuzil",
+        
+        # ── EQUIPAMENTOS E ITENS DE AÇÃO ──
+        "placa": "placa", "placas": "placa", "plk": "placa", "plcas": "placa", "plac": "placa",
+        "c4": "c4", "c-4": "c4", "c4s": "c4", "explosivo": "c4", "bomba": "c4",
+        "colete": "colete", "coletes": "colete", "clt": "colete", "clts": "colete", "armadura": "colete", "armor": "colete", "plate": "colete",
+        "capacete": "capacete", "capacetes": "capacete", "cap": "capacete", "caps": "capacete", "helmet": "capacete",
+        "algema": "algema", "algemas": "algema", "algm": "algema", "alg": "algema", "handcuffs": "algema", "cuffs": "algema",
+        "lockpick": "lockpick", "lock": "lockpick", "locks": "lockpick", "lockpicks": "lockpick", "chave de fenda": "lockpick", "screwdriver": "lockpick", "gazua": "lockpick", "gazuas": "lockpick",
+        "kit reparo": "kit reparo", "reparo": "kit reparo", "repairkit": "kit reparo", "repair kit": "kit reparo", "kit de reparo": "kit reparo", "kitreparo": "kit reparo",
+        "radio": "radio", "radios": "radio", "rad": "radio", "radinho": "radio", "rádio": "radio",
+        "celular": "celular", "celulares": "celular", "cel": "celular", "phone": "celular", "telefone": "celular",
+        "veiculo": "veiculo", "veiculos": "veiculo", "carro": "veiculo", "carros": "veiculo", "vehicle": "veiculo",
+        "moto": "moto", "motos": "moto", "motinha": "moto", "motoca": "moto",
+        "corrente": "corrente", "correntes": "corrente", "chain": "corrente",
+        "corda": "corda", "cordas": "corda", "rope": "corda",
+        "tesoura": "tesoura", "tesouras": "tesoura", "scissors": "tesoura",
+        "furadeira": "furadeira", "furadeiras": "furadeira", "drill": "furadeira", "parafusadeira": "furadeira",
+        "pe de cabra": "pe de cabra", "pé de cabra": "pe de cabra", "cabr": "pe de cabra", "crowbar": "pe de cabra", "pry bar": "pe de cabra",
+        "serra": "serra", "serras": "serra", "saw": "serra", "serrote": "serra",
+        "kit medico": "kit medico", "medkit": "kit medico", "kit de primeiros socorros": "kit medico", "bandagem": "bandagem", "bandagens": "bandagem", "band": "bandagem", "bandage": "bandagem",
+        "remedio": "remedio", "remedios": "remedio", "remed": "remedio", "remeds": "remedio", "medicamento": "remedio", "medicamentos": "remedio", "pill": "remedio", "pílula": "remedio",
+        "garrafa": "garrafa", "garrafas": "garrafa", "bottle": "garrafa",
+        "isca": "isca", "iscas": "isca", "bait": "isca",
+        "anzol": "anzol", "anzois": "anzol", "hook": "anzol",
+        "vara de pesca": "vara de pesca", "vara": "vara de pesca", "fishing rod": "vara de pesca",
+        
+        # ── ITENS DE FACÇÃO / GANG ──
+        "kit contrabando": "kit contrabando", "contrabando": "kit contrabando",
+        "kit assalto": "kit assalto", "assalto": "kit assalto",
+        "kit invasao": "kit invasao", "invasao": "kit invasao",
+        "pendrive": "pendrive", "pendrives": "pendrive", "usb": "pendrive",
+        "laptop": "laptop", "notebook": "laptop",
+        "hacker": "hacker", "hack": "hacker",
+        "gps": "gps", "rastreador": "gps",
+        "jaqueta": "jaqueta", "jaquetas": "jaqueta", "jacket": "jaqueta",
+        "mascara": "mascara", "máscara": "mascara", "mascaras": "mascara", "mask": "mascara",
+        "luvas": "luvas", "luva": "luvas", "gloves": "luvas",
+        "botas": "botas", "bota": "botas", "boots": "botas",
+        "oculos": "oculos", "óculos": "oculos", "glasses": "oculos",
+        "relogio": "relogio", "relógio": "relogio", "watch": "relogio",
+        "corrente de ouro": "corrente de ouro", "ouro": "corrente de ouro",
+        "diamante": "diamante", "diamantes": "diamante", "diamond": "diamante",
+        "barra de ouro": "barra de ouro", "barra ouro": "barra de ouro",
+        "dinheiro sujo": "dinheiro sujo", "dinheiro limpo": "dinheiro limpo",
+        "maleta": "maleta", "maletas": "maleta", "briefcase": "maleta",
+        "pasta": "pasta", "pastas": "pasta",
+        "documento": "documento", "documentos": "documento", "doc": "documento",
+        "passaporte": "passaporte", "passaportes": "passaporte",
+        "identidade": "identidade", "id": "identidade",
+        "licenca": "licenca", "licença": "licenca", "licencas": "licenca",
+        
+        # ── MATERIAIS DE PRODUÇÃO ──
+        "capsula": "capsula", "capsulas": "capsula", "cápsula": "capsula", "cápsulas": "capsula", "cap": "capsula", "caps": "capsula",
+        "embalagem": "embalagem", "embalagens": "embalagem", "emb": "embalagem", "embs": "embalagem", "package": "embalagem", "packaging": "embalagem",
+        "polvora": "polvora", "povora": "polvora", "polvor": "polvora", "polvra": "polvora", "porvora": "polvora", "polv": "polvora", "po": "polvora", "pólvora": "polvora",
+        "metal": "metal", "metais": "metal", "ferro": "metal", "aço": "metal", "aco": "metal", "steel": "metal",
+        "aluminio": "aluminio", "alumínio": "aluminio", "aluminum": "aluminio",
+        "plastico": "plastico", "plástico": "plastico", "plastic": "plastico",
+        "vidro": "vidro", "glass": "vidro",
+        "borracha": "borracha", "rubber": "borracha",
+        "madeira": "madeira", "wood": "madeira",
+        "tecido": "tecido", "cloth": "tecido",
+        "couro": "couro", "leather": "couro",
+        "quimico": "quimico", "químicos": "quimico", "chemical": "quimico",
+        "acido": "acido", "ácido": "acido", "acid": "acido",
+        "solvente": "solvente", "solvent": "solvente",
+        "precursor": "precursor", "precursores": "precursor",
+        "semente": "semente", "sementes": "semente", "seed": "semente", "seeds": "semente",
+        "folha": "folha", "folhas": "folha", "leaf": "folha", "leaves": "folha",
+        "erva": "erva", "ervas": "erva", "herb": "erva",
+        "cogumelo": "cogumelo", "cogumelos": "cogumelo", "mushroom": "cogumelo",
+        "flor": "flor", "flores": "flor", "flower": "flor",
+        "grao": "grao", "grão": "grao", "graos": "grao", "grains": "grao",
+        "farinha": "farinha", "flour": "farinha",
+        "acucar": "acucar", "açúcar": "acucar", "sugar": "acucar",
+        "agua": "agua", "água": "agua", "water": "agua",
+        "oleo": "oleo", "óleo": "oleo", "oil": "oleo",
+        "gasolina": "gasolina", "gas": "gasolina", "fuel": "gasolina",
+        "diesel": "diesel",
+        "bateria": "bateria", "baterias": "bateria", "battery": "bateria",
+        "chip": "chip", "chips": "chip",
+        "placa de circuito": "placa de circuito", "circuito": "placa de circuito", "circuit": "placa de circuito",
+        "cabo": "cabo", "cabos": "cabo", "cable": "cabo",
+        "parafuso": "parafuso", "parafusos": "parafuso", "screw": "parafuso",
+        "prego": "prego", "pregos": "prego", "nail": "prego",
+        "martelo": "martelo", "hammer": "martelo",
+        "chave inglesa": "chave inglesa", "wrench": "chave inglesa",
+        "alicate": "alicate", "pliers": "alicate",
+        
+        # ── COMIDAS E BEBIDAS (RP) ──
+        "hamburguer": "hamburguer", "hambúrguer": "hamburguer", "burger": "hamburguer", "x-burger": "hamburguer",
+        "pizza": "pizza", "pizzas": "pizza",
+        "hot dog": "hot dog", "hotdog": "hot dog", "cachorro quente": "hot dog",
+        "sanduiche": "sanduiche", "sanduíche": "sanduiche", "sandwich": "sanduiche",
+        "batata": "batata", "batatas": "batata", "fries": "batata", "batata frita": "batata",
+        "refrigerante": "refrigerante", "refri": "refrigerante", "soda": "refrigerante", "coca cola": "refrigerante", "coca-cola": "refrigerante",
+        "suco": "suco", "juice": "suco",
+        "cafe": "cafe", "café": "cafe", "coffee": "cafe",
+        "cerveja": "cerveja", "beer": "cerveja", "breja": "cerveja",
+        "vinho": "vinho", "wine": "vinho",
+        "whisky": "whisky", "whiskey": "whisky",
+        "vodka": "vodka",
+        "tequila": "tequila",
+        "energetico": "energetico", "energético": "energetico", "energy": "energetico", "red bull": "energetico",
+        "agua de coco": "agua de coco",
+        "leite": "leite", "milk": "leite",
+        "pao": "pao", "pão": "pao", "bread": "pao",
+        "bolo": "bolo", "cake": "bolo",
+        "chocolate": "chocolate", "choc": "chocolate",
+        "sorvete": "sorvete", "ice cream": "sorvete",
+        "doce": "doce", "doces": "doce", "candy": "doce",
+        "bala": "bala", "balas": "bala",
+        "chiclete": "chiclete", "gum": "chiclete",
+        
+        # ── ANIMAIS / PESCA ──
+        "peixe": "peixe", "peixes": "peixe", "fish": "peixe",
+        "carne": "carne", "meat": "carne",
+        "frango": "frango", "chicken": "frango",
+        "porco": "porco", "pork": "porco",
+        "vaca": "vaca", "boi": "vaca", "cow": "vaca", "beef": "vaca",
+        "camarao": "camarao", "camarão": "camarao", "shrimp": "camarao",
+        "lagosta": "lagosta", "lobster": "lagosta",
+        "polvo": "polvo", "octopus": "polvo",
+        "lula": "lula", "squid": "lula",
+    }
+
+    # 1. Tenta achar no dicionário exato
+    if texto in dicionario:
+        return dicionario[texto]
+
+    # 2. Se não achou, remove acentos e tenta de novo
+    texto_normalizado = normalizar_texto(texto)
+    if texto_normalizado in dicionario:
+        return dicionario[texto_normalizado]
+
+    # 3. Verifica plurais simples (ex: "placas" -> "placa")
+    if texto.endswith("s") and texto[:-1] in dicionario:
+        return dicionario[texto[:-1]]
+    if texto.endswith("es") and texto[:-2] in dicionario:
+        return dicionario[texto[:-2]]
+    if texto.endswith("ns") and texto[:-2] in dicionario:
+        return dicionario[texto[:-2]]
+
+    # 4. Se não achou, retorna o texto original normalizado (para não perder itens customizados que não estão na lista)
+    return texto
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  BLOCO 10 — SISTEMA DE BAÚ UNIFICADO (BAÚ + ARMAS)                          ║
 # ════════════════════════════════════════════════════════════════════════════════
@@ -4620,7 +4831,11 @@ async def criar_embed_bau_unificado():
         embed.add_field(name="🔫 ARSENAL", value="```yaml\n📭 Nenhuma arma no estoque\n```", inline=False)
 
     embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-    embed.add_field(name="📖 COMO USAR", value="**📥 Entrada:** Para guardar itens no baú.\n**📤 Saída:** Para retirar itens do baú.\n\n*Use o formato `Item: Quantidade` (ex: `placas: 100`)*", inline=False)
+    embed.add_field(
+        name="📖 COMO USAR",
+        value="**📥 Entrada:** Guardar itens no baú\n**📤 Saída:** Retirar itens do baú\n\n*Use o formato: `Quantidade Nome` (ex: `100 placas`)*\n*🤖 O bot corrige erros de digitação automaticamente!*",
+        inline=False
+    )
 
     return embed
 
@@ -4629,8 +4844,19 @@ class BauUnificadoModal(discord.ui.Modal):
         self.tipo = tipo
         titulo = "📥 Registrar Entrada" if tipo == "entrou" else "📤 Registrar Saída"
         super().__init__(title=titulo)
-        self.itens = discord.ui.TextInput(label="📦 Itens (item: quantidade)", placeholder="Ex: placas: 100\nc4: 10\nfuzil: 2", style=discord.TextStyle.paragraph, required=True, max_length=500)
-        self.observacao = discord.ui.TextInput(label="📝 Observação (opcional)", placeholder="Ex: Para ação, Para estoque, etc", style=discord.TextStyle.paragraph, required=False, max_length=200)
+        
+        self.itens = discord.ui.TextInput(
+            label="📦 Itens (Quantidade Nome)",
+            placeholder="Ex:\n100 placas\n50 c4\n2 fuzil\n10 polvora",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=500
+        )
+        self.observacao = discord.ui.TextInput(
+            label="📝 Observação (opcional)",
+            placeholder="Ex: Para ação, Para estoque, etc",
+            style=discord.TextStyle.paragraph, required=False, max_length=200
+        )
         self.add_item(self.itens)
         self.add_item(self.observacao)
 
@@ -4639,18 +4865,50 @@ class BauUnificadoModal(discord.ui.Modal):
         try:
             nome_membro = interaction.user.display_name
             itens_dict = {}
-            linhas = self.itens.value.strip().split('\n')
-            for linha in linhas:
-                if ':' in linha:
-                    partes = linha.split(':', 1)
-                    item = partes[0].strip()
+            erros = []
+
+            for linha in self.itens.value.strip().split('\n'):
+                linha = linha.strip()
+                if not linha: continue
+                
+                # Remove o ":" se o usuário ainda usar o formato antigo
+                linha = linha.replace(":", " ")
+                partes = linha.split()
+
+                if len(partes) < 2:
+                    erros.append(f"❌ Formato inválido na linha: `{linha}`")
+                    continue
+
+                # Tenta pegar a quantidade na primeira palavra
+                try:
+                    quantidade = int(partes[0])
+                    item_nome = " ".join(partes[1:]) # O resto é o nome (aceita "municao fuzil")
+                except ValueError:
+                    # Se falhou, tenta inverter (formato antigo: "item 100")
                     try:
-                        quantidade = int(partes[1].strip())
-                    except:
-                        quantidade = partes[1].strip()
-                    itens_dict[item] = quantidade
+                        quantidade = int(partes[-1])
+                        item_nome = " ".join(partes[:-1])
+                    except ValueError:
+                        erros.append(f"❌ Não achei a quantidade na linha: `{linha}`")
+                        continue
+
+                # Aplica a inteligência para corrigir o nome do item
+                item_final = identificar_item_inteligente(item_nome)
+                
+                if quantidade <= 0:
+                    erros.append(f"❌ Quantidade inválida na linha: `{linha}`")
+                    continue
+
+                itens_dict[item_final] = itens_dict.get(item_final, 0) + quantidade
+
+            if erros:
+                msg_erro = "⚠️ **Algumas linhas não puderam ser lidas:**\n" + "\n".join(erros)
+                await interaction.followup.send(msg_erro, ephemeral=True)
+                if not itens_dict:
+                    return
+
             if not itens_dict:
-                await interaction.followup.send("❌ **Nenhum item válido encontrado!** Use o formato: `Item: Quantidade`", ephemeral=True)
+                await interaction.followup.send("❌ **Nenhum item válido encontrado!**", ephemeral=True)
                 return
 
             registrar_manual = True
@@ -4694,9 +4952,17 @@ class BauUnificadoModal(discord.ui.Modal):
                     itens_texto = ', '.join([f'{item} ({qtd})' for item, qtd in itens_dict.items()])
 
                     if _OCR_DISPONIVEL:
-                        aviso_print = f"📎 **{nome_membro}**, anexe o **print da tela do baú** aqui.\n🤖 O bot vai **ler os itens automaticamente** do print.\n📝 **Itens declarados (referência):** {itens_texto}\n\n-# ⚠️ Se o OCR falhar, você recebe uma DM e pode registrar manualmente."
+                        aviso_print = (
+                            f"📎 **{nome_membro}**, anexe o **print da tela do baú** aqui.\n"
+                            f"🤖 O bot vai **ler os itens automaticamente** do print.\n"
+                            f"📝 **Itens declarados (referência):** {itens_texto}\n\n"
+                            f"-# ⚠️ Se o OCR falhar, você recebe uma DM e pode registrar manualmente."
+                        )
                     else:
-                        aviso_print = f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n📝 **Itens:** {itens_texto}"
+                        aviso_print = (
+                            f"📎 **{nome_membro}**, anexe o print da entrada aqui.\n"
+                            f"📝 **Itens:** {itens_texto}"
+                        )
 
                     try:
                         msg_pedido = await canal_controle.send(aviso_print)
@@ -4732,7 +4998,7 @@ class BauUnificadoModal(discord.ui.Modal):
                 await interaction.followup.send(f"❌ **Erro ao registrar:** {str(e)[:100]}", ephemeral=True)
             except:
                 pass
-
+                
 class BauUnificadoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
