@@ -8102,7 +8102,7 @@ class FinalizadosView(discord.ui.View):
 # CLASSE: class StatusView
 # ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: StatusView (Blindada e Integrada ao Baú do Galpão)
+# CLASSE: StatusView (Com Transferência e Blindada)
 # ────────────────────────────────────────────────────────────────────────────────
 class StatusView(discord.ui.View):
     def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1,
@@ -8127,55 +8127,77 @@ class StatusView(discord.ui.View):
         if not self.is_doacao:
             self.add_item(discord.ui.Button(
                 label="💰 Pago", style=discord.ButtonStyle.primary,
-                custom_id="status_pago_fixo", emoji="💰", disabled=self.pago_ja_clicado or self.transferencia_confirmada
+                custom_id="status_pago_fixo", emoji="💰", 
+                disabled=self.pago_ja_clicado or self.transferencia_confirmada
             ))
             self.add_item(discord.ui.Button(
                 label="❌ Pedido cancelado", style=discord.ButtonStyle.danger,
-                custom_id="status_cancelado_fixo", emoji="❌", disabled=self.transferencia_confirmada
+                custom_id="status_cancelado_fixo", emoji="❌", 
+                disabled=self.transferencia_confirmada
             ))
 
         self.add_item(discord.ui.Button(
             label="✅ Entregue", style=discord.ButtonStyle.success,
-            custom_id="status_entregue_fixo", emoji="✅", disabled=self.entrega_ja_entregue or self.transferencia_confirmada
+            custom_id="status_entregue_fixo", emoji="✅", 
+            disabled=self.entrega_ja_entregue or self.transferencia_confirmada
         ))
+        
         self.add_item(discord.ui.Button(
             label="✏️ Editar Venda", style=discord.ButtonStyle.primary,
-            custom_id="editar_venda_fixo", emoji="✏️", disabled=self.transferencia_confirmada
+            custom_id="editar_venda_fixo", emoji="✏️", 
+            disabled=self.transferencia_confirmada
         ))
 
-        if not self.is_doacao and not self.pago_ja_clicado and not self.entrega_ja_entregue:
+        # Linha 2: Transferência e Doação
+        if not self.is_doacao:
+            self.add_item(discord.ui.Button(
+                label="📤 Confirmar Transferência", style=discord.ButtonStyle.success,
+                custom_id="confirmar_transferencia_fixo", emoji="📤",
+                disabled=(not self.pago_ja_clicado) or self.transferencia_confirmada, row=1
+            ))
             self.add_item(discord.ui.Button(
                 label="🎁 Transformar em Doação", style=discord.ButtonStyle.secondary,
-                custom_id="transformar_doacao", emoji="🎁", disabled=(self.valor_total == 0), row=1
+                custom_id="transformar_doacao", emoji="🎁",
+                disabled=self.transferencia_confirmada or (self.valor_total == 0) or self.pago_ja_clicado or self.entrega_ja_entregue, row=1
             ))
 
+    # ─── INTERCEPTA O CLIQUE ANTES DE CHAMAR OS MÉTODOS ───
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
-        if custom_id == "transformar_doacao":
-            embed = discord.Embed(title="⚠️ CONFIRMAR DOAÇÃO", description=f"Transformar o **Pedido #{self.pedido_numero:04d}** em DOAÇÃO?", color=0xE74C3C)
-            view = ConfirmarDoacaoView(mensagem_original=interaction.message, pedido_numero=self.pedido_numero, entrega_id=self.entrega_id)
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        
+        if self.transferencia_confirmada:
+            await interaction.response.send_message("⚠️ Esta venda já foi finalizada.", ephemeral=True)
             return False
-        elif custom_id == "status_pago_fixo":
-            if self.pago_ja_clicado:
-                await interaction.response.send_message("⚠️ Já foi pago!", ephemeral=True); return False
-            await interaction.response.defer()
-            await self.pago(interaction, None)
-            return False
-        elif custom_id == "status_entregue_fixo":
-            if self.entrega_ja_entregue:
-                await interaction.response.send_message("⚠️ Já foi entregue!", ephemeral=True); return False
-            await interaction.response.defer()
-            await self.entregue(interaction, None)
-            return False
-        elif custom_id == "editar_venda_fixo":
-            await self.editar_venda(interaction, None)
-            return False
-        elif custom_id == "status_cancelado_fixo":
-            await interaction.response.defer()
-            await self.cancelado(interaction, None)
-            return False
-        return True
+
+        try:
+            if custom_id == "transformar_doacao":
+                embed = discord.Embed(title="⚠️ CONFIRMAR DOAÇÃO", description=f"Transformar o **Pedido #{self.pedido_numero:04d}** em DOAÇÃO?", color=0xE74C3C)
+                view = ConfirmarDoacaoView(mensagem_original=interaction.message, pedido_numero=self.pedido_numero, entrega_id=self.entrega_id)
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            elif custom_id == "status_pago_fixo":
+                if self.pago_ja_clicado: return False
+                await interaction.response.defer()
+                await self.pago(interaction, None)
+            elif custom_id == "status_entregue_fixo":
+                if self.entrega_ja_entregue: return False
+                await interaction.response.defer()
+                await self.entregue(interaction, None)
+            elif custom_id == "editar_venda_fixo":
+                await self.editar_venda(interaction, None)
+            elif custom_id == "status_cancelado_fixo":
+                await interaction.response.defer()
+                await self.cancelado(interaction, None)
+            elif custom_id == "confirmar_transferencia_fixo":
+                if not self.pago_ja_clicado:
+                    await interaction.response.send_message("⚠️ O pedido precisa estar **PAGO** antes de confirmar a transferência!", ephemeral=True); return False
+                await self.transferir(interaction, None)
+        except Exception as e:
+            logger.error(f"❌ Erro no botão {custom_id}: {e}")
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("❌ Ocorreu um erro interno. A gerência foi notificada.", ephemeral=True)
+            except: pass
+        return False
 
     def get_status(self, embed):
         for i, field in enumerate(embed.fields):
@@ -8284,28 +8306,20 @@ class StatusView(discord.ui.View):
                         if "📦" in l: pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
                 except: pass
 
-        # ─── VERIFICA ESTOQUE NO BAÚ DO GALPÃO ───
         if pacotes_pt > 0:
             if not await verificar_estoque_suficiente("PT", pacotes_pt):
-                estoque_atual = await carregar_estoque()
-                return await interaction.followup.send(f"❌ **Estoque insuficiente de PT!**\n📦 Estoque atual: {estoque_atual['PT']} pacotes", ephemeral=True)
+                return await interaction.followup.send(f"❌ **Estoque insuficiente de PT!**", ephemeral=True)
         if pacotes_sub > 0:
             if not await verificar_estoque_suficiente("SUB", pacotes_sub):
-                estoque_atual = await carregar_estoque()
-                return await interaction.followup.send(f"❌ **Estoque insuficiente de SUB!**\n📦 Estoque atual: {estoque_atual['SUB']} pacotes", ephemeral=True)
+                return await interaction.followup.send(f"❌ **Estoque insuficiente de SUB!**", ephemeral=True)
 
-        # 1. Atualiza o Banco de Dados PRIMEIRO
         try: 
             await marcar_status_parcela(entrega_id=self.entrega_id if self.entrega_id else 0, numero_parcela=self.entrega_atual, pedido_numero=pedido_numero, campo="entregue", autor_id=interaction.user.id)
         except Exception as e: 
             logger.error(f"❌ Erro parcela entregue: {e}")
 
-        # ─── RETIRA DO BAÚ DO GALPÃO E REGISTRA SAÍDA ───
-        if pacotes_pt > 0:
-            await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
-        if pacotes_sub > 0:
-            await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
-
+        if pacotes_pt > 0: await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
+        if pacotes_sub > 0: await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
         try: await _registrar_atividade(interaction.user.id, "venda")
         except: pass
 
@@ -8388,12 +8402,9 @@ class StatusView(discord.ui.View):
                         if "📦" in l: pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
                 except: pass
 
-        # ─── SE JÁ FOI ENTREGUE, DEVOLVE AO BAÚ DO GALPÃO ───
         if self.entrega_ja_entregue or self.pedido_pago(linhas):
-            if pacotes_pt > 0: 
-                await atualizar_estoque("PT", pacotes_pt, "adicionar")
-            if pacotes_sub > 0: 
-                await atualizar_estoque("SUB", pacotes_sub, "adicionar")
+            if pacotes_pt > 0: await atualizar_estoque("PT", pacotes_pt, "adicionar")
+            if pacotes_sub > 0: await atualizar_estoque("SUB", pacotes_sub, "adicionar")
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         cancelador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
@@ -8427,6 +8438,18 @@ class StatusView(discord.ui.View):
         await interaction.followup.send(f"✅ **Pedido #{pedido_numero:04d} cancelado!**", ephemeral=True)
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
+
+    async def transferir(self, interaction: discord.Interaction, button):
+        try:
+            modal = ConfirmarTransferenciaModal(
+                interaction=interaction, mensagem_original=interaction.message,
+                entrega_id=self.entrega_id, pedido_numero=self.pedido_numero,
+                valor=self.valor_total, pt=self.pt, sub=self.sub
+            )
+            await interaction.response.send_modal(modal)
+        except Exception as e:
+            logger.error(f"❌ Erro ao abrir modal de transferência: {e}")
+            await interaction.response.send_message("❌ Erro ao abrir transferência.", ephemeral=True)
 
     def extrair_dados_venda(self, embed):
         dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "", "observacoes": ""}
@@ -26007,6 +26030,30 @@ async def on_ready():
         except Exception as e:
             logger.error(f"Erro ao carregar membros: {e}")
     logger.info(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # REGISTRO GLOBAL E AUTOMÁTICO DE VIEWS (NOVO)
+    # ═══════════════════════════════════════════════════════════════════════════
+    logger.info("🔧 Registrando TODAS as views persistentes...")
+    registradas = 0
+    ignoradas = 0
+    for name, obj in list(globals().items()):
+        if isinstance(obj, type):
+            if issubclass(obj, discord.ui.View) or issubclass(obj, discord.ui.LayoutView):
+                if obj in (discord.ui.View, discord.ui.LayoutView):
+                    continue
+                try:
+                    view_instance = obj()
+                    view_instance.timeout = None
+                    bot.add_view(view_instance)
+                    registradas += 1
+                except TypeError:
+                    ignoradas += 1
+                except Exception as e:
+                    logger.error(f"❌ Erro ao registrar view {name}: {e}")
+                    ignoradas += 1
+    logger.info(f"✅ {registradas} views registradas em massa. {ignoradas} views precisam de argumentos (serão restauradas do banco).")
+
     await carregar_metas_cache()
     await iniciar_tarefas_background()
     bot.loop.create_task(limpeza_cache_periodica())
@@ -26571,9 +26618,48 @@ async def cmd_limpar_cache(ctx):
     gc.collect()
     await ctx.send("✅ Cache limpo e GC executado!")
 
+
 # ════════════════════════════════════════════════════════════════════════════════
-# ║  FIM DOS COMANDOS EXTRAS                                                    ║
+# BLINDAGEM GLOBAL — ESCUDO ANTI-CRASH E ANTI "INTERACTION FAILED"
 # ════════════════════════════════════════════════════════════════════════════════
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    logger.error(f"❌ Erro em comando slash: {error}")
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ Ocorreu um erro interno. A gerência foi notificada.", ephemeral=True)
+    except:
+        pass
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    import traceback
+    logger.error(f"❌ Erro não tratado no evento '{event}':\n{traceback.format_exc()}")
+
+async def _safe_view_error_handler(interaction: discord.Interaction, error: Exception):
+    logger.error(f"❌ Erro em interação ({interaction.data.get('custom_id', '?')}): {error}")
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ Ocorreu um erro interno. A gerência foi notificada.", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ Ocorreu um erro interno. A gerência foi notificada.", ephemeral=True)
+    except:
+        pass
+
+for name, obj in list(globals().items()):
+    if isinstance(obj, type):
+        if issubclass(obj, (discord.ui.View, discord.ui.Modal)) and obj not in (discord.ui.View, discord.ui.Modal):
+            original_on_error = getattr(obj, "on_error", None)
+            
+            async def new_on_error(self, interaction, error, _original=original_on_error):
+                if _original:
+                    try: await _original(interaction, error)
+                    except: pass
+                await _safe_view_error_handler(interaction, error)
+
+            if not original_on_error or original_on_error == discord.ui.View.on_error or original_on_error == discord.ui.Modal.on_error:
+                obj.on_error = new_on_error
+
 
 
 # ════════════════════════════════════════════════════════════════════════════════
