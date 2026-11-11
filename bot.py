@@ -5154,31 +5154,6 @@ async def enviar_painel_bau():
     view = BauUnificadoView()
     await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
 
-async def enviar_painel_armas():
-    """Canal antigo de armas — agora redireciona para o Baú unificado."""
-    canal = bot.get_channel(CANAL_ARMAS_ESTOQUE_ID)
-    if not canal:
-        return
-    try:
-        async for msg in canal.history(limit=50):
-            if msg.author == bot.user:
-                try:
-                    await msg.delete()
-                    await asyncio.sleep(0.3)
-                except:
-                    pass
-
-        embed = discord.Embed(
-            title="⚠️ CANAL UNIFICADO",
-            description=f"Este canal foi **unificado** com o **Controle de Baú**.\n\n📦 **Todos os itens, armas e munições agora ficam no canal:**\n<#{CANAL_BAU_MEMBROS_ID}>\n\n👉 *Acesse o canal acima para registrar entradas, saídas e ver o relatório completo.*",
-            color=0xF1C40F,
-            timestamp=agora()
-        )
-        embed.set_footer(text="🛡 Vida Rasa 442 • Sistema Unificado")
-        await canal.send(embed=embed)
-        logger.info("✅ Redirect do canal de armas enviado")
-    except Exception as e:
-        logger.error(f"❌ Erro painel armas (redirect): {e}")
 
 async def processar_print_bau_ocr(attachment: discord.Attachment) -> dict:
     if not _OCR_DISPONIVEL:
@@ -5212,7 +5187,7 @@ async def processar_print_bau_ocr(attachment: discord.Attachment) -> dict:
 async def on_message_bau_ocr(message: discord.Message):
     if message.author.bot:
         return
-    if message.channel.id not in (CANAL_BAU_MEMBROS_ID, CANAL_ARMAS_ESTOQUE_ID):
+    if message.channel.id != CANAL_BAU_MEMBROS_ID:
         return
     if not message.attachments:
         return
@@ -5223,11 +5198,8 @@ async def on_message_bau_ocr(message: discord.Message):
     if not anexo.content_type or not anexo.content_type.startswith("image/"):
         return
 
-    is_arma = message.channel.id == CANAL_ARMAS_ESTOQUE_ID
-    pendente = (
-        armas_print_pendente.get(message.author.id) if is_arma
-        else bau_print_pendente.get(message.author.id)
-    )
+    # Verifica se tem print pendente (apenas do baú de membros agora)
+    pendente = bau_print_pendente.get(message.author.id)
     if not pendente:
         return
 
@@ -5244,10 +5216,12 @@ async def on_message_bau_ocr(message: discord.Message):
         return
 
     for item, quantidade in itens.items():
-        await atualizar_bau_estoque(item, quantidade, "adicionar")
+        # Aplica a inteligência para corrigir o nome do item lido pelo OCR
+        item_final = identificar_item_inteligente(item)
+        await atualizar_bau_estoque(item_final, quantidade, "adicionar")
         await registrar_movimentacao_bau(
             tipo="entrou",
-            item_nome=item,
+            item_nome=item_final,
             quantidade=quantidade,
             membro=message.author.display_name,
             observacao="Registrado via OCR (print)"
@@ -5258,10 +5232,7 @@ async def on_message_bau_ocr(message: discord.Message):
     if canal_log:
         await canal_log.send(log_msg)
 
-    if is_arma:
-        armas_print_pendente.pop(message.author.id, None)
-    else:
-        bau_print_pendente.pop(message.author.id, None)
+    bau_print_pendente.pop(message.author.id, None)
 
     await message.add_reaction("✅")
     try:
@@ -26331,7 +26302,6 @@ async def enviar_paineis_iniciais(guild):
             ("Botão Ausência", enviar_painel_ausencia),
             ("Relatório Metas", enviar_painel_relatorio_metas),
             ("Baú", enviar_painel_bau),
-            ("Armas", enviar_painel_armas),
             ("Avisos", enviar_painel_avisos),
             ("Grupos", enviar_painel_grupos),
             ("Mensagens", enviar_painel_mensagens),
