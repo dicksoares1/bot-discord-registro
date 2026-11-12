@@ -7498,7 +7498,7 @@ async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, ve
         )
         embed.set_author(name="🕴️ VDR 442 • LOGÍSTICA DE VENDAS", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-        # Identificação
+        # Identificação (Aqui garante que puxa certinho)
         embed.description += f"\n> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n> 🏢 **ORG:** `{organizacao}`\n> 👤 **VENDEDOR:** `{vendedor_nome}`\n"
         
         embed.description += "\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
@@ -7530,7 +7530,7 @@ async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, ve
 
         embed.set_footer(text=f"🛡️ VDR 442 • Finalizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-        # ─── AQUI ESTÁ A MÁGICA: ADICIONA O BOTÃO SE FOR FINALIZADO E AINDA NÃO TIVER TRANSFERIDO ───
+        # ─── ADICIONA O BOTÃO DE TRANSFERÊNCIA SE FOR FINALIZADO ───
         view = None
         if tipo == "finalizado" and not transferido_para:
             view = FinalizadosView(
@@ -8179,7 +8179,7 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
         await interaction.followup.send("❌ Canal de encomendas não encontrado!", ephemeral=True)
         return
     
-    cor = config.get("cor", 0xE67E22) # Laranja padrão
+    cor = config.get("cor", 0xE67E22)
     emoji_org = config.get("emoji", "🏷️")
     
     vendedor_nome = "Desconhecido"
@@ -8195,40 +8195,40 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
     else:
         vendedor_nome = interaction.user.display_name
 
-    # ─── ESTRUTURA VISUAL "FOGO E SANGUE" ───
     if total_entregas > 1:
-        titulo_embed = f"# 📦 ENCOMENDA PARCELADA\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**"
-        descricao = f"> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n> 👤 **VENDEDOR:** `{vendedor_nome}`\n> 🏢 **DESTINO:** `{org_nome}`\n> 📦 **PARCELAS:** `{entrega_atual}/{total_entregas}`"
+        titulo_embed = f"# 📦 ENCOMENDA PARCELADA"
         status_inicial = "🟡 **AGUARDANDO ENTREGA**"
     else:
-        titulo_embed = f"# 🩸 FICHA DE ENCOMENDA\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**"
-        descricao = f"> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n> 👤 **RESPONSÁVEL:** `{vendedor_nome}`\n> 🏢 **DESTINO:** `{org_nome}`"
+        titulo_embed = f"# 🩸 FICHA DE ENCOMENDA"
         status_inicial = "🔴 **AGUARDANDO PAGAMENTO**"
 
     embed = discord.Embed(
         title="",
-        description=f"{titulo_embed}\n\n{descricao}",
+        description=(
+            f"{titulo_embed}\n"
+            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            f"> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n"
+            f"> 👤 **RESPONSÁVEL:** `{vendedor_nome}`\n"
+            f"> 🏢 **DESTINO:** `{org_nome}`\n"
+            f"> 📦 **PARCELAS:** `{entrega_atual}/{total_entregas}`\n\n"
+            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+        ),
         color=cor,
         timestamp=agora()
     )
     embed.set_author(name=f"{emoji_org} VDR 442 • LOGÍSTICA DE VENDAS", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-    embed.description += "\n\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
-
-    # Carga
     carga_texto = ""
     if pt > 0: carga_texto += f"+ {fmt_num(pt)} PT ({pt//50} pacotes)\n"
     if sub > 0: carga_texto += f"+ {fmt_num(sub)} SUB ({sub//50} pacotes)\n"
     
     embed.description += f"\n🎯 **CARREGAMENTO**\n```diff\n{carga_texto.strip()}\n```\n"
 
-    # Valor
     valor_total = (pt * 50) + (sub * 90)
     embed.description += f"💰 **TRANSAÇÃO**\n```fix\n{formatar_dinheiro(valor_total)}\n```\n"
 
-    embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+    embed.description += "\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
 
-    # Resumo de entregas
     if total_entregas > 1 and entregas_lista:
         resumo = ""
         for i, e in enumerate(entregas_lista, 1):
@@ -8241,8 +8241,12 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
     if observacoes:
         embed.description += f"📝 **OBSERVAÇÕES**\n> {observacoes}\n\n"
 
-    embed.description += f"📅 **DATA:** {entregas_lista[entrega_atual-1]['data'] if entregas_lista else agora().strftime('%d/%m/%Y')}\n"
-    embed.description += f"🚦 **STATUS:** {status_inicial}\n\n"
+    data_entrega = entregas_lista[entrega_atual-1]['data'] if entregas_lista else agora().strftime('%d/%m/%Y')
+
+    embed.description += (
+        f"📅 **DATA:** `{data_entrega}`\n"
+        f"🚦 **STATUS:** {status_inicial}\n\n"
+    )
 
     footer_text = f"🛡️ VDR 442 • Gerado por {vendedor_nome} • {agora().strftime('%d/%m/%Y às %H:%M')}"
     if entrega_id:
@@ -8436,7 +8440,6 @@ class StatusView(discord.ui.View):
         self.entrega_ja_entregue = entregue_ja_clicado
         self.pago_ja_clicado = pago_ja_clicado
         self.mensagem_original = mensagem_original
-        self.entrega_criada = False
         self.transferencia_confirmada = transferencia_confirmada
         self.valor_total = valor_total
         self.pt = pt
@@ -8485,6 +8488,7 @@ class StatusView(discord.ui.View):
         try:
             if custom_id == "transformar_doacao":
                 embed = discord.Embed(title="⚠️ CONFIRMAR DOAÇÃO", description=f"Transformar o **Pedido #{self.pedido_numero:04d}** em DOAÇÃO?", color=0xE74C3C)
+                # Passa o entrega_id correto para a view de confirmação
                 view = ConfirmarDoacaoView(mensagem_original=interaction.message, pedido_numero=self.pedido_numero, entrega_id=self.entrega_id)
                 await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
             elif custom_id == "status_pago_fixo":
@@ -8504,7 +8508,7 @@ class StatusView(discord.ui.View):
             logger.error(f"❌ Erro no botão {custom_id}: {e}")
             try:
                 if not interaction.response.is_done():
-                    await interaction.response.send_message("❌ Ocorreu um erro interno. A gerência foi notificada.", ephemeral=True)
+                    await interaction.response.send_message("❌ Ocorreu um erro interno.", ephemeral=True)
             except: pass
         return False
 
@@ -8536,56 +8540,69 @@ class StatusView(discord.ui.View):
     def pedido_cancelado(self, linhas): return any(l.startswith("❌") for l in linhas)
     def entrega_ja_foi_entregue(self, linhas): return any(l.startswith("✅") for l in linhas)
 
+    # ─── FUNÇÃO AUXILIAR PARA EXTRAIR OS DADOS (CORRIGIDA) ───
+    def extrair_dados_venda(self, embed):
+        dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "", "observacoes": ""}
+        for field in embed.fields:
+            nome = field.name.upper().strip()
+            valor = field.value or ""
+            
+            # Tenta pegar a Organização e o Vendedor da nova descrição
+            if "DESTINO" in valor:
+                try:
+                    linhas = valor.split("\n")
+                    for l in linhas:
+                        if "DESTINO" in l:
+                            dados["organizacao"] = l.replace("> 🏢 **DESTINO:**", "").replace("`", "").strip()
+                        if "RESPONSÁVEL" in l:
+                            dados["vendedor"] = l.replace("> 👤 **RESPONSÁVEL:**", "").replace("`", "").strip()
+                except: pass
+            
+            if "🔫 PT" in nome or nome == "PT":
+                try: dados["pt"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
+                except: pass
+            elif "🔫 SUB" in nome or nome == "SUB":
+                try: dados["sub"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
+                except: pass
+        return dados
+
     async def pago(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status(embed)
-        if self.pedido_cancelado(linhas): return await interaction.followup.send("⚠️ Pedido cancelado.", ephemeral=True)
-        if self.pedido_pago(linhas): return await interaction.followup.send("⚠️ Já foi pago.", ephemeral=True)
+        if self.pedido_pago(embed.fields[-1].value.split("\n")): return await interaction.followup.send("⚠️ Já foi pago.", ephemeral=True)
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         pagador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
-        linhas = [l for l in linhas if not l.startswith("⏳") and not l.startswith("💰")]
-        linhas.append(f"💰 Pago • Recebido por {pagador_apelido} • {agora_str}")
-        embed = self.set_status(embed, idx, linhas)
+        
+        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"🟢 **PAGO POR:** `{pagador_apelido}` ({agora_str})")
 
-        titulo = embed.title or ""
-        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
+        titulo = embed.description or ""
+        pedido_numero = self.pedido_numero
+        if "#" in titulo:
+            try: pedido_numero = safe_int(titulo.split("#")[1].split("`")[0])
+            except: pass
 
         try: 
             await marcar_status_parcela(entrega_id=self.entrega_id if self.entrega_id else 0, numero_parcela=self.entrega_atual, pedido_numero=pedido_numero, campo="pago", autor_id=interaction.user.id)
-        except Exception as e: 
-            logger.error(f"❌ Erro parcela paga: {e}")
-
-        try:
             await movimentar_caixa(tipo="venda", valor=self.valor_total, motivo=f"Venda #{pedido_numero:04d} (Entrega {self.entrega_atual}/{self.total_entregas})", autor=interaction.user.id, tipo_dinheiro="limpo")
-        except Exception as e: 
-            logger.error(f"⚠️ Erro caixa: {e}")
+        except Exception as e: logger.error(f"⚠️ Erro ao processar pagamento: {e}")
 
         try:
             await interaction.message.edit(embed=embed, view=StatusView(entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=True, mensagem_original=interaction.message, valor_total=self.valor_total, pt=self.pt, sub=self.sub, pedido_numero=pedido_numero, entregue_ja_clicado=self.entrega_ja_entregue, is_doacao=self.is_doacao))
-        except discord.NotFound:
-            pass
-        except Exception as e:
-            logger.error(f"Erro ao editar msg pago: {e}")
+        except: pass
 
         if self.entrega_ja_entregue:
             try: await interaction.message.delete()
             except: pass
             
-            dados = await extrair_dados_pedido_do_embed(embed)
-            dados["pedido_numero"] = pedido_numero
-            
+            dados = self.extrair_dados_venda(embed)
             await enviar_embed_pedido_finalizado(
                 pedido_numero=pedido_numero, pt=self.pt, sub=self.sub,
-                organizacao=dados.get("organizacao", "Desconhecida"), vendedor_nome=dados.get("vendedor", "Desconhecido"),
-                pago_por=pagador_apelido, pago_em=agora_str, entregue_por=dados.get("entregue_por"), entregue_em=dados.get("entregue_em"),
+                organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
+                pago_por=pagador_apelido, pago_em=agora_str, entregue_por=dados.get("entregue_por", pagador_apelido), entregue_em=agora_str,
                 transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado",
                 entrega_id=self.entrega_id
             )
-            
-            if self.entrega_atual >= self.total_entregas:
-                try: await marcar_pedido_finalizado(pedido_numero, tipo="finalizado")
-                except: pass
+            if self.entrega_atual >= self.total_entregas: await marcar_pedido_finalizado(pedido_numero, tipo="finalizado")
             await interaction.followup.send(f"✅ **Pagamento registrado no caixa!**\nCard removido (já estava entregue).\n🎉 Pedido finalizado!", ephemeral=True)
         else:
             await interaction.followup.send(f"✅ **Pagamento registrado no caixa!**\nAguardando entrega...", ephemeral=True)
@@ -8595,49 +8612,36 @@ class StatusView(discord.ui.View):
     async def entregue(self, interaction: discord.Interaction, button):
         if self.entrega_ja_entregue: return await interaction.followup.send("⚠️ Já entregue!", ephemeral=True)
         embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status(embed)
-        if self.pedido_cancelado(linhas): return await interaction.followup.send("⚠️ Pedido cancelado.", ephemeral=True)
-        if self.entrega_ja_foi_entregue(linhas): return await interaction.followup.send("⚠️ Já entregue.", ephemeral=True)
-
+        
         self.entrega_ja_entregue = True
-        titulo = embed.title or ""
-        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
+        pedido_numero = self.pedido_numero
 
         pacotes_pt, pacotes_sub = 0, 0
-        for field in embed.fields:
-            if field.name == "🔫 PT":
-                try:
-                    for l in field.value.split("\n"):
-                        if "📦" in l: pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except: pass
-            if field.name == "🔫 SUB":
-                try:
-                    for l in field.value.split("\n"):
-                        if "📦" in l: pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except: pass
+        # Busca os pacotes nos blocos de código da descrição
+        if "PT (" in embed.description:
+            try: pacotes_pt = safe_int(embed.description.split("PT (")[1].split(" ")[0])
+            except: pass
+        if "SUB (" in embed.description:
+            try: pacotes_sub = safe_int(embed.description.split("SUB (")[1].split(" ")[0])
+            except: pass
 
-        if pacotes_pt > 0:
-            if not await verificar_estoque_suficiente("PT", pacotes_pt):
-                return await interaction.followup.send(f"❌ **Estoque insuficiente de PT!**", ephemeral=True)
-        if pacotes_sub > 0:
-            if not await verificar_estoque_suficiente("SUB", pacotes_sub):
-                return await interaction.followup.send(f"❌ **Estoque insuficiente de SUB!**", ephemeral=True)
+        if pacotes_pt > 0 and not await verificar_estoque_suficiente("PT", pacotes_pt):
+            return await interaction.followup.send(f"❌ **Estoque insuficiente de PT!**", ephemeral=True)
+        if pacotes_sub > 0 and not await verificar_estoque_suficiente("SUB", pacotes_sub):
+            return await interaction.followup.send(f"❌ **Estoque insuficiente de SUB!**", ephemeral=True)
 
         try: 
             await marcar_status_parcela(entrega_id=self.entrega_id if self.entrega_id else 0, numero_parcela=self.entrega_atual, pedido_numero=pedido_numero, campo="entregue", autor_id=interaction.user.id)
-        except Exception as e: 
-            logger.error(f"❌ Erro parcela entregue: {e}")
-
-        if pacotes_pt > 0: await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
-        if pacotes_sub > 0: await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
-        try: await _registrar_atividade(interaction.user.id, "venda")
-        except: pass
+            if pacotes_pt > 0: await registrar_saida_estoque(pedido_numero, "PT", pacotes_pt, interaction.user.id)
+            if pacotes_sub > 0: await registrar_saida_estoque(pedido_numero, "SUB", pacotes_sub, interaction.user.id)
+            await _registrar_atividade(interaction.user.id, "venda")
+        except Exception as e: logger.error(f"❌ Erro parcela entregue: {e}")
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         entregador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
-        linhas = [l for l in linhas if not l.startswith("📦") and not l.startswith("✅")]
-        linhas.append(f"✅ Entregue por {entregador_apelido} • {agora_str}")
-        embed = self.set_status(embed, idx, linhas)
+        
+        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"🟠 **AGUARDANDO PAGAMENTO**")
+        embed.description = embed.description.replace("🟡 **AGUARDANDO ENTREGA**", f"🟢 **ENTREGUE POR:** `{entregador_apelido}` ({agora_str})")
 
         msg_nova = None
         if self.entrega_atual < self.total_entregas:
@@ -8648,14 +8652,11 @@ class StatusView(discord.ui.View):
             except: pass
             
             if self.entrega_atual >= self.total_entregas:
-                dados = await extrair_dados_pedido_do_embed(embed)
-                dados["pedido_numero"] = pedido_numero
-                
+                dados = self.extrair_dados_venda(embed)
                 await enviar_embed_pedido_finalizado(
                     pedido_numero=pedido_numero, pt=self.pt, sub=self.sub,
-                    organizacao=dados.get("organizacao", "Desconhecida"), vendedor_nome=dados.get("vendedor", "Desconhecido"),
-                    pago_por=dados.get("pago_por"), pago_em=dados.get("pago_em"),
-                    entregue_por=entregador_apelido, entregue_em=agora_str,
+                    organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
+                    pago_por="Sistema", pago_em=agora_str, entregue_por=entregador_apelido, entregue_em=agora_str,
                     transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado",
                     entrega_id=self.entrega_id
                 )
@@ -8670,10 +8671,7 @@ class StatusView(discord.ui.View):
         else:
             try:
                 await interaction.message.edit(embed=embed, view=StatusView(entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=False, mensagem_original=interaction.message, valor_total=self.valor_total, pt=self.pt, sub=self.sub, pedido_numero=pedido_numero, entregue_ja_clicado=True, is_doacao=self.is_doacao))
-            except discord.NotFound:
-                pass
-            except Exception as e:
-                logger.error(f"Erro ao editar msg entregue: {e}")
+            except: pass
 
             if self.entrega_atual < self.total_entregas:
                 if msg_nova: await interaction.followup.send(f"✅ **Entrega registrada!**\n📦 **Próxima entrega gerada!**\n⚠️ Aguardando pagamento.", ephemeral=True)
@@ -8690,55 +8688,44 @@ class StatusView(discord.ui.View):
         modal = EditarVendaModal(interaction.message)
         modal.qtd_pt.default = str(dados["pt"])
         modal.qtd_sub.default = str(dados["sub"])
-        modal.organizacao.default = dados["organizacao"].replace("🏷️ ", "").strip()
-        modal.observacao.default = dados["observacoes"]
+        modal.organizacao.default = dados["organizacao"]
         await interaction.response.send_modal(modal)
 
     async def cancelado(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
-        idx, linhas = self.get_status(embed)
-        titulo = embed.title or ""
-        pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else self.pedido_numero
+        pedido_numero = self.pedido_numero
 
         pacotes_pt, pacotes_sub = 0, 0
-        for field in embed.fields:
-            if field.name == "🔫 PT":
-                try:
-                    for l in field.value.split("\n"):
-                        if "📦" in l: pacotes_pt = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except: pass
-            if field.name == "🔫 SUB":
-                try:
-                    for l in field.value.split("\n"):
-                        if "📦" in l: pacotes_sub = safe_int(l.replace("📦", "").replace("pacotes", "").strip())
-                except: pass
+        if "PT (" in embed.description:
+            try: pacotes_pt = safe_int(embed.description.split("PT (")[1].split(" ")[0])
+            except: pass
+        if "SUB (" in embed.description:
+            try: pacotes_sub = safe_int(embed.description.split("SUB (")[1].split(" ")[0])
+            except: pass
 
-        if self.entrega_ja_entregue or self.pedido_pago(linhas):
+        if self.entrega_ja_entregue:
             if pacotes_pt > 0: await atualizar_estoque("PT", pacotes_pt, "adicionar")
             if pacotes_sub > 0: await atualizar_estoque("SUB", pacotes_sub, "adicionar")
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         cancelador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
-        linhas = [f"❌ Pedido cancelado por {cancelador_apelido} • {agora_str}"]
-        embed = self.set_status(embed, idx, linhas)
+        
+        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"❌ **CANCELADO POR:** `{cancelador_apelido}` ({agora_str})")
+        embed.description = embed.description.replace("🟡 **AGUARDANDO ENTREGA**", f"❌ **CANCELADO POR:** `{cancelador_apelido}` ({agora_str})")
+        embed.description = embed.description.replace("🟢 **PAGO POR", "❌ **CANCELADO POR")
+        embed.description = embed.description.replace("🟢 **ENTREGUE POR", "❌ **CANCELADO POR")
 
         try:
-            await interaction.message.edit(embed=embed, view=StatusView(disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=True, mensagem_original=interaction.message, transferencia_confirmada=True, valor_total=self.valor_total, pt=self.pt, sub=self.sub, pedido_numero=self.pedido_numero, entregue_ja_clicado=True, is_doacao=self.is_doacao))
-        except discord.NotFound:
-            pass
-        except Exception as e:
-            logger.error(f"Erro ao editar msg cancelado: {e}")
+            await interaction.message.edit(embed=embed, view=StatusView(disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=True, mensagem_original=interaction.message, transferencia_confirmada=True, valor_total=self.valor_total, pt=self.pt, sub=self.sub, pedido_numero=pedido_numero, entregue_ja_clicado=True, is_doacao=self.is_doacao))
+        except: pass
 
         if self.entrega_id: await finalizar_entregas(self.entrega_id)
 
-        dados = await extrair_dados_pedido_do_embed(embed)
-        dados["pedido_numero"] = pedido_numero
-        
+        dados = self.extrair_dados_venda(embed)
         await enviar_embed_pedido_finalizado(
             pedido_numero=pedido_numero, pt=self.pt, sub=self.sub,
-            organizacao=dados.get("organizacao", "Desconhecida"), vendedor_nome=dados.get("vendedor", "Desconhecido"),
-            pago_por=dados.get("pago_por"), pago_em=dados.get("pago_em"),
-            entregue_por=dados.get("entregue_por"), entregue_em=dados.get("entregue_em"),
+            organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
+            pago_por=None, pago_em=None, entregue_por=None, entregue_em=None,
             transferido_para=None, transferido_por=None, transferido_em=None,
             cancelado_por=cancelador_apelido, cancelado_em=agora_str, tipo="cancelado",
             entrega_id=self.entrega_id
@@ -8750,24 +8737,6 @@ class StatusView(discord.ui.View):
         await interaction.followup.send(f"✅ **Pedido #{pedido_numero:04d} cancelado!**", ephemeral=True)
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
-
-    def extrair_dados_venda(self, embed):
-        dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "", "observacoes": ""}
-        for field in embed.fields:
-            nome = field.name.upper().strip(); valor = field.value or ""
-            if "🔫 PT" in nome or nome == "PT":
-                try: dados["pt"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
-                except: pass
-            elif "🔫 SUB" in nome or nome == "SUB":
-                try: dados["sub"] = int(valor.split(" munições")[0].replace(".", "").replace(",", "").strip())
-                except: pass
-            elif "ORGANIZA" in nome:
-                limpo = valor.replace("```yaml", "").replace("```", "").strip(); dados["organizacao"] = limpo.split("\n")[0].strip() or "Desconhecida"
-            elif "VENDEDOR" in nome:
-                limpo = valor.replace("```yaml", "").replace("```", "").strip(); dados["vendedor"] = limpo.split("\n")[0].strip() or ""
-            elif "OBSERVA" in nome:
-                limpo = valor.replace("```yaml", "").replace("```", "").strip(); dados["observacoes"] = limpo
-        return dados
 
     async def criar_proxima_entrega(self, interaction, embed_anterior, pedido_original):
         try:
