@@ -8290,21 +8290,22 @@ class ConfirmarDoacaoView(discord.ui.View):
         embed = self.mensagem_original.embeds[0]
         
         embed.color = 0xF1C40F
-        if "DOAÇÃO" not in embed.title:
-            embed.title = f"🎁 [DOAÇÃO] {embed.title}"
-
-        for i, field in enumerate(embed.fields):
-            if field.name == "💰 VALOR TOTAL":
-                embed.set_field_at(i, name="💰 VALOR TOTAL", value="```yaml\nR$ 0,00 (DOAÇÃO)\n```", inline=False)
-            if field.name == "📌 STATUS DO PEDIDO":
-                embed.set_field_at(i, name="📌 STATUS DO PEDIDO", value="```yaml\n📦 A Entregar\n🎁 Doação (Sem custo)\n```", inline=False)
-
-        if not any(f.name == "🎁 AVISO DE DOAÇÃO" for f in embed.fields):
-            embed.add_field(
-                name="🎁 AVISO DE DOAÇÃO",
-                value="```diff\n+ Este pedido é uma DOAÇÃO.\n+ Nenhum valor será cobrado.\n+ Apenas a ENTREGA precisa ser confirmada.\n```",
-                inline=False
+        
+        # ─── ATUALIZA O TEXTO DO NOVO LAYOUT ───
+        if embed.description:
+            # Troca o valor da transação para 0
+            embed.description = embed.description.replace(
+                f"💰 **TRANSAÇÃO**\n```fix\n{formatar_dinheiro(self.valor_total if hasattr(self, 'valor_total') else 0)}\n```", 
+                "💰 **TRANSAÇÃO**\n```fix\nR$ 0,00 (DOAÇÃO)\n```"
             )
+            # Muda o título e o status
+            embed.description = embed.description.replace("🩸 FICHA DE ENCOMENDA", "🎁 FICHA DE DOAÇÃO")
+            embed.description = embed.description.replace("📦 ENCOMENDA PARCELADA", "🎁 DOAÇÃO PARCELADA")
+            embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", "🟢 **DOAÇÃO (SEM CUSTO)**")
+            
+            # Adiciona o aviso de doação
+            if "AVISO DE DOAÇÃO" not in embed.description:
+                embed.description += f"\n\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n> 🎁 **ESTE PEDIDO É UMA DOAÇÃO**\n> Nenhum valor será cobrado.\n> Apenas a **ENTREGA** precisa ser confirmada."
 
         view = StatusView(
             disabled=False,
@@ -8332,7 +8333,6 @@ class ConfirmarDoacaoView(discord.ui.View):
             await interaction.message.delete()
         except:
             pass
-
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ComprovanteModal (Para enviar o print)
 # ────────────────────────────────────────────────────────────────────────────────
