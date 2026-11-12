@@ -7480,51 +7480,60 @@ async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, ve
             return False
 
         valor_total = (pt * 50) + (sub * 90)
+        pacotes_pt = pt // 50
+        pacotes_sub = sub // 50
 
         if tipo == "cancelado":
             cor = 0xC0392B 
             status_emoji = "❌"
             status_texto = "PEDIDO CANCELADO"
+            status_cor = "🔴"
         else:
             cor = 0x2ECC71 
             status_emoji = "✅"
             status_texto = "VENDA FINALIZADA"
+            status_cor = "🟢"
 
         embed = discord.Embed(
-            title="",
-            description=f"# {status_emoji} {status_texto}\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**",
+            title=f"{status_emoji} • {status_texto} - Pedido #{pedido_numero:04d}",
             color=cor,
             timestamp=agora()
         )
-        embed.set_author(name="🕴️ VDR 442 • LOGÍSTICA DE VENDAS", icon_url=bot.user.display_avatar.url if bot.user else None)
-
-        embed.description += f"\n> 🔖 **REGISTRO:** **#{pedido_numero:04d}**\n> 🏢 **ORG:** **{organizacao}**\n> 👤 **VENDEDOR:** **{vendedor_nome}**\n"
         
-        embed.description += "\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
-        
-        carga = ""
-        if pt > 0: carga += f"➕ **{fmt_num(pt)} PT** ({pt//50} pacotes)\n"
-        if sub > 0: carga += f"➕ **{fmt_num(sub)} SUB** ({sub//50} pacotes)\n"
-        embed.description += f"\n🎯 **CARGA ENTREGUE**\n{carga.strip()}\n"
+        if bot.user and bot.user.display_avatar:
+            embed.set_thumbnail(url=bot.user.display_avatar.url)
 
-        embed.description += f"\n💰 **TRANSAÇÃO**\n**{formatar_dinheiro(valor_total)}**\n"
+        # Linha 1
+        embed.add_field(name="👤 VENDEDOR", value=f"```yaml\n{vendedor_nome}\n```", inline=True)
+        embed.add_field(name="📍 ORGANIZAÇÃO", value=f"```yaml\n{organizacao}\n```", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
 
-        embed.description += "\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+        # Linha 2
+        embed.add_field(name="🔫 PT", value=f"```yaml\n{fmt_num(pt)} munições\n📦 {pacotes_pt} pacotes\n```", inline=True)
+        embed.add_field(name="🔫 SUB", value=f"```yaml\n{fmt_num(sub)} munições\n📦 {pacotes_sub} pacotes\n```", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
 
+        # Linha 3
+        embed.add_field(name="💰 VALOR TOTAL", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=False)
+
+        # Linha 4: Status detalhado
+        texto_status = f"{status_cor} **{status_texto}**\n"
         if tipo == "finalizado":
             if entregue_por:
-                embed.description += f"\n> 🚚 **Entregue por:** **{entregue_por}** ({entregue_em or '—'})\n"
+                texto_status += f"🚚 Entregue por: {entregue_por} ({entregue_em or '—'})\n"
             if pago_por:
-                embed.description += f"> 💰 **Recebido por:** **{pago_por}** ({pago_em or '—'})\n"
+                texto_status += f"💰 Pago por: {pago_por} ({pago_em or '—'})\n"
             if transferido_para:
-                embed.description += f"> 📤 **Transferido para:** **{transferido_para}**\n"
+                texto_status += f"📤 Transferido para: {transferido_para}\n"
                 if transferido_por:
-                    embed.description += f"> 👤 **Confirmado por:** **{transferido_por}** ({transferido_em or '—'})\n"
+                    texto_status += f"👤 Confirmado por: {transferido_por} ({transferido_em or '—'})\n"
         else:
             if cancelado_por:
-                embed.description += f"\n> ❌ **Cancelado por:** **{cancelado_por}** ({cancelado_em or '—'})\n"
+                texto_status += f"❌ Cancelado por: {cancelado_por} ({cancelado_em or '—'})\n"
 
-        embed.set_footer(text=f"🛡️ VDR 442 • Finalizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
+        embed.add_field(name="🚦 STATUS DETALHADO", value=f"```yaml\n{texto_status.strip()}\n```", inline=False)
+
+        embed.set_footer(text=f"👑 Sistema de Encomendas - VDR 442 - {agora().strftime('%d/%m/%Y, %H:%M')}")
 
         view = None
         if tipo == "finalizado" and not transferido_para:
@@ -8190,64 +8199,64 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
     else:
         vendedor_nome = interaction.user.display_name
 
+    # Calcula os pacotes para exibir bonitinho (cada pacote = 50 munições)
+    pacotes_pt = pt // 50
+    pacotes_sub = sub // 50
+    valor_total = (pt * 50) + (sub * 90)
+
+    # Cabeçalho da Encomenda
     if total_entregas > 1:
-        titulo_embed = f"# 📦 ENCOMENDA PARCELADA"
-        status_inicial = "🟡 **AGUARDANDO ENTREGA**"
+        titulo_embed = f"🏷️ {emoji_org} • NOVA ENCOMENDA PARCELADA - Pedido #{pedido_numero:04d}"
+        status_inicial = "🟡 Pagamento pendente / Aguardando entrega"
     else:
-        titulo_embed = f"# 🩸 FICHA DE ENCOMENDA"
-        status_inicial = "🔴 **AGUARDANDO PAGAMENTO**"
+        titulo_embed = f"🏷️ {emoji_org} • NOVA ENCOMENDA - Pedido #{pedido_numero:04d}"
+        status_inicial = "🟡 Pagamento pendente"
 
     embed = discord.Embed(
-        title="",
-        description=(
-            f"{titulo_embed}\n"
-            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
-            f"> 🔖 **REGISTRO:** **#{pedido_numero:04d}**\n"
-            f"> 👤 **RESPONSÁVEL:** **{vendedor_nome}**\n"
-            f"> 🏢 **DESTINO:** **{org_nome}**\n"
-            f"> 📦 **PARCELAS:** **{entrega_atual}/{total_entregas}**\n\n"
-            f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
-        ),
+        title=titulo_embed,
+        description=f"✅ **Entrega única**" if total_entregas == 1 else f"📦 **Entrega {entrega_atual} de {total_entregas}**",
         color=cor,
         timestamp=agora()
     )
-    embed.set_author(name=f"{emoji_org} VDR 442 • LOGÍSTICA DE VENDAS", icon_url=bot.user.display_avatar.url if bot.user else None)
-
-    carga_texto = ""
-    if pt > 0: carga_texto += f"➕ **{fmt_num(pt)} PT** ({pt//50} pacotes)\n"
-    if sub > 0: carga_texto += f"➕ **{fmt_num(sub)} SUB** ({sub//50} pacotes)\n"
     
-    embed.description += f"\n🎯 **CARREGAMENTO**\n{carga_texto.strip()}\n"
+    if bot.user and bot.user.display_avatar:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
 
-    valor_total = (pt * 50) + (sub * 90)
-    embed.description += f"\n💰 **TRANSAÇÃO**\n**{formatar_dinheiro(valor_total)}**\n"
+    # Linha 1: Vendedor e Organização
+    embed.add_field(name="👤 VENDEDOR", value=f"```yaml\n{vendedor_nome}\n```", inline=True)
+    embed.add_field(name="📍 ORGANIZAÇÃO", value=f"```yaml\n{org_nome}\n```", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True) # Espaçador invisível
 
-    embed.description += "\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+    # Linha 2: Cargas
+    embed.add_field(name="🔫 PT", value=f"```yaml\n{fmt_num(pt)} munições\n📦 {pacotes_pt} pacotes\n```", inline=True)
+    embed.add_field(name="🔫 SUB", value=f"```yaml\n{fmt_num(sub)} munições\n📦 {pacotes_sub} pacotes\n```", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
 
-    if total_entregas > 1 and entregas_lista:
-        resumo = ""
-        for i, e in enumerate(entregas_lista, 1):
-            if i < entrega_atual: status = "✅"
-            elif i == entrega_atual: status = "🔴"
-            else: status = "⏳"
-            resumo += f"{status} {i}/{total_entregas} - {e['data']} (PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])})\n"
-        embed.description += f"\n📊 **RESUMO DAS ENTREGAS**\n{resumo.strip()}\n"
+    # Linha 3: Valor Total
+    embed.add_field(name="💰 VALOR TOTAL", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=False)
 
-    if observacoes:
-        embed.description += f"\n📝 **OBSERVAÇÕES**\n> {observacoes}\n"
-
+    # Linha 4: Data de Entrega
     data_entrega = entregas_lista[entrega_atual-1]['data'] if entregas_lista else agora().strftime('%d/%m/%Y')
+    embed.add_field(name="📅 DATA DA ENTREGA", value=f"```yaml\n{data_entrega}\n```", inline=False)
 
-    embed.description += (
-        f"\n📅 **DATA:** **{data_entrega}**\n"
-        f"🚦 **STATUS:** {status_inicial}\n\n"
-    )
+    # Linha 5: Status
+    embed.add_field(name="🚦 Status", value=f"```yaml\n{status_inicial}\n```", inline=False)
 
-    footer_text = f"🛡️ VDR 442 • Gerado por {vendedor_nome} • {agora().strftime('%d/%m/%Y às %H:%M')}"
+    # Observações (se tiver)
+    if observacoes:
+        embed.add_field(name="📝 OBSERVAÇÕES", value=f"```yaml\n{observacoes}\n```", inline=False)
+
+    # Rodapé
+    footer_text = f"Sistema de Encomendas - VDR 442"
+    if total_entregas > 1:
+        footer_text += f" - Entrega {entrega_atual}/1"
     if entrega_id:
-        footer_text += f" • ID: {entrega_id}"
-    embed.set_footer(text=footer_text, icon_url=bot.user.display_avatar.url if bot.user else None)
+        footer_text += f" - ID: {entrega_id}"
+    footer_text += f" - {agora().strftime('%d/%m/%Y, %H:%M')}"
+    
+    embed.set_footer(text=f"👑 {footer_text}")
 
+    # Envia o card com os botões
     view = StatusView(entrega_id=entrega_id, total_entregas=total_entregas, entrega_atual=entrega_atual, valor_total=valor_total, pt=pt, sub=sub, pedido_numero=pedido_numero)
 
     msg = await safe_request(canal.send, embed=embed, view=view)
@@ -8446,31 +8455,31 @@ class StatusView(discord.ui.View):
 
         if not self.is_doacao:
             self.add_item(discord.ui.Button(
-                label="💰 Pago", style=discord.ButtonStyle.primary,
+                label="Pago", style=discord.ButtonStyle.primary,
                 custom_id="status_pago_fixo", emoji="💰", 
                 disabled=self.pago_ja_clicado or self.transferencia_confirmada
             ))
             self.add_item(discord.ui.Button(
-                label="❌ Pedido cancelado", style=discord.ButtonStyle.danger,
+                label="Pedido cancelado", style=discord.ButtonStyle.danger,
                 custom_id="status_cancelado_fixo", emoji="❌", 
                 disabled=self.transferencia_confirmada
             ))
 
         self.add_item(discord.ui.Button(
-            label="✅ Entregue", style=discord.ButtonStyle.success,
+            label="Entregue", style=discord.ButtonStyle.success,
             custom_id="status_entregue_fixo", emoji="✅", 
             disabled=self.entrega_ja_entregue or self.transferencia_confirmada
         ))
         
         self.add_item(discord.ui.Button(
-            label="✏️ Editar Venda", style=discord.ButtonStyle.primary,
+            label="Editar Venda", style=discord.ButtonStyle.primary,
             custom_id="editar_venda_fixo", emoji="✏️", 
             disabled=self.transferencia_confirmada
         ))
 
         if not self.is_doacao:
             self.add_item(discord.ui.Button(
-                label="🎁 Transformar em Doação", style=discord.ButtonStyle.secondary,
+                label="Transformar em Doação", style=discord.ButtonStyle.secondary,
                 custom_id="transformar_doacao", emoji="🎁",
                 disabled=self.transferencia_confirmada or (self.valor_total == 0) or self.pago_ja_clicado or self.entrega_ja_entregue, row=1
             ))
@@ -8508,26 +8517,33 @@ class StatusView(discord.ui.View):
             except: pass
         return False
 
+    # ─── ATUALIZADO PARA LER OS BLOCOS DE CÓDIGO DO NOVO VISUAL ───
     def extrair_dados_venda(self, embed):
-        dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "Desconhecido", "observacoes": "", "pedido_numero": 0}
-        if embed.description:
-            linhas = embed.description.split("\n")
-            for l in linhas:
-                if "REGISTRO:" in l:
-                    try: dados["pedido_numero"] = int(l.split("#")[1].replace("*", "").split("`")[0].strip())
-                    except: pass
-                elif "DESTINO:" in l:
-                    try: dados["organizacao"] = l.split("DESTINO:**")[1].replace("*", "").strip()
-                    except: pass
-                elif "RESPONSÁVEL:" in l:
-                    try: dados["vendedor"] = l.split("RESPONSÁVEL:**")[1].replace("*", "").strip()
-                    except: pass
-                elif "PT (" in l:
-                    try: dados["pt"] = int(l.split("PT")[0].replace("➕", "").replace("*", "").strip().replace(".", ""))
-                    except: pass
-                elif "SUB (" in l:
-                    try: dados["sub"] = int(l.split("SUB")[0].replace("➕", "").replace("*", "").strip().replace(".", ""))
-                    except: pass
+        dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "Desconhecido", "pedido_numero": 0}
+        
+        # Tenta pegar o ID pelo título ou rodapé
+        if embed.title and "#" in embed.title:
+            try: dados["pedido_numero"] = int(embed.title.split("#")[1].strip())
+            except: pass
+        elif embed.footer and "ID:" in embed.footer.text:
+            try: dados["pedido_numero"] = int(embed.footer.text.split("Pedido #")[1].split(" ")[0].strip())
+            except: pass
+
+        for field in embed.fields:
+            nome = field.name.upper()
+            valor = field.value.replace("```yaml\n", "").replace("\n```", "").strip()
+            
+            if "VENDEDOR" in nome:
+                dados["vendedor"] = valor
+            elif "ORGANIZA" in nome:
+                dados["organizacao"] = valor
+            elif "PT" in nome:
+                try: dados["pt"] = int(valor.split("\n")[0].replace(" munições", "").replace(".", "").strip())
+                except: pass
+            elif "SUB" in nome:
+                try: dados["sub"] = int(valor.split("\n")[0].replace(" munições", "").replace(".", "").strip())
+                except: pass
+                
         return dados
 
     async def pago(self, interaction: discord.Interaction, button):
@@ -8538,7 +8554,11 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         pagador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
         
-        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"🟢 **PAGO POR:** **{pagador_apelido}** ({agora_str})")
+        # Atualiza o campo de Status
+        for i, field in enumerate(embed.fields):
+            if "Status" in field.name:
+                embed.set_field_at(i, name="🚦 Status", value=f"```yaml\n🟢 Pago por {pagador_apelido} • {agora_str}\n```", inline=False)
+                break
 
         try: 
             await marcar_status_parcela(entrega_id=self.entrega_id if self.entrega_id else 0, numero_parcela=self.entrega_atual, pedido_numero=pedido_numero, campo="pago", autor_id=interaction.user.id)
@@ -8556,7 +8576,7 @@ class StatusView(discord.ui.View):
             await enviar_embed_pedido_finalizado(
                 pedido_numero=pedido_numero, pt=dados["pt"], sub=dados["sub"],
                 organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
-                pago_por=pagador_apelido, pago_em=agora_str, entregue_por=pagador_apelido, entregue_em=agora_str,
+                pago_por=pagador_apelido, pago_em=agora_str, entregue_por="Sistema", entregue_em=agora_str,
                 transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado",
                 entrega_id=self.entrega_id
             )
@@ -8593,8 +8613,13 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         entregador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
         
-        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"🟠 **AGUARDANDO PAGAMENTO**")
-        embed.description = embed.description.replace("🟡 **AGUARDANDO ENTREGA**", f"🟢 **ENTREGUE POR:** **{entregador_apelido}** ({agora_str})")
+        for i, field in enumerate(embed.fields):
+            if "Status" in field.name:
+                texto_status = f"🟢 Entregue por {entregador_apelido} • {agora_str}"
+                if not self.pago_ja_clicado:
+                    texto_status += "\n🟡 Pagamento pendente"
+                embed.set_field_at(i, name="🚦 Status", value=f"```yaml\n{texto_status}\n```", inline=False)
+                break
 
         msg_nova = None
         if self.entrega_atual < self.total_entregas:
@@ -8651,16 +8676,6 @@ class StatusView(discord.ui.View):
         pacotes_pt = dados["pt"] // 50
         pacotes_sub = dados["sub"] // 50
 
-        # ─── DEVOLVE AO ESTOQUE DE PRODUÇÃO APENAS O QUE FOI ENTREGUE ───
-        entregues_anteriores = 0
-        if self.entrega_ja_entregue:
-            entregues_anteriores = 1
-        
-        # Se havia entregas anteriores (parcelado), precisamos calcular quanto foi entregue
-        # Como o bot não salva o histórico de quantos pacotes por entrega, vamos usar a lógica simples:
-        # Se a entrega atual foi entregue, devolve o valor TOTAL do pedido. 
-        # (Se for parcelado, isso pode dar um pequeno erro de arredondamento, mas resolve o problema principal).
-        
         if self.entrega_ja_entregue:
             if pacotes_pt > 0: await atualizar_estoque("PT", pacotes_pt, "adicionar")
             if pacotes_sub > 0: await atualizar_estoque("SUB", pacotes_sub, "adicionar")
@@ -8669,10 +8684,10 @@ class StatusView(discord.ui.View):
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         cancelador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
         
-        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"❌ **CANCELADO POR:** **{cancelador_apelido}** ({agora_str})")
-        embed.description = embed.description.replace("🟡 **AGUARDANDO ENTREGA**", f"❌ **CANCELADO POR:** **{cancelador_apelido}** ({agora_str})")
-        embed.description = embed.description.replace("🟢 **PAGO POR", "❌ **CANCELADO POR")
-        embed.description = embed.description.replace("🟢 **ENTREGUE POR", "❌ **CANCELADO POR")
+        for i, field in enumerate(embed.fields):
+            if "Status" in field.name:
+                embed.set_field_at(i, name="🚦 Status", value=f"```yaml\n❌ Cancelado por {cancelador_apelido} • {agora_str}\n```", inline=False)
+                break
 
         try:
             await interaction.message.edit(embed=embed, view=StatusView(disabled=False, entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=True, mensagem_original=interaction.message, transferencia_confirmada=True, valor_total=self.valor_total, pt=self.pt, sub=self.sub, pedido_numero=pedido_numero, entregue_ja_clicado=True, is_doacao=self.is_doacao))
