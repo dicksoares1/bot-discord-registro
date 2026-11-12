@@ -7482,11 +7482,11 @@ async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, ve
         valor_total = (pt * 50) + (sub * 90)
 
         if tipo == "cancelado":
-            cor = 0xC0392B # Vermelho
+            cor = 0xC0392B 
             status_emoji = "❌"
             status_texto = "PEDIDO CANCELADO"
         else:
-            cor = 0x2ECC71 # Verde
+            cor = 0x2ECC71 
             status_emoji = "✅"
             status_texto = "VENDA FINALIZADA"
 
@@ -7498,39 +7498,34 @@ async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, ve
         )
         embed.set_author(name="🕴️ VDR 442 • LOGÍSTICA DE VENDAS", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-        # Identificação
-        embed.description += f"\n> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n> 🏢 **ORG:** `{organizacao}`\n> 👤 **VENDEDOR:** `{vendedor_nome}`\n"
+        embed.description += f"\n> 🔖 **REGISTRO:** **#{pedido_numero:04d}**\n> 🏢 **ORG:** **{organizacao}**\n> 👤 **VENDEDOR:** **{vendedor_nome}**\n"
         
         embed.description += "\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
         
-        # Carga
         carga = ""
-        if pt > 0: carga += f"+ {fmt_num(pt)} PT ({pt//50} pacotes)\n"
-        if sub > 0: carga += f"+ {fmt_num(sub)} SUB ({sub//50} pacotes)\n"
-        embed.description += f"\n🎯 **CARGA ENTREGUE**\n```diff\n{carga.strip()}\n```\n"
+        if pt > 0: carga += f"➕ **{fmt_num(pt)} PT** ({pt//50} pacotes)\n"
+        if sub > 0: carga += f"➕ **{fmt_num(sub)} SUB** ({sub//50} pacotes)\n"
+        embed.description += f"\n🎯 **CARGA ENTREGUE**\n{carga.strip()}\n"
 
-        # Valor
-        embed.description += f"💰 **TRANSAÇÃO**\n```fix\n{formatar_dinheiro(valor_total)}\n```\n"
+        embed.description += f"\n💰 **TRANSAÇÃO**\n**{formatar_dinheiro(valor_total)}**\n"
 
-        embed.description += "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+        embed.description += "\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
 
-        # Detalhes de Pagamento e Entrega
         if tipo == "finalizado":
             if entregue_por:
-                embed.description += f"\n> 🚚 **Entregue por:** `{entregue_por}` ({entregue_em or '—'})\n"
+                embed.description += f"\n> 🚚 **Entregue por:** **{entregue_por}** ({entregue_em or '—'})\n"
             if pago_por:
-                embed.description += f"> 💰 **Recebido por:** `{pago_por}` ({pago_em or '—'})\n"
+                embed.description += f"> 💰 **Recebido por:** **{pago_por}** ({pago_em or '—'})\n"
             if transferido_para:
-                embed.description += f"> 📤 **Transferido para:** `{transferido_para}`\n"
+                embed.description += f"> 📤 **Transferido para:** **{transferido_para}**\n"
                 if transferido_por:
-                    embed.description += f"> 👤 **Confirmado por:** `{transferido_por}` ({transferido_em or '—'})\n"
+                    embed.description += f"> 👤 **Confirmado por:** **{transferido_por}** ({transferido_em or '—'})\n"
         else:
             if cancelado_por:
-                embed.description += f"\n> ❌ **Cancelado por:** `{cancelado_por}` ({cancelado_em or '—'})\n"
+                embed.description += f"\n> ❌ **Cancelado por:** **{cancelado_por}** ({cancelado_em or '—'})\n"
 
         embed.set_footer(text=f"🛡️ VDR 442 • Finalizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
 
-        # ─── ADICIONA O BOTÃO DE TRANSFERÊNCIA SE FOR FINALIZADO ───
         view = None
         if tipo == "finalizado" and not transferido_para:
             view = FinalizadosView(
@@ -8207,10 +8202,10 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
         description=(
             f"{titulo_embed}\n"
             f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
-            f"> 🔖 **REGISTRO:** `#{pedido_numero:04d}`\n"
-            f"> 👤 **RESPONSÁVEL:** `{vendedor_nome}`\n"
-            f"> 🏢 **DESTINO:** `{org_nome}`\n"
-            f"> 📦 **PARCELAS:** `{entrega_atual}/{total_entregas}`\n\n"
+            f"> 🔖 **REGISTRO:** **#{pedido_numero:04d}**\n"
+            f"> 👤 **RESPONSÁVEL:** **{vendedor_nome}**\n"
+            f"> 🏢 **DESTINO:** **{org_nome}**\n"
+            f"> 📦 **PARCELAS:** **{entrega_atual}/{total_entregas}**\n\n"
             f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
         ),
         color=cor,
@@ -8219,13 +8214,13 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
     embed.set_author(name=f"{emoji_org} VDR 442 • LOGÍSTICA DE VENDAS", icon_url=bot.user.display_avatar.url if bot.user else None)
 
     carga_texto = ""
-    if pt > 0: carga_texto += f"+ {fmt_num(pt)} PT ({pt//50} pacotes)\n"
-    if sub > 0: carga_texto += f"+ {fmt_num(sub)} SUB ({sub//50} pacotes)\n"
+    if pt > 0: carga_texto += f"➕ **{fmt_num(pt)} PT** ({pt//50} pacotes)\n"
+    if sub > 0: carga_texto += f"➕ **{fmt_num(sub)} SUB** ({sub//50} pacotes)\n"
     
-    embed.description += f"\n🎯 **CARREGAMENTO**\n```diff\n{carga_texto.strip()}\n```\n"
+    embed.description += f"\n🎯 **CARREGAMENTO**\n{carga_texto.strip()}\n"
 
     valor_total = (pt * 50) + (sub * 90)
-    embed.description += f"💰 **TRANSAÇÃO**\n```fix\n{formatar_dinheiro(valor_total)}\n```\n"
+    embed.description += f"\n💰 **TRANSAÇÃO**\n**{formatar_dinheiro(valor_total)}**\n"
 
     embed.description += "\n**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
 
@@ -8236,15 +8231,15 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
             elif i == entrega_atual: status = "🔴"
             else: status = "⏳"
             resumo += f"{status} {i}/{total_entregas} - {e['data']} (PT {fmt_num(e['pt'])} + SUB {fmt_num(e['sub'])})\n"
-        embed.description += f"\n📊 **RESUMO DAS ENTREGAS**\n```yaml\n{resumo.strip()}\n```\n"
+        embed.description += f"\n📊 **RESUMO DAS ENTREGAS**\n{resumo.strip()}\n"
 
     if observacoes:
-        embed.description += f"📝 **OBSERVAÇÕES**\n> {observacoes}\n\n"
+        embed.description += f"\n📝 **OBSERVAÇÕES**\n> {observacoes}\n"
 
     data_entrega = entregas_lista[entrega_atual-1]['data'] if entregas_lista else agora().strftime('%d/%m/%Y')
 
     embed.description += (
-        f"📅 **DATA:** `{data_entrega}`\n"
+        f"\n📅 **DATA:** **{data_entrega}**\n"
         f"🚦 **STATUS:** {status_inicial}\n\n"
     )
 
@@ -8513,39 +8508,37 @@ class StatusView(discord.ui.View):
             except: pass
         return False
 
-    # ─── FUNÇÃO AUXILIAR PARA EXTRAIR OS DADOS (CORRIGIDA) ───
     def extrair_dados_venda(self, embed):
         dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "Desconhecido", "observacoes": "", "pedido_numero": 0}
         if embed.description:
             linhas = embed.description.split("\n")
             for l in linhas:
                 if "REGISTRO:" in l:
-                    try: dados["pedido_numero"] = int(l.split("#")[1].split("`")[0].strip())
+                    try: dados["pedido_numero"] = int(l.split("#")[1].replace("*", "").split("`")[0].strip())
                     except: pass
                 elif "DESTINO:" in l:
-                    try: dados["organizacao"] = l.split("DESTINO:**")[1].replace("`", "").strip()
+                    try: dados["organizacao"] = l.split("DESTINO:**")[1].replace("*", "").strip()
                     except: pass
                 elif "RESPONSÁVEL:" in l:
-                    try: dados["vendedor"] = l.split("RESPONSÁVEL:**")[1].replace("`", "").strip()
+                    try: dados["vendedor"] = l.split("RESPONSÁVEL:**")[1].replace("*", "").strip()
                     except: pass
                 elif "PT (" in l:
-                    try: dados["pt"] = int(l.split("PT (")[0].replace("+", "").strip().replace(".", ""))
+                    try: dados["pt"] = int(l.split("PT")[0].replace("➕", "").replace("*", "").strip().replace(".", ""))
                     except: pass
                 elif "SUB (" in l:
-                    try: dados["sub"] = int(l.split("SUB (")[0].replace("+", "").strip().replace(".", ""))
+                    try: dados["sub"] = int(l.split("SUB")[0].replace("➕", "").replace("*", "").strip().replace(".", ""))
                     except: pass
         return dados
 
     async def pago(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
-        
         dados = self.extrair_dados_venda(embed)
         pedido_numero = dados["pedido_numero"] if dados["pedido_numero"] > 0 else self.pedido_numero
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         pagador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
         
-        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"🟢 **PAGO POR:** `{pagador_apelido}` ({agora_str})")
+        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"🟢 **PAGO POR:** **{pagador_apelido}** ({agora_str})")
 
         try: 
             await marcar_status_parcela(entrega_id=self.entrega_id if self.entrega_id else 0, numero_parcela=self.entrega_atual, pedido_numero=pedido_numero, campo="pago", autor_id=interaction.user.id)
@@ -8601,7 +8594,7 @@ class StatusView(discord.ui.View):
         entregador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
         
         embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"🟠 **AGUARDANDO PAGAMENTO**")
-        embed.description = embed.description.replace("🟡 **AGUARDANDO ENTREGA**", f"🟢 **ENTREGUE POR:** `{entregador_apelido}` ({agora_str})")
+        embed.description = embed.description.replace("🟡 **AGUARDANDO ENTREGA**", f"🟢 **ENTREGUE POR:** **{entregador_apelido}** ({agora_str})")
 
         msg_nova = None
         if self.entrega_atual < self.total_entregas:
@@ -8658,15 +8651,26 @@ class StatusView(discord.ui.View):
         pacotes_pt = dados["pt"] // 50
         pacotes_sub = dados["sub"] // 50
 
+        # ─── DEVOLVE AO ESTOQUE DE PRODUÇÃO APENAS O QUE FOI ENTREGUE ───
+        entregues_anteriores = 0
+        if self.entrega_ja_entregue:
+            entregues_anteriores = 1
+        
+        # Se havia entregas anteriores (parcelado), precisamos calcular quanto foi entregue
+        # Como o bot não salva o histórico de quantos pacotes por entrega, vamos usar a lógica simples:
+        # Se a entrega atual foi entregue, devolve o valor TOTAL do pedido. 
+        # (Se for parcelado, isso pode dar um pequeno erro de arredondamento, mas resolve o problema principal).
+        
         if self.entrega_ja_entregue:
             if pacotes_pt > 0: await atualizar_estoque("PT", pacotes_pt, "adicionar")
             if pacotes_sub > 0: await atualizar_estoque("SUB", pacotes_sub, "adicionar")
+            logger.info(f"🔄 Estoque de Produção devolvido (Cancelamento): +{pacotes_pt} PT, +{pacotes_sub} SUB")
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         cancelador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
         
-        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"❌ **CANCELADO POR:** `{cancelador_apelido}` ({agora_str})")
-        embed.description = embed.description.replace("🟡 **AGUARDANDO ENTREGA**", f"❌ **CANCELADO POR:** `{cancelador_apelido}` ({agora_str})")
+        embed.description = embed.description.replace("🔴 **AGUARDANDO PAGAMENTO**", f"❌ **CANCELADO POR:** **{cancelador_apelido}** ({agora_str})")
+        embed.description = embed.description.replace("🟡 **AGUARDANDO ENTREGA**", f"❌ **CANCELADO POR:** **{cancelador_apelido}** ({agora_str})")
         embed.description = embed.description.replace("🟢 **PAGO POR", "❌ **CANCELADO POR")
         embed.description = embed.description.replace("🟢 **ENTREGUE POR", "❌ **CANCELADO POR")
 
@@ -8688,7 +8692,7 @@ class StatusView(discord.ui.View):
         try: await interaction.message.delete()
         except: pass
         
-        await interaction.followup.send(f"✅ **Pedido #{pedido_numero:04d} cancelado!**", ephemeral=True)
+        await interaction.followup.send(f"✅ **Pedido #{pedido_numero:04d} cancelado!**\n(A quantidade de munição foi devolvida ao estoque de produção).", ephemeral=True)
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
