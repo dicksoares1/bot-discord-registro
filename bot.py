@@ -166,6 +166,9 @@ AGREGADO_ROLE_ID = 1422847202937536532
 CARGO_ADV_1_ID = 1567523356134088847
 CARGO_ADV_2_ID = 1567523623294476403
 CARGO_ADV_3_ID = 1567523686834118787
+CARGO_ORIENTACAO_ID = 1570785613135880192
+CARGO_INDICACAO_ID = 1468691113559724278
+CARGO_INDICACAO_APROVADA_ID = 1570770347538649138
 
 
 CARGOS_PERMITIDOS_REMOVER = [
@@ -281,6 +284,9 @@ CANAL_COMPRAS_REEMBOLSO_ID = 1569430787336441959
 CANAL_CONFIRMAR_META_ID = 1569433609146990622
 CANAL_BLINDADOS_CADASTRO_ID = 1569440854085468160
 CANAL_BLINDADOS_VENCIMENTO_ID = 1569440929696190554
+CANAL_ORIENTACAO_ID = 1570785193525117128
+CANAL_REGISTRO_INDICACAO_ID = 1570769372988051476
+CANAL_HISTORICO_INDICACAO_ID = 1570769530286776433
 PIX_CHAVE = "02912141508"  # Ex: 11999999999
 PIX_NOME = "Dickson Souza Soares" 
 PIX_CIDADE = "Eunapolis" # Sem acentos!
@@ -925,6 +931,23 @@ async def inicializar_tabelas(pool):
                 data TIMESTAMP DEFAULT NOW()
             )
         """)
+
+        # ═══════════════ TABELAS DE INDICAÇÕES ═══════════════
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS indicacoes (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(30) NOT NULL,
+                nome_completo TEXT NOT NULL,
+                data_nascimento TEXT NOT NULL,
+                discord_id TEXT NOT NULL,
+                steam_hex TEXT NOT NULL,
+                status VARCHAR(20) DEFAULT 'pendente',
+                aprovado_por VARCHAR(30),
+                data_registro TIMESTAMP DEFAULT NOW(),
+                data_aprovacao TIMESTAMP
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_indicacoes_user ON indicacoes(user_id)")
         # ═══════════════ TABELAS DE PAINÉIS E BOTÕES ═══════════════
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS paineis (
@@ -2238,6 +2261,197 @@ class AprovarRegistroView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=None)
 
 # ────────────────────────────────────────────────────────────────────────────────
+# SISTEMA DE ORIENTAÇÃO E INDICAÇÃO
+# ────────────────────────────────────────────────────────────────────────────────
+
+class RegistroIndicacaoModal(discord.ui.Modal, title="📝 Registro de Indicação"):
+    nome = discord.ui.TextInput(
+        label="Nome Completo (como no RG)",
+        placeholder="Sem abreviações ou cortes",
+        required=True, max_length=100
+    )
+    data_nasc = discord.ui.TextInput(
+        label="Data de Nascimento (IRL)",
+        placeholder="Ex: 01/01/2008",
+        required=True, max_length=10
+    )
+    steam_hex = discord.ui.TextInput(
+        label="SteamHex",
+        placeholder="Ex: steam:110000112345678",
+        required=True, max_length=50
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                existe = await conn.fetchval("SELECT 1 FROM indicacoes WHERE user_id = $1 AND status = 'pendente'", str(interaction.user.id))
+                if existe:
+                    await interaction.followup.send("❌ Você já possui um registro de indicação pendente de aprovação!", ephemeral=True)
+                    return
+
+                await conn.execute("""
+                    INSERT INTO indicacoes (user_id, nome_completo, data_nascimento, discord_id, steam_hex)
+                    VALUES ($1, $2, $3, $4, $5)
+                """, str(interaction.user.id), self.nome.value, self.data_nasc.value, str(interaction.user.id), self.steam_hex.value)
+
+        canal_hist = interaction.guild.get_channel(CANAL_HISTORICO_INDICACAO_ID)
+        if canal_hist:
+            embed = discord.Embed(
+                title="",
+                description=(
+                    f"# 🆕 NOVO REGISTRO DE INDICAÇÃO\n"
+                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+                    f"> 👤 **NOME COMPLETO:** `{self.nome.value}`\n"
+                    f"> 📅 **DATA DE NASCIMENTO:** `{self.data_nasc.value}`\n"
+                    f"> 🆔 **DISCORD ID:** `{interaction.user.id}` (@{interaction.user.name})\n"
+                    f"> 🎮 **STEAMHEX:** `{self.steam_hex.value}`\n\n"
+                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+                    f"> 📅 **Data do Registro:** `{agora().strftime('%d/%m/%Y às %H:%M')}`\n"
+                    f"> 📌 **STATUS:** `⏳ AGUARDANDO APROVAÇÃO`"
+                ),
+                color=0xF1C40F,
+                timestamp=agora()
+            )
+            embed.set_author(name="🕴️ VDR 442 • INDICAÇÕES", icon_url=bot.user.display_avatar.url if bot.user else None)
+            embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Indicações", icon_url=bot.user.display_avatar.url if bot.user else None)
+            
+            view = AprovarIndicacaoView(interaction.user.id)
+            msg = await canal_hist.send(content=f"<@&{CARGO_01_ID}>", embed=embed, view=view)
+            await BotaoPersistente.salvar_botao(msg.id, canal_hist.id, "indicacao", {"user_id": interaction.user.id})
+
+        await interaction.followup.send("✅ **Registro de indicação enviado com sucesso!**\nAguarde a aprovação do Líder no canal de histórico.", ephemeral=True)
+
+
+class AprovarIndicacaoView(discord.ui.View):
+    def __init__(self, user_id, status_atual="pendente"):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        
+        # Se já estiver processado, desabilita os botões
+        disabled = (status_atual != "pendente")
+
+        btn_aprovar = discord.ui.Button(label="✅ Aprovar", style=discord.ButtonStyle.success, custom_id="aprovar_indicacao_btn", emoji="✅", disabled=disabled)
+        btn_aprovar.callback = self.aprovar
+        self.add_item(btn_aprovar)
+
+        btn_rejeitar = discord.ui.Button(label="❌ Rejeitar", style=discord.ButtonStyle.danger, custom_id="rejeitar_indicacao_btn", emoji="❌", disabled=disabled)
+        btn_rejeitar.callback = self.rejeitar
+        self.add_item(btn_rejeitar)
+
+    async def aprovar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_lider = any(r.id == CARGO_01_ID for r in interaction.user.roles)
+        
+        if not is_admin and not is_lider:
+            await interaction.response.send_message("❌ Apenas o **Líder** (Cargo 01) pode aprovar indicações!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        membro = interaction.guild.get_member(self.user_id)
+        
+        if not membro:
+            await interaction.followup.send("❌ O membro não está mais no servidor.", ephemeral=True)
+            return
+
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE indicacoes SET status = 'aprovado', aprovado_por = $1, data_aprovacao = NOW() WHERE user_id = $2", str(interaction.user.id), str(self.user_id))
+
+        try:
+            cargo_orientacao = interaction.guild.get_role(CARGO_ORIENTACAO_ID)
+            cargo_indicacao = interaction.guild.get_role(CARGO_INDICACAO_ID)
+            cargo_aprovada = interaction.guild.get_role(CARGO_INDICACAO_APROVADA_ID)
+            cargo_em_registro = interaction.guild.get_role(EM_REGISTRO_ROLE_ID)
+
+            if cargo_orientacao and cargo_orientacao in membro.roles: await membro.remove_roles(cargo_orientacao)
+            if cargo_indicacao and cargo_indicacao in membro.roles: await membro.remove_roles(cargo_indicacao)
+            if cargo_aprovada: await membro.add_roles(cargo_aprovada)
+            if cargo_em_registro: await membro.add_roles(cargo_em_registro)
+        except Exception as e:
+            logger.error(f"❌ Erro ao trocar cargos do membro {membro.display_name}: {e}")
+
+        embed = interaction.message.embeds[0]
+        embed.color = 0x2ECC71
+        embed.description = embed.description.replace("⏳ AGUARDANDO APROVAÇÃO", f"✅ APROVADO POR {interaction.user.mention}")
+        
+        # Atualiza a view desabilitando os botões
+        await interaction.message.edit(embed=embed, view=AprovarIndicacaoView(self.user_id, status_atual="aprovado"))
+        
+        try:
+            await membro.send(f"✅ **Parabéns!** Sua indicação foi aprovada pelo Líder.\nVocê agora tem acesso à sala de **Registro Normal** para finalizar sua entrada na cidade.")
+        except: pass
+
+        await interaction.followup.send(f"✅ **Indicação de {membro.mention} aprovada com sucesso!**", ephemeral=True)
+
+    async def rejeitar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin = interaction.user.guild_permissions.administrator
+        is_lider = any(r.id == CARGO_01_ID for r in interaction.user.roles)
+        
+        if not is_admin and not is_lider:
+            await interaction.response.send_message("❌ Apenas o **Líder** (Cargo 01) pode rejeitar indicações!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        membro = interaction.guild.get_member(self.user_id)
+
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE indicacoes SET status = 'rejeitado', aprovado_por = $1, data_aprovacao = NOW() WHERE user_id = $2", str(interaction.user.id), str(self.user_id))
+
+        embed = interaction.message.embeds[0]
+        embed.color = 0xE74C3C
+        embed.description = embed.description.replace("⏳ AGUARDANDO APROVAÇÃO", f"❌ REJEITADO POR {interaction.user.mention}")
+        
+        await interaction.message.edit(embed=embed, view=AprovarIndicacaoView(self.user_id, status_atual="rejeitado"))
+        await interaction.followup.send(f"❌ **Indicação de {membro.mention if membro else self.user_id} rejeitada.**", ephemeral=True)
+
+
+class PainelOrientacaoView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Já possuo AL no Complexo", style=discord.ButtonStyle.success, custom_id="btn_ja_tenho_al", emoji="✅")
+    async def ja_tenho_al(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            cargo_orientacao = interaction.guild.get_role(CARGO_ORIENTACAO_ID)
+            cargo_em_registro = interaction.guild.get_role(EM_REGISTRO_ROLE_ID)
+            
+            if cargo_orientacao in interaction.user.roles:
+                await interaction.user.remove_roles(cargo_orientacao)
+            if cargo_em_registro:
+                await interaction.user.add_roles(cargo_em_registro)
+                
+            await interaction.followup.send("✅ **Perfeito!** Como você já possui AL, você foi direcionado para a sala de **Registro Normal**. Vá até o canal de registro e faça o seu registro!", ephemeral=True)
+        except Exception as e:
+            logger.error(f"❌ Erro ao mudar cargo (Já tenho AL): {e}")
+            await interaction.followup.send("❌ Ocorreu um erro ao mudar seu cargo. Avise a gerência.", ephemeral=True)
+
+    @discord.ui.button(label="Ainda não possuo AL", style=discord.ButtonStyle.danger, custom_id="btn_nao_tenho_al", emoji="❌")
+    async def nao_tenho_al(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            cargo_orientacao = interaction.guild.get_role(CARGO_ORIENTACAO_ID)
+            cargo_indicacao = interaction.guild.get_role(CARGO_INDICACAO_ID)
+            
+            if cargo_orientacao in interaction.user.roles:
+                await interaction.user.remove_roles(cargo_orientacao)
+            if cargo_indicacao:
+                await interaction.user.add_roles(cargo_indicacao)
+                
+            await interaction.followup.send("✅ **Entendido!** Como você ainda não possui AL, você foi direcionado para a sala de **Registro de Indicação**. Vá até o canal de indicação e faça o seu registro!", ephemeral=True)
+        except Exception as e:
+            logger.error(f"❌ Erro ao mudar cargo (Não tenho AL): {e}")
+            await interaction.followup.send("❌ Ocorreu um erro ao mudar seu cargo. Avise a gerência.", ephemeral=True)
+
+# ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistroModal
 # ────────────────────────────────────────────────────────────────────────────────
 class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
@@ -2320,6 +2534,76 @@ class RegistroView(discord.ui.View):
             )
             return
         await interaction.response.send_modal(RegistroModal())
+
+async def enviar_painel_orientacao():
+    canal = bot.get_channel(CANAL_ORIENTACAO_ID)
+    if not canal: return
+
+    embed = discord.Embed(
+        title="",
+        description=(
+            "# 🛡️ BEM-VINDO À VIDA RASA\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 📌 **STATUS:** `🟢 AGUARDANDO SUA ESCOLHA`\n"
+            "> 👤 **ACESSO:** `NOVOS MEMBROS`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 👋 ATENÇÃO, NOVO MEMBRO!\n"
+            "Para liberar seu acesso ao resto do servidor, você precisa nos dizer como você chegou aqui. Escolha uma das opções abaixo:\n\n"
+            "**🟢 JÁ POSSUO AL NO COMPLEXO**\n"
+            "Se você já tem um registro (AL) na cidade e já é um membro ativo, clique no botão verde para ir direto para o registro normal.\n\n"
+            "**🔴 AINDA NÃO POSSUO AL**\n"
+            "Se você está chegando agora, indicado por alguém ou não, clique no botão vermelho para fazer o seu registro de indicação. Após a aprovação do Líder, você será liberado para o registro normal.\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
+            "*Atenção: A escolha é irreversível. Se errar, contate a gerência.*"
+        ),
+        color=0x2ECC71,
+        timestamp=agora()
+    )
+    embed.set_author(name="🕴️ VDR 442 • RECEPÇÃO", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • Orientações", icon_url=bot.user.display_avatar.url if bot.user else None)
+    
+    view = PainelOrientacaoView()
+    await enviar_ou_atualizar_painel("painel_orientacao", CANAL_ORIENTACAO_ID, embed, view)
+
+
+async def enviar_painel_registro_indicacao():
+    canal = bot.get_channel(CANAL_REGISTRO_INDICACAO_ID)
+    if not canal: return
+
+    embed = discord.Embed(
+        title="",
+        description=(
+            "# 📝 REGISTRO DE INDICAÇÃO\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "> 🛡️ **SISTEMA:** `INDICAÇÕES`\n"
+            "> 📌 **STATUS:** `🟢 ABERTO`\n"
+            "> 👤 **ACESSO:** `NOVOS MEMBROS (INDICAÇÃO)`\n\n"
+            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 📋 COMO FUNCIONA\n"
+            "Se você está chegando de fora, sem AL, precisa se registrar aqui.\n"
+            "**1️⃣** Clique no botão **Registrar Indicação** abaixo.\n"
+            "**2️⃣** Preencha seus dados corretamente (Nome Completo, Data de Nascimento, SteamHex).\n"
+            "**3️⃣** Aguarde o Líder aprovar seu registro.\n"
+            "Após a aprovação, você ganhará o cargo de **Indicação Aprovada** e poderá fazer o registro normal."
+        ),
+        color=0xE74C3C,
+        timestamp=agora()
+    )
+    embed.set_author(name="🕴️ VDR 442 • RECEPÇÃO", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_footer(text=f"🛡 Vida Rasa 442 • Registro de Indicação", icon_url=bot.user.display_avatar.url if bot.user else None)
+
+    view = discord.ui.View(timeout=None)
+    btn_registrar = discord.ui.Button(label="Registrar Indicação", style=discord.ButtonStyle.success, emoji="📝", custom_id="btn_registrar_indicacao")
+    
+    async def registrar_callback(interaction: discord.Interaction):
+        await interaction.response.send_modal(RegistroIndicacaoModal())
+        
+    btn_registrar.callback = registrar_callback
+    view.add_item(btn_registrar)
+
+    await enviar_ou_atualizar_painel("painel_registro_indicacao", CANAL_REGISTRO_INDICACAO_ID, embed, view)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_registro
@@ -20136,11 +20420,12 @@ async def on_member_join(member):
             logger.error(f"❌ Erro ao enviar log de entrada: {e}")
 
     try:
-        cargo_em_registro = member.guild.get_role(EM_REGISTRO_ROLE_ID)
-        if cargo_em_registro:
-            await safe_request(member.add_roles, cargo_em_registro)
+        cargo_orientacao = member.guild.get_role(CARGO_ORIENTACAO_ID)
+        if cargo_orientacao:
+            await safe_request(member.add_roles, cargo_orientacao)
+            logger.info(f"✅ Cargo de Orientação dado para {member.display_name}")
     except Exception as e:
-        logger.error(f"❌ Erro ao adicionar cargo de registro: {e}")
+        logger.error(f"❌ Erro ao adicionar cargo de orientação: {e}")
 
     try:
         suspeito = await verificar_suspeito_db(member.id)
@@ -21887,6 +22172,51 @@ class PainelAuditoriaView(discord.ui.View):
         await enviar_painel_auditoria()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
 
+    @discord.ui.button(label="📋 Histórico de Indicações", style=discord.ButtonStyle.primary, custom_id="audit_indicacoes_btn", emoji="📋", row=2)
+    async def btn_indicacoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._checar_permissao(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            return
+
+        async with pool.acquire() as conn:
+            registros = await conn.fetch("SELECT * FROM indicacoes ORDER BY data_registro ASC")
+
+        if not registros:
+            await interaction.followup.send("📭 Nenhuma indicação registrada até o momento.", ephemeral=True)
+            return
+
+        linhas = []
+        linhas.append("=" * 60)
+        linhas.append("HISTORICO DE INDICACOES - VIDA RASA 442")
+        linhas.append("=" * 60)
+        linhas.append(f"Data de Geracao: {agora().strftime('%d/%m/%Y %H:%M')}")
+        linhas.append(f"Total de Registros: {len(registros)}")
+        linhas.append("")
+
+        for r in registros:
+            linhas.append("-" * 60)
+            linhas.append(f"Nome: {r['nome_completo']}")
+            linhas.append(f"Data Nasc: {r['data_nascimento']}")
+            linhas.append(f"Discord ID: {r['discord_id']}")
+            linhas.append(f"SteamHex: {r['steam_hex']}")
+            linhas.append(f"Status: {r['status'].upper()}")
+            linhas.append(f"Registrado em: {r['data_registro'].strftime('%d/%m/%Y %H:%M')}")
+            if r['data_aprovacao']:
+                linhas.append(f"Aprovado em: {r['data_aprovacao'].strftime('%d/%m/%Y %H:%M')}")
+        
+        linhas.append("-" * 60)
+        linhas.append("=" * 60)
+
+        texto_final = "\n".join(linhas)
+        arquivo = discord.File(io.BytesIO(texto_final.encode("utf-8")), filename="historico_indicacoes.txt")
+
+        await interaction.followup.send(content="📎 **Arquivo de Histórico de Indicações gerado com sucesso!**", file=arquivo, ephemeral=True)
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_auditoria
 # ────────────────────────────────────────────────────────────────────────────────
@@ -22598,7 +22928,19 @@ class BotaoPersistente:
                             logger.error(f"❌ Erro ao restaurar painel V2 {tipo}: {e}")
                         continue
 
-                    # ─── Resto dos botões (AQUI PASSA O CANAL_ID) ───
+                    # ─── Restaura os botões de Indicação (NOVO) ───
+                    elif tipo == "indicacao":
+                        try:
+                            user_id = int(dados.get("user_id"))
+                            async with pool.acquire() as conn:
+                                status = await conn.fetchval("SELECT status FROM indicacoes WHERE user_id = $1 ORDER BY id DESC LIMIT 1", str(user_id))
+                            view = AprovarIndicacaoView(user_id, status_atual=status or "pendente")
+                            await msg.edit(view=view)
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao restaurar botão de indicação: {e}")
+                        continue
+
+                    # ─── Resto dos botões (vendas, ações, produção) ───
                     view = BotaoPersistente.criar_view(tipo, dados, row["canal_id"])
                     if view:
                         await msg.edit(view=view)
@@ -26273,6 +26615,8 @@ async def enviar_paineis_iniciais(guild):
             ("Caixa", enviar_painel_caixa),
             ("Empréstimos", enviar_painel_emprestimos),
             ("Doações", enviar_painel_doacoes),
+            ("Orientação", enviar_painel_orientacao),
+            ("Registro de Indicação", enviar_painel_registro_indicacao),
         ]
         for i, (nome, func) in enumerate(paineis):
             try:
