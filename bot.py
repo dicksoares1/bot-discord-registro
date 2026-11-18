@@ -2190,13 +2190,20 @@ class AprovarRegistroView(discord.ui.View):
         self.user_id = user_id
 
     async def _tem_permissao(self, member):
-        cargos_permitidos = [CARGO_DONO_MORRO_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_ID, CARGO_01_ID, CARGO_02_ID]
+        # Cargos que podem aprovar (01 é o Dono do Morro/Líder)
+        cargos_permitidos = [
+            CARGO_01_ID, 
+            CARGO_02_ID, 
+            CARGO_03_ID, 
+            CARGO_GERENTE_GERAL_ID,
+            CARGO_GERENTE_ID
+        ]
         return member.guild_permissions.administrator or any(r.id in cargos_permitidos for r in member.roles)
 
-    @discord.ui.button(label="✅ Aprovar", style=discord.ButtonStyle.success, custom_id="aprovar_registro_malta")
+    @discord.ui.button(label="✅ Aprovar", style=discord.ButtonStyle.success, custom_id="aprovar_registro_vdr")
     async def aprovar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._tem_permissao(interaction.user):
-            await interaction.response.send_message("❌ Apenas Gerentes ou ADM podem aprovar.", ephemeral=True)
+            await interaction.response.send_message("❌ Apenas **01, 02, 03, Gerente Geral, Gerentes ou ADM** podem aprovar.", ephemeral=True)
             return
             
         await interaction.response.defer(ephemeral=True)
@@ -2208,11 +2215,20 @@ class AprovarRegistroView(discord.ui.View):
         agregado = interaction.guild.get_role(AGREGADO_ROLE_ID)
         em_registro = interaction.guild.get_role(EM_REGISTRO_ROLE_ID)
         convidado = interaction.guild.get_role(CONVIDADO_ROLE_ID)
+        indicacao_aprovada = interaction.guild.get_role(CARGO_INDICACAO_APROVADA_ID)
+        cargo_indicacao = interaction.guild.get_role(CARGO_INDICACAO_ID)
 
+        # Remove cargos antigos
         if em_registro and em_registro in membro.roles: 
             await membro.remove_roles(em_registro)
         if convidado and convidado in membro.roles: 
             await membro.remove_roles(convidado)
+        if indicacao_aprovada and indicacao_aprovada in membro.roles:
+            await membro.remove_roles(indicacao_aprovada)
+        if cargo_indicacao and cargo_indicacao in membro.roles:
+            await membro.remove_roles(cargo_indicacao)
+
+        # Adiciona o cargo de Agregado
         if agregado: 
             await membro.add_roles(agregado)
 
@@ -2233,11 +2249,12 @@ class AprovarRegistroView(discord.ui.View):
         embed.title = "✅ REGISTRO APROVADO"
         embed.set_footer(text=f"Aprovado por {interaction.user.display_name}")
         await interaction.message.edit(embed=embed, view=None)
+        await interaction.followup.send(f"✅ **{membro.mention} aprovado com sucesso!**", ephemeral=True)
 
-    @discord.ui.button(label="❌ Rejeitar", style=discord.ButtonStyle.danger, custom_id="rejeitar_registro_malta")
+    @discord.ui.button(label="❌ Rejeitar", style=discord.ButtonStyle.danger, custom_id="rejeitar_registro_vdr")
     async def rejeitar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._tem_permissao(interaction.user):
-            await interaction.response.send_message("❌ Apenas Gerentes ou ADM podem rejeitar.", ephemeral=True)
+            await interaction.response.send_message("❌ Apenas **01, 02, 03, Gerente Geral, Gerentes ou ADM** podem rejeitar.", ephemeral=True)
             return
             
         await interaction.response.defer(ephemeral=True)
@@ -2259,7 +2276,7 @@ class AprovarRegistroView(discord.ui.View):
         embed.title = "❌ REGISTRO REJEITADO"
         embed.set_footer(text=f"Rejeitado por {interaction.user.display_name}")
         await interaction.message.edit(embed=embed, view=None)
-
+        await interaction.followup.send(f"❌ **Registro de {membro.mention if membro else self.user_id} rejeitado.**", ephemeral=True)
 # ────────────────────────────────────────────────────────────────────────────────
 # SISTEMA DE ORIENTAÇÃO E INDICAÇÃO
 # ────────────────────────────────────────────────────────────────────────────────
@@ -5605,6 +5622,49 @@ async def cmd_testar_ocr(ctx):
         await ctx.send(f"✅ **OCR DISPONÍVEL**\n📌 Versão Tesseract: `{versao}`\n🌐 Idiomas: `{', '.join(idiomas)}`\n\n💡 Para testar: envie um print no canal de baú.")
     except Exception as e:
         await ctx.send(f"⚠️ OCR instalado mas com problema: `{str(e)[:200]}`")
+
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: !reparar_registros
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name="reparar_registros")
+@commands.has_permissions(administrator=True)
+async def cmd_reparar_registros(ctx):
+    await ctx.send("🔄 **Buscando registros antigos no canal para consertar os botões...**")
+    
+    canal = bot.get_channel(CANAL_LOG_REGISTRO_ID)
+    if not canal:
+        await ctx.send("❌ Canal de registro (CANAL_LOG_REGISTRO_ID) não encontrado.")
+        return
+
+    contador = 0
+    # Varre as últimas 200 mensagens do canal
+    async for msg in canal.history(limit=200):
+        if msg.author == bot.user and msg.embeds:
+            embed = msg.embeds[0]
+            # Verifica se é um card de registro pendente
+            if "NOVO REGISTRO PENDENTE" in embed.title:
+                # Tenta descobrir o ID do usuário pelo footer ou campo
+                user_id = None
+                
+                # Pega o ID do campo "INFORMAÇÕES DO CANDIDATO"
+                for field in embed.fields:
+                    if "INFORMAÇÕES" in field.name:
+                        try:
+                            user_id = int(field.value.split("🆔 ID: `")[1].split("`")[0])
+                        except:
+                            pass
+                
+                if user_id:
+                    # Aplica a nova View
+                    nova_view = AprovarRegistroView(user_id)
+                    try:
+                        await msg.edit(view=nova_view)
+                        contador += 1
+                        await asyncio.sleep(0.5) # Evita rate limit do Discord
+                    except Exception as e:
+                        logger.error(f"Erro ao consertar mensagem {msg.id}: {e}")
+
+    await ctx.send(f"✅ **{contador} registros antigos foram consertados!**\nAgora os botões de Aprovar e Rejeitar estão funcionando novamente nesses cards.")
 
 @bot.command(name="registrar_manual_bau")
 async def cmd_registrar_manual_bau(ctx):
