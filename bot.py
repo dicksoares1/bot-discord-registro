@@ -3163,6 +3163,7 @@ async def salvar_compra_db(produto, valor, comprado_por, quantidade=0, tipo="Com
                     logger.info(f"🧨 Estoque de pólvora atualizado via lançamento: +{qtd}")
 
             elif "embalagem" in produto_lower:
+                # Se a quantidade não foi informada, tenta calcular pelo valor
                 qtd = quantidade if quantidade > 0 else int(valor / PRECO_EMBALAGEM_POR_UNIDADE)
                 if qtd > 0:
                     await atualizar_estoque_embalagens(qtd, "adicionar")
@@ -3363,6 +3364,8 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
         tipo = self.tipo_lancamento.value.strip().capitalize()
         descricao = self.descricao.value.strip()
         if not descricao: return await interaction.followup.send("❌ Descrição inválida!", ephemeral=True)
+        
+        # O safe_int agora limpa os pontos corretamente (ex: "25.000" vira 25000)
         qtd_compra = safe_int(self.quantidade.value) if self.quantidade.value else 0
         qtd_brinde = safe_int(self.brinde.value) if self.brinde.value else 0
         valor_input = safe_int(self.valor.value) if self.valor.value else 0
@@ -3405,7 +3408,7 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
                     f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
                     f"> 📌 **STATUS:** `✅ CAIXA LIMPO DEBITADO`"
                 ),
-                color=0x3498DB, # Azul para lançamento
+                color=0x3498DB,
                 timestamp=agora()
             )
             embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
@@ -3428,7 +3431,7 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
                     f"> 📌 **STATUS:** `⏳ AGUARDANDO APROVAÇÃO`\n\n"
                     f"> ⚠️ **Atenção:** O valor **NÃO** foi descontado do caixa ainda."
                 ),
-                color=0xF39C12, # Laranja
+                color=0xF39C12,
                 timestamp=agora()
             )
             embed_reembolso.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
