@@ -5639,39 +5639,37 @@ async def cmd_reparar_registros(ctx):
     contador = 0
     verificadas = 0
     
-    # Busca 1000 mensagens (o máximo de uma vez)
     async for msg in canal.history(limit=1000):
         verificadas += 1
         if msg.author == bot.user and msg.embeds:
             embed = msg.embeds[0]
             
-            # Verifica se é um card de registro
             if embed.title and "REGISTRO" in embed.title.upper():
-                # Tenta achar o ID do usuário no rodapé ou no campo
                 user_id = None
                 
-                if "ID:" in embed.footer.text:
-                    try: user_id = int(embed.footer.text.split("ID: `")[1].split("`")[0])
-                    except: pass
+                # PROTEÇÃO: Verifica se o footer existe antes de tentar ler
+                if embed.footer and embed.footer.text:
+                    if "ID:" in embed.footer.text:
+                        try: user_id = int(embed.footer.text.split("ID: `")[1].split("`")[0])
+                        except: pass
                 
-                if not user_id:
+                if not user_id and embed.fields:
                     for field in embed.fields:
                         if "INFORMAÇÕES" in field.name.upper() or "ID" in field.name.upper():
                             try: user_id = int(field.value.split("ID: `")[1].split("`")[0])
                             except: pass
 
                 if user_id:
-                    # Aplica a nova View
                     nova_view = AprovarRegistroView(user_id)
                     try:
                         await msg.edit(view=nova_view)
                         contador += 1
-                        await asyncio.sleep(1.0) # Pausa maior para o Discord não bloquear
+                        await asyncio.sleep(1.0)
                     except Exception as e:
                         logger.error(f"Erro ao consertar mensagem {msg.id}: {e}")
 
     await ctx.send(f"✅ **Fim da varredura!**\n🔍 Verificadas: **{verificadas}** mensagens.\n🛠️ Consertados: **{contador}** registros.")
-
+    
 @bot.command(name="registrar_manual_bau")
 async def cmd_registrar_manual_bau(ctx):
     removido = bau_print_pendente.pop(ctx.author.id, None) or armas_print_pendente.pop(ctx.author.id, None)
