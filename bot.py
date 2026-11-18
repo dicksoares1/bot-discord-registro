@@ -5629,7 +5629,7 @@ async def cmd_testar_ocr(ctx):
 @bot.command(name="reparar_registros")
 @commands.has_permissions(administrator=True)
 async def cmd_reparar_registros(ctx):
-    await ctx.send("🔄 **Buscando registros antigos no canal para consertar os botões...**")
+    await ctx.send("🔄 **VASSOURA PROFUNDA:** Buscando em até 1000 mensagens antigas...")
     
     canal = bot.get_channel(CANAL_LOG_REGISTRO_ID)
     if not canal:
@@ -5637,34 +5637,40 @@ async def cmd_reparar_registros(ctx):
         return
 
     contador = 0
-    # Varre as últimas 200 mensagens do canal
-    async for msg in canal.history(limit=200):
+    verificadas = 0
+    
+    # Busca 1000 mensagens (o máximo de uma vez)
+    async for msg in canal.history(limit=1000):
+        verificadas += 1
         if msg.author == bot.user and msg.embeds:
             embed = msg.embeds[0]
-            # Verifica se é um card de registro pendente
-            if "NOVO REGISTRO PENDENTE" in embed.title:
-                # Tenta descobrir o ID do usuário pelo footer ou campo
+            
+            # Verifica se é um card de registro
+            if embed.title and "REGISTRO" in embed.title.upper():
+                # Tenta achar o ID do usuário no rodapé ou no campo
                 user_id = None
                 
-                # Pega o ID do campo "INFORMAÇÕES DO CANDIDATO"
-                for field in embed.fields:
-                    if "INFORMAÇÕES" in field.name:
-                        try:
-                            user_id = int(field.value.split("🆔 ID: `")[1].split("`")[0])
-                        except:
-                            pass
+                if "ID:" in embed.footer.text:
+                    try: user_id = int(embed.footer.text.split("ID: `")[1].split("`")[0])
+                    except: pass
                 
+                if not user_id:
+                    for field in embed.fields:
+                        if "INFORMAÇÕES" in field.name.upper() or "ID" in field.name.upper():
+                            try: user_id = int(field.value.split("ID: `")[1].split("`")[0])
+                            except: pass
+
                 if user_id:
                     # Aplica a nova View
                     nova_view = AprovarRegistroView(user_id)
                     try:
                         await msg.edit(view=nova_view)
                         contador += 1
-                        await asyncio.sleep(0.5) # Evita rate limit do Discord
+                        await asyncio.sleep(1.0) # Pausa maior para o Discord não bloquear
                     except Exception as e:
                         logger.error(f"Erro ao consertar mensagem {msg.id}: {e}")
 
-    await ctx.send(f"✅ **{contador} registros antigos foram consertados!**\nAgora os botões de Aprovar e Rejeitar estão funcionando novamente nesses cards.")
+    await ctx.send(f"✅ **Fim da varredura!**\n🔍 Verificadas: **{verificadas}** mensagens.\n🛠️ Consertados: **{contador}** registros.")
 
 @bot.command(name="registrar_manual_bau")
 async def cmd_registrar_manual_bau(ctx):
