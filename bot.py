@@ -4959,9 +4959,273 @@ async def on_message_lavagem(message: discord.Message):
 # ║  BLOCO 09 — SISTEMA DE LIVES                                                ║
 # ════════════════════════════════════════════════════════════════════════════════
 
+
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: carregar_lives_db
+# BLOCO 09 — CONFIGURAÇÃO: CARGO AUTOMÁTICO AO VIVO (TWITCH / KICK)
 # ────────────────────────────────────────────────────────────────────────────────
+CARGO_AO_VIVO_ID = 1573103462743543938
+KICK_CLIENT_ID = os.getenv('KICK_CLIENT_ID', '').strip()
+KICK_CLIENT_SECRET = os.getenv('KICK_CLIENT_SECRET', '').strip()
+_kick_token_ao_vivo = None
+_kick_expiracao_ao_vivo = 0
+_lives_tabelas_prontas = False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: preparar_tabelas_ao_vivo
+# ────────────────────────────────────────────────────────────────────────────────
+async def preparar_tabelas_ao_vivo():
+    global _lives_tabelas_prontas
+    if _lives_tabelas_prontas:
+        return True
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS lives_monitoramento_ao_vivo (
+                    live_id INTEGER PRIMARY KEY,
+                    user_id VARCHAR(30) NOT NULL,
+                    plataforma VARCHAR(10) NOT NULL,
+                    online BOOLEAN NOT NULL DEFAULT FALSE,
+                    offline_consecutivos INTEGER NOT NULL DEFAULT 0,
+                    atualizado_em TIMESTAMP DEFAULT NOW()
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS lives_cargos_controlados (
+                    user_id VARCHAR(30) PRIMARY KEY,
+                    offline_consecutivos INTEGER NOT NULL DEFAULT 0,
+                    atualizado_em TIMESTAMP DEFAULT NOW()
+                )
+            ''')
+        _lives_tabelas_prontas = True
+        return True
+    except Exception:
+        logger.exception('❌ Não foi possível preparar as tabelas de AO VIVO')
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: obter_token_kick_ao_vivo
+# ────────────────────────────────────────────────────────────────────────────────
+async def obter_token_kick_ao_vivo():
+    global _kick_token_ao_vivo, _kick_expiracao_ao_vivo
+    if _kick_token_ao_vivo and time_module.time() < _kick_expiracao_ao_vivo:
+        return _kick_token_ao_vivo
+    if not KICK_CLIENT_ID or not KICK_CLIENT_SECRET:
+        logger.error('❌ Configure KICK_CLIENT_ID e KICK_CLIENT_SECRET no Railway')
+        return None
+    if not http_session or http_session.closed:
+        return None
+    try:
+        async with http_session.post(
+            'https://id.kick.com/oauth/token',
+            data={
+                'grant_type': 'client_credentials',
+                'client_id': KICK_CLIENT_ID,
+                'client_secret': KICK_CLIENT_SECRET,
+            },
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resposta:
+            if resposta.status != 200:
+                logger.warning('⚠️ OAuth Kick respondeu HTTP %s', resposta.status)
+                return None
+            dados = await resposta.json(content_type=None)
+            token = dados.get('access_token') if isinstance(dados, dict) else None
+            if not token:
+                logger.error('❌ OAuth Kick não retornou access_token')
+                return None
+            _kick_token_ao_vivo = token
+            _kick_expiracao_ao_vivo = time_module.time() + max(
+                60, int(dados.get('expires_in') or 3600) - 120
+            )
+            return token
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError):
+        logger.exception('❌ Falha na autenticação da Kick')
+        return None
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: consultar_live_automatica
+# ────────────────────────────────────────────────────────────────────────────────
+async def consultar_live_automatica(plataforma, canal):
+    """Retorna (True/False/None, título, jogo, imagem); None significa ERRO."""
+    if not http_session or http_session.closed:
+        return None, None, None, None
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        if plataforma == 'twitch':
+            token = await obter_token_twitch()
+            if not token or not TWITCH_CLIENT_ID:
+                return None, None, None, None
+            async with http_session.get(
+                'https://api.twitch.tv/helix/streams',
+                params={'user_login': canal},
+                headers={'Client-ID': TWITCH_CLIENT_ID, 'Authorization': f'Bearer {token}'},
+                timeout=timeout,
+            ) as resposta:
+                if resposta.status != 200:
+                    logger.warning('⚠️ Twitch %s: HTTP %s', canal, resposta.status)
+                    return None, None, None, None
+                dados = await resposta.json(content_type=None)
+            streams = dados.get('data') if isinstance(dados, dict) else None
+            if not isinstance(streams, list):
+                return None, None, None, None
+            if not streams:
+                return False, None, None, None
+            live = streams[0]
+            imagem = (live.get('thumbnail_url') or '').replace('{width}', '1280').replace('{height}', '720')
+            return True, live.get('title'), live.get('game_name'), imagem
+
+        if plataforma == 'kick':
+            token = await obter_token_kick_ao_vivo()
+            if not token:
+                return None, None, None, None
+            async with http_session.get(
+                'https://api.kick.com/public/v1/channels',
+                params={'slug': canal},
+                headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
+                timeout=timeout,
+            ) as resposta:
+                if resposta.status == 401:
+                    global _kick_token_ao_vivo, _kick_expiracao_ao_vivo
+                    _kick_token_ao_vivo, _kick_expiracao_ao_vivo = None, 0
+                if resposta.status != 200:
+                    logger.warning('⚠️ Kick %s: HTTP %s', canal, resposta.status)
+                    return None, None, None, None
+                dados = await resposta.json(content_type=None)
+            canais = dados.get('data') if isinstance(dados, dict) else None
+            if not isinstance(canais, list):
+                return None, None, None, None
+            encontrado = next(
+                (c for c in canais if isinstance(c, dict) and str(c.get('slug', '')).lower() == canal.lower()),
+                None,
+            )
+            if not encontrado:
+                logger.warning('⚠️ Canal Kick %s não localizado: cargo preservado', canal)
+                return None, None, None, None
+            stream = encontrado.get('stream')
+            if not isinstance(stream, dict):
+                return None, None, None, None
+            online = stream.get('is_live')
+            if not isinstance(online, bool):
+                return None, None, None, None
+            categoria = encontrado.get('category')
+            jogo = categoria.get('name') if isinstance(categoria, dict) else None
+            titulo = encontrado.get('stream_title') or stream.get('title')
+            imagem = stream.get('thumbnail')
+            if not isinstance(imagem, str):
+                imagem = None
+            return online, titulo, jogo, imagem
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError):
+        logger.exception('❌ Erro consultando %s/%s', plataforma, canal)
+    except Exception:
+        logger.exception('❌ Resposta inesperada de %s/%s', plataforma, canal)
+    return None, None, None, None
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_verificacao_live
+# ────────────────────────────────────────────────────────────────────────────────
+async def salvar_verificacao_live(live_id, user_id, plataforma, online):
+    """Duas verificações offline consecutivas antes de considerar encerrada."""
+    pool = await get_pool()
+    if not pool:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            if online:
+                await conn.execute('''
+                    INSERT INTO lives_monitoramento_ao_vivo
+                        (live_id, user_id, plataforma, online, offline_consecutivos)
+                    VALUES ($1, $2, $3, TRUE, 0)
+                    ON CONFLICT (live_id) DO UPDATE
+                    SET user_id = EXCLUDED.user_id, plataforma = EXCLUDED.plataforma,
+                        online = TRUE, offline_consecutivos = 0, atualizado_em = NOW()
+                ''', live_id, user_id, plataforma)
+                return True
+            contador = await conn.fetchval('''
+                INSERT INTO lives_monitoramento_ao_vivo
+                    (live_id, user_id, plataforma, online, offline_consecutivos)
+                VALUES ($1, $2, $3, FALSE, 1)
+                ON CONFLICT (live_id) DO UPDATE
+                SET user_id = EXCLUDED.user_id, plataforma = EXCLUDED.plataforma,
+                    offline_consecutivos = lives_monitoramento_ao_vivo.offline_consecutivos + 1,
+                    online = CASE WHEN lives_monitoramento_ao_vivo.offline_consecutivos + 1 >= 2
+                                  THEN FALSE ELSE lives_monitoramento_ao_vivo.online END,
+                    atualizado_em = NOW()
+                RETURNING offline_consecutivos
+            ''', live_id, user_id, plataforma)
+            return False if int(contador) >= 2 else None
+    except Exception:
+        logger.exception('❌ Falha salvando verificação de live %s', live_id)
+        return None
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_cargo_ao_vivo
+# ────────────────────────────────────────────────────────────────────────────────
+async def atualizar_cargo_ao_vivo(user_id, adicionar):
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        logger.error('❌ Servidor não encontrado para sincronizar AO VIVO')
+        return False
+    cargo = guild.get_role(CARGO_AO_VIVO_ID)
+    if not cargo:
+        logger.error('❌ Cargo AO VIVO %s não encontrado', CARGO_AO_VIVO_ID)
+        return False
+    try:
+        membro = guild.get_member(int(user_id))
+        if membro is None:
+            membro = await guild.fetch_member(int(user_id))
+    except discord.NotFound:
+        return not adicionar  # Membro saiu do servidor: não há cargo a remover.
+    except discord.HTTPException:
+        logger.exception('❌ Não foi possível buscar membro %s para AO VIVO', user_id)
+        return False
+    if (cargo in membro.roles) == adicionar:
+        return True
+    eu = guild.me
+    if eu is None or not eu.guild_permissions.manage_roles or eu.top_role <= cargo:
+        logger.error('❌ Dê Gerenciar Cargos ao bot e posicione o cargo do bot ACIMA de AO VIVO')
+        return False
+    try:
+        if adicionar:
+            await membro.add_roles(cargo, reason='Live Twitch/Kick confirmada pelo VDR442')
+        else:
+            await membro.remove_roles(cargo, reason='Live Twitch/Kick encerrada pelo VDR442')
+        return True
+    except discord.HTTPException:
+        logger.exception('❌ Falha %s cargo AO VIVO em %s', 'adicionando' if adicionar else 'removendo', user_id)
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: sincronizar_cargo_ao_vivo
+# ────────────────────────────────────────────────────────────────────────────────
+async def sincronizar_cargo_ao_vivo(user_id, ha_live, consulta_incompleta):
+    if consulta_incompleta and not ha_live:
+        return  # NUNCA remover por falha na API ou confirmação offline incompleta.
+    pool = await get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        if ha_live:
+            await conn.execute('''
+                INSERT INTO lives_cargos_controlados (user_id, offline_consecutivos)
+                VALUES ($1, 0)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    offline_consecutivos = 0, atualizado_em = NOW()
+            ''', user_id)
+        else:
+            contador = await conn.fetchval('''
+                UPDATE lives_cargos_controlados
+                SET offline_consecutivos = offline_consecutivos + 1, atualizado_em = NOW()
+                WHERE user_id = $1 RETURNING offline_consecutivos
+            ''', user_id)
+            if contador is None or int(contador) < 2:
+                return
+    sucesso = await atualizar_cargo_ao_vivo(user_id, ha_live)
+    if not ha_live and sucesso:
+        async with pool.acquire() as conn:
+            await conn.execute('DELETE FROM lives_cargos_controlados WHERE user_id = $1', user_id)
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_lives_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -5384,9 +5648,7 @@ class GerenciarLiveView(discord.ui.View):
             ephemeral=True
         )
 
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: PainelLivesUnicoView
-# ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: PainelLivesUnicoView
 # ────────────────────────────────────────────────────────────────────────────────
@@ -5400,127 +5662,167 @@ class PainelLivesUnicoView(discord.ui.View):
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: cadastrar_twitch
     # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="🎥 Cadastrar Twitch", style=discord.ButtonStyle.primary, custom_id="cadastrar_twitch", emoji="🎥")
-    async def cadastrar_twitch(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label='🎥 Cadastrar Twitch/Kick', style=discord.ButtonStyle.primary,
+                       custom_id='cadastrar_twitch', emoji='🎥')
+    async def cadastrar_twitch(self, interaction: discord.Interaction,
+                               button: discord.ui.Button):
         await interaction.response.send_modal(CadastrarLiveModal())
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: publicar_live
     # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="📢 Publicar Live", style=discord.ButtonStyle.success, custom_id="publicar_live", emoji="📢")
-    async def publicar_live(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PublicarLiveManualModal(interaction.user.id, interaction.user.display_name))
+    @discord.ui.button(label='📢 Publicar Live', style=discord.ButtonStyle.success,
+                       custom_id='publicar_live', emoji='📢')
+    async def publicar_live(self, interaction: discord.Interaction,
+                            button: discord.ui.Button):
+        await interaction.response.send_modal(
+            PublicarLiveManualModal(interaction.user.id, interaction.user.display_name)
+        )
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: minha_live
     # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="🎥 Minha Live", style=discord.ButtonStyle.primary, custom_id="minha_live_manual", emoji="🎥")
-    async def minha_live(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label='🎥 Minha Live', style=discord.ButtonStyle.primary,
+                       custom_id='minha_live_manual', emoji='🎥')
+    async def minha_live(self, interaction: discord.Interaction,
+                         button: discord.ui.Button):
         view = GerenciarLiveView(interaction.user.id, interaction.user.display_name)
         embed = discord.Embed(
-            title="🎥 GERENCIAR MINHA LIVE",
+            title='🎥 GERENCIAR MINHA LIVE',
             description=(
-                "**📌 Como funciona:**\n\n"
-                "1. Clique em **'Cadastrar/Atualizar Live'**\n"
-                "2. Informe a plataforma (Kick, TikTok, etc)\n"
-                "3. Cole o link da sua live\n"
-                "4. Quando começar, clique em **'ANUNCIAR LIVE'**\n\n"
-                "✅ **Plataformas suportadas:**\n"
-                "• 🟢 Kick\n"
-                "• 📱 TikTok\n"
-                "• ▶️ YouTube\n"
-                "• E qualquer outra!"
+                '**📌 Como funciona:**\n\n'
+                '1. Clique em **Cadastrar Twitch/Kick** no painel para ativar o monitoramento automático.\n'
+                '2. Para divulgar outras plataformas manualmente, clique em **Publicar Live**.\n'
+                '3. Os botões de gerenciamento manual continuam disponíveis abaixo.\n\n'
+                '✅ **Plataformas:**\n'
+                '• 🟣 Twitch — automática\n'
+                '• 🟢 Kick — automática\n'
+                '• 📱 TikTok — manual\n'
+                '• ▶️ YouTube — manual\n'
+                '• Outras — manual'
             ),
-            color=0x3498db
+            color=0x3498DB,
         )
-        embed.set_footer(text="Sistema de Lives • VDR")
+        embed.set_footer(text='Sistema de Lives • VDR')
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_lives
 # ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: enviar_painel_lives
-# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_lives():
     canal = bot.get_channel(CANAL_CADASTRO_LIVE_ID)
-    if not canal: return
-
+    if not canal:
+        return
     embed = discord.Embed(
-        title="",
+        title='',
         description=(
-            "# 🎥 CENTRAL DE LIVES\n"
-            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
-            "> 🛡️ **SISTEMA:** `DIVULGAÇÃO DE STREAMS`\n"
-            "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
-            "> 👤 **ACESSO:** `TODOS OS MEMBROS`\n\n"
-            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
-            "### 🟣 TWITCH (AUTOMÁTICO)\n"
-            "> Cadastre sua live **uma única vez**. Quando você entrar ao vivo, o bot anuncia automaticamente no canal de divulgação.\n\n"
-            "### 🟢 KICK / 📱 TIKTOK / ▶️ YOUTUBE (MANUAL)\n"
-            "> Toda vez que for começar a live, publique manualmente. Preencha os dados e o anúncio vai imediatamente para o canal.\n\n"
-            "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
-            f"> 📢 **DESTINO:** <#{CANAL_DIVULGACAO_LIVE_ID}>\n"
+            '# 🎥 CENTRAL DE LIVES\n'
+            '**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n'
+            '> 🛡️ **SISTEMA:** `DIVULGAÇÃO DE STREAMS`\n'
+            '> 📌 **STATUS:** `🟢 OPERACIONAL`\n'
+            '> 👤 **ACESSO:** `TODOS OS MEMBROS`\n\n'
+            '**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n'
+            '### 🟣 TWITCH / 🟢 KICK — AUTOMÁTICAS\n'
+            '> Clique em **Cadastrar Twitch/Kick** uma única vez e envie o link do canal.\n'
+            '> Durante a live, o bot adiciona o cargo **AO VIVO** e divulga a transmissão.\n'
+            '> Quando a live terminar, o cargo será removido automaticamente.\n\n'
+            '### 📱 TIKTOK / ▶️ YOUTUBE — MANUAIS\n'
+            '> Continue usando **Publicar Live**, exatamente como antes.\n\n'
+            '**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n'
+            f'> 📢 **DESTINO:** <#{CANAL_DIVULGACAO_LIVE_ID}>\n'
         ),
-        color=0x9146FF, # Roxo Twitch
-        timestamp=agora()
+        color=0x9146FF,
+        timestamp=agora(),
     )
-    embed.set_author(name="🕴️ VDR 442 • MÍDIA", icon_url=bot.user.display_avatar.url if bot.user else None)
+    embed.set_author(name='🕴️ VDR 442 • MÍDIA',
+                     icon_url=bot.user.display_avatar.url if bot.user else None)
     embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
-    embed.set_footer(text=f"🛡️ VDR 442 • Sistema de Lives • {agora().strftime('%d/%m/%Y')}", icon_url=bot.user.display_avatar.url if bot.user else None)
-
+    embed.set_footer(text=f"🛡️ VDR 442 • Sistema de Lives • {agora().strftime('%d/%m/%Y')}",
+                     icon_url=bot.user.display_avatar.url if bot.user else None)
     try:
         async for msg in canal.history(limit=30):
             if msg.author == bot.user:
-                try: await msg.delete()
-                except: pass
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
         await canal.send(embed=embed, view=PainelLivesUnicoView())
-    except Exception as e:
-        logger.error(f"❌ Erro ao enviar painel de lives: {e}")
+    except Exception as erro:
+        logger.error('❌ Erro ao enviar painel de lives: %s', erro)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # LOOP: verificar_lives
 # ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: verificar_lives
+# FUNÇÃO: verificar_lives — TWITCH + KICK + CARGO AO VIVO
 # ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=2)
 async def verificar_lives():
+    # O loop já é iniciado pelo iniciar_tarefas_background() do bot.
+    if not await preparar_tabelas_ao_vivo():
+        return  # Banco indisponível: não mexe em cargos nem em flags.
+    pool = await get_pool()
+    if not pool:
+        return
     try:
-        lives = await carregar_lives_db()
-        if not lives:
-            return
-        for row in lives:
-            user_id = row["user_id"]
-            link = row["link"]
-            divulgado = row["divulgado"]
-            if not link:
-                continue
-            plataforma = detectar_plataforma(link)
-            canal_name = extrair_canal(link)
-            if not plataforma or not canal_name:
-                continue
-            if plataforma != "twitch":
-                continue
-            ao_vivo = False
-            titulo = None
-            jogo = None
-            thumbnail = None
-            try:
-                ao_vivo, titulo, jogo, thumbnail = await checar_twitch(canal_name)
-            except Exception as e:
-                logger.error(f"❌ Erro ao verificar Twitch/{canal_name}: {e}")
-                continue
-            if not ao_vivo and divulgado:
-                await atualizar_divulgado_db(link, False)
-            if ao_vivo and not divulgado:
-                resultado = await divulgar_live(user_id, link, titulo, jogo, thumbnail)
-                if resultado:
+        async with pool.acquire() as conn:
+            lives = await conn.fetch('SELECT id, user_id, link, divulgado FROM lives ORDER BY id')
+            controlados = await conn.fetch('SELECT user_id FROM lives_cargos_controlados')
+    except Exception:
+        logger.exception('❌ Não foi possível ler lives: cargos preservados')
+        return
+
+    usuarios = {
+        str(row['user_id']): {'online': False, 'incompleto': False}
+        for row in controlados
+    }
+    respostas = {}
+    for row in lives:
+        link = row['link']
+        if not link:
+            continue
+        plataforma = detectar_plataforma(link)
+        if plataforma not in ('twitch', 'kick'):
+            continue  # TikTok e YouTube continuam como já estão.
+        usuario = str(row['user_id'])
+        estado_usuario = usuarios.setdefault(usuario, {'online': False, 'incompleto': False})
+        canal = extrair_canal(link)
+        if not canal:
+            estado_usuario['incompleto'] = True
+            continue
+        chave = (plataforma, canal.lower())
+        if chave not in respostas:
+            respostas[chave] = await consultar_live_automatica(plataforma, canal)
+        online, titulo, jogo, imagem = respostas[chave]
+        if online is None:
+            estado_usuario['incompleto'] = True
+            continue
+        confirmado = await salvar_verificacao_live(
+            int(row['id']), usuario, plataforma, online
+        )
+        if confirmado is None:
+            estado_usuario['incompleto'] = True
+            continue
+        if confirmado:
+            estado_usuario['online'] = True
+            if not row['divulgado']:
+                anunciado = await divulgar_live(usuario, link, titulo, jogo, imagem, plataforma=plataforma)
+                if anunciado:
                     await atualizar_divulgado_db(link, True)
-    except Exception as e:
-        logger.error(f"❌ Erro no loop de lives: {e}")
+        elif row['divulgado']:
+            # Só libera o próximo anúncio após confirmar o encerramento.
+            await atualizar_divulgado_db(link, False)
 
-
+    # Inclui também usuários que já tiveram cargo concedido pelo bot e
+    # removeram seus cadastros posteriormente.
+    for usuario, estado in usuarios.items():
+        try:
+            await sincronizar_cargo_ao_vivo(
+                usuario, estado['online'], estado['incompleto']
+            )
+        except Exception:
+            logger.exception('❌ Falha ao sincronizar AO VIVO de %s', usuario)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # INTELIGÊNCIA DE TEXTO E CORREÇÃO AUTOMÁTICA DO BAÚ
