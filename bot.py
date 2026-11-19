@@ -135,9 +135,15 @@ META_LIMITE = 300000
 CARGO_GERENTE_ID = 1324499473296134154
 CARGO_GERENTE_MECANICA_ID = 1475910336056922222
 CARGO_GERENTE_GERAL_ID = 1462804425163935796
+# Cargo opcional: zero impede concessão de permissão se não configurado no Railway.
+CARGO_DONO_MORRO_ID = int(os.getenv("CARGO_DONO_MORRO_ID", "0"))
+CARGOS_GERENCIA = [CARGO_GERENTE_ID, CARGO_GERENTE_MECANICA_ID, CARGO_GERENTE_GERAL_ID]
+
 CARGO_01_ID = 1258753233355014144
 CARGO_02_ID = 1258753479082512394
 CARGO_03_ID = 1471284152945873041
+CARGOS_LIDERANCA = [CARGO_01_ID, CARGO_02_ID, CARGO_03_ID]
+
 
 # CARGOS DE RESPONSÁVEIS
 CARGO_RESP_METAS_ID = 1337407399656423485
@@ -296,6 +302,9 @@ PIX_CIDADE = "Eunapolis" # Sem acentos!
 # ────────────────────────────────────────────────────────────────────────────────
 # 1.7 — CORES E ESTILOS (mantidas do original)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: Cores
+# ────────────────────────────────────────────────────────────────────────────────
 class Cores:
     META = 0x1a1a2e
     VENDA = 0x0f3460
@@ -315,6 +324,9 @@ class Cores:
     PRATA = 0xb2bec3
     BRANCO = 0xdfe6e9
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: Emojis
+# ────────────────────────────────────────────────────────────────────────────────
 class Emojis:
     META = "📊"
     VENDA = "🛒"
@@ -360,40 +372,64 @@ MAX_DB_RECONNECT_ATTEMPTS = 10
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: conectar_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: conectar_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def conectar_db():
     global db, db_reconnect_attempts
     if not DATABASE_URL:
         logger.error("❌ DATABASE_URL não encontrada!")
         return None
-    async with db_lock:
-        if db and not db._closed:
+    for tentativa in range(1, MAX_DB_RECONNECT_ATTEMPTS + 1):
+        async with db_lock:
+            if db and not db._closed:
+                try:
+                    async with db.acquire(timeout=15) as conn:
+                        await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=15)
+                    db_reconnect_attempts = 0
+                    return db
+                except Exception as e:
+                    logger.warning("⚠️ Pool antigo indisponível: %s", e)
+                    try:
+                        await asyncio.wait_for(db.close(), timeout=5)
+                    except Exception:
+                        try: db.terminate()
+                        except Exception: pass
+                    db = None
+            novo_pool = None
             try:
-                async with db.acquire() as conn:
-                    await conn.fetchval("SELECT 1")
+                novo_pool = await asyncio.wait_for(
+                    asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10,
+                        command_timeout=30, timeout=20, max_inactive_connection_lifetime=300),
+                    timeout=45
+                )
+                await inicializar_tabelas(novo_pool)
+                db = novo_pool
                 db_reconnect_attempts = 0
+                logger.info("✅ PostgreSQL conectado e tabelas verificadas")
                 return db
-            except:
-                pass
-        try:
-            db = await asyncpg.create_pool(
-                DATABASE_URL,
-                min_size=2,
-                max_size=10,
-                command_timeout=30,
-                max_inactive_connection_lifetime=300
-            )
-            db_reconnect_attempts = 0
-            await inicializar_tabelas(db)
-            return db
-        except Exception as e:
-            db_reconnect_attempts += 1
-            logger.error(f"❌ Erro ao conectar ao PostgreSQL: {e}")
-            if db_reconnect_attempts >= MAX_DB_RECONNECT_ATTEMPTS:
-                logger.critical("🔴 Número máximo de tentativas de reconexão atingido!")
-                return None
-            await asyncio.sleep(5 * db_reconnect_attempts)
-            return await conectar_db()
+            except asyncio.CancelledError:
+                if novo_pool:
+                    try: await asyncio.wait_for(novo_pool.close(), timeout=5)
+                    except Exception: novo_pool.terminate()
+                raise
+            except Exception as e:
+                if novo_pool:
+                    try: await asyncio.wait_for(novo_pool.close(), timeout=5)
+                    except Exception: novo_pool.terminate()
+                db = None
+                db_reconnect_attempts = tentativa
+                logger.error("❌ PostgreSQL: tentativa %s/%s falhou: %s",
+                             tentativa, MAX_DB_RECONNECT_ATTEMPTS, e)
+        # Nunca dormir ou chamar conectar_db novamente segurando db_lock.
+        if tentativa < MAX_DB_RECONNECT_ATTEMPTS:
+            await asyncio.sleep(min(5 * tentativa, 30))
+    logger.critical("🔴 Falha nas tentativas de reconexão PostgreSQL")
+    return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: get_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: get_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -406,6 +442,9 @@ def get_db():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: get_pool
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: get_pool
+# ────────────────────────────────────────────────────────────────────────────────
 async def get_pool():
     pool = get_db()
     if pool:
@@ -413,6 +452,9 @@ async def get_pool():
     logger.warning("⚠️ Pool do banco fechado! Reconectando...")
     return await conectar_db()
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: inicializar_tabelas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: inicializar_tabelas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -744,6 +786,30 @@ async def inicializar_tabelas(pool):
                 acao_id INTEGER,
                 nome TEXT,
                 data_criacao TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+        # ═══════════════ REGISTROS DE TRANSFERÊNCIAS DE VENDAS ═══════════════
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS vendas_transferencias (
+                id BIGSERIAL PRIMARY KEY,
+                pedido_numero INTEGER NOT NULL,
+                entrega_id INTEGER NOT NULL DEFAULT 0,
+                numero_parcela INTEGER NOT NULL DEFAULT 1,
+                mensagem_id VARCHAR(30),
+                nome_destino VARCHAR(100) NOT NULL,
+                confirmado_por VARCHAR(30) NOT NULL,
+                valor BIGINT NOT NULL DEFAULT 0,
+                confirmado_em TIMESTAMP DEFAULT NOW(),
+                UNIQUE(pedido_numero, entrega_id, numero_parcela)
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_transf_mensagem ON vendas_transferencias(mensagem_id)")
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS notificacoes_config (
+                tipo VARCHAR(100) PRIMARY KEY,
+                ativo BOOLEAN NOT NULL DEFAULT TRUE,
+                atualizado_em TIMESTAMP DEFAULT NOW()
             )
         """)
 
@@ -1257,15 +1323,24 @@ async def inicializar_tabelas(pool):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: agora
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: agora
+# ────────────────────────────────────────────────────────────────────────────────
 def agora():
     return datetime.now(BRASIL)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: agora_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: agora_db
+# ────────────────────────────────────────────────────────────────────────────────
 def agora_db():
     return datetime.now(BRASIL).replace(tzinfo=None)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: str_para_datetime
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: str_para_datetime
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1281,6 +1356,9 @@ def str_para_datetime(data_str):
         dt = dt.replace(tzinfo=BRASIL)
     return dt
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: str_para_datetime_completa
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: str_para_datetime_completa
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1302,6 +1380,9 @@ def str_para_datetime_completa(data_str):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: datetime_para_str
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: datetime_para_str
+# ────────────────────────────────────────────────────────────────────────────────
 def datetime_para_str(dt):
     if not dt:
         return None
@@ -1314,11 +1395,17 @@ def datetime_para_str(dt):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: para_db_naive
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: para_db_naive
+# ────────────────────────────────────────────────────────────────────────────────
 def para_db_naive(dt):
     if dt.tzinfo is not None:
         dt = dt.astimezone(BRASIL)
     return dt.replace(tzinfo=None)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: calcular_semana_anterior
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: calcular_semana_anterior
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1332,6 +1419,9 @@ def calcular_semana_anterior():
     domingo_anterior = domingo_anterior.replace(hour=23, minute=59, second=59, microsecond=0)
     return segunda_anterior, domingo_anterior
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: calcular_barra_progresso
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: calcular_barra_progresso
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1361,6 +1451,9 @@ def calcular_barra_progresso(data_fim, dias_totais):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: formatar_tempo_detalhado
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: formatar_tempo_detalhado
+# ────────────────────────────────────────────────────────────────────────────────
 def formatar_tempo_detalhado(data_fim):
     agora_br = agora()
     if not data_fim or agora_br >= data_fim:
@@ -1379,6 +1472,9 @@ def formatar_tempo_detalhado(data_fim):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: formatar_dinheiro
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: formatar_dinheiro
+# ────────────────────────────────────────────────────────────────────────────────
 def formatar_dinheiro(valor):
     try:
         valor = float(valor)
@@ -1389,12 +1485,18 @@ def formatar_dinheiro(valor):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: fmt_num
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: fmt_num
+# ────────────────────────────────────────────────────────────────────────────────
 def fmt_num(valor):
     try:
         return f"{int(valor):,.0f}".replace(",", ".")
     except:
         return "0"
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: safe_int
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: safe_int
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1413,6 +1515,9 @@ def safe_int(valor, default=0):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: capitalizar_nome
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: capitalizar_nome
+# ────────────────────────────────────────────────────────────────────────────────
 def capitalizar_nome(texto):
     if not texto:
         return texto
@@ -1425,6 +1530,9 @@ def capitalizar_nome(texto):
             palavras_capitalizadas.append(palavra.upper())
     return " ".join(palavras_capitalizadas)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: normalizar_texto
+# ────────────────────────────────────────────────────────────────────────────────
 def normalizar_texto(texto):
     """
     Normaliza texto para comparação:
@@ -1439,6 +1547,9 @@ def normalizar_texto(texto):
     texto = texto.lower()
     texto = ' '.join(texto.split())
     return texto
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: barra
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: barra
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1457,6 +1568,9 @@ def barra(pct, size=20):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: detectar_plataforma
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: detectar_plataforma
+# ────────────────────────────────────────────────────────────────────────────────
 def detectar_plataforma(link):
     link = link.lower()
     if "twitch.tv" in link:
@@ -1467,6 +1581,9 @@ def detectar_plataforma(link):
         return "tiktok"
     return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: extrair_canal
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: extrair_canal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1536,11 +1653,17 @@ TEXTO_ADV_COMPORTAMENTO = """
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: pode_remover_ausencia
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: pode_remover_ausencia
+# ────────────────────────────────────────────────────────────────────────────────
 def pode_remover_ausencia(member):
     if not member:
         return False
     return any(role.id in CARGOS_PERMITIDOS_REMOVER for role in member.roles)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: pode_gerenciar_lavagem
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: pode_gerenciar_lavagem
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1550,6 +1673,9 @@ def pode_gerenciar_lavagem(member):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: obter_categoria_meta (versão síncrona)
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: obter_categoria_meta
 # ────────────────────────────────────────────────────────────────────────────────
 def obter_categoria_meta(member):
     if not member:
@@ -1563,6 +1689,9 @@ def obter_categoria_meta(member):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: membro_deve_ter_meta (versão síncrona)
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: membro_deve_ter_meta
 # ────────────────────────────────────────────────────────────────────────────────
 def membro_deve_ter_meta(member):
     if not member:
@@ -1586,6 +1715,9 @@ def membro_deve_ter_meta(member):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: obter_regra_meta_membro (SOLDADO VISUAL SOBRESCREVE, MAS NÃO REMOVE ISENÇÃO)
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: obter_regra_meta_membro
 # ────────────────────────────────────────────────────────────────────────────────
 async def obter_regra_meta_membro(member):
     if not member:
@@ -1683,6 +1815,9 @@ async def obter_regra_meta_membro(member):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: safe_request
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: safe_request
+# ────────────────────────────────────────────────────────────────────────────────
 async def safe_request(func, *args, max_retries=3, **kwargs):
     for attempt in range(max_retries):
         try:
@@ -1711,6 +1846,9 @@ async def safe_request(func, *args, max_retries=3, **kwargs):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: retry_operation
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: retry_operation
+# ────────────────────────────────────────────────────────────────────────────────
 async def retry_operation(func, *args, max_retries=3, delay=2, **kwargs):
     for attempt in range(max_retries):
         try:
@@ -1725,6 +1863,9 @@ async def retry_operation(func, *args, max_retries=3, delay=2, **kwargs):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: safe_fetch_message
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: safe_fetch_message
+# ────────────────────────────────────────────────────────────────────────────────
 async def safe_fetch_message(canal, msg_id):
     try:
         return await canal.fetch_message(msg_id)
@@ -1736,6 +1877,9 @@ async def safe_fetch_message(canal, msg_id):
         logger.error(f"Erro ao buscar mensagem {msg_id}: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: responder_interacao
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: responder_interacao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1755,6 +1899,9 @@ async def responder_interacao(interaction: discord.Interaction, *, defer=False, 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: pegar_usuario
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: pegar_usuario
+# ────────────────────────────────────────────────────────────────────────────────
 async def pegar_usuario(uid):
     if uid in user_cache:
         return user_cache[uid]
@@ -1765,6 +1912,9 @@ async def pegar_usuario(uid):
     except:
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: pegar_apelido
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: pegar_apelido
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1784,7 +1934,13 @@ async def pegar_apelido(user_id, guild=None):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CacheManager (MELHORADA)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CacheManager
+# ────────────────────────────────────────────────────────────────────────────────
 class CacheManager:
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, default_ttl=300, max_size=100):
         self._cache = OrderedDict()
         self._default_ttl = default_ttl
@@ -1793,6 +1949,9 @@ class CacheManager:
         self._hits = 0
         self._misses = 0
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: get
+    # ────────────────────────────────────────────────────────────────────────────────
     async def get(self, key):
         async with self._lock:
             if key in self._cache:
@@ -1806,6 +1965,9 @@ class CacheManager:
             self._misses += 1
             return None
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: set
+    # ────────────────────────────────────────────────────────────────────────────────
     async def set(self, key, data, ttl=None):
         async with self._lock:
             if len(self._cache) >= self._max_size:
@@ -1818,15 +1980,24 @@ class CacheManager:
             }
             self._cache.move_to_end(key)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: delete
+    # ────────────────────────────────────────────────────────────────────────────────
     async def delete(self, key):
         async with self._lock:
             if key in self._cache:
                 del self._cache[key]
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: clear
+    # ────────────────────────────────────────────────────────────────────────────────
     async def clear(self):
         async with self._lock:
             self._cache.clear()
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: clean_expired
+    # ────────────────────────────────────────────────────────────────────────────────
     async def clean_expired(self):
         async with self._lock:
             now = time_module.time()
@@ -1838,9 +2009,15 @@ class CacheManager:
                 del self._cache[key]
             return len(expired)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: size
+    # ────────────────────────────────────────────────────────────────────────────────
     def size(self):
         return len(self._cache)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: stats
+    # ────────────────────────────────────────────────────────────────────────────────
     def stats(self):
         total = self._hits + self._misses
         hit_rate = (self._hits / total * 100) if total > 0 else 0
@@ -1885,6 +2062,9 @@ armas_print_pendente = {}
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CoresUX
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CoresUX
+# ────────────────────────────────────────────────────────────────────────────────
 class CoresUX:
     PRIMARIA     = 0x5865F2
     SUCESSO      = 0x2ECC71
@@ -1909,6 +2089,9 @@ class CoresUX:
     ESCURO       = 0x1A1A2E
     CLARO        = 0xECF0F1
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EmojisUX
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EmojisUX
 # ────────────────────────────────────────────────────────────────────────────────
@@ -1969,6 +2152,9 @@ class EmojisUX:
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: embed_padrao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_padrao
+# ────────────────────────────────────────────────────────────────────────────────
 def embed_padrao(
     titulo: str,
     descricao: str = "",
@@ -2019,6 +2205,9 @@ def embed_padrao(
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: adicionar_separador
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: adicionar_separador
+# ────────────────────────────────────────────────────────────────────────────────
 def adicionar_separador(embed: discord.Embed, texto: str = ""):
     embed.add_field(
         name=EmojisUX.DIVISOR,
@@ -2030,12 +2219,18 @@ def adicionar_separador(embed: discord.Embed, texto: str = ""):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: adicionar_campo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: adicionar_campo
+# ────────────────────────────────────────────────────────────────────────────────
 def adicionar_campo(embed: discord.Embed, nome: str, valor: str, emoji: str = None, inline: bool = True):
     if emoji:
         nome = f"{emoji} {nome}"
     embed.add_field(name=nome, value=valor, inline=inline)
     return embed
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: com_rodape
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: com_rodape
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2052,6 +2247,9 @@ def com_rodape(embed: discord.Embed, texto: str = None):
         )
     return embed
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: formatar_lista_colunas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: formatar_lista_colunas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2075,6 +2273,9 @@ def formatar_lista_colunas(itens: list, titulo: str = "", largura: int = 2):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: barra_progresso_ux
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: barra_progresso_ux
+# ────────────────────────────────────────────────────────────────────────────────
 def barra_progresso_ux(pct: float, tamanho: int = 20) -> str:
     pct = max(0, min(1, pct))
     preenchido = int(pct * tamanho)
@@ -2092,6 +2293,9 @@ def barra_progresso_ux(pct: float, tamanho: int = 20) -> str:
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: embed_sucesso
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_sucesso
+# ────────────────────────────────────────────────────────────────────────────────
 def embed_sucesso(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
     return embed_padrao(
         titulo=titulo,
@@ -2101,6 +2305,9 @@ def embed_sucesso(titulo: str, descricao: str = "", autor: str = None) -> discor
         autor=autor
     )
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_erro
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: embed_erro
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2116,6 +2323,9 @@ def embed_erro(titulo: str, descricao: str = "", autor: str = None) -> discord.E
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: embed_aviso
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_aviso
+# ────────────────────────────────────────────────────────────────────────────────
 def embed_aviso(titulo: str, descricao: str = "", autor: str = None) -> discord.Embed:
     return embed_padrao(
         titulo=titulo,
@@ -2125,6 +2335,9 @@ def embed_aviso(titulo: str, descricao: str = "", autor: str = None) -> discord.
         autor=autor
     )
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: embed_info
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: embed_info
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2151,6 +2364,9 @@ def embed_info(titulo: str, descricao: str = "", autor: str = None) -> discord.E
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_registro_historico
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_registro_historico
+# ────────────────────────────────────────────────────────────────────────────────
 async def salvar_registro_historico(user_id, user_name, passaporte, nome, vulgo, telefone, indicado, tipo):
     pool = await get_pool()
     if not pool:
@@ -2170,6 +2386,9 @@ async def salvar_registro_historico(user_id, user_name, passaporte, nome, vulgo,
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_registro_existente
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_registro_existente
+# ────────────────────────────────────────────────────────────────────────────────
 async def verificar_registro_existente(user_id):
     pool = await get_pool()
     if not pool:
@@ -2184,11 +2403,20 @@ async def verificar_registro_existente(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AprovarRegistroView (AGORA DEFINIDA ANTES DO MODAL)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AprovarRegistroView
+# ────────────────────────────────────────────────────────────────────────────────
 class AprovarRegistroView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _tem_permissao
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _tem_permissao(self, member):
         # Cargos que podem aprovar (01 é o Dono do Morro/Líder)
         cargos_permitidos = [
@@ -2200,6 +2428,9 @@ class AprovarRegistroView(discord.ui.View):
         ]
         return member.guild_permissions.administrator or any(r.id in cargos_permitidos for r in member.roles)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: aprovar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Aprovar", style=discord.ButtonStyle.success, custom_id="aprovar_registro_vdr")
     async def aprovar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._tem_permissao(interaction.user):
@@ -2251,6 +2482,9 @@ class AprovarRegistroView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=None)
         await interaction.followup.send(f"✅ **{membro.mention} aprovado com sucesso!**", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: rejeitar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Rejeitar", style=discord.ButtonStyle.danger, custom_id="rejeitar_registro_vdr")
     async def rejeitar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._tem_permissao(interaction.user):
@@ -2281,6 +2515,9 @@ class AprovarRegistroView(discord.ui.View):
 # SISTEMA DE ORIENTAÇÃO E INDICAÇÃO
 # ────────────────────────────────────────────────────────────────────────────────
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistroIndicacaoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RegistroIndicacaoModal(discord.ui.Modal, title="📝 Registro de Indicação"):
     nome = discord.ui.TextInput(
         label="Nome Completo (como no RG)",
@@ -2298,6 +2535,9 @@ class RegistroIndicacaoModal(discord.ui.Modal, title="📝 Registro de Indicaç�
         required=True, max_length=50
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -2342,7 +2582,13 @@ class RegistroIndicacaoModal(discord.ui.Modal, title="📝 Registro de Indicaç�
         await interaction.followup.send("✅ **Registro de indicação enviado com sucesso!**\nAguarde a aprovação do Líder no canal de histórico.", ephemeral=True)
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AprovarIndicacaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class AprovarIndicacaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, status_atual="pendente"):
         super().__init__(timeout=None)
         self.user_id = user_id
@@ -2358,6 +2604,9 @@ class AprovarIndicacaoView(discord.ui.View):
         btn_rejeitar.callback = self.rejeitar
         self.add_item(btn_rejeitar)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: aprovar
+    # ────────────────────────────────────────────────────────────────────────────────
     async def aprovar(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_lider = any(r.id == CARGO_01_ID for r in interaction.user.roles)
@@ -2404,6 +2653,9 @@ class AprovarIndicacaoView(discord.ui.View):
 
         await interaction.followup.send(f"✅ **Indicação de {membro.mention} aprovada com sucesso!**", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: rejeitar
+    # ────────────────────────────────────────────────────────────────────────────────
     async def rejeitar(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_lider = any(r.id == CARGO_01_ID for r in interaction.user.roles)
@@ -2428,10 +2680,19 @@ class AprovarIndicacaoView(discord.ui.View):
         await interaction.followup.send(f"❌ **Indicação de {membro.mention if membro else self.user_id} rejeitada.**", ephemeral=True)
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: PainelOrientacaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class PainelOrientacaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ja_tenho_al
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="Já possuo AL no Complexo", style=discord.ButtonStyle.success, custom_id="btn_ja_tenho_al", emoji="✅")
     async def ja_tenho_al(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -2450,6 +2711,9 @@ class PainelOrientacaoView(discord.ui.View):
             logger.error(f"❌ Erro ao mudar cargo (Já tenho AL): {e}")
             await interaction.followup.send("❌ Ocorreu um erro ao mudar seu cargo. Avise a gerência.", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: nao_tenho_al
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="Ainda não possuo AL", style=discord.ButtonStyle.danger, custom_id="btn_nao_tenho_al", emoji="❌")
     async def nao_tenho_al(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -2471,6 +2735,9 @@ class PainelOrientacaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistroModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistroModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
     passaporte = discord.ui.TextInput(label="📋 Passaporte", placeholder="Digite seu passaporte", required=True)
     nome = discord.ui.TextInput(label="👤 Nome (igual está na cidade)", placeholder="Ex: Rodrigo Santos", required=True)
@@ -2478,6 +2745,9 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
     telefone = discord.ui.TextInput(label="📱 Telefone In Game", placeholder="Ex: (11) 99999-9999", required=True)
     indicado = discord.ui.TextInput(label="👤 Indicado por (opcional)", placeholder="Nome de quem te indicou", required=False)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         membro = interaction.user
@@ -2537,10 +2807,19 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistroView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistroView
+# ────────────────────────────────────────────────────────────────────────────────
 class RegistroView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: registro
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📋 Fazer Registro", style=discord.ButtonStyle.success, custom_id="registro_fazer")
     async def registro(self, interaction: discord.Interaction, button: discord.ui.Button):
         existe = await verificar_registro_existente(interaction.user.id)
@@ -2552,6 +2831,9 @@ class RegistroView(discord.ui.View):
             return
         await interaction.response.send_modal(RegistroModal())
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_orientacao
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_orientacao():
     canal = bot.get_channel(CANAL_ORIENTACAO_ID)
     if not canal: return
@@ -2584,6 +2866,9 @@ async def enviar_painel_orientacao():
     await enviar_ou_atualizar_painel("painel_orientacao", CANAL_ORIENTACAO_ID, embed, view)
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_registro_indicacao
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_registro_indicacao():
     canal = bot.get_channel(CANAL_REGISTRO_INDICACAO_ID)
     if not canal: return
@@ -2614,6 +2899,9 @@ async def enviar_painel_registro_indicacao():
     view = discord.ui.View(timeout=None)
     btn_registrar = discord.ui.Button(label="Registrar Indicação", style=discord.ButtonStyle.success, emoji="📝", custom_id="btn_registrar_indicacao")
     
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: registrar_callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def registrar_callback(interaction: discord.Interaction):
         await interaction.response.send_modal(RegistroIndicacaoModal())
         
@@ -2622,6 +2910,9 @@ async def enviar_painel_registro_indicacao():
 
     await enviar_ou_atualizar_painel("painel_registro_indicacao", CANAL_REGISTRO_INDICACAO_ID, embed, view)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_registro
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_registro
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2676,6 +2967,9 @@ async def enviar_painel_registro():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_embed_aviso_supremo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_embed_aviso_supremo
+# ────────────────────────────────────────────────────────────────────────────────
 async def criar_embed_aviso_supremo(titulo, mensagem, local=None, data_hora=None, cor_hex=None, is_doacao=False):
     tipo_detectado = "informativo"
     titulo_lower = titulo.lower()
@@ -2726,7 +3020,13 @@ async def criar_embed_aviso_supremo(titulo, mensagem, local=None, data_hora=None
 # ────────────────────────────────────────────────────────────────────────────────
 # SUBSTITUIR: Classe AvisosSelect
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AvisosSelect
+# ────────────────────────────────────────────────────────────────────────────────
 class AvisosSelect(discord.ui.Select):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         options = [
             discord.SelectOption(label="📢 Vida Rasa", description="Aviso geral para toda a facção", emoji="📢", value="vida_rasa"),
@@ -2739,6 +3039,9 @@ class AvisosSelect(discord.ui.Select):
         # O segredo é colocar o custom_id aqui
         super().__init__(placeholder="📌 Selecione o canal para o aviso...", min_values=1, max_values=1, options=options, custom_id="aviso_select_fixo")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         valor = self.values[0]
         canais = {
@@ -2766,7 +3069,13 @@ class AvisosSelect(discord.ui.Select):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AvisoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AvisoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Oficial"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, canal_id, nome_canal, is_doacao=False):
         super().__init__(timeout=300)
         self.canal_id = canal_id
@@ -2779,6 +3088,9 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Oficial"):
     data_hora = discord.ui.TextInput(label="📅 Data e Hora (Opcional)", placeholder="Ex: 25/08/2026 10:51", required=False, max_length=50)
     cor_tipo = discord.ui.TextInput(label="🎨 Cor (opcional)", placeholder="vermelho, verde, azul", required=False, max_length=20)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -2814,11 +3126,20 @@ class AvisoModal(discord.ui.Modal, title="📢 Criar Aviso Oficial"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AvisosView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AvisosView
+# ────────────────────────────────────────────────────────────────────────────────
 class AvisosView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None) # <-- Adicionado timeout=None
         self.add_item(AvisosSelect())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         tem_permissao = (
             interaction.user.guild_permissions.administrator or
@@ -2832,6 +3153,9 @@ class AvisosView(discord.ui.View):
             return False
         return True
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_avisos
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_avisos
 # ────────────────────────────────────────────────────────────────────────────────
@@ -2894,6 +3218,9 @@ async def enviar_painel_avisos():
 # SISTEMA DE DOAÇÕES (PIX MANUAL)
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: DoacaoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
     valor = discord.ui.TextInput(
         label="💰 Valor da Doação (R$)",
@@ -2909,6 +3236,9 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
         max_length=200
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -2933,6 +3263,9 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             valor_str = f"{valor_real:.2f}"
 
             # ─── GERADOR DE PIX MANUAL (PADRÃO BANCO CENTRAL) ───
+            # ────────────────────────────────────────────────────────────────────────────────
+            # MÉTODO: calcular_crc16
+            # ────────────────────────────────────────────────────────────────────────────────
             def calcular_crc16(payload):
                 crc = 0xFFFF
                 for byte in payload.encode('utf-8'):
@@ -2944,6 +3277,9 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
                             crc <<= 1
                 return f"{crc & 0xFFFF:04X}"
 
+            # ────────────────────────────────────────────────────────────────────────────────
+            # MÉTODO: formatar_campo
+            # ────────────────────────────────────────────────────────────────────────────────
             def formatar_campo(id_campo, valor):
                 tamanho = f"{len(valor):02d}"
                 return f"{id_campo}{tamanho}{valor}"
@@ -3051,14 +3387,26 @@ class DoacaoModal(discord.ui.Modal, title="💸 Fazer Doação via PIX"):
             logger.error(f"❌ Erro ao gerar PIX: {e}")
             await interaction.followup.send(f"❌ **Erro ao gerar o PIX.** Verifique a chave configurada no bot.", ephemeral=True)
             
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: DoacaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class DoacaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: doar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💸 Fazer Doação via PIX", style=discord.ButtonStyle.success, custom_id="btn_doacao_pix", emoji="💸")
     async def doar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(DoacaoModal())
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_doacoes
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_doacoes():
     canal = bot.get_channel(CANAL_DOACOES_ID)
     if not canal: return
@@ -3086,6 +3434,9 @@ async def enviar_painel_doacoes():
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  BLOCO 06 — SISTEMA FINANCEIRO                                              ║
 # ════════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_relatorio_financeiro
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_relatorio_financeiro
 # ────────────────────────────────────────────────────────────────────────────────
@@ -3140,6 +3491,9 @@ async def enviar_painel_relatorio_financeiro():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_compra_db (Atualizada para receber a quantidade)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_compra_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def salvar_compra_db(produto, valor, comprado_por, quantidade=0, tipo="Compra"):
     pool = await get_pool()
     if not pool:
@@ -3190,11 +3544,20 @@ async def salvar_compra_db(produto, valor, comprado_por, quantidade=0, tipo="Com
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ReembolsoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ReembolsoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ReembolsoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, reembolso_id):
         super().__init__(timeout=None)
         self.reembolso_id = reembolso_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _checar_permissao
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
         is_admin = interaction.user.guild_permissions.administrator
         # Apenas 01 e 02
@@ -3204,6 +3567,9 @@ class ReembolsoView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Confirmar Reembolso", style=discord.ButtonStyle.success, custom_id="btn_confirmar_reembolso")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
@@ -3251,6 +3617,9 @@ class ReembolsoView(discord.ui.View):
         
         await enviar_painel_caixa()
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: recusar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Recusar Reembolso", style=discord.ButtonStyle.danger, custom_id="btn_recusar_reembolso")
     async def recusar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
@@ -3291,11 +3660,20 @@ class ReembolsoView(discord.ui.View):
         
         await enviar_painel_caixa()
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarReembolsoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarReembolsoModal(discord.ui.Modal, title="✅ Confirmar Reembolso"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, compra_id, mensagem_original, valor, item, membro_id):
         super().__init__(); self.compra_id = compra_id; self.mensagem_original = mensagem_original
         self.valor = valor; self.item = item; self.membro_id = membro_id
     confirmacao = discord.ui.TextInput(label="Digite CONFIRMAR para autorizar", placeholder="CONFIRMAR", required=True, max_length=20)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         if self.confirmacao.value.strip().upper() != "CONFIRMAR":
             await interaction.response.send_message("❌ Confirmação incorreta.", ephemeral=True); return
@@ -3319,11 +3697,20 @@ class ConfirmarReembolsoModal(discord.ui.Modal, title="✅ Confirmar Reembolso")
         await interaction.followup.send("✅ Reembolso confirmado e descontado do Caixa Limpo!", ephemeral=True)
         await enviar_painel_caixa()
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RecusarReembolsoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RecusarReembolsoModal(discord.ui.Modal, title="❌ Recusar Reembolso"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, compra_id, mensagem_original, item, membro_id):
         super().__init__(); self.compra_id = compra_id; self.mensagem_original = mensagem_original
         self.item = item; self.membro_id = membro_id
     motivo = discord.ui.TextInput(label="Motivo da recusa", placeholder="Ex: Valor errado", style=discord.TextStyle.paragraph, required=True)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         pool = await get_pool()
@@ -3338,19 +3725,37 @@ class RecusarReembolsoModal(discord.ui.Modal, title="❌ Recusar Reembolso"):
         await self.mensagem_original.edit(embed=embed, view=None)
         await interaction.followup.send("✅ Reembolso recusado.", ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ReembolsoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ReembolsoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, compra_id, valor, item, membro_id):
         super().__init__(timeout=None); self.compra_id = compra_id; self.valor = valor; self.item = item; self.membro_id = membro_id
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction):
         if not any(r.id in [CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Apenas **01** ou **02**!", ephemeral=True); return False
         return True
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Confirmar", style=discord.ButtonStyle.success, custom_id="btn_confirmar_reembolso")
     async def confirmar(self, i, b): await i.response.send_modal(ConfirmarReembolsoModal(self.compra_id, i.message, self.valor, self.item, self.membro_id))
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: recusar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Recusar", style=discord.ButtonStyle.danger, custom_id="btn_recusar_reembolso")
     async def recusar(self, i, b): await i.response.send_modal(RecusarReembolsoModal(self.compra_id, i.message, self.item, self.membro_id))
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCompraModal (Com Sistema de Reembolso)
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistrarCompraModal
 # ────────────────────────────────────────────────────────────────────────────────
 class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento"):
     tipo_lancamento = discord.ui.TextInput(label="🏷️ Tipo de Lançamento", placeholder="Ex: Compra, Salário, Aluguel", required=True, max_length=50)
@@ -3359,6 +3764,9 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
     brinde = discord.ui.TextInput(label="🎁 Brinde (opcional)", placeholder="Ex: 50", required=False, max_length=10)
     valor = discord.ui.TextInput(label="💰 Valor total", placeholder="Ex: 40000", required=False)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         tipo = self.tipo_lancamento.value.strip().capitalize()
@@ -3447,10 +3855,19 @@ class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento")
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCompraView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistrarCompraView
+# ────────────────────────────────────────────────────────────────────────────────
 class RegistrarCompraView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: registrar_compra
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📝 Registrar Lançamento", style=discord.ButtonStyle.success, custom_id="registrar_compra_btn", emoji="💸")
     async def registrar_compra(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarCompraModal())
@@ -3458,10 +3875,16 @@ class RegistrarCompraView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioFinanceiroModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioFinanceiroModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEIRO"):
     data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO", placeholder="Ex: 01/04/2026", required=True)
     data_fim = discord.ui.TextInput(label="📅 Data FIM", placeholder="Ex: 30/04/2026", required=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -3622,15 +4045,27 @@ class RelatorioFinanceiroModal(discord.ui.Modal, title="📊 RELATÓRIO FINANCEI
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioFinanceiroView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioFinanceiroView
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioFinanceiroView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: gerar_relatorio
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📊 Gerar Relatório Financeiro", style=discord.ButtonStyle.success, custom_id="relatorio_financeiro_btn", emoji="💰")
     async def gerar_relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioFinanceiroModal())
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_registrar_compra
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_registrar_compra
 # ────────────────────────────────────────────────────────────────────────────────
@@ -3695,6 +4130,9 @@ async def enviar_painel_registrar_compra():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_ausencia_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_ausencia_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def salvar_ausencia_db(user_id, nome, motivo, data_inicio, data_fim):
     pool = await get_pool()
     if not pool:
@@ -3708,6 +4146,9 @@ async def salvar_ausencia_db(user_id, nome, motivo, data_inicio, data_fim):
     except Exception as e:
         logger.error(f"❌ Erro ao salvar ausência: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_ausencias_ativas_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_ausencias_ativas_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -3725,6 +4166,9 @@ async def buscar_ausencias_ativas_db():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_ausencia_por_user
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_ausencia_por_user
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_ausencia_por_user(user_id):
     pool = await get_pool()
     if not pool:
@@ -3739,6 +4183,9 @@ async def buscar_ausencia_por_user(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: desativar_ausencia
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: desativar_ausencia
+# ────────────────────────────────────────────────────────────────────────────────
 async def desativar_ausencia(user_id):
     pool = await get_pool()
     if not pool:
@@ -3749,6 +4196,9 @@ async def desativar_ausencia(user_id):
     except Exception as e:
         logger.error(f"❌ Erro ao desativar ausência: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: remover_ausencias_expiradas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: remover_ausencias_expiradas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -3769,12 +4219,18 @@ async def remover_ausencias_expiradas():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AusenciaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AusenciaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
     nome = discord.ui.TextInput(label="Seu nome completo", placeholder="Digite seu nome", required=True)
     data_inicio = discord.ui.TextInput(label="Data de INÍCIO da ausência", placeholder="Ex: 10/04/2026", required=True)
     data_fim = discord.ui.TextInput(label="Data de RETORNO", placeholder="Ex: 15/04/2026", required=True)
     motivo = discord.ui.TextInput(label="Motivo da ausência", placeholder="Ex: Viagem, Problemas de saúde, etc", style=discord.TextStyle.paragraph, required=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -3835,7 +4291,13 @@ class AusenciaModal(discord.ui.Modal, title="📝 Solicitar Ausência"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RemoverAusenciaSelect
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RemoverAusenciaSelect
+# ────────────────────────────────────────────────────────────────────────────────
 class RemoverAusenciaSelect(discord.ui.Select):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, ausencias):
         options = []
         for ausencia in ausencias:
@@ -3844,6 +4306,9 @@ class RemoverAusenciaSelect(discord.ui.Select):
             options.append(discord.SelectOption(label=nome, description=f"Período: {periodo}", value=str(ausencia['user_id'])))
         super().__init__(placeholder="Selecione a ausência para remover (volta antecipada)", min_values=1, max_values=1, options=options)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         user_id = int(self.values[0])
         member = interaction.guild.get_member(user_id)
@@ -3880,7 +4345,13 @@ class RemoverAusenciaSelect(discord.ui.Select):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RemoverAusenciaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RemoverAusenciaView
+# ────────────────────────────────────────────────────────────────────────────────
 class RemoverAusenciaView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, ausencias):
         super().__init__(timeout=60)
         self.add_item(RemoverAusenciaSelect(ausencias))
@@ -3888,14 +4359,26 @@ class RemoverAusenciaView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AusenciaUnificadoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AusenciaUnificadoView
+# ────────────────────────────────────────────────────────────────────────────────
 class AusenciaUnificadoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: solicitar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📝 Solicitar Ausência", style=discord.ButtonStyle.primary, custom_id="ausencia_solicitar", emoji="📝")
     async def solicitar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AusenciaModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: remover
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔄 Remover Ausência", style=discord.ButtonStyle.primary, custom_id="ausencia_remover", emoji="🔄")
     async def remover(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not pode_remover_ausencia(interaction.user):
@@ -3916,6 +4399,9 @@ class AusenciaUnificadoView(discord.ui.View):
             view=view, ephemeral=True
         )
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_ausencia
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_ausencia
 # ────────────────────────────────────────────────────────────────────────────────
@@ -3966,6 +4452,9 @@ async def enviar_painel_ausencia():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_lavagem_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_lavagem_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def salvar_lavagem_db(user_id, valor_sujo, taxa, valor_retorno):
     pool = await get_pool()
     if not pool:
@@ -3979,6 +4468,9 @@ async def salvar_lavagem_db(user_id, valor_sujo, taxa, valor_retorno):
     except Exception as e:
         logger.error(f"❌ Erro ao salvar lavagem: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_lavagens_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_lavagens_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -3996,6 +4488,9 @@ async def carregar_lavagens_db():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: limpar_lavagens_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: limpar_lavagens_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def limpar_lavagens_db():
     pool = await get_pool()
     if not pool:
@@ -4009,9 +4504,15 @@ async def limpar_lavagens_db():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: LavagemModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: LavagemModal
+# ────────────────────────────────────────────────────────────────────────────────
 class LavagemModal(discord.ui.Modal, title="🧼 Iniciar Lavagem"):
     valor = discord.ui.TextInput(label="💰 Valor do dinheiro sujo", placeholder="Ex: 100000", required=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -4058,8 +4559,14 @@ class LavagemModal(discord.ui.Modal, title="🧼 Iniciar Lavagem"):
             ephemeral=True
         )
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfigurarTaxaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfigurarTaxaModal(discord.ui.Modal, title="⚙️ Configurar Taxa de Lavagem"):
     nova_taxa = discord.ui.TextInput(label="Nova Taxa (%)", placeholder="Ex: 15", required=True, max_length=3)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -4077,6 +4584,9 @@ class ConfigurarTaxaModal(discord.ui.Modal, title="⚙️ Configurar Taxa de Lav
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÕES DE TAXA DE LAVAGEM (VERSÃO LIMPA E DEFINITIVA)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_taxa_lavagem_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_taxa_lavagem_db():
     pool = await get_pool()
     if not pool:
@@ -4091,6 +4601,9 @@ async def buscar_taxa_lavagem_db():
         logger.error(f"❌ Erro ao buscar taxa de lavagem: {e}")
         return 20
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_taxa_lavagem_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def salvar_taxa_lavagem_db(nova_taxa, user_id):
     pool = await get_pool()
     if not pool:
@@ -4107,9 +4620,15 @@ async def salvar_taxa_lavagem_db(nova_taxa, user_id):
         logger.error(f"❌ Erro ao salvar taxa de lavagem: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfigurarTaxaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfigurarTaxaModal(discord.ui.Modal, title="⚙️ Configurar Taxa de Lavagem"):
     nova_taxa = discord.ui.TextInput(label="Nova Taxa (%)", placeholder="Ex: 15", required=True, max_length=3)
     
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -4124,20 +4643,35 @@ class ConfigurarTaxaModal(discord.ui.Modal, title="⚙️ Configurar Taxa de Lav
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: LavagemView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: LavagemView
+# ────────────────────────────────────────────────────────────────────────────────
 class LavagemView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: iniciar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🧼 Iniciar Lavagem", style=discord.ButtonStyle.primary, custom_id="lavagem_iniciar", emoji="🧼")
     async def iniciar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(LavagemModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: configurar_taxa
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⚙️ Configurar Taxa", style=discord.ButtonStyle.secondary, custom_id="lavagem_config_taxa", emoji="⚙️")
     async def configurar_taxa(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(r.id in CARGOS_LIDERANCA + CARGOS_GERENCIA for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Apenas a Liderança/ADM podem mudar a taxa.", ephemeral=True); return
         await interaction.response.send_modal(ConfigurarTaxaModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: limpar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🧹 Limpar Sala", style=discord.ButtonStyle.danger, custom_id="lavagem_limpar", emoji="🧹")
     async def limpar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not pode_gerenciar_lavagem(interaction.user):
@@ -4161,6 +4695,9 @@ class LavagemView(discord.ui.View):
         embed.set_footer(text=f"🛡 Vida Rasa 442 • Limpeza realizada por {interaction.user.display_name}", icon_url=bot.user.display_avatar.url if bot.user else None)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: relatorio
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📊 Gerar Relatório", style=discord.ButtonStyle.success, custom_id="lavagem_relatorio", emoji="📊")
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not pode_gerenciar_lavagem(interaction.user):
@@ -4238,6 +4775,9 @@ class LavagemView(discord.ui.View):
             ephemeral=True
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: avisar_todos
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📩 Avisar TODOS no DM", style=discord.ButtonStyle.primary, custom_id="lavagem_dm", emoji="📩")
     async def avisar_todos(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not pode_gerenciar_lavagem(interaction.user):
@@ -4296,6 +4836,9 @@ class LavagemView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_lavagem
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_lavagem
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_lavagem():
     canal = bot.get_channel(CANAL_INICIAR_LAVAGEM_ID)
     if not canal: return
@@ -4334,6 +4877,9 @@ async def enviar_painel_lavagem():
     view = LavagemView()
     await enviar_ou_atualizar_painel("painel_lavagem", CANAL_INICIAR_LAVAGEM_ID, embed, view)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_message_lavagem
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: on_message_lavagem
 # ────────────────────────────────────────────────────────────────────────────────
@@ -4416,6 +4962,9 @@ async def on_message_lavagem(message: discord.Message):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_lives_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_lives_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def carregar_lives_db():
     pool = await get_pool()
     if not pool:
@@ -4427,6 +4976,9 @@ async def carregar_lives_db():
         logger.error(f"❌ Erro ao carregar lives: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_live_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_live_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -4443,6 +4995,9 @@ async def salvar_live_db(user_id, link):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_divulgado_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_divulgado_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_divulgado_db(link, valor):
     pool = await get_pool()
     if not pool:
@@ -4456,6 +5011,9 @@ async def atualizar_divulgado_db(link, valor):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: remover_live_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: remover_live_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def remover_live_db(user_id):
     pool = await get_pool()
     if not pool:
@@ -4466,6 +5024,9 @@ async def remover_live_db(user_id):
     except Exception as e:
         logger.error(f"❌ Erro ao remover live: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_live_manual
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_live_manual
 # ────────────────────────────────────────────────────────────────────────────────
@@ -4487,6 +5048,9 @@ async def salvar_live_manual(user_id, user_name, plataforma, link, titulo, categ
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_lives_ativas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_lives_ativas
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_lives_ativas():
     pool = await get_pool()
     if not pool:
@@ -4501,6 +5065,9 @@ async def buscar_lives_ativas():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: desativar_live_manual
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: desativar_live_manual
+# ────────────────────────────────────────────────────────────────────────────────
 async def desativar_live_manual(live_id):
     pool = await get_pool()
     if not pool:
@@ -4511,6 +5078,9 @@ async def desativar_live_manual(live_id):
     except Exception as e:
         logger.error(f"❌ Erro ao desativar live manual: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: obter_token_twitch
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: obter_token_twitch
 # ────────────────────────────────────────────────────────────────────────────────
@@ -4541,6 +5111,9 @@ async def obter_token_twitch():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: checar_twitch
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: checar_twitch
+# ────────────────────────────────────────────────────────────────────────────────
 async def checar_twitch(canal):
     try:
         token = await obter_token_twitch()
@@ -4564,6 +5137,9 @@ async def checar_twitch(canal):
         logger.error(f"Erro Twitch API para {canal}: {e}")
         return False, None, None, None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: divulgar_live
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: divulgar_live
 # ────────────────────────────────────────────────────────────────────────────────
@@ -4612,9 +5188,15 @@ async def divulgar_live(user_id, link, titulo, jogo, thumbnail, plataforma=None)
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CadastrarLiveModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CadastrarLiveModal
+# ────────────────────────────────────────────────────────────────────────────────
 class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
     link = discord.ui.TextInput(label="Cole o link da sua live", placeholder="https://kick.com/seucanal ou https://twitch.tv/seucanal")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         lives = await carregar_lives_db()
         novo_link = self.link.value.strip().lower()
@@ -4641,7 +5223,13 @@ class CadastrarLiveModal(discord.ui.Modal, title="🎥 Cadastrar Live"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: PublicarLiveManualModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: PublicarLiveManualModal
+# ────────────────────────────────────────────────────────────────────────────────
 class PublicarLiveManualModal(discord.ui.Modal, title="📢 PUBLICAR LIVE"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, user_name):
         super().__init__()
         self.user_id = user_id
@@ -4652,6 +5240,9 @@ class PublicarLiveManualModal(discord.ui.Modal, title="📢 PUBLICAR LIVE"):
     titulo = discord.ui.TextInput(label="📝 TÍTULO DA LIVE", placeholder="EX: MUITA AÇÃO NA VDR!", required=True)
     jogo = discord.ui.TextInput(label="🎮 JOGO/CATEGORIA", placeholder="EX: GTA RP, MINECRAFT", required=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         plataforma = self.plataforma.value.strip().upper()
         link = self.link.value.strip()
@@ -4682,12 +5273,21 @@ class PublicarLiveManualModal(discord.ui.Modal, title="📢 PUBLICAR LIVE"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: GerenciarLiveView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: GerenciarLiveView
+# ────────────────────────────────────────────────────────────────────────────────
 class GerenciarLiveView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, user_name):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.user_name = user_name
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cadastrar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📝 Cadastrar/Atualizar Live", style=discord.ButtonStyle.primary, custom_id="cadastrar_live_manual", emoji="📝")
     async def cadastrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != str(self.user_id):
@@ -4695,6 +5295,9 @@ class GerenciarLiveView(discord.ui.View):
             return
         await interaction.response.send_modal(PublicarLiveManualModal(self.user_id, self.user_name))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: anunciar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📢 ANUNCIAR LIVE", style=discord.ButtonStyle.success, custom_id="anunciar_live_manual", emoji="📢")
     async def anunciar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != str(self.user_id):
@@ -4757,6 +5360,9 @@ class GerenciarLiveView(discord.ui.View):
             ephemeral=True
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Cancelar Live", style=discord.ButtonStyle.danger, custom_id="cancelar_live_manual", emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != str(self.user_id):
@@ -4781,18 +5387,33 @@ class GerenciarLiveView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: PainelLivesUnicoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: PainelLivesUnicoView
+# ────────────────────────────────────────────────────────────────────────────────
 class PainelLivesUnicoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cadastrar_twitch
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🎥 Cadastrar Twitch", style=discord.ButtonStyle.primary, custom_id="cadastrar_twitch", emoji="🎥")
     async def cadastrar_twitch(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(CadastrarLiveModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: publicar_live
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📢 Publicar Live", style=discord.ButtonStyle.success, custom_id="publicar_live", emoji="📢")
     async def publicar_live(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(PublicarLiveManualModal(interaction.user.id, interaction.user.display_name))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: minha_live
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🎥 Minha Live", style=discord.ButtonStyle.primary, custom_id="minha_live_manual", emoji="🎥")
     async def minha_live(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = GerenciarLiveView(interaction.user.id, interaction.user.display_name)
@@ -4815,6 +5436,9 @@ class PainelLivesUnicoView(discord.ui.View):
         embed.set_footer(text="Sistema de Lives • VDR")
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_lives
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_lives
 # ────────────────────────────────────────────────────────────────────────────────
@@ -4857,6 +5481,9 @@ async def enviar_painel_lives():
 # ────────────────────────────────────────────────────────────────────────────────
 # LOOP: verificar_lives
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_lives
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=2)
 async def verificar_lives():
     try:
@@ -4897,6 +5524,9 @@ async def verificar_lives():
 
 # ────────────────────────────────────────────────────────────────────────────────
 # INTELIGÊNCIA DE TEXTO E CORREÇÃO AUTOMÁTICA DO BAÚ
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: identificar_item_inteligente
 # ────────────────────────────────────────────────────────────────────────────────
 def identificar_item_inteligente(texto):
     texto = texto.lower().strip()
@@ -5111,6 +5741,9 @@ def identificar_item_inteligente(texto):
 # ║  BLOCO 10 — SISTEMA DE BAÚ UNIFICADO (BAÚ + ARMAS)                          ║
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_bau_estoque
+# ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_bau_estoque(item_nome, quantidade, operacao="adicionar"):
     pool = await get_pool()
     if not pool:
@@ -5133,6 +5766,9 @@ async def atualizar_bau_estoque(item_nome, quantidade, operacao="adicionar"):
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar estoque do baú: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_movimentacao_bau
+# ────────────────────────────────────────────────────────────────────────────────
 async def registrar_movimentacao_bau(tipo, item_nome, quantidade, membro, observacao=None):
     pool = await get_pool()
     if not pool:
@@ -5143,6 +5779,9 @@ async def registrar_movimentacao_bau(tipo, item_nome, quantidade, membro, observ
     except Exception as e:
         logger.error(f"❌ Erro ao registrar movimentação: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_bau_estoque
+# ────────────────────────────────────────────────────────────────────────────────
 async def carregar_bau_estoque():
     pool = await get_pool()
     if not pool:
@@ -5158,6 +5797,9 @@ async def carregar_bau_estoque():
         logger.error(f"❌ Erro ao carregar estoque do baú: {e}")
         return {}
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: is_arma
+# ────────────────────────────────────────────────────────────────────────────────
 def is_arma(item_nome):
     item_lower = item_nome.lower()
     palavras_arma = [
@@ -5171,6 +5813,9 @@ def is_arma(item_nome):
             return True
     return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_embed_bau_unificado
+# ────────────────────────────────────────────────────────────────────────────────
 async def criar_embed_bau_unificado():
     estoque = await carregar_bau_estoque()
 
@@ -5224,7 +5869,13 @@ async def criar_embed_bau_unificado():
     embed.set_footer(text=f"🛡️ VDR 442 • Atualizado em {agora().strftime('%d/%m/%Y às %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
     return embed
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: BauUnificadoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class BauUnificadoModal(discord.ui.Modal):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, tipo):
         self.tipo = tipo
         titulo = "📥 Registrar Entrada" if tipo == "entrou" else "📤 Registrar Saída"
@@ -5242,6 +5893,9 @@ class BauUnificadoModal(discord.ui.Modal):
         self.add_item(self.itens)
         self.add_item(self.observacao)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -5369,10 +6023,19 @@ class BauUnificadoModal(discord.ui.Modal):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarZerarBauView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarZerarBauView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarZerarBauView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=60)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ SIM, ZERAR TUDO", style=discord.ButtonStyle.danger, custom_id="conf_zerar_bau")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Verifica novamente se é o 01 ou ADM
@@ -5416,6 +6079,9 @@ class ConfirmarZerarBauView(discord.ui.View):
             logger.error(f"❌ Erro ao zerar baú: {e}")
             await interaction.followup.send(f"❌ Erro ao zerar o baú: `{str(e)[:150]}`", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id="cancel_zerar_bau")
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Ação cancelada. O baú está a salvo.", ephemeral=True)
@@ -5427,20 +6093,35 @@ class ConfirmarZerarBauView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: BauUnificadoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: BauUnificadoView
+# ────────────────────────────────────────────────────────────────────────────────
 class BauUnificadoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: registrar_entrada
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📥 Registrar Entrada", style=discord.ButtonStyle.success, custom_id="bau_entrada_btn", emoji="📥", row=0)
     async def registrar_entrada(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = BauUnificadoModal("entrou")
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: registrar_saida
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📤 Registrar Saída", style=discord.ButtonStyle.danger, custom_id="bau_saida_btn", emoji="📤", row=0)
     async def registrar_saida(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = BauUnificadoModal("saiu")
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: zerar_bau
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🗑️ Zerar Baú", style=discord.ButtonStyle.danger, custom_id="bau_zerar_btn", emoji="🗑️", row=1)
     async def zerar_bau(self, interaction: discord.Interaction, button: discord.ui.Button):
         # VERIFICAÇÃO DE PERMISSÃO: Apenas o 01 ou ADM do Discord
@@ -5467,6 +6148,9 @@ class BauUnificadoView(discord.ui.View):
         view = ConfirmarZerarBauView()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_ou_atualizar_painel_bau
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
     canal = bot.get_channel(canal_id)
     if not canal:
@@ -5511,6 +6195,9 @@ async def enviar_ou_atualizar_painel_bau(nome, canal_id, embed, view):
     except Exception as e:
         logger.error(f"❌ Erro crítico ao enviar painel {nome}: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_bau
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_bau():
     canal = bot.get_channel(CANAL_BAU_MEMBROS_ID)
     if not canal:
@@ -5521,6 +6208,9 @@ async def enviar_painel_bau():
     await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: processar_print_bau_ocr
+# ────────────────────────────────────────────────────────────────────────────────
 async def processar_print_bau_ocr(attachment: discord.Attachment) -> dict:
     if not _OCR_DISPONIVEL:
         return {}
@@ -5550,6 +6240,9 @@ async def processar_print_bau_ocr(attachment: discord.Attachment) -> dict:
         logger.error(f"❌ Erro OCR: {e}")
         return {}
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_message_bau_ocr
+# ────────────────────────────────────────────────────────────────────────────────
 async def on_message_bau_ocr(message: discord.Message):
     if message.author.bot:
         return
@@ -5613,6 +6306,9 @@ async def on_message_bau_ocr(message: discord.Message):
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar painel após OCR: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_testar_ocr
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="testar_ocr")
 @commands.has_permissions(administrator=True)
 async def cmd_testar_ocr(ctx):
@@ -5628,6 +6324,9 @@ async def cmd_testar_ocr(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !reparar_registros
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_reparar_registros
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="reparar_registros")
 @commands.has_permissions(administrator=True)
@@ -5673,6 +6372,9 @@ async def cmd_reparar_registros(ctx):
 
     await ctx.send(f"✅ **Fim da varredura!**\n🔍 Verificadas: **{verificadas}** mensagens.\n🛠️ Consertados: **{contador}** registros.")
     
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_registrar_manual_bau
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="registrar_manual_bau")
 async def cmd_registrar_manual_bau(ctx):
     removido = bau_print_pendente.pop(ctx.author.id, None) or armas_print_pendente.pop(ctx.author.id, None)
@@ -6188,6 +6890,9 @@ REGRAS_ACOES = {
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_acao_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_acao_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def salvar_acao_db(tipo, autor):
     pool = await get_pool()
     if not pool:
@@ -6199,6 +6904,9 @@ async def salvar_acao_db(tipo, autor):
         logger.error(f"❌ Erro ao salvar ação: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_acoes_semana
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_acoes_semana
 # ────────────────────────────────────────────────────────────────────────────────
@@ -6216,6 +6924,9 @@ async def buscar_acoes_semana():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: participar_acao_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: participar_acao_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def participar_acao_db(acao_id, user_id):
     pool = await get_pool()
     if not pool:
@@ -6230,6 +6941,9 @@ async def participar_acao_db(acao_id, user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: remover_participante_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: remover_participante_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def remover_participante_db(acao_id, user_id):
     pool = await get_pool()
     if not pool:
@@ -6240,6 +6954,9 @@ async def remover_participante_db(acao_id, user_id):
     except Exception as e:
         logger.error(f"❌ Erro ao remover participante: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_participantes_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_participantes_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -6257,6 +6974,9 @@ async def buscar_participantes_db(acao_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_acao_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_acao_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_acao_db(acao_id):
     pool = await get_pool()
     if not pool:
@@ -6268,6 +6988,9 @@ async def buscar_acao_db(acao_id):
         logger.error(f"❌ Erro ao buscar ação: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cancelar_acao_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: cancelar_acao_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -6284,6 +7007,9 @@ async def cancelar_acao_db(acao_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: concluir_acao_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: concluir_acao_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def concluir_acao_db(acao_id, resultado, valor=0):
     pool = await get_pool()
     if not pool:
@@ -6294,6 +7020,9 @@ async def concluir_acao_db(acao_id, resultado, valor=0):
     except Exception as e:
         logger.error(f"❌ Erro ao concluir ação: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_limite_categoria
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_limite_categoria
 # ────────────────────────────────────────────────────────────────────────────────
@@ -6335,10 +7064,19 @@ async def verificar_limite_categoria(acao_tipo):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: FecharButton
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: FecharButton
+# ────────────────────────────────────────────────────────────────────────────────
 class FecharButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(label="❌ Fechar", style=discord.ButtonStyle.danger)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         try:
             await interaction.message.delete()
@@ -6348,7 +7086,13 @@ class FecharButton(discord.ui.Button):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: SelecionarAcaoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: SelecionarAcaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class SelecionarAcaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, acoes, titulo, emoji):
         super().__init__(timeout=60)
         options = []
@@ -6387,6 +7131,9 @@ class SelecionarAcaoView(discord.ui.View):
         self.add_item(self.select)
         self.add_item(FecharButton())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: select_callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def select_callback(self, interaction: discord.Interaction):
         acao_tipo = interaction.data["values"][0]
         await interaction.response.defer(ephemeral=True)
@@ -6517,12 +7264,21 @@ class SelecionarAcaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AcaoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AcaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class AcaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, acao_id, criador_id):
         super().__init__(timeout=None)
         self.acao_id = acao_id
         self.criador_id = criador_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: participar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Participar", style=discord.ButtonStyle.success, custom_id="acao_participar", emoji="✅")
     async def participar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(role.id in CARGOS_PERMITIDOS_ESCALACAO for role in interaction.user.roles):
@@ -6547,6 +7303,9 @@ class AcaoView(discord.ui.View):
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você se inscreveu na ação **{acao['tipo']}**!", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: sair
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Sair", style=discord.ButtonStyle.danger, custom_id="acao_sair", emoji="❌")
     async def sair(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await get_pool()
@@ -6568,6 +7327,9 @@ class AcaoView(discord.ui.View):
         await self.atualizar_embed(interaction, participantes, acao)
         await interaction.response.send_message(f"✅ Você saiu da ação **{acao['tipo']}**!", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar_acao
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🚫 Cancelar Ação", style=discord.ButtonStyle.danger, custom_id="acao_cancelar", emoji="🚫")
     async def cancelar_acao(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_criador = interaction.user.id == self.criador_id
@@ -6606,6 +7368,9 @@ class AcaoView(discord.ui.View):
         await interaction.followup.send(f"✅ Ação **{acao['tipo']}** cancelada e removida!", ephemeral=True)
         await enviar_painel_acoes(interaction.guild)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: concluir
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📤 Concluir Escalação", style=discord.ButtonStyle.primary, custom_id="acao_concluir", emoji="📤")
     async def concluir(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_criador = interaction.user.id == self.criador_id
@@ -6713,6 +7478,9 @@ class AcaoView(discord.ui.View):
 
             await enviar_painel_acoes(interaction.guild)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: atualizar_embed
+    # ────────────────────────────────────────────────────────────────────────────────
     async def atualizar_embed(self, interaction, participantes, acao):
         try:
             mensagem = interaction.message
@@ -6753,6 +7521,9 @@ class AcaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AdicionarParticipantesManualModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdicionarParticipantesManualModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AdicionarParticipantesManualModal(discord.ui.Modal, title="📝 ADICIONAR PARTICIPANTES"):
     participantes = discord.ui.TextInput(
         label="👥 Nomes dos participantes (um por linha)",
@@ -6762,12 +7533,18 @@ class AdicionarParticipantesManualModal(discord.ui.Modal, title="📝 ADICIONAR 
         max_length=500
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, acao_id, mensagem_original, acao):
         super().__init__(timeout=300)
         self.acao_id = acao_id
         self.mensagem_original = mensagem_original
         self.acao = acao
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         pool = await get_pool()
@@ -6857,11 +7634,20 @@ class AdicionarParticipantesManualModal(discord.ui.Modal, title="📝 ADICIONAR 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioAcaoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioAcaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioAcaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, acao_id):
         super().__init__(timeout=None)
         self.acao_id = acao_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: adicionar_participantes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="➕ Adicionar Participantes", style=discord.ButtonStyle.primary, custom_id="relatorio_adicionar_participantes", emoji="➕", row=0)
     async def adicionar_participantes(self, interaction: discord.Interaction, button: discord.ui.Button):
         cargos_permitidos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
@@ -6896,6 +7682,9 @@ class RelatorioAcaoView(discord.ui.View):
         modal = AdicionarParticipantesRelatorioModal(self.acao_id, interaction.message)
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ganhou
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🏆 Ganhou", style=discord.ButtonStyle.success, custom_id="relatorio_ganhou", emoji="🏆", row=1)
     async def ganhou(self, interaction: discord.Interaction, button: discord.ui.Button):
         cargos_permitidos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
@@ -6929,6 +7718,9 @@ class RelatorioAcaoView(discord.ui.View):
 
         await interaction.response.send_modal(ResultadoGanhouModal(self.acao_id, interaction.message))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: perdeu
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💀 Perdeu", style=discord.ButtonStyle.danger, custom_id="relatorio_perdeu", emoji="💀", row=1)
     async def perdeu(self, interaction: discord.Interaction, button: discord.ui.Button):
         cargos_permitidos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
@@ -6965,6 +7757,9 @@ class RelatorioAcaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AdicionarParticipantesRelatorioModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdicionarParticipantesRelatorioModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AdicionarParticipantesRelatorioModal(discord.ui.Modal, title="📝 ADICIONAR PARTICIPANTES"):
     participantes = discord.ui.TextInput(
         label="👥 Nomes dos participantes (um por linha)",
@@ -6974,11 +7769,17 @@ class AdicionarParticipantesRelatorioModal(discord.ui.Modal, title="📝 ADICION
         max_length=500
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, acao_id, mensagem_original):
         super().__init__(timeout=300)
         self.acao_id = acao_id
         self.mensagem_original = mensagem_original
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         pool = await get_pool()
@@ -7066,12 +7867,21 @@ class AdicionarParticipantesRelatorioModal(discord.ui.Modal, title="📝 ADICION
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ResultadoAcaoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ResultadoAcaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ResultadoAcaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, acao_id, mensagem_original):
         super().__init__(timeout=None)
         self.acao_id = acao_id
         self.mensagem_original = mensagem_original
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ganhou
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🏆 Ganhou", style=discord.ButtonStyle.success, custom_id="resultado_ganhou")
     async def ganhou(self, interaction: discord.Interaction, button):
         pool = await get_pool()
@@ -7087,6 +7897,9 @@ class ResultadoAcaoView(discord.ui.View):
             return
         await interaction.response.send_modal(ResultadoGanhouModal(self.acao_id, self.mensagem_original))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: perdeu
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💀 Perdeu", style=discord.ButtonStyle.danger, custom_id="resultado_perdeu")
     async def perdeu(self, interaction: discord.Interaction, button):
         pool = await get_pool()
@@ -7105,6 +7918,9 @@ class ResultadoAcaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ResultadoGanhouModal (DIVISÃO COLETIVA DOS SOLDADOS)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ResultadoGanhouModal
+# ────────────────────────────────────────────────────────────────────────────────
 class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
     dinheiro = discord.ui.TextInput(
         label="💰 Valor total ganho",
@@ -7112,11 +7928,17 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
         required=True
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, acao_id, mensagem_original):
         super().__init__()
         self.acao_id = acao_id
         self.mensagem_original = mensagem_original
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -7332,14 +8154,23 @@ class ResultadoGanhouModal(discord.ui.Modal, title="🎉 Resultado - GANHOU"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ResultadoPerdeuModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ResultadoPerdeuModal
+# ────────────────────────────────────────────────────────────────────────────────
 class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
     confirmacao = discord.ui.TextInput(label="Digite CONFIRMAR para registrar a perda", required=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, acao_id, mensagem_original):
         super().__init__()
         self.acao_id = acao_id
         self.mensagem_original = mensagem_original
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         if self.confirmacao.value.strip().upper() != "CONFIRMAR":
             await interaction.response.send_message("❌ Confirmação incorreta!", ephemeral=True)
@@ -7435,28 +8266,46 @@ class ResultadoPerdeuModal(discord.ui.Modal, title="💀 Resultado - PERDEU"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: PainelAcoesView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: PainelAcoesView
+# ────────────────────────────────────────────────────────────────────────────────
 class PainelAcoesView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: acoes_complexo
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🏙️ Complexo", style=discord.ButtonStyle.primary, custom_id="acoes_complexo", emoji="🏙️")
     async def acoes_complexo(self, interaction: discord.Interaction, button):
         await interaction.response.defer(ephemeral=True)
         view = SelecionarAcaoView(ACOES_COMPLEXO, "ESCOLHA A AÇÃO DO COMPLEXO", "🏙️")
         await interaction.followup.send("**🏙️ Selecione a ação do Complexo:**", view=view, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: acoes_bahamas
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🏝️ Bahamas", style=discord.ButtonStyle.primary, custom_id="acoes_bahamas", emoji="🏝️")
     async def acoes_bahamas(self, interaction: discord.Interaction, button):
         await interaction.response.defer(ephemeral=True)
         view = SelecionarAcaoView(ACOES_BAHAMAS, "ESCOLHA A AÇÃO DE BAHAMAS", "🏝️")
         await interaction.followup.send("**🏝️ Selecione a ação de Bahamas:**", view=view, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: acoes_helicrash
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🚁 Helicrash", style=discord.ButtonStyle.primary, custom_id="acoes_helicrash", emoji="🚁")
     async def acoes_helicrash(self, interaction: discord.Interaction, button):
         await interaction.response.defer(ephemeral=True)
         view = SelecionarAcaoView(ACOES_HELICRASH, "ESCOLHA O HELICRASH", "🚁")
         await interaction.followup.send("**🚁 Selecione o Helicrash:**", view=view, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: reset
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="♻️ Resetar Ações", style=discord.ButtonStyle.danger, custom_id="acoes_reset", emoji="♻️", row=1)
     async def reset(self, interaction: discord.Interaction, button):
         cargos_permitidos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
@@ -7490,10 +8339,19 @@ class PainelAcoesView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarResetAcoesView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarResetAcoesView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarResetAcoesView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=60)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ CONFIRMAR RESET", style=discord.ButtonStyle.danger, custom_id="confirmar_reset_acoes", emoji="✅")
     async def confirmar(self, interaction: discord.Interaction, button):
         await interaction.response.defer(ephemeral=True)
@@ -7555,6 +8413,9 @@ class ConfirmarResetAcoesView(discord.ui.View):
             logger.error(f"❌ Erro ao resetar ações: {e}")
             await interaction.followup.send(f"❌ **Erro ao resetar ações:** {str(e)[:100]}", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id="cancelar_reset_acoes", emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button):
         await interaction.response.send_message("❌ **Reset cancelado.**", ephemeral=True)
@@ -7563,6 +8424,9 @@ class ConfirmarResetAcoesView(discord.ui.View):
         except:
             pass
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restaurar_acoes
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_acoes
 # ────────────────────────────────────────────────────────────────────────────────
@@ -7594,6 +8458,9 @@ async def restaurar_acoes():
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar ações: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_acoes
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_acoes
 # ────────────────────────────────────────────────────────────────────────────────
@@ -7706,38 +8573,44 @@ ORGANIZACOES_CONFIG = {
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: proximo_pedido
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: proximo_pedido
+# ────────────────────────────────────────────────────────────────────────────────
 async def proximo_pedido():
     pool = await get_pool()
     if not pool:
-        return 1
-    try:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT ultimo FROM pedidos WHERE id=1")
-            if not row:
-                await conn.execute("INSERT INTO pedidos (id, ultimo) VALUES (1, 1)")
-                return 1
-            novo = row["ultimo"] + 1
-            await conn.execute("UPDATE pedidos SET ultimo=$1 WHERE id=1", novo)
-            return novo
-    except Exception as e:
-        logger.error(f"❌ Erro ao gerar próximo pedido: {e}")
-        return 1
+        raise RuntimeError("Banco indisponível: não é seguro gerar pedido provisório")
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            numero = await conn.fetchval("""
+                INSERT INTO pedidos (id, ultimo) VALUES (1, 1)
+                ON CONFLICT (id) DO UPDATE SET ultimo = pedidos.ultimo + 1
+                RETURNING ultimo
+            """)
+            if numero is None:
+                raise RuntimeError("PostgreSQL não retornou número do pedido")
+            return int(numero)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_venda_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_venda_db
 # ────────────────────────────────────────────────────────────────────────────────
 async def salvar_venda_db(vendedor_id, valor, pedido_numero, pt=0, sub=0):
     pool = await get_pool()
     if not pool:
-        return
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO vendas (user_id, valor, data, pedido_numero, pt, sub) VALUES ($1, $2, $3, $4, $5, $6)", 
-                vendedor_id, valor, agora_db().strftime("%d/%m/%Y"), pedido_numero, pt, sub
-            )
-    except Exception as e:
-        logger.error(f"❌ Erro ao salvar venda: {e}")
+        raise RuntimeError("Banco indisponível para salvar venda")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO vendas (user_id, valor, data, pedido_numero, pt, sub) VALUES ($1,$2,$3,$4,$5,$6)",
+            str(vendedor_id), int(valor), agora_db().strftime("%d/%m/%Y"),
+            int(pedido_numero), int(pt), int(sub)
+        )
+    return True
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_valor_venda_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_valor_venda_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -7757,6 +8630,9 @@ async def atualizar_valor_venda_db(pedido_numero, valor, pt=None, sub=None):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_vendas_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_vendas_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def carregar_vendas_db():
     pool = await get_pool()
     if not pool:
@@ -7771,35 +8647,35 @@ async def carregar_vendas_db():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: marcar_pedido_finalizado
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: marcar_pedido_finalizado
+# ────────────────────────────────────────────────────────────────────────────────
 async def marcar_pedido_finalizado(pedido_numero, tipo="finalizado"):
     pool = await get_pool()
     if not pool:
         return False
+    if tipo not in ("finalizado", "cancelado"):
+        return False
     try:
         async with pool.acquire() as conn:
             if tipo == "cancelado":
-                await conn.execute(
-                    """UPDATE vendas 
-                       SET cancelado = true, 
-                           finalizado_em = NOW(), 
-                           tipo_finalizacao = 'cancelado' 
-                       WHERE pedido_numero = $1""",
-                    pedido_numero
-                )
+                resultado = await conn.execute("""UPDATE vendas
+                    SET cancelado=true, finalizado_em=COALESCE(finalizado_em,NOW()), tipo_finalizacao='cancelado'
+                    WHERE pedido_numero=$1 AND cancelado=false""", int(pedido_numero))
             else:
-                await conn.execute(
-                    """UPDATE vendas 
-                       SET finalizado = true, 
-                           finalizado_em = NOW(), 
-                           tipo_finalizacao = 'finalizado' 
-                       WHERE pedido_numero = $1""",
-                    pedido_numero
-                )
-            return True
+                resultado = await conn.execute("""UPDATE vendas
+                    SET finalizado=true, finalizado_em=COALESCE(finalizado_em,NOW()), tipo_finalizacao='finalizado'
+                    WHERE pedido_numero=$1 AND finalizado=false AND cancelado=false""", int(pedido_numero))
+            return resultado.endswith(' 1') or await conn.fetchval(
+                "SELECT (finalizado OR cancelado) FROM vendas WHERE pedido_numero=$1", int(pedido_numero)
+            ) is True
     except Exception as e:
-        logger.error(f"❌ Erro ao marcar pedido como {tipo}: {e}")
+        logger.error("❌ Marcar pedido #%s: %s", pedido_numero, e)
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_pedido_finalizado
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_pedido_finalizado
 # ────────────────────────────────────────────────────────────────────────────────
@@ -7821,87 +8697,140 @@ async def verificar_pedido_finalizado(pedido_numero):
         return False
 
 # ────────────────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_responsaveis_venda — dados persistidos na entrega e no caixa
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_responsaveis_venda
+# ────────────────────────────────────────────────────────────────────────────────
+async def buscar_responsaveis_venda(pedido_numero, entrega_id=None, guild=None):
+    resposta = {"entregue_por": None, "entregue_em": None, "pago_por": None, "pago_em": None}
+    pool = await get_pool()
+    if not pool: return resposta
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT entregue_por, entregue_em, pago_por, pago_em FROM entregas_status
+                WHERE pedido_numero=$1 AND ($2::integer IS NULL OR entrega_id=$2)
+                ORDER BY entregue_em DESC NULLS LAST, pago_em DESC NULLS LAST LIMIT 1
+            """, int(pedido_numero), int(entrega_id) if entrega_id else None)
+            if row:
+                for tipo in ("entregue", "pago"):
+                    autor = row[f"{tipo}_por"]
+                    if autor:
+                        resposta[f"{tipo}_por"] = await _nome_responsavel_venda(autor, guild)
+                    data = row[f"{tipo}_em"]
+                    if data: resposta[f"{tipo}_em"] = data.strftime('%d/%m/%Y %H:%M')
+            # Históricos antigos que não persistiram a entrega: recuperar da saída real do estoque.
+            if not resposta["entregue_por"]:
+                row = await conn.fetchrow("""
+                    SELECT retirado_por, data FROM saida_estoque
+                    WHERE pedido_numero=$1 AND retirado_por IS NOT NULL
+                    ORDER BY data DESC LIMIT 1""", int(pedido_numero))
+                if row:
+                    resposta["entregue_por"] = await _nome_responsavel_venda(row["retirado_por"], guild)
+                    if row["data"]: resposta["entregue_em"] = row["data"].strftime('%d/%m/%Y %H:%M')
+            # Para dados legados, tentar o autor que registrou o recebimento no caixa.
+            if not resposta["pago_por"]:
+                row = await conn.fetchrow("""
+                    SELECT autor, data FROM caixa_movimentacoes
+                    WHERE motivo ILIKE $1 AND tipo='venda' AND autor IS NOT NULL
+                    ORDER BY data ASC LIMIT 1""", f"%Venda #{int(pedido_numero):04d}%")
+                if row:
+                    resposta["pago_por"] = await _nome_responsavel_venda(row["autor"], guild)
+                    if row["data"]: resposta["pago_em"] = row["data"].strftime('%d/%m/%Y %H:%M')
+    except Exception as e:
+        logger.error("❌ Falha ao rastrear responsáveis da venda #%s: %s", pedido_numero, e)
+    return resposta
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _nome_responsavel_venda — resolve ID sem inventar responsável
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _nome_responsavel_venda
+# ────────────────────────────────────────────────────────────────────────────────
+async def _nome_responsavel_venda(autor, guild=None):
+    if not autor: return None
+    try:
+        uid = int(autor)
+        return await pegar_apelido(uid, guild) if guild else str(uid)
+    except (TypeError, ValueError):
+        return str(autor)
+    except Exception as e:
+        logger.warning("⚠️ Falha ao obter apelido %s: %s", autor, e)
+        return str(autor)
+
 # FUNÇÃO: enviar_embed_pedido_finalizado
 # ────────────────────────────────────────────────────────────────────────────────
-async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, vendedor_nome, pago_por, pago_em, entregue_por, entregue_em, transferido_para, transferido_por, transferido_em, cancelado_por=None, cancelado_em=None, tipo="finalizado", entrega_id=None):
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_embed_pedido_finalizado
+# ────────────────────────────────────────────────────────────────────────────────
+async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, vendedor_nome, pago_por, pago_em,
+                                         entregue_por, entregue_em, transferido_para, transferido_por, transferido_em,
+                                         cancelado_por=None, cancelado_em=None, tipo="finalizado", entrega_id=None):
     try:
         canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
         if not canal:
-            logger.error(f"❌ Canal de pedidos finalizados não encontrado: {CANAL_PEDIDOS_FINALIZADOS_ID}")
+            logger.error("❌ Canal de finalizados indisponível: %s", CANAL_PEDIDOS_FINALIZADOS_ID)
             return False
-
+        pt, sub = int(pt), int(sub)
         valor_total = (pt * 50) + (sub * 90)
-        pacotes_pt = pt // 50
-        pacotes_sub = sub // 50
-
-        if tipo == "cancelado":
-            cor = 0xC0392B 
-            status_emoji = "❌"
-            status_texto = "PEDIDO CANCELADO"
-            status_cor = "🔴"
-        else:
-            cor = 0x2ECC71 
-            status_emoji = "✅"
-            status_texto = "VENDA FINALIZADA"
-            status_cor = "🟢"
-
+        if tipo == "finalizado":
+            rastreio = await buscar_responsaveis_venda(pedido_numero, entrega_id, canal.guild)
+            entregue_por = rastreio["entregue_por"] or (entregue_por if entregue_por != "Sistema" else None)
+            entregue_em = rastreio["entregue_em"] or entregue_em
+            pago_por = rastreio["pago_por"] or (pago_por if pago_por != "Sistema" else None)
+            pago_em = rastreio["pago_em"] or pago_em
+        cancelada = tipo == "cancelado"
         embed = discord.Embed(
-            title=f"{status_emoji} • {status_texto} - Pedido #{pedido_numero:04d}",
-            color=cor,
+            title=f"{'❌ • PEDIDO CANCELADO' if cancelada else '✅ • VENDA FINALIZADA'} - Pedido #{pedido_numero:04d}",
+            color=0xC0392B if cancelada else 0x2ECC71,
             timestamp=agora()
         )
-        
         if bot.user and bot.user.display_avatar:
             embed.set_thumbnail(url=bot.user.display_avatar.url)
-
-        # Linha 1
         embed.add_field(name="👤 VENDEDOR", value=f"```yaml\n{vendedor_nome}\n```", inline=True)
         embed.add_field(name="📍 ORGANIZAÇÃO", value=f"```yaml\n{organizacao}\n```", inline=True)
         embed.add_field(name="\u200b", value="\u200b", inline=True)
-
-        # Linha 2
-        embed.add_field(name="🔫 PT", value=f"```yaml\n{fmt_num(pt)} munições\n📦 {pacotes_pt} pacotes\n```", inline=True)
-        embed.add_field(name="🔫 SUB", value=f"```yaml\n{fmt_num(sub)} munições\n📦 {pacotes_sub} pacotes\n```", inline=True)
+        embed.add_field(name="🔫 PT", value=f"```yaml\n{fmt_num(pt)} munições\n📦 {pt//50} pacotes\n```", inline=True)
+        embed.add_field(name="🔫 SUB", value=f"```yaml\n{fmt_num(sub)} munições\n📦 {sub//50} pacotes\n```", inline=True)
         embed.add_field(name="\u200b", value="\u200b", inline=True)
-
-        # Linha 3
         embed.add_field(name="💰 VALOR TOTAL", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=False)
-
-        # Linha 4: Status detalhado
-        texto_status = f"{status_cor} **{status_texto}**\n"
-        if tipo == "finalizado":
-            if entregue_por:
-                texto_status += f"🚚 Entregue por: {entregue_por} ({entregue_em or '—'})\n"
-            if pago_por:
-                texto_status += f"💰 Pago por: {pago_por} ({pago_em or '—'})\n"
-            if transferido_para:
-                texto_status += f"📤 Transferido para: {transferido_para}\n"
-                if transferido_por:
-                    texto_status += f"👤 Confirmado por: {transferido_por} ({transferido_em or '—'})\n"
+        texto = "🔴 **PEDIDO CANCELADO**" if cancelada else "🟢 **VENDA FINALIZADA**"
+        if cancelada:
+            if cancelado_por: texto += f"\n❌ Cancelado por: {cancelado_por} ({cancelado_em or '—'})"
         else:
-            if cancelado_por:
-                texto_status += f"❌ Cancelado por: {cancelado_por} ({cancelado_em or '—'})\n"
-
-        embed.add_field(name="🚦 STATUS DETALHADO", value=f"```yaml\n{texto_status.strip()}\n```", inline=False)
-
-        embed.set_footer(text=f"👑 Sistema de Encomendas - VDR 442 - {agora().strftime('%d/%m/%Y, %H:%M')}")
-
+            texto += f"\n🚚 Entregue por: {entregue_por or 'Não identificado'} ({entregue_em or '—'})"
+            texto += f"\n💰 Pagamento recebido por: {pago_por or 'Não identificado'} ({pago_em or '—'})"
+            if transferido_para:
+                texto += f"\n📤 Transferido para: {transferido_para}"
+                if transferido_por:
+                    texto += f"\n👤 Transferência confirmada por: {transferido_por} ({transferido_em or '—'})"
+        embed.add_field(name="🚦 STATUS DETALHADO", value=f"```yaml\n{texto}\n```", inline=False)
+        footer = f"👑 Sistema de Encomendas - VDR 442 • Pedido #{pedido_numero:04d}"
+        if entrega_id: footer += f" • ID: {int(entrega_id)}"
+        footer += f" • {agora().strftime('%d/%m/%Y, %H:%M')}"
+        embed.set_footer(text=footer)
         view = None
-        if tipo == "finalizado" and not transferido_para:
-            view = FinalizadosView(
-                entrega_id=entrega_id,
-                pedido_numero=pedido_numero,
-                valor_total=valor_total,
-                pt=pt,
-                sub=sub
-            )
-
-        await safe_request(canal.send, embed=embed, view=view)
+        if not cancelada and not transferido_para:
+            view = FinalizadosView(entrega_id=entrega_id, pedido_numero=pedido_numero,
+                                   valor_total=valor_total, pt=pt, sub=sub)
+        msg = await safe_request(canal.send, embed=embed, view=view)
+        if not msg:
+            return False
+        if view:
+            await BotaoPersistente.salvar_botao(msg.id, canal.id, "finalizado_transferencia", {
+                "entrega_id": entrega_id, "pedido_numero": pedido_numero,
+                "valor_total": valor_total, "pt": pt, "sub": sub
+            })
         return True
-
     except Exception as e:
-        logger.error(f"❌ Erro ao enviar embed de pedido finalizado: {e}")
+        logger.error("❌ Falha ao enviar pedido finalizado #%s: %s", pedido_numero, e)
         return False
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: extrair_dados_pedido_do_embed
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: extrair_dados_pedido_do_embed
 # ────────────────────────────────────────────────────────────────────────────────
@@ -7968,14 +8897,14 @@ async def extrair_dados_pedido_do_embed(embed):
             linhas = valor.split("\n")
             for linha in linhas:
                 linha_clean = linha.strip()
-                if linha_clean.startswith("💰 Pago"):
-                    dados["pago_por"] = linha_clean.replace("💰 Pago • Recebido por", "").replace("•", "|").split("|")[0].strip()
+                if linha_clean.startswith(("💰 Pago", "💰 Pagamento recebido", "🟢 Pago", "🟢 Pagamento recebido")):
+                    dados["pago_por"] = re.sub(r"^(?:💰|🟢)\s*(?:Pago|Pagamento recebido)(?:\s*•\s*Recebido)?\s*por\s*:?\s*", "", linha_clean).split("(")[0].split("•")[0].strip()
                     try:
                         dados["pago_em"] = linha_clean.split("•")[-1].strip()
                     except:
                         pass
-                elif linha_clean.startswith("✅ Entregue"):
-                    dados["entregue_por"] = linha_clean.replace("✅ Entregue por", "").replace("•", "|").split("|")[0].strip()
+                elif linha_clean.startswith(("✅ Entregue", "🟢 Entregue", "🚚 Entregue")):
+                    dados["entregue_por"] = re.sub(r"^(?:✅|🟢|🚚)\s*Entregue\s*por\s*:?\s*", "", linha_clean).split("(")[0].split("•")[0].strip()
                     try:
                         dados["entregue_em"] = linha_clean.split("•")[-1].strip()
                     except:
@@ -8017,6 +8946,9 @@ async def extrair_dados_pedido_do_embed(embed):
 
     return dados
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_entrega_parcelada
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_entrega_parcelada
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8074,132 +9006,99 @@ async def salvar_entrega_parcelada(pedido_original, total_entregas, pt_por_entre
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: garantir_entrega_status
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: garantir_entrega_status
+# ────────────────────────────────────────────────────────────────────────────────
 async def garantir_entrega_status(entrega_id, numero_parcela, pedido_numero):
     pool = await get_pool()
     if not pool: return None
-    
-    # ─── REGRA: SE FOR ÚNICO (0 OU NONE), O NÚMERO DA PARCELA É O PEDIDO ───
-    if entrega_id == 0 or entrega_id is None:
-        entrega_id_real = 0
-        numero_parcela_real = int(pedido_numero) if pedido_numero else 1
-    else:
-        entrega_id_real = int(entrega_id)
-        numero_parcela_real = int(numero_parcela)
-        
+    pedido = int(pedido_numero)
+    entrega = int(entrega_id or 0)
+    parcela = int(numero_parcela) if entrega else pedido
+    if pedido <= 0 or parcela <= 0:
+        logger.error("❌ Pedido/parcela inválida: %s/%s", pedido, parcela)
+        return None
     try:
         async with pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO entregas_status (entrega_id, numero_parcela, pedido_numero)
-                   VALUES ($1, $2, $3) ON CONFLICT (entrega_id, numero_parcela) DO NOTHING""",
-                entrega_id_real, numero_parcela_real, int(pedido_numero) if pedido_numero else 0
-            )
-            row = await conn.fetchrow(
-                "SELECT * FROM entregas_status WHERE entrega_id = $1 AND numero_parcela = $2",
-                entrega_id_real, numero_parcela_real
-            )
-            return row["id"] if row else None
+            return await conn.fetchval("""
+                INSERT INTO entregas_status (entrega_id, numero_parcela, pedido_numero)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (entrega_id, numero_parcela) DO UPDATE
+                  SET pedido_numero=EXCLUDED.pedido_numero
+                RETURNING id
+            """, entrega, parcela, pedido)
     except Exception as e:
-        logger.error(f"❌ Erro em garantir_entrega_status: {e}")
+        logger.error("❌ Erro em garantir_entrega_status: %s", e)
         return None
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_status_parcela
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_status_parcela
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_status_parcela(entrega_id, numero_parcela, pedido_numero):
-    """
-    Retorna a linha da entregas_status daquela parcela,
-    ou cria se não existir (para entrega única e migração).
-    """
-    await garantir_entrega_status(entrega_id, numero_parcela, pedido_numero)
+    chave = await garantir_entrega_status(entrega_id, numero_parcela, pedido_numero)
+    if chave is None: return None
     pool = await get_pool()
-    if not pool:
-        return None
+    if not pool: return None
     try:
         async with pool.acquire() as conn:
-            return await conn.fetchrow(
-                "SELECT * FROM entregas_status WHERE entrega_id = $1 AND numero_parcela = $2",
-                int(entrega_id) if entrega_id else 0,
-                int(numero_parcela)
-            )
+            return await conn.fetchrow("SELECT * FROM entregas_status WHERE id=$1", chave)
     except Exception as e:
-        logger.error(f"❌ Erro em buscar_status_parcela: {e}")
+        logger.error("❌ Buscar status da parcela: %s", e)
         return None
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: marcar_status_parcela
 # ────────────────────────────────────────────────────────────────────────────────
-async def marcar_status_parcela(entrega_id, numero_parcela, pedido_numero, campo, autor_id=None, transferido_para=None):
-    """
-    Marca um campo (entregue / pago / finalizado / cancelado) da parcela.
-    campo ∈ {"entregue", "pago", "finalizado", "cancelado"}
-    Retorna True se conseguiu marcar, False se já estava marcado ou deu erro.
-    """
-    campo = campo.lower()
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: marcar_status_parcela
+# ────────────────────────────────────────────────────────────────────────────────
+async def marcar_status_parcela(entrega_id, numero_parcela, pedido_numero, campo, autor_id=None, transferido_para=None, conn=None):
+    campo = str(campo).lower()
     if campo not in ("entregue", "pago", "finalizado", "cancelado"):
-        logger.error(f"❌ marcar_status_parcela: campo inválido '{campo}'")
+        logger.error("❌ Campo inválido de parcela: %s", campo)
         return False
-
-    await garantir_entrega_status(entrega_id, numero_parcela, pedido_numero)
-    pool = await get_pool()
-    if not pool:
-        return False
-
+    # Não inserir um pedido único com (entrega_id=0, numero_parcela=1),
+    # pois essa chave seria compartilhada por todos os pedidos únicos.
+    entrega = int(entrega_id or 0)
+    parcela = int(numero_parcela) if entrega else int(pedido_numero)
+    if int(pedido_numero) <= 0 or parcela <= 0: return False
+    pool = await get_pool() if conn is None else None
+    if conn is None and not pool: return False
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _executar
+    # ────────────────────────────────────────────────────────────────────────────────
+    async def _executar(c):
+        await c.execute("""INSERT INTO entregas_status (entrega_id, numero_parcela, pedido_numero)
+            VALUES ($1,$2,$3) ON CONFLICT(entrega_id,numero_parcela) DO NOTHING""",
+            entrega, parcela, int(pedido_numero))
+        if campo == "finalizado":
+            res = await c.fetchval("""UPDATE entregas_status
+                SET finalizado=true, finalizado_por=$1, finalizado_em=NOW(), transferido_para=$2
+                WHERE entrega_id=$3 AND numero_parcela=$4 AND finalizado=false AND cancelado=false
+                RETURNING id""", str(autor_id) if autor_id else None, transferido_para, entrega, parcela)
+        else:
+            res = await c.fetchval(f"""UPDATE entregas_status
+                SET {campo}=true, {campo}_por=$1, {campo}_em=NOW()
+                WHERE entrega_id=$2 AND numero_parcela=$3 AND {campo}=false
+                  AND cancelado=false RETURNING id""",
+                str(autor_id) if autor_id else None, entrega, parcela)
+        return res is not None
     try:
-        async with pool.acquire() as conn:
-            # Verifica se já estava marcado
-            row = await conn.fetchrow(
-                "SELECT * FROM entregas_status WHERE entrega_id = $1 AND numero_parcela = $2",
-                int(entrega_id) if entrega_id else 0,
-                int(numero_parcela)
-            )
-            if not row:
-                return False
-            if row[campo]:
-                return False  # já marcado
-
-            if campo == "entregue":
-                await conn.execute(
-                    """UPDATE entregas_status
-                       SET entregue = true, entregue_por = $1, entregue_em = NOW()
-                       WHERE entrega_id = $2 AND numero_parcela = $3""",
-                    str(autor_id) if autor_id else None,
-                    int(entrega_id) if entrega_id else 0,
-                    int(numero_parcela)
-                )
-            elif campo == "pago":
-                await conn.execute(
-                    """UPDATE entregas_status
-                       SET pago = true, pago_por = $1, pago_em = NOW()
-                       WHERE entrega_id = $2 AND numero_parcela = $3""",
-                    str(autor_id) if autor_id else None,
-                    int(entrega_id) if entrega_id else 0,
-                    int(numero_parcela)
-                )
-            elif campo == "finalizado":
-                await conn.execute(
-                    """UPDATE entregas_status
-                       SET finalizado = true, finalizado_por = $1, finalizado_em = NOW(), transferido_para = $2
-                       WHERE entrega_id = $3 AND numero_parcela = $4""",
-                    str(autor_id) if autor_id else None,
-                    transferido_para,
-                    int(entrega_id) if entrega_id else 0,
-                    int(numero_parcela)
-                )
-            elif campo == "cancelado":
-                await conn.execute(
-                    """UPDATE entregas_status
-                       SET cancelado = true, cancelado_por = $1, cancelado_em = NOW()
-                       WHERE entrega_id = $2 AND numero_parcela = $3""",
-                    str(autor_id) if autor_id else None,
-                    int(entrega_id) if entrega_id else 0,
-                    int(numero_parcela)
-                )
-            logger.info(f"✅ entregas_status: parcela {numero_parcela} (pedido #{pedido_numero}) marcada como '{campo}'")
-            return True
+        if conn is not None:
+            return await _executar(conn)
+        async with pool.acquire() as c:
+            async with c.transaction():
+                return await _executar(c)
     except Exception as e:
-        logger.error(f"❌ Erro em marcar_status_parcela: {e}")
+        logger.error("❌ Marcar parcela %s pedido %s: %s", campo, pedido_numero, e)
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_todas_parcelas_finalizadas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_todas_parcelas_finalizadas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8229,6 +9128,9 @@ async def verificar_todas_parcelas_finalizadas(entrega_id):
         logger.error(f"❌ Erro em verificar_todas_parcelas_finalizadas: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: migrar_entregas_status_antigas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: migrar_entregas_status_antigas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8278,7 +9180,7 @@ async def migrar_entregas_status_antigas():
                 try:
                     await conn.execute(
                         """INSERT INTO entregas_status (entrega_id, numero_parcela, pedido_numero)
-                           VALUES (0, 1, $1)
+                           VALUES (0, $1, $1)
                            ON CONFLICT (entrega_id, numero_parcela) DO NOTHING""",
                         pedido
                     )
@@ -8298,6 +9200,9 @@ async def migrar_entregas_status_antigas():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_entregas_pendentes
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_entregas_pendentes
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_entregas_pendentes():
     pool = await get_pool()
     if not pool:
@@ -8309,6 +9214,9 @@ async def buscar_entregas_pendentes():
         logger.error(f"❌ Erro ao buscar entregas pendentes: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_entrega_parcelada
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_entrega_parcelada
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8329,6 +9237,9 @@ async def atualizar_entrega_parcelada(entrega_id, entrega_atual, mensagem_id, pr
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: finalizar_entregas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: finalizar_entregas
+# ────────────────────────────────────────────────────────────────────────────────
 async def finalizar_entregas(entrega_id):
     pool = await get_pool()
     if not pool:
@@ -8339,6 +9250,9 @@ async def finalizar_entregas(entrega_id):
     except Exception as e:
         logger.error(f"❌ Erro ao finalizar entregas: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_entrega_detalhes
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_entrega_detalhes
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8355,17 +9269,33 @@ async def salvar_entrega_detalhes(entrega_id, entregas_json):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_saida_estoque
 # ────────────────────────────────────────────────────────────────────────────────
-async def registrar_saida_estoque(pedido_numero, tipo, pacotes, retirado_por):
-    pool = await get_pool()
-    if not pool:
-        return
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_saida_estoque
+# ────────────────────────────────────────────────────────────────────────────────
+async def registrar_saida_estoque(pedido_numero, tipo, pacotes, retirado_por, conn=None):
+    pool = await get_pool() if conn is None else None
+    if conn is None and not pool: return False
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _saida
+    # ────────────────────────────────────────────────────────────────────────────────
+    async def _saida(c):
+        if not await atualizar_estoque(tipo, pacotes, 'remover', conn=c):
+            raise ValueError('Estoque insuficiente ou indisponível')
+        await c.execute("""INSERT INTO saida_estoque (pedido_numero,tipo,pacotes,retirado_por,data)
+            VALUES($1,$2,$3,$4,NOW())""",
+            int(pedido_numero), str(tipo), int(pacotes), str(retirado_por))
+        return True
     try:
-        async with pool.acquire() as conn:
-            await conn.execute("INSERT INTO saida_estoque (pedido_numero, tipo, pacotes, retirado_por, data) VALUES ($1, $2, $3, $4, NOW())", pedido_numero, tipo, pacotes, str(retirado_por))
-            await atualizar_estoque(tipo, pacotes, "remover")
+        if conn: return await _saida(conn)
+        async with pool.acquire() as c:
+            async with c.transaction(): return await _saida(c)
     except Exception as e:
-        logger.error(f"❌ Erro ao registrar saída de estoque: {e}")
+        logger.error("❌ Falha na saída de estoque do pedido #%s: %s", pedido_numero,e)
+        return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_estoque_suficiente
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_estoque_suficiente
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8380,6 +9310,9 @@ async def verificar_estoque_suficiente(tipo, pacotes_necessarios):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarTransferenciaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarTransferenciaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSFERÊNCIA"):
     transferido_para = discord.ui.TextInput(
         label="📤 Transferido para:",
@@ -8388,6 +9321,9 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
         max_length=50
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, interaction, mensagem_original, entrega_id, pedido_numero, valor, pt, sub):
         super().__init__(timeout=300)
         self.interaction = interaction
@@ -8398,133 +9334,125 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
         self.pt = pt
         self.sub = sub
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        nome_destino = self.transferido_para.value.strip().upper()
+        if not nome_destino:
+            await interaction.followup.send("❌ Informe quem recebeu a transferência.", ephemeral=True)
+            return
+        pool = await get_pool()
+        if not pool:
+            await interaction.followup.send("❌ Banco de dados indisponível. Tente novamente.", ephemeral=True)
+            return
         try:
-            transferido_para = self.transferido_para.value.strip().upper()
-            if not transferido_para:
-                await interaction.followup.send("❌ **Nome inválido!** Digite o nome da pessoa que recebeu a transferência.", ephemeral=True)
+            embed = self.mensagem_original.embeds[0] if self.mensagem_original.embeds else None
+            if not embed:
+                await interaction.followup.send("❌ Histórico da venda não encontrado.", ephemeral=True)
                 return
-
-            pool = await get_pool()
-            if not pool:
-                await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            dados = await extrair_dados_pedido_do_embed(embed)
+            pedido = int(self.pedido_numero or dados.get('pedido_numero') or 0)
+            if pedido <= 0:
+                await interaction.followup.send("❌ Número do pedido inválido.", ephemeral=True)
                 return
-
+            entrega = int(self.entrega_id or 0)
+            if not entrega and embed.footer and embed.footer.text and 'ID:' in embed.footer.text:
+                match = re.search(r'ID:\s*(\d+)', embed.footer.text)
+                if match: entrega = int(match.group(1))
+            pt = int(self.pt or dados.get('pt') or 0)
+            sub = int(self.sub or dados.get('sub') or 0)
+            valor = int(self.valor_total or ((pt * 50) + (sub * 90)))
+            numero_parcela = 1
+            if entrega:
+                async with pool.acquire() as c:
+                    numero_parcela = int(await c.fetchval("""
+                        SELECT COALESCE(MAX(numero_parcela),1) FROM entregas_status
+                        WHERE entrega_id=$1 AND pedido_numero=$2 AND entregue=true AND pago=true
+                    """, entrega, pedido) or 1)
+            # A chave de transferência NÃO é vendas.finalizado: a venda precisa estar
+            # finalizada para exibir este botão. Evitar repetição por pedido/parcela.
             async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT finalizado, cancelado, migrado FROM vendas WHERE pedido_numero = $1",
-                    self.pedido_numero
-                )
-                if row and (row["finalizado"] or row["cancelado"] or row["migrado"]):
-                    await interaction.followup.send(
-                        "⚠️ **Este pedido já foi finalizado!** A transferência não será duplicada.",
-                        ephemeral=True
-                    )
-                    return
-
-            embed = self.mensagem_original.embeds[0]
-            embed.color = 0x2ecc71
-
-            for i, field in enumerate(embed.fields):
-                if field.name == "📌 STATUS DO PEDIDO":
-                    embed.set_field_at(
-                        i,
-                        name="📌 STATUS DO PEDIDO",
-                        value=f"✅ **TRANSFERÊNCIA CONFIRMADA**\n📤 **Transferido para:** {transferido_para}\n👤 **Confirmado por:** {interaction.user.display_name}\n💰 **Valor:** {formatar_dinheiro(self.valor_total)}\n📅 **Data:** {agora().strftime('%d/%m/%Y %H:%M')}",
-                        inline=False
-                    )
-                    break
-
-            if "ENTREGA" in embed.title:
-                embed.title = f"✅ {embed.title} - TRANSFERÊNCIA CONFIRMADA"
-            else:
-                embed.title = f"✅ {embed.title} - TRANSFERÊNCIA CONFIRMADA"
-
-            indices_remover = []
-            for i, field in enumerate(embed.fields):
-                if field.name == "✅ VENDA FINALIZADA COM SUCESSO":
-                    indices_remover.append(i)
-                if field.name == "━━━━━━━━━━━━━━━━━━━━━━━━━━":
-                    indices_remover.append(i)
-
-            for i in sorted(indices_remover, reverse=True):
-                embed.remove_field(i)
-
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="", inline=False)
-            embed.add_field(
-                name="💰 TRANSFERÊNCIA REALIZADA",
-                value=f"✅ **Pagamento enviado para:** {transferido_para}\n👤 **Confirmado por:** {interaction.user.display_name}\n💵 **Valor:** {formatar_dinheiro(self.valor_total)}",
-                inline=False
-            )
-            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━", value="🔥 **Pedido encerrado no sistema**", inline=False)
-
-            view = StatusView(
-                disabled=True,
-                entrega_id=self.entrega_id,
-                total_entregas=1,
-                entrega_atual=1,
-                pago_ja_clicado=True,
-                mensagem_original=self.mensagem_original,
-                transferencia_confirmada=True,
-                valor_total=self.valor_total,
-                pt=self.pt,
-                sub=self.sub,
-                pedido_numero=self.pedido_numero,
-                entregue_ja_clicado=True
-            )
-
-            await self.mensagem_original.edit(embed=embed, view=view)
-
-            canal_log = interaction.guild.get_channel(CANAL_LOGS_GERAIS_ID)
-            if canal_log:
-                embed_log = discord.Embed(
-                    title="📤 TRANSFERÊNCIA CONFIRMADA",
-                    description=f"📦 **Pedido #{self.pedido_numero:04d}**",
-                    color=0x2ecc71,
-                    timestamp=agora()
-                )
-                embed_log.add_field(name="👤 Confirmado por", value=interaction.user.mention, inline=True)
-                embed_log.add_field(name="📤 Transferido para", value=transferido_para, inline=True)
-                embed_log.add_field(name="💰 Valor", value=formatar_dinheiro(self.valor_total), inline=True)
-                embed_log.add_field(name="🔫 PT", value=f"{fmt_num(self.pt)} munições", inline=True)
-                embed_log.add_field(name="🔫 SUB", value=f"{fmt_num(self.sub)} munições", inline=True)
-                embed_log.set_footer(text=f"Transferência confirmada em {agora().strftime('%d/%m/%Y %H:%M')}")
-                await canal_log.send(embed=embed_log)
-
+                async with conn.transaction():
+                    venda = await conn.fetchrow("SELECT finalizado,cancelado FROM vendas WHERE pedido_numero=$1 FOR UPDATE", pedido)
+                    if venda and venda['cancelado']:
+                        await interaction.followup.send("❌ Pedido cancelado. Transferência bloqueada.", ephemeral=True)
+                        return
+                    anterior = await conn.fetchrow("""
+                        SELECT nome_destino, confirmado_por, confirmado_em
+                        FROM vendas_transferencias
+                        WHERE pedido_numero=$1 AND entrega_id=$2 AND numero_parcela=$3
+                    """, pedido, entrega, numero_parcela)
+                    if anterior:
+                        await interaction.followup.send(
+                            f"⚠️ Transferência já registrada para **{anterior['nome_destino']}**. Não foi duplicada.", ephemeral=True)
+                        return
+                    await conn.execute("""INSERT INTO vendas_transferencias
+                        (pedido_numero,entrega_id,numero_parcela,mensagem_id,nome_destino,confirmado_por,valor,confirmado_em)
+                        VALUES($1,$2,$3,$4,$5,$6,$7,NOW())""",
+                        pedido, entrega, numero_parcela, str(self.mensagem_original.id), nome_destino,
+                        str(interaction.user.id), valor)
+                    if entrega:
+                        await conn.execute("""UPDATE entregas_status SET
+                            finalizado=true, finalizado_por=$1, finalizado_em=COALESCE(finalizado_em,NOW()), transferido_para=$2
+                            WHERE entrega_id=$3 AND numero_parcela=$4""",
+                            str(interaction.user.id), nome_destino, entrega, numero_parcela)
+                    else:
+                        # Os pedidos antigos podem não ter a linha de status: preservar o histórico.
+                        await conn.execute("""INSERT INTO entregas_status (entrega_id,numero_parcela,pedido_numero)
+                            VALUES(0,$1,$1) ON CONFLICT(entrega_id,numero_parcela) DO NOTHING""", pedido)
+                        await conn.execute("""UPDATE entregas_status SET
+                            finalizado=true, finalizado_por=$1, finalizado_em=COALESCE(finalizado_em,NOW()), transferido_para=$2
+                            WHERE entrega_id=0 AND numero_parcela=$3""",
+                            str(interaction.user.id), nome_destino, pedido)
+            # O pagamento JÁ foi lançado quando a pessoa clicou "Pago".
+            # Confirmar transferência NÃO deve creditar o caixa novamente.
             try:
-                await movimentar_caixa(
-                    tipo="venda",
-                    valor=self.valor_total,
-                    motivo=f"Venda #{self.pedido_numero:04d}",
-                    autor=interaction.user.id
-                )
-                logger.info(f"💰 Caixa (sujo): +{formatar_dinheiro(self.valor_total)} (Venda #{self.pedido_numero:04d})")
+                atualizado = embed.copy()
+                detalhes = (f"📤 **Transferido para:** {nome_destino}\n"
+                            f"👤 **Transferência confirmada por:** {interaction.user.display_name}\n"
+                            f"📅 **Em:** {agora().strftime('%d/%m/%Y %H:%M')}")
+                for i, field in enumerate(atualizado.fields):
+                    if 'STATUS' in field.name.upper():
+                        texto_antigo = field.value.replace('```yaml', '').replace('```','').strip()
+                        atualizado.set_field_at(i, name=field.name,
+                            value=f"```yaml\n{texto_antigo}\n{detalhes}\n```", inline=field.inline)
+                        break
+                else:
+                    atualizado.add_field(name="🚦 STATUS DETALHADO", value=detalhes, inline=False)
+                atualizado.color = 0x2ECC71
+                atualizado.set_footer(text=f"VDR 442 • Transferência confirmada • Pedido #{pedido:04d}")
+                await self.mensagem_original.edit(embed=atualizado, view=None)
+                await apagar_botao_transferencia_persistente(self.mensagem_original.id)
             except Exception as e:
-                logger.error(f"⚠️ Erro ao somar venda no caixa: {e}")
-
-            await finalizar_e_mover_pedido(
-                interaction=interaction,
-                mensagem_original=self.mensagem_original,
-                pedido_numero=self.pedido_numero,
-                pt=self.pt,
-                sub=self.sub,
-                transferido_para=transferido_para
-            )
-
+                logger.error("⚠️ Transferência gravada mas mensagem #%s não pôde ser atualizada: %s", pedido, e)
+                await interaction.followup.send(
+                    "✅ Transferência salva no banco, mas não foi possível atualizar o card. "
+                    "A recuperação tentará sincronizá-lo após o reinício.", ephemeral=True)
+                return
+            canal_log = interaction.guild.get_channel(CANAL_LOGS_GERAIS_ID) if interaction.guild else None
+            if canal_log:
+                try:
+                    await canal_log.send(embed=discord.Embed(
+                        title="📤 TRANSFERÊNCIA CONFIRMADA",
+                        description=f"Pedido #{pedido:04d} • Destino: **{nome_destino}**\n"
+                                    f"Confirmada por {interaction.user.mention} • {formatar_dinheiro(valor)}",
+                        color=0x2ECC71, timestamp=agora()))
+                except Exception as e:
+                    logger.warning("⚠️ Erro no log de transferência: %s", e)
             await interaction.followup.send(
-                f"✅ **Transferência confirmada com sucesso!**\n"
-                f"📤 Transferido para: **{transferido_para}**\n"
-                f"👤 Confirmado por: **{interaction.user.display_name}**\n"
-                f"💰 Valor: {formatar_dinheiro(self.valor_total)}\n"
-                f"📦 Pedido #{self.pedido_numero:04d} finalizado!",
-                ephemeral=True
-            )
-
+                f"✅ Transferência confirmada para **{nome_destino}**, por {interaction.user.mention}. "
+                "Pagamento não foi lançado novamente no caixa.", ephemeral=True)
+        except asyncpg.UniqueViolationError:
+            await interaction.followup.send("⚠️ Esta transferência já foi confirmada.", ephemeral=True)
         except Exception as e:
-            logger.error(f"❌ Erro ao confirmar transferência: {e}")
-            await interaction.followup.send(f"❌ **Erro ao confirmar transferência:** {str(e)[:100]}", ephemeral=True)
+            logger.exception("❌ Erro ao confirmar transferência do pedido %s: %s", self.pedido_numero, e)
+            await interaction.followup.send("❌ Erro ao confirmar transferência. Operação não concluída; consulte os logs.", ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_embed_entrega
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_embed_entrega
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8629,13 +9557,22 @@ async def criar_embed_entrega(interaction, pedido_numero, entrega_atual, total_e
 # ────────────────────────────────────────────────────────────────────────────────
 # SUBSTITUIR: Classe ConfirmarDoacaoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarDoacaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarDoacaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, mensagem_original, pedido_numero, entrega_id=None):
         super().__init__(timeout=60)
         self.mensagem_original = mensagem_original
         self.pedido_numero = pedido_numero
         self.entrega_id = entrega_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Sim, zerar valor", style=discord.ButtonStyle.danger, custom_id="confirmar_doacao_sim")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -8683,6 +9620,9 @@ class ConfirmarDoacaoView(discord.ui.View):
         await interaction.followup.send("✅ **Pedido transformado em doação!**\nAgora apenas o botão **'✅ Entregue'** está ativo.", ephemeral=True)
         await enviar_painel_vendas()
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary, custom_id="confirmar_doacao_nao")
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Ação cancelada. O valor do pedido foi mantido.", ephemeral=True)
@@ -8693,6 +9633,9 @@ class ConfirmarDoacaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ComprovanteModal (Para enviar o print)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ComprovanteModal
+# ────────────────────────────────────────────────────────────────────────────────
 class ComprovanteModal(discord.ui.Modal, title="📎 Enviar Comprovante"):
     link_imagem = discord.ui.TextInput(
         label="🔗 Link da Imagem (Imgur, etc)", 
@@ -8700,10 +9643,16 @@ class ComprovanteModal(discord.ui.Modal, title="📎 Enviar Comprovante"):
         required=True
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, pedido_numero):
         super().__init__()
         self.pedido_numero = pedido_numero
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -8733,11 +9682,20 @@ class ComprovanteModal(discord.ui.Modal, title="📎 Enviar Comprovante"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: BotaoComprovanteView (Para o DM e para o Painel)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: BotaoComprovanteView
+# ────────────────────────────────────────────────────────────────────────────────
 class BotaoComprovanteView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, pedido_numero):
         super().__init__(timeout=None) # Timeout None para não expirar
         self.pedido_numero = pedido_numero
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: anexar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📎 Anexar Comprovante", style=discord.ButtonStyle.success, custom_id="btn_anexar_comprovante")
     async def anexar(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Verifica se quem clicou é o dono do pedido (opcional, mas seguro)
@@ -8745,10 +9703,84 @@ class BotaoComprovanteView(discord.ui.View):
         await interaction.response.send_modal(ComprovanteModal(self.pedido_numero))
 
 # ────────────────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: apagar_botao_transferencia_persistente
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: apagar_botao_transferencia_persistente
+# ────────────────────────────────────────────────────────────────────────────────
+async def apagar_botao_transferencia_persistente(mensagem_id):
+    pool = await get_pool()
+    if not pool: return False
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM botoes_persistentes WHERE mensagem_id=$1 AND tipo='finalizado_transferencia'", str(mensagem_id))
+        return True
+    except Exception as e:
+        logger.error("❌ Falha ao limpar botão da transferência: %s", e)
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restaurar_transferencias_finalizadas
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restaurar_transferencias_finalizadas
+# ────────────────────────────────────────────────────────────────────────────────
+async def restaurar_transferencias_finalizadas():
+    canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
+    if not canal: return
+    pool = await get_pool()
+    if not pool: return
+    contador = 0
+    try:
+        # O registro global da FinalizadosView cobre também cards legados fora do histórico recente.
+        async for msg in canal.history(limit=1000):
+            if not msg.embeds or not msg.components or msg.author.id != bot.user.id: continue
+            embed = msg.embeds[0]
+            if 'VENDA FINALIZADA' not in (embed.title or '').upper(): continue
+            dados = await extrair_dados_pedido_do_embed(embed)
+            pedido = dados['pedido_numero']
+            if not pedido: continue
+            async with pool.acquire() as conn:
+                transferencia = await conn.fetchrow("""
+                    SELECT nome_destino, confirmado_por, confirmado_em FROM vendas_transferencias
+                    WHERE mensagem_id=$1 OR pedido_numero=$2 ORDER BY confirmado_em DESC LIMIT 1
+                """, str(msg.id), pedido)
+            if transferencia:
+                if not any('Transferido para:' in str(f.value) for f in embed.fields):
+                    novo = embed.copy()
+                    destino = transferencia['nome_destino']
+                    autor = await _nome_responsavel_venda(transferencia['confirmado_por'], canal.guild)
+                    novo.add_field(name="📤 TRANSFERÊNCIA", value=f"Transferido para: {destino}\nConfirmado por: {autor}", inline=False)
+                    await msg.edit(embed=novo, view=None)
+                else:
+                    await msg.edit(view=None)
+                await apagar_botao_transferencia_persistente(msg.id)
+            else:
+                entrega = None
+                if embed.footer and embed.footer.text:
+                    achado = re.search(r'ID:\s*(\d+)', embed.footer.text)
+                    if achado: entrega = int(achado.group(1))
+                view = FinalizadosView(entrega_id=entrega, pedido_numero=pedido,
+                    pt=dados['pt'], sub=dados['sub'],
+                    valor_total=(dados['pt']*50 + dados['sub']*90))
+                bot.add_view(view, message_id=msg.id)
+                contador += 1
+        logger.info("✅ Views de transferência restauradas: %s", contador)
+    except Exception as e:
+        logger.error("❌ Erro ao restaurar botões do canal Finalizados: %s", e)
+
 # CLASSE: FinalizadosView (Apenas com o botão de Transferência)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: FinalizadosView
+# ────────────────────────────────────────────────────────────────────────────────
 class FinalizadosView(discord.ui.View):
-    def __init__(self, entrega_id, pedido_numero, valor_total, pt, sub, is_doacao=False):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
+    def __init__(self, entrega_id=None, pedido_numero=0, valor_total=0, pt=0, sub=0, is_doacao=False):
         super().__init__(timeout=None)
         self.entrega_id = entrega_id
         self.pedido_numero = pedido_numero
@@ -8756,27 +9788,43 @@ class FinalizadosView(discord.ui.View):
         self.pt = pt
         self.sub = sub
         self.is_doacao = is_doacao
+        if not is_doacao:
+            botao = discord.ui.Button(label="📤 Confirmar Transferência",
+                 style=discord.ButtonStyle.success, custom_id="confirmar_transferencia_fixo", emoji="📤")
+            botao.callback = self.abrir_modal_transferencia
+            self.add_item(botao)
 
-        if not self.is_doacao:
-            btn_transf = discord.ui.Button(
-                label="📤 Confirmar Transferência",
-                style=discord.ButtonStyle.success,
-                custom_id="confirmar_transferencia_fixo",
-                emoji="📤"
-            )
-            btn_transf.callback = self.abrir_modal_transferencia
-            self.add_item(btn_transf)
-
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: abrir_modal_transferencia
+    # ────────────────────────────────────────────────────────────────────────────────
     async def abrir_modal_transferencia(self, interaction: discord.Interaction):
+        # View global pode ser reutilizada após reinício: dados vêm do card clicado.
+        embed = interaction.message.embeds[0] if interaction.message.embeds else None
+        if not embed:
+            await interaction.response.send_message("❌ Card da venda indisponível.", ephemeral=True)
+            return
+        dados = await extrair_dados_pedido_do_embed(embed)
+        pedido = self.pedido_numero or dados['pedido_numero']
+        pt = self.pt or dados['pt']
+        sub = self.sub or dados['sub']
+        entrega = self.entrega_id
+        if not entrega and embed.footer and embed.footer.text and 'ID:' in embed.footer.text:
+            match = re.search(r'ID:\s*(\d+)', embed.footer.text)
+            if match: entrega = int(match.group(1))
+        if not pedido:
+            await interaction.response.send_message("❌ Número do pedido não localizado.", ephemeral=True)
+            return
+        pool = await get_pool()
+        if not pool:
+            await interaction.response.send_message("❌ Banco indisponível.", ephemeral=True)
+            return
+        if any('Transferido para:' in str(f.value) for f in embed.fields):
+            await interaction.response.send_message("⚠️ Este card já indica transferência confirmada.", ephemeral=True)
+            return
         modal = ConfirmarTransferenciaModal(
-            interaction=interaction,
-            mensagem_original=interaction.message,
-            entrega_id=self.entrega_id,
-            pedido_numero=self.pedido_numero,
-            valor=self.valor_total,
-            pt=self.pt,
-            sub=self.sub
-        )
+            interaction=interaction, mensagem_original=interaction.message,
+            entrega_id=entrega, pedido_numero=pedido,
+            valor=self.valor_total or (pt*50 + sub*90), pt=pt, sub=sub)
         await interaction.response.send_modal(modal)
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -8785,7 +9833,13 @@ class FinalizadosView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: StatusView (Com Transferência e Blindada)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: StatusView
+# ────────────────────────────────────────────────────────────────────────────────
 class StatusView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, disabled: bool = False, entrega_id: int = None, total_entregas: int = 1, entrega_atual: int = 1,
                  pago_ja_clicado: bool = False, mensagem_original: discord.Message = None, transferencia_confirmada: bool = False,
                  valor_total: int = 0, pt: int = 0, sub: int = 0, pedido_numero: int = 0,
@@ -8835,6 +9889,9 @@ class StatusView(discord.ui.View):
                 disabled=self.transferencia_confirmada or (self.valor_total == 0) or self.pago_ja_clicado or self.entrega_ja_entregue, row=1
             ))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         
@@ -8869,6 +9926,9 @@ class StatusView(discord.ui.View):
         return False
 
     # ─── ATUALIZADO PARA LER OS BLOCOS DE CÓDIGO DO NOVO VISUAL ───
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: extrair_dados_venda
+    # ────────────────────────────────────────────────────────────────────────────────
     def extrair_dados_venda(self, embed):
         dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "Desconhecido", "pedido_numero": 0}
         
@@ -8897,6 +9957,9 @@ class StatusView(discord.ui.View):
                 
         return dados
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: pago
+    # ────────────────────────────────────────────────────────────────────────────────
     async def pago(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         dados = self.extrair_dados_venda(embed)
@@ -8908,7 +9971,7 @@ class StatusView(discord.ui.View):
         # Atualiza o campo de Status
         for i, field in enumerate(embed.fields):
             if "Status" in field.name:
-                embed.set_field_at(i, name="🚦 Status", value=f"```yaml\n🟢 Pago por {pagador_apelido} • {agora_str}\n```", inline=False)
+                embed.set_field_at(i, name="🚦 Status", value=f"```yaml\n🟢 Pagamento recebido por {pagador_apelido} • {agora_str}\n```", inline=False)
                 break
 
         try: 
@@ -8927,7 +9990,7 @@ class StatusView(discord.ui.View):
             await enviar_embed_pedido_finalizado(
                 pedido_numero=pedido_numero, pt=dados["pt"], sub=dados["sub"],
                 organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
-                pago_por=pagador_apelido, pago_em=agora_str, entregue_por="Sistema", entregue_em=agora_str,
+                pago_por=pagador_apelido, pago_em=agora_str, entregue_por=None, entregue_em=None,
                 transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado",
                 entrega_id=self.entrega_id
             )
@@ -8938,6 +10001,9 @@ class StatusView(discord.ui.View):
         
         await enviar_painel_vendas()
         
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: entregue
+    # ────────────────────────────────────────────────────────────────────────────────
     async def entregue(self, interaction: discord.Interaction, button):
         if self.entrega_ja_entregue: return await interaction.followup.send("⚠️ Já entregue!", ephemeral=True)
         embed = interaction.message.embeds[0]
@@ -8984,7 +10050,7 @@ class StatusView(discord.ui.View):
                 await enviar_embed_pedido_finalizado(
                     pedido_numero=pedido_numero, pt=dados["pt"], sub=dados["sub"],
                     organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
-                    pago_por="Sistema", pago_em=agora_str, entregue_por=entregador_apelido, entregue_em=agora_str,
+                    pago_por=None, pago_em=None, entregue_por=entregador_apelido, entregue_em=agora_str,
                     transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado",
                     entrega_id=self.entrega_id
                 )
@@ -9010,6 +10076,9 @@ class StatusView(discord.ui.View):
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_venda
+    # ────────────────────────────────────────────────────────────────────────────────
     async def editar_venda(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         dados = self.extrair_dados_venda(embed)
@@ -9019,6 +10088,9 @@ class StatusView(discord.ui.View):
         modal.organizacao.default = dados["organizacao"]
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelado
+    # ────────────────────────────────────────────────────────────────────────────────
     async def cancelado(self, interaction: discord.Interaction, button):
         embed = interaction.message.embeds[0]
         dados = self.extrair_dados_venda(embed)
@@ -9062,6 +10134,9 @@ class StatusView(discord.ui.View):
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: criar_proxima_entrega
+    # ────────────────────────────────────────────────────────────────────────────────
     async def criar_proxima_entrega(self, interaction, embed_anterior, pedido_original):
         try:
             if not self.entrega_id: return False
@@ -9104,6 +10179,9 @@ class StatusView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: VendaModal (Original - Sem DM e sem comprovantes)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: VendaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     organizacao = discord.ui.TextInput(label="🏷️ Organização", placeholder="Ex: VDR, POLICIA, MAFIA", required=True, max_length=50)
     data_entrega = discord.ui.TextInput(label="📅 Data da 1ª Entrega", placeholder="Ex: 06/11/2026", required=True, max_length=10)
@@ -9111,6 +10189,9 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
     qtd_sub = discord.ui.TextInput(label="🔫 Quantidade SUB", placeholder="Deixe 0 se não houver", required=False, default="0", max_length=10)
     observacoes = discord.ui.TextInput(label="📝 Observações (opcional)", placeholder="Ex: cliente X, urgente", style=discord.TextStyle.paragraph, required=False, max_length=500)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -9207,7 +10288,13 @@ class VendaModal(discord.ui.Modal, title="🧮 Registro de Venda"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarVendaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EditarVendaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, message):
         super().__init__(timeout=300)
         self.message = message
@@ -9216,6 +10303,9 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
     organizacao = discord.ui.TextInput(label="🏷️ Nova Organização", placeholder="Digite a nova organização (deixe em branco para manter)", required=False, max_length=50)
     observacao = discord.ui.TextInput(label="📝 Nova Observação", placeholder="Digite a nova observação (deixe em branco para manter)", style=discord.TextStyle.paragraph, required=False, max_length=500)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         embed = self.message.embeds[0]
@@ -9316,8 +10406,17 @@ class EditarVendaModal(discord.ui.Modal, title="✏️ Editar Venda"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarResetComissoesView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarResetComissoesView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarResetComissoesView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self): super().__init__(timeout=60)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ SIM", style=discord.ButtonStyle.danger, custom_id="conf_reset_com")
     async def confirmar(self, i, b):
         await i.response.defer(ephemeral=True)
@@ -9326,13 +10425,22 @@ class ConfirmarResetComissoesView(discord.ui.View):
             await conn.execute("UPDATE vendas SET comissao_paga = true WHERE comissao_paga = false")
         await enviar_painel_vendas()
         await i.followup.send("✅ Comissões resetadas no painel.", ephemeral=True)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ NÃO", style=discord.ButtonStyle.secondary, custom_id="cancel_reset_com")
     async def cancelar(self, i, b):
         await i.response.send_message("❌ Cancelado.", ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioVendasPeriodoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioVendasPeriodoModal(discord.ui.Modal, title="📅 RELATÓRIO DE VENDAS (PERÍODO)"):
     data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO (DD/MM/AAAA)", placeholder="Ex: 01/10/2026", required=True)
     data_fim = discord.ui.TextInput(label="📅 Data FIM (DD/MM/AAAA)", placeholder="Ex: 31/10/2026", required=True)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -9359,9 +10467,15 @@ class RelatorioVendasPeriodoModal(discord.ui.Modal, title="📅 RELATÓRIO DE VE
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioEntregasDataModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioEntregasDataModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioEntregasDataModal(discord.ui.Modal, title="📅 Entregas Pendentes (Por Data)"):
     data = discord.ui.TextInput(label="📅 Data de Entrega", placeholder="Ex: 06/11/2026", required=True, max_length=10)
     
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -9400,14 +10514,26 @@ class RelatorioEntregasDataModal(discord.ui.Modal, title="📅 Entregas Pendente
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CalculadoraView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CalculadoraView
+# ────────────────────────────────────────────────────────────────────────────────
 class CalculadoraView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self): super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: registrar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📝 Registrar Venda", style=discord.ButtonStyle.primary, custom_id="calc_registrar_venda", emoji="📝")
     async def registrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.response.is_done(): return
         await interaction.response.send_modal(VendaModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: atualizar_estoque
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔄 Atualizar Estoque", style=discord.ButtonStyle.secondary, custom_id="calc_atualizar_estoque", emoji="🔄", row=1)
     async def atualizar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.response.is_done(): return
@@ -9415,10 +10541,16 @@ class CalculadoraView(discord.ui.View):
         await enviar_painel_vendas()
         await interaction.followup.send("✅ Estoque atualizado!", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: entregas_pendentes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📅 Por Data", style=discord.ButtonStyle.success, custom_id="calc_entregas_pendentes", emoji="📅", row=1)
     async def entregas_pendentes(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioEntregasDataModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: todas_entregas
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📋 Todas Pendentes", style=discord.ButtonStyle.secondary, custom_id="calc_todas_entregas_pendentes", emoji="📋", row=2)
     async def todas_entregas(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -9494,10 +10626,16 @@ class CalculadoraView(discord.ui.View):
         await interaction.followup.send(embed=embed, ephemeral=True)
         
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: relatorio
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📊 Relatório de Vendas", style=discord.ButtonStyle.success, custom_id="calc_relatorio_vendas", emoji="📊", row=3)
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioVendasPeriodoModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: pagar_comissoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💸 Pagar Comissões", style=discord.ButtonStyle.success, custom_id="calc_pagar_comissoes", emoji="💸", row=3)
     async def pagar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -9520,6 +10658,9 @@ class CalculadoraView(discord.ui.View):
         await enviar_painel_vendas(); await enviar_painel_caixa()
         await interaction.followup.send(f"✅ Comissões pagas!\n💰 Total: {formatar_dinheiro(valor_comissao)}", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: resetar_comissoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔄 Resetar Comissões", style=discord.ButtonStyle.danger, custom_id="calc_reset_comissoes", emoji="🔄", row=4)
     async def resetar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -9531,10 +10672,16 @@ class CalculadoraView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioVendasPeriodoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioVendasPeriodoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioVendasPeriodoModal(discord.ui.Modal, title="📅 RELATÓRIO DE VENDAS (PERÍODO)"):
     data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO (DD/MM/AAAA)", placeholder="Ex: 01/08/2026", required=True)
     data_fim = discord.ui.TextInput(label="📅 Data FIM (DD/MM/AAAA)", placeholder="Ex: 31/08/2026", required=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         data_inicio_str = self.data_inicio.value.strip()
@@ -9591,10 +10738,16 @@ class RelatorioVendasPeriodoModal(discord.ui.Modal, title="📅 RELATÓRIO DE VE
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioVendasModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioVendasModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioVendasModal(discord.ui.Modal, title="📅 RELATÓRIO DE VENDAS"):
     data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO (DD/MM/AAAA)", placeholder="Ex: 01/09/2026", required=True)
     data_fim = discord.ui.TextInput(label="📅 Data FIM (DD/MM/AAAA)", placeholder="Ex: 30/09/2026", required=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -9668,6 +10821,9 @@ class RelatorioVendasModal(discord.ui.Modal, title="📅 RELATÓRIO DE VENDAS"):
 
         await interaction.followup.send(embed=embed, ephemeral=False)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: finalizar_e_mover_pedido
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: finalizar_e_mover_pedido
 # ────────────────────────────────────────────────────────────────────────────────
@@ -9805,6 +10961,9 @@ async def finalizar_e_mover_pedido(
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_botoes_vendas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restaurar_botoes_vendas
+# ────────────────────────────────────────────────────────────────────────────────
 async def restaurar_botoes_vendas():
     try:
         canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
@@ -9912,6 +11071,9 @@ async def restaurar_botoes_vendas():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: recriar_mensagens_vendas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: recriar_mensagens_vendas
+# ────────────────────────────────────────────────────────────────────────────────
 async def recriar_mensagens_vendas():
     try:
         canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
@@ -9979,6 +11141,9 @@ async def recriar_mensagens_vendas():
     except Exception as e:
         logger.error(f"❌ Erro ao recriar mensagens de vendas: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_vendas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_vendas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10106,6 +11271,9 @@ async def enviar_painel_vendas():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_estoque
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_estoque
+# ────────────────────────────────────────────────────────────────────────────────
 async def carregar_estoque():
     pool = await get_pool()
     if not pool:
@@ -10124,25 +11292,36 @@ async def carregar_estoque():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_estoque
 # ────────────────────────────────────────────────────────────────────────────────
-async def atualizar_estoque(tipo, quantidade, operacao="adicionar"):
-    pool = await get_pool()
-    if not pool:
-        return
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_estoque
+# ────────────────────────────────────────────────────────────────────────────────
+async def atualizar_estoque(tipo, quantidade, operacao="adicionar", conn=None):
+    pool = await get_pool() if conn is None else None
+    if conn is None and not pool: return False
+    tipo, quantidade = str(tipo).upper(), int(quantidade)
+    if tipo not in ('PT','SUB') or quantidade < 0 or operacao not in ('adicionar','remover'):
+        return False
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _executar
+    # ────────────────────────────────────────────────────────────────────────────────
+    async def _executar(c):
+        if operacao == 'adicionar':
+            resultado = await c.execute("""UPDATE estoque_municoes SET quantidade=quantidade+$1,ultima_atualizacao=NOW()
+                WHERE tipo=$2""", quantidade,tipo)
+        else:
+            resultado = await c.execute("""UPDATE estoque_municoes SET quantidade=quantidade-$1,ultima_atualizacao=NOW()
+                WHERE tipo=$2 AND quantidade >= $1""", quantidade,tipo)
+        return resultado == 'UPDATE 1'
     try:
-        async with pool.acquire() as conn:
-            if operacao == "adicionar":
-                await conn.execute(
-                    "UPDATE estoque_municoes SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE tipo = $2",
-                    quantidade, tipo
-                )
-            else:
-                await conn.execute(
-                    "UPDATE estoque_municoes SET quantidade = quantidade - $1, ultima_atualizacao = NOW() WHERE tipo = $2 AND quantidade >= $1",
-                    quantidade, tipo
-                )
+        if conn: return await _executar(conn)
+        async with pool.acquire() as c: return await _executar(c)
     except Exception as e:
-        logger.error(f"❌ Erro ao atualizar estoque: {e}")
+        logger.error("❌ Estoque munições %s: %s", tipo,e)
+        return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_estoque_polvora
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_estoque_polvora
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10161,27 +11340,33 @@ async def carregar_estoque_polvora():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_estoque_polvora
 # ────────────────────────────────────────────────────────────────────────────────
-async def atualizar_estoque_polvora(quantidade, operacao="adicionar"):
-    pool = await get_pool()
-    if not pool:
-        return False
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_estoque_polvora
+# ────────────────────────────────────────────────────────────────────────────────
+async def atualizar_estoque_polvora(quantidade, operacao="adicionar", conn=None):
+    pool = await get_pool() if conn is None else None
+    if conn is None and not pool: return False
+    quantidade = int(quantidade)
+    if quantidade < 0 or operacao not in ('adicionar','remover'): return False
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _executar
+    # ────────────────────────────────────────────────────────────────────────────────
+    async def _executar(c):
+        if operacao == 'adicionar':
+            resultado = await c.execute("UPDATE estoque_polvora SET quantidade=quantidade+$1, ultima_atualizacao=NOW() WHERE id=1", quantidade)
+        else:
+            resultado = await c.execute("UPDATE estoque_polvora SET quantidade=quantidade-$1, ultima_atualizacao=NOW() WHERE id=1 AND quantidade >= $1", quantidade)
+        return resultado == 'UPDATE 1'
     try:
-        async with pool.acquire() as conn:
-            if operacao == "adicionar":
-                await conn.execute(
-                    "UPDATE estoque_polvora SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1",
-                    quantidade
-                )
-            else:
-                await conn.execute(
-                    "UPDATE estoque_polvora SET quantidade = quantidade - $1, ultima_atualizacao = NOW() WHERE id = 1 AND quantidade >= $1",
-                    quantidade
-                )
-            return True
+        if conn: return await _executar(conn)
+        async with pool.acquire() as c: return await _executar(c)
     except Exception as e:
-        logger.error(f"❌ Erro ao atualizar estoque de pólvora: {e}")
+        logger.error("❌ Estoque pólvora: %s", e)
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_entrada_polvora
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_entrada_polvora
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10207,6 +11392,9 @@ async def registrar_entrada_polvora(quantidade, registrado_por, obs=""):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_polvora_suficiente
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_polvora_suficiente
+# ────────────────────────────────────────────────────────────────────────────────
 async def verificar_polvora_suficiente(quantidade):
     estoque = await carregar_estoque_polvora()
     return estoque >= quantidade
@@ -10214,9 +11402,15 @@ async def verificar_polvora_suficiente(quantidade):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: consumir_polvora
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: consumir_polvora
+# ────────────────────────────────────────────────────────────────────────────────
 async def consumir_polvora(quantidade):
     return await atualizar_estoque_polvora(quantidade, "remover")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_estoque_insumos
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_estoque_insumos
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10238,6 +11432,9 @@ async def carregar_estoque_insumos():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_estoque_capsulas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_estoque_capsulas
+# ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_estoque_capsulas(quantidade, operacao="adicionar"):
     pool = await get_pool()
     if not pool:
@@ -10251,6 +11448,9 @@ async def atualizar_estoque_capsulas(quantidade, operacao="adicionar"):
     except Exception as e:
         logger.error(f"❌ Erro ao atualizar estoque de cápsulas: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_estoque_embalagens
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_estoque_embalagens
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10270,6 +11470,9 @@ async def atualizar_estoque_embalagens(quantidade, operacao="adicionar"):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_entrada_insumos
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_entrada_insumos
+# ────────────────────────────────────────────────────────────────────────────────
 async def registrar_entrada_insumos(tipo, quantidade, registrado_por, obs=""):
     pool = await get_pool()
     if not pool:
@@ -10284,6 +11487,9 @@ async def registrar_entrada_insumos(tipo, quantidade, registrado_por, obs=""):
     except Exception as e:
         logger.error(f"❌ Erro ao registrar entrada de insumos: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_insumos_producao
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_insumos_producao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10306,6 +11512,9 @@ async def verificar_insumos_producao(tipo, pacotes):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: consumir_insumos_producao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: consumir_insumos_producao
+# ────────────────────────────────────────────────────────────────────────────────
 async def consumir_insumos_producao(tipo, pacotes):
     if tipo == "PT":
         capsulas_consumir = pacotes * 25
@@ -10317,6 +11526,9 @@ async def consumir_insumos_producao(tipo, pacotes):
     await atualizar_estoque_embalagens(embalagens_consumir, "remover")
     return capsulas_consumir, embalagens_consumir
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_producao_municao
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_producao_municao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10336,6 +11548,9 @@ async def registrar_producao_municao(tipo, pacotes, produzido_por, obs=""):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_polvora_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_polvora_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def salvar_polvora_db(user_id, qtd, valor):
     pool = await get_pool()
     if not pool:
@@ -10347,6 +11562,9 @@ async def salvar_polvora_db(user_id, qtd, valor):
     except Exception as e:
         logger.error(f"❌ Erro ao salvar pólvora: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_polvoras_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_polvoras_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10364,6 +11582,9 @@ async def carregar_polvoras_db():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: limpar_polvoras_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: limpar_polvoras_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def limpar_polvoras_db():
     pool = await get_pool()
     if not pool:
@@ -10374,6 +11595,9 @@ async def limpar_polvoras_db():
     except Exception as e:
         logger.error(f"❌ Erro ao limpar pólvoras: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_producao
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_producao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10420,6 +11644,9 @@ async def carregar_producao(pid):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_producao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_producao
+# ────────────────────────────────────────────────────────────────────────────────
 async def salvar_producao(pid, dados):
     if isinstance(dados["inicio"], datetime):
         inicio_str = dados["inicio"].isoformat()
@@ -10452,6 +11679,9 @@ async def salvar_producao(pid, dados):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: deletar_producao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: deletar_producao
+# ────────────────────────────────────────────────────────────────────────────────
 async def deletar_producao(pid):
     pool = await get_pool()
     if not pool:
@@ -10462,6 +11692,9 @@ async def deletar_producao(pid):
     except Exception as e:
         logger.error(f"❌ Erro ao deletar produção {pid}: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_aluguel
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_aluguel
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10482,6 +11715,9 @@ async def salvar_aluguel(galpao, dias):
         logger.error(f"❌ ERRO AO SALVAR ALUGUEL: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_alugueis
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_alugueis
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10515,11 +11751,20 @@ async def carregar_alugueis():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: SegundaTaskView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: SegundaTaskView
+# ────────────────────────────────────────────────────────────────────────────────
 class SegundaTaskView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, pid):
         super().__init__(timeout=None) # <── MUDANÇA AQUI: timeout=None
         self.pid = pid
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Confirmar 2ª Task", style=discord.ButtonStyle.success, custom_id="segunda_task_btn")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.response.is_done():
@@ -10563,7 +11808,13 @@ class SegundaTaskView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarProducaoView (Aparece após preencher o modal)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarProducaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarProducaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, galpao, tempo_base, qtd_galpoes, polvora_por_galpao, obs):
         super().__init__(timeout=120)
         self.galpao = galpao
@@ -10572,6 +11823,9 @@ class ConfirmarProducaoView(discord.ui.View):
         self.polvora_por_galpao = polvora_por_galpao
         self.obs = obs
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Confirmar e Iniciar", style=discord.ButtonStyle.success)
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -10676,6 +11930,9 @@ class ConfirmarProducaoView(discord.ui.View):
         except (discord.NotFound, discord.HTTPException):
             pass # Ignora completamente se a mensagem já foi apagada
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.danger)
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Produção cancelada.", ephemeral=True)
@@ -10691,16 +11948,25 @@ class ConfirmarProducaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ProducaoCompletaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ProducaoCompletaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
     qtd_galpoes = discord.ui.TextInput(label="📊 Quantos galpões?", placeholder="Digite 1, 2 ou 3", required=True, max_length=1)
     polvora_por_galpao = discord.ui.TextInput(label="💣 Pólvora por galpão", placeholder="Ex: 400", required=True)
     obs = discord.ui.TextInput(label="📝 Observação (opcional)", style=discord.TextStyle.paragraph, required=False)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, galpao, tempo_base):
         super().__init__()
         self.galpao = galpao
         self.tempo_base = tempo_base
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -10752,11 +12018,17 @@ class ProducaoCompletaModal(discord.ui.Modal, title="🏭 Iniciar Produção"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ProducaoMunicaoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ProducaoMunicaoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
     tipo_municao = discord.ui.TextInput(label="Tipo de munição", placeholder="Digite PT ou SUB", required=True, max_length=3)
     quantidade_pacotes = discord.ui.TextInput(label="Quantidade de PACOTES", placeholder="Ex: 100 (cada pacote = 50 munições)", required=True)
     observacao = discord.ui.TextInput(label="Observação (opcional)", style=discord.TextStyle.paragraph, required=False)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         tipo = self.tipo_municao.value.strip().upper()
@@ -10803,10 +12075,16 @@ class ProducaoMunicaoModal(discord.ui.Modal, title="🎯 Produzir Munição"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCapsulasModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistrarCapsulasModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RegistrarCapsulasModal(discord.ui.Modal, title="📦 Registrar Cápsulas"):
     quantidade = discord.ui.TextInput(label="Quantidade de CÁPSULAS", placeholder="Ex: 1000", required=True)
     observacao = discord.ui.TextInput(label="Observação (opcional)", style=discord.TextStyle.paragraph, required=False)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -10833,10 +12111,16 @@ class RegistrarCapsulasModal(discord.ui.Modal, title="📦 Registrar Cápsulas")
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarEmbalagensModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistrarEmbalagensModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagens"):
     quantidade = discord.ui.TextInput(label="Quantidade de EMBALAGENS", placeholder="Ex: 500", required=True)
     observacao = discord.ui.TextInput(label="Observação (opcional)", style=discord.TextStyle.paragraph, required=False)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -10863,10 +12147,16 @@ class RegistrarEmbalagensModal(discord.ui.Modal, title="📦 Registrar Embalagen
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AlugarGalpaoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AlugarGalpaoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AlugarGalpaoModal(discord.ui.Modal, title="📅 Alugar Galpão"):
     galpao = discord.ui.TextInput(label="🏭 Qual galpão?", placeholder="Digite NORTE ou SUL", required=True, max_length=5)
     dias = discord.ui.TextInput(label="📅 Quantos dias?", placeholder="Digite o número de dias", required=True, max_length=3)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         galpao_input = self.galpao.value.strip().upper()
@@ -10899,10 +12189,19 @@ class AlugarGalpaoModal(discord.ui.Modal, title="📅 Alugar Galpão"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: FabricacaoView (Painel Abertos)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: FabricacaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class FabricacaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: norte
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🏭 Galpões Norte", style=discord.ButtonStyle.primary, custom_id="fabricacao_norte", row=0)
     async def norte(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await get_pool()
@@ -10916,6 +12215,9 @@ class FabricacaoView(discord.ui.View):
             return
         await interaction.response.send_modal(ProducaoCompletaModal("GALPÕES NORTE", TEMPO_BASE_NORTE))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: sul
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🏭 Galpões Sul", style=discord.ButtonStyle.primary, custom_id="fabricacao_sul", row=0)
     async def sul(self, interaction: discord.Interaction, button: discord.ui.Button):
         pool = await get_pool()
@@ -10929,6 +12231,9 @@ class FabricacaoView(discord.ui.View):
             return
         await interaction.response.send_modal(ProducaoCompletaModal("GALPÕES SUL", TEMPO_BASE_SUL))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: produzir_municao
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔫 Produzir Munição", style=discord.ButtonStyle.success, custom_id="fabricacao_municao", emoji="🎯", row=0)
     async def produzir_municao(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ProducaoMunicaoModal())
@@ -10936,10 +12241,19 @@ class FabricacaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarResetComissoesProducaoView (Confirmação do Reset)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarResetComissoesProducaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarResetComissoesProducaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=60)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ SIM, RESETAR", style=discord.ButtonStyle.danger, custom_id="conf_reset_comissoes_prod")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -10960,6 +12274,9 @@ class ConfirmarResetComissoesProducaoView(discord.ui.View):
         except:
             pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id="cancel_reset_comissoes_prod")
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Reset cancelado.", ephemeral=True)
@@ -10971,26 +12288,47 @@ class ConfirmarResetComissoesProducaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: GerenciamentoProducaoView (Seu código com o novo botão)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: GerenciamentoProducaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class GerenciamentoProducaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: registrar_capsulas
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💊 Registrar Cápsulas", style=discord.ButtonStyle.primary, custom_id="gerenciar_registrar_capsulas", emoji="💊", row=0)
     async def registrar_capsulas(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarCapsulasModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: registrar_embalagens
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📦 Registrar Embalagens", style=discord.ButtonStyle.primary, custom_id="gerenciar_registrar_embalagens", emoji="📦", row=0)
     async def registrar_embalagens(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrarEmbalagensModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: relatorio
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📊 Relatório Produção", style=discord.ButtonStyle.secondary, custom_id="gerenciar_relatorio", emoji="📊", row=0)
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RelatorioProducaoModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: alugar_galpao
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📅 Alugar Galpão", style=discord.ButtonStyle.primary, custom_id="gerenciar_alugar", emoji="📅", row=1)
     async def alugar_galpao(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AlugarGalpaoModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ver_alugueis
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📊 Alugueis", style=discord.ButtonStyle.secondary, custom_id="gerenciar_ver_alugueis", emoji="📊", row=1)
     async def ver_alugueis(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -11013,6 +12351,9 @@ class GerenciamentoProducaoView(discord.ui.View):
         embed.set_footer(text="🛡 Vida Rasa 442", icon_url=bot.user.display_avatar.url if bot.user else None)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_estoque
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✏️ Editar Estoque", style=discord.ButtonStyle.primary, custom_id="gerenciar_editar_estoque", emoji="✏️", row=2)
     async def editar_estoque(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -11033,6 +12374,9 @@ class GerenciamentoProducaoView(discord.ui.View):
         
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: registrar_polvora_manual
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🧨 Registrar Pólvora Manual", style=discord.ButtonStyle.primary, custom_id="gerenciar_registrar_polvora", emoji="🧨", row=2)
     async def registrar_polvora_manual(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -11044,12 +12388,18 @@ class GerenciamentoProducaoView(discord.ui.View):
         modal = RegistrarPolvoraManualModal(estoque_atual)
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: atualizar_painel
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="gerenciar_atualizar", emoji="🔄", row=2)
     async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_gerenciamento_producao()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: pagar_comissoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💸 Pagar Comissões (Caixa)", style=discord.ButtonStyle.success, custom_id="gerenciar_pagar_comissoes", emoji="💸", row=3)
     async def pagar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -11109,6 +12459,9 @@ class GerenciamentoProducaoView(discord.ui.View):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ─── BOTÃO DE RESETAR COMISSÕES MANUAL (ADICIONADO) ───
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: resetar_comissoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔄 Resetar Comissões (Manual)", style=discord.ButtonStyle.danger, custom_id="gerenciar_reset_comissoes", emoji="🔄", row=3)
     async def resetar_comissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -11126,6 +12479,9 @@ class GerenciamentoProducaoView(discord.ui.View):
             color=0xe74c3c
         )
         await interaction.response.send_message(embed=embed, view=ConfirmarResetComissoesProducaoView(), ephemeral=True)
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_gerenciamento_producao
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_gerenciamento_producao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -11270,7 +12626,13 @@ async def enviar_painel_gerenciamento_producao():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarEstoqueCompletoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EditarEstoqueCompletoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE COMPLETO"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
 
@@ -11280,6 +12642,9 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
     embalagens = discord.ui.TextInput(label="📦 Quantidade de Embalagens", placeholder="Digite a quantidade atual de embalagens", required=False, max_length=10)
     polvora = discord.ui.TextInput(label="🧨 Quantidade de Pólvora", placeholder="Digite a quantidade atual de pólvora", required=False, max_length=10)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         pool = await get_pool()
@@ -11383,7 +12748,13 @@ class EditarEstoqueCompletoModal(discord.ui.Modal, title="📦 EDITAR ESTOQUE CO
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarPolvoraManualModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistrarPolvoraManualModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RegistrarPolvoraManualModal(discord.ui.Modal, title="🧨 Registrar Pólvora Manual"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, estoque_atual=0):
         super().__init__(timeout=300)
         self.estoque_atual = estoque_atual
@@ -11402,6 +12773,9 @@ class RegistrarPolvoraManualModal(discord.ui.Modal, title="🧨 Registrar Pólvo
         max_length=200
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -11458,6 +12832,9 @@ class RegistrarPolvoraManualModal(discord.ui.Modal, title="🧨 Registrar Pólvo
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioProducaoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioProducaoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioProducaoModal(discord.ui.Modal, title="📊 RELATÓRIO DE PRODUÇÃO"):
     data_inicio = discord.ui.TextInput(
         label="📅 Data INÍCIO (DD/MM/AAAA)",
@@ -11470,6 +12847,9 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 RELATÓRIO DE PRODUÇ
         required=True
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -11552,6 +12932,9 @@ class RelatorioProducaoModal(discord.ui.Modal, title="📊 RELATÓRIO DE PRODUÇ
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: gerar_desc_producao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: gerar_desc_producao
+# ────────────────────────────────────────────────────────────────────────────────
 async def gerar_desc_producao(prod, pct=None, restante=None):
     try:
         if isinstance(prod["inicio"], str):
@@ -11595,6 +12978,9 @@ async def gerar_desc_producao(prod, pct=None, restante=None):
         logger.error(f"❌ Erro ao gerar descrição: {e}")
         return f"**Galpão:** {prod.get('galpao', 'Desconhecido')}\n⏳ **Erro ao carregar dados...**"
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: acompanhar_producao
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: acompanhar_producao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -11736,6 +13122,9 @@ async def acompanhar_producao(pid):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: finalizar_producao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: finalizar_producao
+# ────────────────────────────────────────────────────────────────────────────────
 async def finalizar_producao(pid, msg, prod):
     try:
         polvora_total = prod.get("polvora", 400)
@@ -11804,6 +13193,9 @@ async def finalizar_producao(pid, msg, prod):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_heartbeat_producoes
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_heartbeat_producoes
+# ────────────────────────────────────────────────────────────────────────────────
 async def verificar_heartbeat_producoes():
     try:
         pool = await get_pool()
@@ -11856,6 +13248,9 @@ async def verificar_heartbeat_producoes():
     except Exception as e:
         logger.error(f"❌ Erro no heartbeat: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restaurar_producoes
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_producoes
 # ────────────────────────────────────────────────────────────────────────────────
@@ -11927,6 +13322,9 @@ async def restaurar_producoes():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_fabricacao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_fabricacao
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_fabricacao():
     canal = bot.get_channel(CANAL_FABRICACAO_ID)
     if not canal:
@@ -11983,6 +13381,9 @@ async def enviar_painel_fabricacao():
 # PREDIÇÃO DE RUPTURA DE ESTOQUE
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: calcular_ruptura_estoque
+# ────────────────────────────────────────────────────────────────────────────────
 async def calcular_ruptura_estoque():
     """
     Calcula em quantos dias o estoque acaba com base na média dos últimos 7 dias.
@@ -12036,6 +13437,9 @@ async def calcular_ruptura_estoque():
         return None
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: alertar_ruptura_estoque
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=12)
 async def alertar_ruptura_estoque():
     """A cada 12h, alerta a produção se o estoque de munição for acabar em < 3 dias."""
@@ -12089,6 +13493,9 @@ async def alertar_ruptura_estoque():
     except Exception as e:
         logger.error(f"❌ Erro no alerta de ruptura: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: alertar_estoque_baixo_vendas
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=6)
 async def alertar_estoque_baixo_vendas():
     """Avisa no chat de vendas se o estoque estiver baixo para vender."""
@@ -12145,6 +13552,9 @@ async def alertar_estoque_baixo_vendas():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_metas_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_metas_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def carregar_metas_db():
     pool = await get_pool()
     if not pool:
@@ -12161,6 +13571,9 @@ async def carregar_metas_db():
         logger.error(f"❌ Erro ao carregar metas: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_meta_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_meta_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -12185,6 +13598,9 @@ async def salvar_meta_db(user_id, canal_id, dinheiro, acao):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_valor_meta_personalizado
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_valor_meta_personalizado
+# ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_valor_meta_personalizado(user_id, novo_valor):
     pool = await get_pool()
     if not pool:
@@ -12197,6 +13613,9 @@ async def atualizar_valor_meta_personalizado(user_id, novo_valor):
         logger.error(f"❌ Erro ao atualizar valor personalizado da meta: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: adicionar_dinheiro_meta
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: adicionar_dinheiro_meta
 # ────────────────────────────────────────────────────────────────────────────────
@@ -12251,6 +13670,9 @@ async def adicionar_dinheiro_meta(user_id, valor):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: depositar_na_meta
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: depositar_na_meta
+# ────────────────────────────────────────────────────────────────────────────────
 async def depositar_na_meta(user_id, valor, motivo):
     pool = await get_pool()
     if not pool:
@@ -12289,6 +13711,9 @@ async def depositar_na_meta(user_id, valor, motivo):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: definir_valor_meta_por_id
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: definir_valor_meta_por_id
+# ────────────────────────────────────────────────────────────────────────────────
 async def definir_valor_meta_por_id(user_id):
     guild = bot.get_guild(GUILD_ID)
     if not guild:
@@ -12307,6 +13732,9 @@ async def definir_valor_meta_por_id(user_id):
                 return row["valor_meta_personalizado"]
     return await definir_valor_meta_por_cargo(member)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: definir_valor_meta_por_cargo
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: definir_valor_meta_por_cargo
 # ────────────────────────────────────────────────────────────────────────────────
@@ -12334,6 +13762,9 @@ async def definir_valor_meta_por_cargo(member: discord.Member):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_divida_ativa
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_divida_ativa
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_divida_ativa(user_id):
     pool = await get_pool()
     if not pool:
@@ -12348,6 +13779,9 @@ async def buscar_divida_ativa(user_id):
         logger.error(f"❌ Erro ao buscar dívida ativa: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_divida_meta
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_divida_meta
 # ────────────────────────────────────────────────────────────────────────────────
@@ -12407,6 +13841,9 @@ async def criar_divida_meta(user_id, valor_original, semana_fechamento):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: quitar_dividas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: quitar_dividas
+# ────────────────────────────────────────────────────────────────────────────────
 async def quitar_dividas(user_id):
     pool = await get_pool()
     if not pool:
@@ -12422,6 +13859,9 @@ async def quitar_dividas(user_id):
         logger.error(f"❌ Erro ao quitar dívidas: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: calcular_total_dividas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: calcular_total_dividas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -12443,6 +13883,9 @@ async def calcular_total_dividas(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: listar_dividas_ativas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: listar_dividas_ativas
+# ────────────────────────────────────────────────────────────────────────────────
 async def listar_dividas_ativas():
     pool = await get_pool()
     if not pool:
@@ -12456,6 +13899,9 @@ async def listar_dividas_ativas():
         logger.error(f"❌ Erro ao listar dívidas: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdicionarCaixaModal
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AdicionarCaixaModal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -12479,6 +13925,9 @@ class AdicionarCaixaModal(discord.ui.Modal, title="➕ Adicionar Dinheiro ao Cai
         max_length=5
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -12530,6 +13979,9 @@ class AdicionarCaixaModal(discord.ui.Modal, title="➕ Adicionar Dinheiro ao Cai
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RemoverCaixaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RemoverCaixaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RemoverCaixaModal(discord.ui.Modal, title="➖ Remover Dinheiro do Caixa"):
     valor = discord.ui.TextInput(
         label="💰 Valor a remover (R$)",
@@ -12550,6 +14002,9 @@ class RemoverCaixaModal(discord.ui.Modal, title="➖ Remover Dinheiro do Caixa")
         max_length=5
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -12613,6 +14068,9 @@ class RemoverCaixaModal(discord.ui.Modal, title="➖ Remover Dinheiro do Caixa")
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AdicionarLavadoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdicionarLavadoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AdicionarLavadoModal(discord.ui.Modal, title="💸 Adicionar Dinheiro Lavado"):
     valor = discord.ui.TextInput(
         label="💰 Valor lavado (R$)",
@@ -12627,6 +14085,9 @@ class AdicionarLavadoModal(discord.ui.Modal, title="💸 Adicionar Dinheiro Lava
         max_length=200
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -12670,7 +14131,13 @@ class AdicionarLavadoModal(discord.ui.Modal, title="💸 Adicionar Dinheiro Lava
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: LavarDinheiroModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: LavarDinheiroModal
+# ────────────────────────────────────────────────────────────────────────────────
 class LavarDinheiroModal(discord.ui.Modal, title="🧼 LAVAR DINHEIRO (CAIXA)"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
 
@@ -12681,6 +14148,9 @@ class LavarDinheiroModal(discord.ui.Modal, title="🧼 LAVAR DINHEIRO (CAIXA)"):
         max_length=20
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -12826,6 +14296,9 @@ class LavarDinheiroModal(discord.ui.Modal, title="🧼 LAVAR DINHEIRO (CAIXA)"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioCaixaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioCaixaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioCaixaModal(discord.ui.Modal, title="📈 Relatório do Caixa"):
     data_inicio = discord.ui.TextInput(
         label="📅 Data INÍCIO (DD/MM/AAAA)",
@@ -12840,6 +14313,9 @@ class RelatorioCaixaModal(discord.ui.Modal, title="📈 Relatório do Caixa"):
         max_length=10
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -13047,6 +14523,9 @@ class RelatorioCaixaModal(discord.ui.Modal, title="📈 Relatório do Caixa"):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_caixa
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_caixa
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_caixa():
     canal_id = 1559914499014660128
     canal = bot.get_channel(canal_id)
@@ -13065,10 +14544,19 @@ async def enviar_painel_caixa():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CaixaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CaixaView
+# ────────────────────────────────────────────────────────────────────────────────
 class CaixaView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _checar_permissao
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(
@@ -13083,30 +14571,45 @@ class CaixaView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: adicionar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="➕ Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="caixa_adicionar", emoji="➕", row=0)
     async def adicionar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
             return
         await interaction.response.send_modal(AdicionarCaixaModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: remover
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="➖ Remover Dinheiro", style=discord.ButtonStyle.danger, custom_id="caixa_remover", emoji="➖", row=0)
     async def remover(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
             return
         await interaction.response.send_modal(RemoverCaixaModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: lavado
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💸 Adicionar Lavado", style=discord.ButtonStyle.primary, custom_id="caixa_lavado", emoji="💸", row=0)
     async def lavado(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
             return
         await interaction.response.send_modal(AdicionarLavadoModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: lavar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🧼 Lavar Dinheiro", style=discord.ButtonStyle.success, custom_id="caixa_lavar", emoji="🧼", row=0)
     async def lavar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
             return
         await interaction.response.send_modal(LavarDinheiroModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: historico
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📊 Histórico Completo", style=discord.ButtonStyle.secondary, custom_id="caixa_historico", emoji="📊", row=1)
     async def historico(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
@@ -13163,12 +14666,18 @@ class CaixaView(discord.ui.View):
         embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y às %H:%M')}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: relatorio
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📈 Relatório por Período", style=discord.ButtonStyle.secondary, custom_id="caixa_relatorio", emoji="📈", row=1)
     async def relatorio(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
             return
         await interaction.response.send_modal(RelatorioCaixaModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: atualizar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="caixa_atualizar", emoji="🔄", row=1)
     async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
@@ -13177,6 +14686,9 @@ class CaixaView(discord.ui.View):
         await enviar_painel_caixa()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_caixa
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_caixa
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13199,57 +14711,56 @@ async def buscar_caixa():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: movimentar_caixa
 # ────────────────────────────────────────────────────────────────────────────────
-async def movimentar_caixa(tipo, valor, motivo, autor, tipo_dinheiro="auto"):
-    pool = await get_pool()
-    if not pool:
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: movimentar_caixa
+# ────────────────────────────────────────────────────────────────────────────────
+async def movimentar_caixa(tipo, valor, motivo, autor, tipo_dinheiro="auto", conn=None):
+    """Movimentação atômica do saldo e histórico, com conexão transacional opcional."""
+    if tipo_dinheiro == 'auto':
+        tipo_dinheiro = 'sujo' if tipo in ('acao','lavagem','deposito_meta') else 'limpo'
+    if tipo_dinheiro not in ('sujo','limpo'):
+        logger.error("❌ Tipo de dinheiro inválido: %s", tipo_dinheiro)
         return False
+    pool = await get_pool() if conn is None else None
+    if conn is None and not pool: return False
+    sinal = 1 if tipo in ('ajuste_mais','venda','acao','lavagem','parcela_receber','deposito_meta') else -1
+    delta = int(valor) * sinal
+    if int(valor) < 0: return False
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _mover
+    # ────────────────────────────────────────────────────────────────────────────────
+    async def _mover(c):
+        await c.execute("INSERT INTO caixa(id,valor_atual,valor_sujo,valor_limpo) VALUES(1,0,0,0) ON CONFLICT (id) DO NOTHING")
+        row = await c.fetchrow("SELECT valor_sujo,valor_limpo FROM caixa WHERE id=1 FOR UPDATE")
+        sujo = int(row['valor_sujo'] or 0)
+        limpo = int(row['valor_limpo'] or 0)
+        if tipo_dinheiro=='sujo':
+            if sujo+delta < 0:
+                raise ValueError('Saldo sujo insuficiente')
+            sujo += delta
+        else:
+            if limpo+delta < 0:
+                raise ValueError('Saldo limpo insuficiente')
+            limpo += delta
+        await c.execute("""UPDATE caixa SET valor_sujo=$1,valor_limpo=$2,valor_atual=$3,ultima_atualizacao=NOW()
+            WHERE id=1""",sujo,limpo,sujo+limpo)
+        await c.execute("""INSERT INTO caixa_movimentacoes(tipo,tipo_dinheiro,valor,motivo,autor,data)
+            VALUES($1,$2,$3,$4,$5,NOW())""",tipo,tipo_dinheiro,int(valor),str(motivo),str(autor))
+        return True
     try:
-        if tipo_dinheiro == "auto":
-            if tipo in ("acao", "lavagem", "deposito_meta"):
-                tipo_dinheiro = "sujo"
-            else:
-                tipo_dinheiro = "limpo"
-
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT valor_sujo, valor_limpo FROM caixa WHERE id = 1")
-            sujo_atual = row["valor_sujo"] if row else 0
-            limpo_atual = row["valor_limpo"] if row else 0
-
-            if tipo in ("ajuste_mais", "venda", "acao", "lavagem", "parcela_receber", "deposito_meta"):
-                sinal = 1
-            else:
-                sinal = -1
-
-            delta = valor * sinal
-
-            if tipo_dinheiro == "sujo":
-                sujo_novo = max(0, sujo_atual + delta)
-                limpo_novo = limpo_atual
-            else:
-                limpo_novo = max(0, limpo_atual + delta)
-                sujo_novo = sujo_atual
-
-            total_novo = sujo_novo + limpo_novo
-
-            await conn.execute(
-                """UPDATE caixa
-                   SET valor_sujo = $1, valor_limpo = $2, valor_atual = $3, ultima_atualizacao = NOW()
-                   WHERE id = 1""",
-                sujo_novo, limpo_novo, total_novo
-            )
-
-            await conn.execute("""
-                INSERT INTO caixa_movimentacoes (tipo, tipo_dinheiro, valor, motivo, autor, data)
-                VALUES ($1, $2, $3, $4, $5, NOW())
-            """, tipo, tipo_dinheiro, valor, motivo, str(autor))
-
-            return True
-
+        if conn is not None:
+            return await _mover(conn)
+        async with pool.acquire() as c:
+            async with c.transaction():
+                return await _mover(c)
     except Exception as e:
-        logger.error(f"❌ Erro ao movimentar caixa: {e}")
+        logger.error("❌ Erro ao movimentar caixa (%s / %s): %s", tipo, motivo, e)
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_movimentacoes_caixa
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_movimentacoes_caixa
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13267,6 +14778,9 @@ async def buscar_movimentacoes_caixa(limite=5):
         logger.error(f"❌ Erro ao buscar movimentações: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: gerar_embed_caixa
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: gerar_embed_caixa
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13328,6 +14842,9 @@ async def gerar_embed_caixa():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: proximo_id_emprestimo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: proximo_id_emprestimo
+# ────────────────────────────────────────────────────────────────────────────────
 async def proximo_id_emprestimo():
     pool = await get_pool()
     if not pool:
@@ -13340,6 +14857,9 @@ async def proximo_id_emprestimo():
         logger.error(f"❌ Erro ao gerar próximo ID: {e}")
         return 1
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_emprestimo
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_emprestimo
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13422,6 +14942,9 @@ async def criar_emprestimo(
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: listar_emprestimos_ativos
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: listar_emprestimos_ativos
+# ────────────────────────────────────────────────────────────────────────────────
 async def listar_emprestimos_ativos():
     pool = await get_pool()
     if not pool:
@@ -13435,6 +14958,9 @@ async def listar_emprestimos_ativos():
         logger.error(f"❌ Erro ao listar empréstimos: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: listar_emprestimos_quitados
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: listar_emprestimos_quitados
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13454,6 +14980,9 @@ async def listar_emprestimos_quitados():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_parcelas_emprestimo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_parcelas_emprestimo
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_parcelas_emprestimo(emprestimo_id):
     pool = await get_pool()
     if not pool:
@@ -13468,6 +14997,9 @@ async def buscar_parcelas_emprestimo(emprestimo_id):
         logger.error(f"❌ Erro ao buscar parcelas: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: marcar_parcela_paga
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: marcar_parcela_paga
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13517,6 +15049,9 @@ async def marcar_parcela_paga(parcela_id):
         logger.error(f"❌ Erro ao marcar parcela como paga: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_parcelas_vencendo
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_parcelas_vencendo
 # ────────────────────────────────────────────────────────────────────────────────
@@ -13634,6 +15169,9 @@ async def verificar_parcelas_vencendo():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: gerar_embed_emprestimos
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: gerar_embed_emprestimos
+# ────────────────────────────────────────────────────────────────────────────────
 async def gerar_embed_emprestimos():
     ativos = await listar_emprestimos_ativos()
 
@@ -13681,6 +15219,9 @@ async def gerar_embed_emprestimos():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: NovoEmprestimoReceberModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: NovoEmprestimoReceberModal
+# ────────────────────────────────────────────────────────────────────────────────
 class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo (A Receber)"):
     nome_faccao = discord.ui.TextInput(label="🏢 Facção", placeholder="FALCATRUA", required=True, max_length=100)
     passaporte_telefone = discord.ui.TextInput(label="🆔 Passaporte / 📱 Telefone", placeholder="820 / (11) 99999-9999", required=True, max_length=100)
@@ -13688,6 +15229,9 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo (A Receber)"
     parcelamento = discord.ui.TextInput(label="📊 Parcelas e Frequência", placeholder="4 parcelas mensal", required=True, max_length=60)
     juros = discord.ui.TextInput(label="📈 Juros (%)", placeholder="20", required=True, max_length=5)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -13772,6 +15316,9 @@ class NovoEmprestimoReceberModal(discord.ui.Modal, title="📥 Novo (A Receber)"
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: NovoEmprestimoPagarModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: NovoEmprestimoPagarModal
+# ────────────────────────────────────────────────────────────────────────────────
 class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo (A Pagar)"):
     nome_faccao = discord.ui.TextInput(label="🏢 Quem Emprestou", placeholder="MAFIA, LEON", required=True, max_length=100)
     valores = discord.ui.TextInput(label="💰 Valor Recebido / Total", placeholder="800000 / 960000", required=True, max_length=50)
@@ -13779,6 +15326,9 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo (A Pagar)"):
     telefone = discord.ui.TextInput(label="📱 Telefone (opcional)", placeholder="(11) 88888-8888", required=False, max_length=50)
     observacoes = discord.ui.TextInput(label="📝 Obs", placeholder="PIX", required=False, max_length=200)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         vs = self.valores.value.strip()
@@ -13852,12 +15402,21 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo (A Pagar)"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MarcarParcelaPagaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MarcarParcelaPagaView
+# ────────────────────────────────────────────────────────────────────────────────
 class MarcarParcelaPagaView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, parcela_id, tipo):
         super().__init__(timeout=None)
         self.parcela_id = parcela_id
         self.tipo = tipo
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: marcar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Paga", style=discord.ButtonStyle.success, custom_id="marcar_parcela_paga", emoji="✅")
     async def marcar(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -13933,6 +15492,9 @@ class MarcarParcelaPagaView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_emprestimos
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_emprestimos
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_emprestimos():
     canal_id = 1458241230512066560
     canal = bot.get_channel(canal_id)
@@ -13951,10 +15513,19 @@ async def enviar_painel_emprestimos():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EmprestimosView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EmprestimosView
+# ────────────────────────────────────────────────────────────────────────────────
 class EmprestimosView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _checar_permissao
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(
@@ -13969,18 +15540,27 @@ class EmprestimosView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: novo_receber
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📥 Novo (a Receber)", style=discord.ButtonStyle.success, custom_id="emprestimo_novo_receber", emoji="📥", row=0)
     async def novo_receber(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
             return
         await interaction.response.send_modal(NovoEmprestimoReceberModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: novo_pagar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📤 Novo (a Pagar)", style=discord.ButtonStyle.danger, custom_id="emprestimo_novo_pagar", emoji="📤", row=0)
     async def novo_pagar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
             return
         await interaction.response.send_modal(NovoEmprestimoPagarModal())
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: listar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📊 Listar Todos", style=discord.ButtonStyle.primary, custom_id="emprestimo_listar", emoji="📊", row=1)
     async def listar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
@@ -14024,6 +15604,9 @@ class EmprestimosView(discord.ui.View):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: historico
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📜 Histórico", style=discord.ButtonStyle.secondary, custom_id="emprestimo_historico", emoji="📜", row=1)
     async def historico(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
@@ -14065,6 +15648,9 @@ class EmprestimosView(discord.ui.View):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: atualizar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔄 Atualizar", style=discord.ButtonStyle.secondary, custom_id="emprestimo_atualizar", emoji="🔄", row=1)
     async def atualizar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
@@ -14080,6 +15666,9 @@ class EmprestimosView(discord.ui.View):
 # ║  BLOCO 14 — SISTEMA DE METAS (PARTE 2/3)                                   ║
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_tipo_meta_semana
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_tipo_meta_semana
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14105,6 +15694,9 @@ async def buscar_tipo_meta_semana():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_meta_global_acoes
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_meta_global_acoes
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_meta_global_acoes():
     pool = await get_pool()
     if not pool:
@@ -14119,6 +15711,9 @@ async def buscar_meta_global_acoes():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_meta_soldado
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_meta_soldado
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_meta_soldado():
     pool = await get_pool()
     if not pool:
@@ -14130,6 +15725,9 @@ async def buscar_meta_soldado():
     except:
         return 0
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: definir_meta_soldado
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: definir_meta_soldado
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14150,6 +15748,9 @@ async def definir_meta_soldado(valor):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_total_soldado
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_total_soldado
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_total_soldado():
     pool = await get_pool()
     if not pool:
@@ -14161,6 +15762,9 @@ async def buscar_total_soldado():
     except:
         return 0
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: somar_total_soldado
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: somar_total_soldado
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14184,6 +15788,9 @@ async def somar_total_soldado(valor):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: zerar_total_soldado
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: zerar_total_soldado
+# ────────────────────────────────────────────────────────────────────────────────
 async def zerar_total_soldado():
     pool = await get_pool()
     if not pool:
@@ -14198,6 +15805,9 @@ async def zerar_total_soldado():
             return True
     except:
         return False
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: definir_meta_global_acoes
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: definir_meta_global_acoes
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14219,6 +15829,9 @@ async def definir_meta_global_acoes(valor):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_config_cargo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_config_cargo
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_config_cargo(cargo_id):
     pool = await get_pool()
     if not pool:
@@ -14232,6 +15845,9 @@ async def buscar_config_cargo(cargo_id):
     except:
         return None, None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: definir_config_cargo
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: definir_config_cargo
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14250,6 +15866,9 @@ async def definir_config_cargo(cargo_id, tipo_meta, valor_meta=None):
     except:
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: definir_tipo_meta_semana
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: definir_tipo_meta_semana
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14273,6 +15892,9 @@ async def definir_tipo_meta_semana(tipo):
         logger.error(f"❌ Erro ao definir tipo da meta: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: definir_valor_meta_polvora
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: definir_valor_meta_polvora
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14301,6 +15923,9 @@ async def definir_valor_meta_polvora(user_id):
 
     return 3000
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: adicionar_polvora_meta
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: adicionar_polvora_meta
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14365,6 +15990,9 @@ async def adicionar_polvora_meta(user_id, valor):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: editar_polvora_meta
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: editar_polvora_meta
+# ────────────────────────────────────────────────────────────────────────────────
 async def editar_polvora_meta(user_id, novo_valor):
     pool = await get_pool()
     if not pool:
@@ -14399,6 +16027,9 @@ async def editar_polvora_meta(user_id, novo_valor):
         logger.error(f"❌ Erro ao editar pólvora da meta: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_divida_polvora
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_divida_polvora
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14458,6 +16089,9 @@ async def criar_divida_polvora(user_id, valor_original, semana_fechamento):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_dividas_usuario
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_dividas_usuario
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_dividas_usuario(user_id):
     pool = await get_pool()
     if not pool:
@@ -14504,6 +16138,9 @@ async def buscar_dividas_usuario(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: calcular_bonificacao_polvora
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: calcular_bonificacao_polvora
+# ────────────────────────────────────────────────────────────────────────────────
 async def calcular_bonificacao_polvora(user_id):
     pool = await get_pool()
     if not pool:
@@ -14532,6 +16169,9 @@ async def calcular_bonificacao_polvora(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_ponto_ativo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_ponto_ativo
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_ponto_ativo(user_id):
     pool = await get_pool()
     if not pool:
@@ -14546,6 +16186,9 @@ async def buscar_ponto_ativo(user_id):
         logger.error(f"❌ Erro ao buscar ponto ativo: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: abrir_ponto
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: abrir_ponto
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14570,6 +16213,9 @@ async def abrir_ponto(user_id):
         logger.error(f"❌ Erro ao abrir ponto: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: fechar_ponto
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: fechar_ponto
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14599,6 +16245,9 @@ async def fechar_ponto(user_id):
         logger.error(f"❌ Erro ao fechar ponto: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: calcular_horas_semana
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: calcular_horas_semana
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14635,6 +16284,9 @@ async def calcular_horas_semana(user_id):
         logger.error(f"❌ Erro ao calcular horas da semana: {e}")
         return 0
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: calcular_horas_periodo
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: calcular_horas_periodo
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14676,6 +16328,9 @@ async def calcular_horas_periodo(user_id, data_inicio, data_fim):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: resetar_pontos_semana
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: resetar_pontos_semana
+# ────────────────────────────────────────────────────────────────────────────────
 async def resetar_pontos_semana():
     pool = await get_pool()
     if not pool:
@@ -14693,6 +16348,9 @@ async def resetar_pontos_semana():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: formatar_horas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: formatar_horas
+# ────────────────────────────────────────────────────────────────────────────────
 def formatar_horas(segundos):
     if segundos < 60:
         return f"{segundos}s"
@@ -14702,6 +16360,9 @@ def formatar_horas(segundos):
         return f"{horas}h {minutos}min"
     return f"{minutos}min"
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_categoria_salva
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_categoria_salva
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14719,6 +16380,9 @@ async def buscar_categoria_salva(nome_cargo):
         logger.error(f"❌ Erro ao buscar categoria salva: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_categoria_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_categoria_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14740,6 +16404,9 @@ async def salvar_categoria_db(nome_cargo, categoria_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_categoria_automatica
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_categoria_automatica
+# ────────────────────────────────────────────────────────────────────────────────
 async def criar_categoria_automatica(guild, nome_cargo):
     try:
         nome_categoria = f"📜 | METAS {nome_cargo.upper()}"
@@ -14751,6 +16418,9 @@ async def criar_categoria_automatica(guild, nome_cargo):
         logger.error(f"❌ Erro ao criar categoria {nome_cargo}: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: obter_categoria_meta_async
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: obter_categoria_meta_async
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14778,6 +16448,9 @@ async def obter_categoria_meta_async(member):
                     return None
     return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_sala_meta
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_sala_meta
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14889,6 +16562,9 @@ async def criar_sala_meta(member: discord.Member):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: ajustar_permissoes_sala
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: ajustar_permissoes_sala
+# ────────────────────────────────────────────────────────────────────────────────
 async def ajustar_permissoes_sala(canal, member, is_mecanico):
     try:
         guild = member.guild
@@ -14919,6 +16595,9 @@ async def ajustar_permissoes_sala(canal, member, is_mecanico):
     except Exception as e:
         logger.error(f"❌ Erro ao ajustar permissões da sala: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_acesso_responsaveis
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_acesso_responsaveis
 # ────────────────────────────────────────────────────────────────────────────────
@@ -14967,6 +16646,9 @@ async def atualizar_acesso_responsaveis():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_metas_cache
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_metas_cache
+# ────────────────────────────────────────────────────────────────────────────────
 async def carregar_metas_cache():
     global metas_cache
     try:
@@ -14997,6 +16679,9 @@ async def carregar_metas_cache():
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_embed_meta (CRIA PAINEL PRA TODOS, INCLUSIVE ISENTOS)
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_embed_meta
 # ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_embed_meta(user_id):
     """
@@ -15054,6 +16739,9 @@ async def atualizar_embed_meta(user_id):
     except Exception as e:
         logger.error(f"❌ Erro crítico em atualizar_embed_meta (V2) para {user_id}: {e}")
         
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_aviso_meta_nao_batida
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_aviso_meta_nao_batida
 # ────────────────────────────────────────────────────────────────────────────────
@@ -15165,6 +16853,9 @@ async def enviar_aviso_meta_nao_batida(user_id, valor_original, valor_divida, mo
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_categoria_meta
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_categoria_meta
+# ────────────────────────────────────────────────────────────────────────────────
 async def atualizar_categoria_meta(member):
     try:
         if str(member.id) not in metas_cache:
@@ -15197,6 +16888,9 @@ async def atualizar_categoria_meta(member):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: fixar_painel_meta_no_final (DELETA + RECRIA IMEDIATAMENTE)
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: fixar_painel_meta_no_final
 # ────────────────────────────────────────────────────────────────────────────────
 async def fixar_painel_meta_no_final(user_id):
     try:
@@ -15244,11 +16938,20 @@ async def fixar_painel_meta_no_final(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MetaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MetaView
+# ────────────────────────────────────────────────────────────────────────────────
 class MetaView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: adicionar_dinheiro
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💰 Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="meta_adicionar_dinheiro_fixo", emoji="💰", row=0)
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15278,6 +16981,9 @@ class MetaView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: adicionar_polvora
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🧨 Adicionar Pólvora", style=discord.ButtonStyle.success, custom_id="meta_adicionar_polvora_fixo", emoji="🧨", row=0)
     async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15307,6 +17013,9 @@ class MetaView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_meta
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_fixo", emoji="✏️", row=1)
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15337,6 +17046,9 @@ class MetaView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_polvora
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🧨 Editar Pólvora", style=discord.ButtonStyle.primary, custom_id="meta_editar_polvora_fixo", emoji="🧨", row=1)
     async def editar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15363,6 +17075,9 @@ class MetaView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_valor_meta
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⚙️ Editar Valor da Meta", style=discord.ButtonStyle.primary, custom_id="meta_editar_valor_fixo", emoji="⚙️", row=2)
     async def editar_valor_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15383,11 +17098,20 @@ class MetaView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: SoldadoView (NOVO — para cargo Soldado)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: SoldadoView
+# ────────────────────────────────────────────────────────────────────────────────
 class SoldadoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: adicionar_dinheiro
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💰 Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="soldado_adicionar_dinheiro", emoji="💰", row=0)
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15417,6 +17141,9 @@ class SoldadoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_meta
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="soldado_editar_meta", emoji="✏️", row=0)
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15446,6 +17173,9 @@ class SoldadoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_acoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⚔️ Editar Dinheiro de Ações", style=discord.ButtonStyle.primary, custom_id="soldado_editar_acoes", emoji="⚔️", row=1)
     async def editar_acoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15474,11 +17204,20 @@ class SoldadoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: SoldadoMecanicoView (Soldado + Mecânico — TEM PONTO)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: SoldadoMecanicoView
+# ────────────────────────────────────────────────────────────────────────────────
 class SoldadoMecanicoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ponto_dinamico
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🟢 Abrir Ponto", style=discord.ButtonStyle.success, custom_id="soldado_mecanico_ponto", emoji="🟢", row=0)
     async def ponto_dinamico(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != str(self.user_id):
@@ -15511,6 +17250,9 @@ class SoldadoMecanicoView(discord.ui.View):
                 ephemeral=True
             )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: adicionar_dinheiro
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💰 Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="soldado_mecanico_add_din", emoji="💰", row=1)
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15531,6 +17273,9 @@ class SoldadoMecanicoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_meta
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="soldado_mecanico_edit", emoji="✏️", row=1)
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15560,6 +17305,9 @@ class SoldadoMecanicoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_horas
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✏️ Editar Horas", style=discord.ButtonStyle.primary, custom_id="soldado_mecanico_edit_horas", emoji="⏰", row=2)
     async def editar_horas(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15579,6 +17327,9 @@ class SoldadoMecanicoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_acoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⚔️ Editar Dinheiro de Ações", style=discord.ButtonStyle.primary, custom_id="soldado_mecanico_edit_acoes", emoji="⚔️", row=2)
     async def editar_acoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15606,11 +17357,20 @@ class SoldadoMecanicoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MecanicoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MecanicoView
+# ────────────────────────────────────────────────────────────────────────────────
 class MecanicoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ponto_dinamico
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🟢 Abrir Ponto", style=discord.ButtonStyle.success, custom_id="mecanico_ponto_dinamico", emoji="🟢", row=0)
     async def ponto_dinamico(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != str(self.user_id):
@@ -15643,6 +17403,9 @@ class MecanicoView(discord.ui.View):
                 ephemeral=True
             )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: adicionar_dinheiro
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💰 Adicionar Dinheiro", style=discord.ButtonStyle.success, custom_id="mecanico_adicionar_dinheiro", emoji="💰", row=1)
     async def adicionar_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15663,6 +17426,9 @@ class MecanicoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: adicionar_polvora
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🧨 Adicionar Pólvora", style=discord.ButtonStyle.success, custom_id="mecanico_adicionar_polvora", emoji="🧨", row=1)
     async def adicionar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15683,6 +17449,9 @@ class MecanicoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_meta
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✏️ Editar Meta", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_meta", emoji="✏️", row=2)
     async def editar_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15710,6 +17479,9 @@ class MecanicoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_polvora
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🧨 Editar Pólvora", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_polvora", emoji="🧨", row=2)
     async def editar_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15736,6 +17508,9 @@ class MecanicoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_valor_meta
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⚙️ Editar Valor da Meta", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_valor", emoji="⚙️", row=3)
     async def editar_valor_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15754,6 +17529,9 @@ class MecanicoView(discord.ui.View):
             except:
                 pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_horas
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✏️ Editar Horas", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_horas", emoji="⏰", row=3)
     async def editar_horas(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -15775,6 +17553,9 @@ class MecanicoView(discord.ui.View):
 # ════════════════════════════════════════════════════════════════════════════════
 # COMPONENTS V2 — PAINEL DE META HÍBRIDO (LayoutView)
 # ════════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _v2_montar_container
+# ────────────────────────────────────────────────────────────────────────────────
 async def _v2_montar_container(user_id):
     """
     Monta o Container (conteúdo visual) do painel de meta V2.
@@ -15848,6 +17629,9 @@ async def _v2_montar_container(user_id):
         barra = "▓" * int(pct * 20) + "░" * (20 - int(pct * 20))
         status_emoji = "🟢" if pct >= 1 else "🟡" if pct >= 0.5 else "🔴"
 
+        # ────────────────────────────────────────────────────────────────────────────────
+        # MÉTODO: fmt
+        # ────────────────────────────────────────────────────────────────────────────────
         def fmt(v, d):
             return formatar_dinheiro(v) if d else fmt_num(v)
 
@@ -15945,11 +17729,17 @@ async def _v2_montar_container(user_id):
         logger.error(f"❌ Erro ao montar container V2: {e}")
         return None, None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: V2MetaView
+# ────────────────────────────────────────────────────────────────────────────────
 class V2MetaView(discord.ui.LayoutView):
     """
     LayoutView Híbrido para painel de meta.
     Botões mudam conforme cargos do membro (soldado, mecânico, isento).
     """
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, container, cargos_info):
         super().__init__(timeout=None)
         self.user_id = user_id
@@ -16045,6 +17835,9 @@ class V2MetaView(discord.ui.LayoutView):
     # ═══════════════════════════════════════════════════════════════════════════
     # CALLBACKS — Adicionar dinheiro
     # ═══════════════════════════════════════════════════════════════════════════
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _add_dinheiro
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _add_dinheiro(self, interaction: discord.Interaction):
         if str(interaction.user.id) != str(self.user_id):
             await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
@@ -16060,6 +17853,9 @@ class V2MetaView(discord.ui.LayoutView):
             return
         await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _add_polvora
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _add_polvora(self, interaction: discord.Interaction):
         if str(interaction.user.id) != str(self.user_id):
             await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
@@ -16078,6 +17874,9 @@ class V2MetaView(discord.ui.LayoutView):
     # ═══════════════════════════════════════════════════════════════════════════
     # CALLBACKS — Ponto (mecânico)
     # ═══════════════════════════════════════════════════════════════════════════
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _ponto_dinamico
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _ponto_dinamico(self, interaction: discord.Interaction):
         if str(interaction.user.id) != str(self.user_id):
             await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
@@ -16113,6 +17912,9 @@ class V2MetaView(discord.ui.LayoutView):
     # ═══════════════════════════════════════════════════════════════════════════
     # CALLBACKS — Edições (BLOQUEIO DO DONO DA SALA APLICADO)
     # ═══════════════════════════════════════════════════════════════════════════
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _editar_meta
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _editar_meta(self, interaction: discord.Interaction):
         # REGRA: Apenas gerentes ou ADM. O dono da sala NÃO PODE.
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
@@ -16135,6 +17937,9 @@ class V2MetaView(discord.ui.LayoutView):
         }
         await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _editar_valor
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _editar_valor(self, interaction: discord.Interaction):
         # REGRA: Apenas gerentes ou ADM. O dono da sala NÃO PODE.
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
@@ -16145,6 +17950,9 @@ class V2MetaView(discord.ui.LayoutView):
         meta_total = await definir_valor_meta_por_id(self.user_id)
         await interaction.response.send_modal(EditarValorMetaModal(self.user_id, meta_total))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _editar_acoes
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _editar_acoes(self, interaction: discord.Interaction):
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
         is_admin = interaction.user.guild_permissions.administrator
@@ -16163,6 +17971,9 @@ class V2MetaView(discord.ui.LayoutView):
         valor_atual = meta.get("dinheiro_acoes") or 0
         await interaction.response.send_modal(EditarDinheiroAcoesModal(self.user_id, valor_atual))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _editar_horas
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _editar_horas(self, interaction: discord.Interaction):
         is_dono = str(interaction.user.id) == str(self.user_id)
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
@@ -16174,7 +17985,13 @@ class V2MetaView(discord.ui.LayoutView):
         await interaction.response.send_modal(EditarHorasModal(self.user_id, segundos_atuais))
 
 # ════════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarDepositoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarDepositoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, confirmacao_id, user_id, tipo, valor):
         super().__init__(timeout=None)
         self.confirmacao_id = confirmacao_id
@@ -16182,6 +17999,9 @@ class ConfirmarDepositoView(discord.ui.View):
         self.tipo = tipo
         self.valor = valor
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         is_admin = interaction.user.guild_permissions.administrator
         cargos = [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID]
@@ -16190,6 +18010,9 @@ class ConfirmarDepositoView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Confirmar", style=discord.ButtonStyle.success, custom_id="confirmar_deposito_meta")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -16230,6 +18053,9 @@ class ConfirmarDepositoView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=None)
         await interaction.followup.send(f"✅ Depósito de **{self.tipo}** confirmado!", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: rejeitar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Rejeitar", style=discord.ButtonStyle.danger, custom_id="rejeitar_deposito_meta")
     async def rejeitar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -16263,10 +18089,19 @@ class ConfirmarDepositoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AdicionarDinheiroModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdicionarDinheiroModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Sujo"):
     quantidade = discord.ui.TextInput(label="Valor do Dinheiro Sujo", placeholder="Digite o valor (ex: 5000)", required=True)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id): super().__init__(); self.user_id = user_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         v = safe_int(self.quantidade.value)
@@ -16289,10 +18124,19 @@ class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Su
         
         await interaction.followup.send(f"✅ **Solicitação enviada!**\n💰 Valor: {formatar_dinheiro(v)}\nAguarde a gerência confirmar.", ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdicionarPolvoraModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AdicionarPolvoraModal(discord.ui.Modal, title="🧨 Adicionar Pólvora"):
     quantidade = discord.ui.TextInput(label="Quantidade de Pólvora", placeholder="Digite a quantidade (ex: 500)", required=True, max_length=10)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id): super().__init__(); self.user_id = user_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         v = safe_int(self.quantidade.value)
@@ -16318,7 +18162,13 @@ class AdicionarPolvoraModal(discord.ui.Modal, title="🧨 Adicionar Pólvora"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarPolvoraModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EditarPolvoraModal
+# ────────────────────────────────────────────────────────────────────────────────
 class EditarPolvoraModal(discord.ui.Modal, title="✏️ Editar Pólvora da Meta"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, valor_atual):
         super().__init__(timeout=300)
         self.user_id = user_id
@@ -16332,6 +18182,9 @@ class EditarPolvoraModal(discord.ui.Modal, title="✏️ Editar Pólvora da Meta
         )
         self.add_item(self.novo_valor)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -16381,7 +18234,13 @@ class EditarPolvoraModal(discord.ui.Modal, title="✏️ Editar Pólvora da Meta
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarMetaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EditarMetaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, dados_atuais):
         super().__init__(timeout=300)
         self.user_id = user_id
@@ -16391,6 +18250,9 @@ class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
         self.add_item(self.dinheiro)
         self.add_item(self.saldo_excedente)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -16452,7 +18314,13 @@ class EditarMetaModal(discord.ui.Modal, title="✏️ Editar Meta"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarDinheiroAcoesModal (NOVO — editar dinheiro de ações do Soldado)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EditarDinheiroAcoesModal
+# ────────────────────────────────────────────────────────────────────────────────
 class EditarDinheiroAcoesModal(discord.ui.Modal, title="✏️ Editar Dinheiro de Ações"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, valor_atual):
         super().__init__(timeout=300)
         self.user_id = user_id
@@ -16466,6 +18334,9 @@ class EditarDinheiroAcoesModal(discord.ui.Modal, title="✏️ Editar Dinheiro d
         )
         self.add_item(self.novo_valor)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -16519,7 +18390,13 @@ class EditarDinheiroAcoesModal(discord.ui.Modal, title="✏️ Editar Dinheiro d
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarValorMetaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EditarValorMetaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, valor_atual):
         super().__init__(timeout=300)
         self.user_id = user_id
@@ -16533,6 +18410,9 @@ class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"
         )
         self.add_item(self.novo_valor)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -16581,7 +18461,13 @@ class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarHorasModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EditarHorasModal
+# ────────────────────────────────────────────────────────────────────────────────
 class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, segundos_atuais=0):
         super().__init__(timeout=300)
         self.user_id = user_id
@@ -16603,6 +18489,9 @@ class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
         self.add_item(self.acao)
         self.add_item(self.horas)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -16743,9 +18632,15 @@ class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CriarSalaParaMembroModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CriarSalaParaMembroModal
+# ────────────────────────────────────────────────────────────────────────────────
 class CriarSalaParaMembroModal(discord.ui.Modal, title="📂 Criar Sala para Membro"):
     membro_id = discord.ui.TextInput(label="🆔 ID do Membro", placeholder="Digite o ID do membro (ex: 123456789)", required=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -16786,10 +18681,19 @@ class CriarSalaParaMembroModal(discord.ui.Modal, title="📂 Criar Sala para Mem
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: SolicitarSalaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: SolicitarSalaView
+# ────────────────────────────────────────────────────────────────────────────────
 class SolicitarSalaView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: criar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="➕ Criar Sala para Membro", style=discord.ButtonStyle.success, custom_id="criar_sala_gerencia")
     async def criar(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -16803,6 +18707,9 @@ class SolicitarSalaView(discord.ui.View):
         modal = CriarSalaParaMembroModal()
         await interaction.response.send_modal(modal)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_solicitar_sala
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_solicitar_sala
 # ────────────────────────────────────────────────────────────────────────────────
@@ -16836,7 +18743,13 @@ async def enviar_painel_solicitar_sala():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfigurarMetaCargoSelect
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfigurarMetaCargoSelect
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfigurarMetaCargoSelect(discord.ui.Select):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         options = [
             discord.SelectOption(label="📦 Resp. Produção", value=str(CARGO_RESP_PRODUCAO_ID)),
@@ -16848,6 +18761,9 @@ class ConfigurarMetaCargoSelect(discord.ui.Select):
         ]
         super().__init__(placeholder="Selecione o cargo para configurar...", options=options)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         cargo_id = self.values[0]
         view = TipoMetaCargoView(cargo_id)
@@ -16856,23 +18772,38 @@ class ConfigurarMetaCargoSelect(discord.ui.Select):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: TipoMetaCargoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: TipoMetaCargoView
+# ────────────────────────────────────────────────────────────────────────────────
 class TipoMetaCargoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, cargo_id):
         super().__init__(timeout=120)
         self.cargo_id = cargo_id
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_dinheiro
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💰 Dinheiro", style=discord.ButtonStyle.success)
     async def btn_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
         await definir_config_cargo(self.cargo_id, "dinheiro")
         await interaction.response.send_message("✅ Cargo configurado para DINHEIRO.", ephemeral=True)
         await atualizar_todos_embeds_metas(interaction)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_polvora
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🧨 Pólvora", style=discord.ButtonStyle.primary)
     async def btn_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
         await definir_config_cargo(self.cargo_id, "polvora")
         await interaction.response.send_message("✅ Cargo configurado para PÓLVORA.", ephemeral=True)
         await atualizar_todos_embeds_metas(interaction)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_sem_meta
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🚫 Sem Meta", style=discord.ButtonStyle.danger)
     async def btn_sem_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
@@ -16899,18 +18830,27 @@ class TipoMetaCargoView(discord.ui.View):
         embed = discord.Embed(title="✅ CARGO ISENTO DE META", description=f"Cargo **{self.nome_cargo}** agora está **ISENTO**.\n\n👥 {atualizados} membros atualizados.", color=0x2ECC71)
         await interaction.followup.send(embed=embed, ephemeral=True) 
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_acoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🎯 Ações", style=discord.ButtonStyle.danger)
     async def btn_acoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         await definir_config_cargo(self.cargo_id, "acoes")
         await interaction.response.send_message("✅ Cargo configurado para AÇÕES.", ephemeral=True)
         await atualizar_todos_embeds_metas(interaction)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_ambos
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⚖️ Ambos", style=discord.ButtonStyle.secondary)
     async def btn_ambos(self, interaction: discord.Interaction, button: discord.ui.Button):
         await definir_config_cargo(self.cargo_id, "ambos")
         await interaction.response.send_message("✅ Cargo configurado para AMBOS.", ephemeral=True)
         await atualizar_todos_embeds_metas(interaction)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_todos_embeds_metas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_todos_embeds_metas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -16926,10 +18866,19 @@ async def atualizar_todos_embeds_metas(interaction):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfigurarMetaCargoButton
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfigurarMetaCargoButton
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfigurarMetaCargoButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(label="⚙️ Configurar Cargos", style=discord.ButtonStyle.secondary, custom_id="config_cargos_btn", emoji="⚙️", row=2)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         view = discord.ui.View(timeout=120)
         view.add_item(ConfigurarMetaCargoSelect())
@@ -16938,13 +18887,25 @@ class ConfigurarMetaCargoButton(discord.ui.Button):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioMetasButton
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioMetasButton
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioMetasButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(label="📊 Gerar Relatório de Metas", style=discord.ButtonStyle.success, custom_id="relatorio_metas_btn", emoji="📊")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(RelatorioMetasModal())
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioMetasModal
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioMetasModal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -16952,6 +18913,9 @@ class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
     data_inicio = discord.ui.TextInput(label="📅 Data INÍCIO", placeholder="Ex: 01/07/2026", required=True)
     data_fim = discord.ui.TextInput(label="📅 Data FIM", placeholder="Ex: 31/07/2026", required=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -16977,10 +18941,19 @@ class RelatorioMetasModal(discord.ui.Modal, title="📊 Relatório de Metas"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: FecharMetasAutomaticoButton
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: FecharMetasAutomaticoButton
+# ────────────────────────────────────────────────────────────────────────────────
 class FecharMetasAutomaticoButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(label="🔒 Fechar Metas (Automático - Semana Anterior)", style=discord.ButtonStyle.success, custom_id="fechar_metas_automatico_btn", emoji="🔒")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
@@ -17001,7 +18974,13 @@ class FecharMetasAutomaticoButton(discord.ui.Button):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: TrocarTipoMetaSelect
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: TrocarTipoMetaSelect
+# ────────────────────────────────────────────────────────────────────────────────
 class TrocarTipoMetaSelect(discord.ui.Select):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, tipo_atual):
         options = [
             discord.SelectOption(label="💰 Dinheiro Sujo", description="Meta contada em dinheiro (R$)", value="dinheiro", emoji="💰", default=(tipo_atual == "dinheiro")),
@@ -17009,6 +18988,9 @@ class TrocarTipoMetaSelect(discord.ui.Select):
         ]
         super().__init__(placeholder="🎯 Escolha o tipo da semana...", min_values=1, max_values=1, options=options)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         novo_tipo = self.values[0]
         tipo_atual = await buscar_tipo_meta_semana()
@@ -17066,7 +19048,13 @@ class TrocarTipoMetaSelect(discord.ui.Select):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: TrocarTipoMetaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: TrocarTipoMetaView
+# ────────────────────────────────────────────────────────────────────────────────
 class TrocarTipoMetaView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, tipo_atual):
         super().__init__(timeout=60)
         self.add_item(TrocarTipoMetaSelect(tipo_atual))
@@ -17074,7 +19062,13 @@ class TrocarTipoMetaView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: TrocarTipoMetaButton
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: TrocarTipoMetaButton
+# ────────────────────────────────────────────────────────────────────────────────
 class TrocarTipoMetaButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(
             label="🔄 Trocar Tipo de Meta",
@@ -17084,6 +19078,9 @@ class TrocarTipoMetaButton(discord.ui.Button):
             row=1
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(
@@ -17129,7 +19126,13 @@ class TrocarTipoMetaButton(discord.ui.Button):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: VerDividasButton
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: VerDividasButton
+# ────────────────────────────────────────────────────────────────────────────────
 class VerDividasButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(
             label="📋 Ver Dívidas",
@@ -17139,6 +19142,9 @@ class VerDividasButton(discord.ui.Button):
             row=1
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(
@@ -17211,7 +19217,13 @@ class VerDividasButton(discord.ui.Button):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RemoverDividaSelect
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RemoverDividaSelect
+# ────────────────────────────────────────────────────────────────────────────────
 class RemoverDividaSelect(discord.ui.Select):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, dividas, guild):
         options = []
         # Agrupa por usuário para não duplicar no menu
@@ -17241,6 +19253,9 @@ class RemoverDividaSelect(discord.ui.Select):
 
         super().__init__(placeholder="Selecione o membro para limpar as dívidas...", min_values=1, max_values=1, options=options)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         if self.values[0] == "none":
             await interaction.response.send_message("📭 Nenhuma dívida para remover.", ephemeral=True)
@@ -17269,7 +19284,13 @@ class RemoverDividaSelect(discord.ui.Select):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RemoverDividaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RemoverDividaView
+# ────────────────────────────────────────────────────────────────────────────────
 class RemoverDividaView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, dividas, guild):
         super().__init__(timeout=60)
         self.add_item(RemoverDividaSelect(dividas, guild))
@@ -17277,7 +19298,13 @@ class RemoverDividaView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: LimparDividasButton
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: LimparDividasButton
+# ────────────────────────────────────────────────────────────────────────────────
 class LimparDividasButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(
             label="🧹 Limpar Dívidas",
@@ -17287,6 +19314,9 @@ class LimparDividasButton(discord.ui.Button):
             row=2
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(
@@ -17310,7 +19340,13 @@ class LimparDividasButton(discord.ui.Button):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: DefinirMetaSoldadoButton (NOVO — define meta de soldado da semana)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: DefinirMetaSoldadoButton
+# ────────────────────────────────────────────────────────────────────────────────
 class DefinirMetaSoldadoButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(
             label="⚔️ Definir Meta Soldado",
@@ -17320,6 +19356,9 @@ class DefinirMetaSoldadoButton(discord.ui.Button):
             row=2
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(
@@ -17339,7 +19378,13 @@ class DefinirMetaSoldadoButton(discord.ui.Button):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: DefinirMetaSoldadoModal (NOVO)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: DefinirMetaSoldadoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class DefinirMetaSoldadoModal(discord.ui.Modal, title="⚔️ Definir Meta de Soldado"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, meta_atual):
         super().__init__(timeout=300)
         self.meta_atual = meta_atual
@@ -17352,6 +19397,9 @@ class DefinirMetaSoldadoModal(discord.ui.Modal, title="⚔️ Definir Meta de So
         )
         self.add_item(self.novo_valor)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -17415,7 +19463,13 @@ class DefinirMetaSoldadoModal(discord.ui.Modal, title="⚔️ Definir Meta de So
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioHorasButton
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioHorasButton
+# ────────────────────────────────────────────────────────────────────────────────
 class RelatorioHorasButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(
             label="⏰ Relatório de Horas (Mecânica)",
@@ -17424,6 +19478,9 @@ class RelatorioHorasButton(discord.ui.Button):
             emoji="⏰"
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
@@ -17435,6 +19492,9 @@ class RelatorioHorasButton(discord.ui.Button):
             return
         await interaction.response.send_modal(RelatorioHorasModal())
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RelatorioHorasModal
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RelatorioHorasModal
 # ────────────────────────────────────────────────────────────────────────────────
@@ -17452,6 +19512,9 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
         max_length=10
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -17488,6 +19551,9 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
             logger.error(f"❌ Erro no RelatorioHorasModal: {e}")
             await interaction.followup.send(f"❌ Erro ao gerar relatório: {str(e)[:150]}", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _gerar_relatorio_atual
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _gerar_relatorio_atual(self, interaction, inicio, fim, ini_str, fim_str):
         guild = bot.get_guild(GUILD_ID)
         if not guild:
@@ -17513,6 +19579,9 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
         mecanicos.sort(key=lambda x: x["segundos"], reverse=True)
         await self._enviar_txt(interaction, mecanicos, ini_str, fim_str, tipo="ATUAL")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _gerar_relatorio_historico
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _gerar_relatorio_historico(self, interaction, inicio, fim, ini_str, fim_str):
         pool = await get_pool()
         if not pool:
@@ -17553,6 +19622,9 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
             logger.error(f"❌ Erro ao buscar histórico de horas: {e}")
             await interaction.followup.send(f"❌ Erro: {str(e)[:150]}", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _enviar_txt
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _enviar_txt(self, interaction, mecanicos, ini_str, fim_str, tipo="ATUAL"):
         if not mecanicos:
             await interaction.followup.send("📭 Nenhum mecânico registrado no período.", ephemeral=True)
@@ -17618,6 +19690,9 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: resetar_horas_semana_manual
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: resetar_horas_semana_manual
+# ────────────────────────────────────────────────────────────────────────────────
 async def resetar_horas_semana_manual(guild):
     if not guild:
         return {"sucesso": False, "erro": "Guild não encontrada"}
@@ -17672,7 +19747,13 @@ async def resetar_horas_semana_manual(guild):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ResetarHorasSemanaButton
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ResetarHorasSemanaButton
+# ────────────────────────────────────────────────────────────────────────────────
 class ResetarHorasSemanaButton(discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(
             label="🔄 Resetar Horas da Semana",
@@ -17682,6 +19763,9 @@ class ResetarHorasSemanaButton(discord.ui.Button):
             row=1
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(
@@ -17747,10 +19831,19 @@ class ResetarHorasSemanaButton(discord.ui.Button):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarResetHorasView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarResetHorasView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarResetHorasView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=60)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(
         label="✅ CONFIRMAR RESET",
         style=discord.ButtonStyle.danger,
@@ -17797,6 +19890,9 @@ class ConfirmarResetHorasView(discord.ui.View):
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(
         label="❌ CANCELAR",
         style=discord.ButtonStyle.secondary,
@@ -17813,7 +19909,13 @@ class ConfirmarResetHorasView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarFechamentoAutomaticoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarFechamentoAutomaticoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarFechamentoAutomaticoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, data_inicio, data_fim, data_inicio_str, data_fim_str):
         super().__init__(timeout=60)
         self.data_inicio = data_inicio
@@ -17821,6 +19923,9 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
         self.data_inicio_str = data_inicio_str
         self.data_fim_str = data_fim_str
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✅ Confirmar Fechamento", style=discord.ButtonStyle.danger, custom_id="confirmar_fechamento_auto", emoji="✅")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -17886,10 +19991,16 @@ class ConfirmarFechamentoAutomaticoView(discord.ui.View):
             logger.error(f"❌ Erro ao fechar metas automático: {e}")
             await interaction.followup.send(f"❌ Erro ao fechar metas: {e}", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary, custom_id="cancelar_fechamento_auto", emoji="❌")
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Operação cancelada.", ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_historico_metas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_historico_metas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -17917,6 +20028,9 @@ async def buscar_historico_metas(data_inicio, data_fim):
         logger.error(f"❌ Erro ao buscar histórico: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: gerar_relatorio_bonificacao
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: gerar_relatorio_bonificacao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -17986,6 +20100,9 @@ async def gerar_relatorio_bonificacao(membros_com_bonificacao, semana_str, canal
         logger.error(f"❌ Erro ao gerar relatório de bonificação: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_dividas_prolongadas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_dividas_prolongadas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -18061,6 +20178,9 @@ async def verificar_dividas_prolongadas():
 # ALERTAS ESCALONADOS DE DÍVIDA (7 / 14 / 21 dias)
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _enviar_alerta_divida_membro
+# ────────────────────────────────────────────────────────────────────────────────
 async def _enviar_alerta_divida_membro(user_id, nivel, dividas_info):
     """
     Envia o embed de alerta no canal (sala) do próprio membro.
@@ -18165,6 +20285,9 @@ async def _enviar_alerta_divida_membro(user_id, nivel, dividas_info):
         return False
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _enviar_alerta_divida_gerencia
+# ────────────────────────────────────────────────────────────────────────────────
 async def _enviar_alerta_divida_gerencia(user_id, nivel, dividas_info):
     """Envia resumo na gerência (só níveis 2 e 3)."""
     try:
@@ -18228,6 +20351,9 @@ async def _enviar_alerta_divida_gerencia(user_id, nivel, dividas_info):
         return False
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: alertar_dividas_escalonado
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=12)
 async def alertar_dividas_escalonado():
     """
@@ -18333,6 +20459,9 @@ async def alertar_dividas_escalonado():
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: fechar_todas_metas (CHECA TOTAL COLETIVO DOS SOLDADOS)
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: fechar_todas_metas
 # ────────────────────────────────────────────────────────────────────────────────
 async def fechar_todas_metas(data_inicio, data_fim):
     pool = await get_pool()
@@ -18464,6 +20593,9 @@ async def fechar_todas_metas(data_inicio, data_fim):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: zerar_exibicao_metas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: zerar_exibicao_metas
+# ────────────────────────────────────────────────────────────────────────────────
 async def zerar_exibicao_metas():
     try:
         guild = bot.get_guild(GUILD_ID)
@@ -18551,6 +20683,9 @@ async def zerar_exibicao_metas():
         logger.error(f"❌ Erro ao zerar exibição das metas: {e}")
         return 0
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: gerar_relatorio_txt
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: gerar_relatorio_txt
 # ────────────────────────────────────────────────────────────────────────────────
@@ -18748,6 +20883,9 @@ async def gerar_relatorio_txt(interaction, data_inicio_str, data_fim_str, histor
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: gerar_relatorio_metas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: gerar_relatorio_metas
+# ────────────────────────────────────────────────────────────────────────────────
 async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, historico, titulo_extra="", horas_mecanicos=None):
     try:
         if not historico:
@@ -18767,6 +20905,9 @@ async def gerar_relatorio_metas(interaction, data_inicio_str, data_fim_str, hist
         logger.error(f"❌ Erro ao gerar relatório: {e}")
         await interaction.followup.send(f"❌ Erro ao gerar relatório: {str(e)}", ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_meta_concluida
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_meta_concluida
 # ────────────────────────────────────────────────────────────────────────────────
@@ -18816,6 +20957,9 @@ async def verificar_meta_concluida(user_id, valor_total):
             return False
     return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_avisos_quarta
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_avisos_quarta
 # ────────────────────────────────────────────────────────────────────────────────
@@ -18921,6 +21065,9 @@ async def verificar_avisos_quarta():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_avisos_quarta_forcado
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_avisos_quarta_forcado
+# ────────────────────────────────────────────────────────────────────────────────
 async def verificar_avisos_quarta_forcado():
     logger.info("📨 TESTE FORÇADO: Verificando avisos de quarta-feira...")
     pool = await get_pool()
@@ -19010,6 +21157,9 @@ async def verificar_avisos_quarta_forcado():
 # ────────────────────────────────────────────────────────────────────────────────
 # LOOP: verificar_avisos_meta
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_avisos_meta
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=1)
 async def verificar_avisos_meta():
     try:
@@ -19024,6 +21174,9 @@ async def verificar_avisos_meta():
 # ║  BLOCO 14 (FECHAMENTO) — FUNÇÃO FALTANTE                                   ║
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_relatorio_metas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_relatorio_metas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -19069,12 +21222,18 @@ async def enviar_painel_relatorio_metas():
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 14 — SISTEMA DE METAS 100% COMPLETO                           ║
 # ════════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CadastrarBlindadoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class CadastrarBlindadoModal(discord.ui.Modal, title="🚗 Cadastrar Blindado"):
     membro = discord.ui.TextInput(label="👤 Membro", placeholder="Nome ou @menção", required=True)
     passaporte = discord.ui.TextInput(label="🆔 Passaporte", placeholder="Ex: 123456", required=True)
     veiculo = discord.ui.TextInput(label="🚙 Tipo de Blindado", placeholder="Ex: Insurgent", required=True)
     valor = discord.ui.TextInput(label="💰 Valor da Taxa (R$)", placeholder="Ex: 500000", required=True)
     dias = discord.ui.TextInput(label="📅 Dias (Padrão 15)", placeholder="Ex: 15", required=False, default="15")
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -19092,11 +21251,20 @@ class CadastrarBlindadoModal(discord.ui.Modal, title="🚗 Cadastrar Blindado"):
         embed.add_field(name="📅 Vence em", value=data_vencimento.strftime('%d/%m/%Y'), inline=True)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RenovarBlindadoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RenovarBlindadoModal(discord.ui.Modal, title="💰 Dar Baixa / Renovar"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, blindado_id, mensagem_original):
         super().__init__(); self.blindado_id = blindado_id; self.mensagem_original = mensagem_original
     valor = discord.ui.TextInput(label="💰 Valor Pago (R$)", placeholder="Ex: 500000", required=True)
     dias = discord.ui.TextInput(label="📅 Dias Renovados", placeholder="Ex: 15", required=True, default="15")
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -19114,22 +21282,43 @@ class RenovarBlindadoModal(discord.ui.Modal, title="💰 Dar Baixa / Renovar"):
         await self.mensagem_original.edit(embed=embed, view=None)
         await interaction.followup.send(f"✅ Baixa dada! Renovado até {nova_data.strftime('%d/%m/%Y')}.", ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AlertaVencimentoView
+# ────────────────────────────────────────────────────────────────────────────────
 class AlertaVencimentoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, blindado_id): super().__init__(timeout=None); self.blindado_id = blindado_id
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: dar_baixa
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="💰 Dar Baixa / Pago", style=discord.ButtonStyle.success, custom_id="blindado_baixa")
     async def dar_baixa(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(r.id in [CARGO_DONO_MORRO_ID, CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Apenas a gerência pode dar baixa!", ephemeral=True)
         await interaction.response.send_modal(RenovarBlindadoModal(self.blindado_id, interaction.message))
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: PainelBlindadosView
+# ────────────────────────────────────────────────────────────────────────────────
 class PainelBlindadosView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self): super().__init__(timeout=None)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cadastrar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🚗 Cadastrar Blindado", style=discord.ButtonStyle.primary, custom_id="blindado_cadastrar", emoji="🚗")
     async def cadastrar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not any(r.id in [CARGO_01_ID, CARGO_02_ID, CARGO_GERENTE_ID] for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Apenas Gerentes/01/02 podem cadastrar!", ephemeral=True)
         await interaction.response.send_modal(CadastrarBlindadoModal())
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_blindados
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_blindados():
     canal = bot.get_channel(CANAL_BLINDADOS_CADASTRO_ID)
     if not canal: return
@@ -19137,6 +21326,9 @@ async def enviar_painel_blindados():
     embed.add_field(name="📖 COMO FUNCIONA:", value="**1️⃣** Clique em **🚗 Cadastrar Blindado**.\n**2️⃣** Informe membro, passaporte, tipo e valor.\n**3️⃣** O prazo padrão é de 15 dias.\n**4️⃣** Quando vencer, a liderança receberá um alerta.", inline=False)
     await enviar_ou_atualizar_painel("painel_blindados", CANAL_BLINDADOS_CADASTRO_ID, embed, PainelBlindadosView())
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_vencimento_blindados
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=1)
 async def verificar_vencimento_blindados():
     pool = await get_pool()
@@ -19179,6 +21371,9 @@ TIPOS_ORGANIZACAO = {
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_grupo_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_grupo_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def salvar_grupo_db(grupo_id, nome_org, lider_nome, lider_telefone, braco_nome, braco_telefone, produto, tipo_org="PISTA SEM PAINEL", observacoes=""):
     pool = await get_pool()
     if not pool:
@@ -19200,6 +21395,9 @@ async def salvar_grupo_db(grupo_id, nome_org, lider_nome, lider_telefone, braco_
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_grupo_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_grupo_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def carregar_grupo_db(grupo_id):
     pool = await get_pool()
     if not pool:
@@ -19214,6 +21412,9 @@ async def carregar_grupo_db(grupo_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_grupos_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_grupos_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def carregar_grupos_db():
     pool = await get_pool()
     if not pool:
@@ -19225,6 +21426,9 @@ async def carregar_grupos_db():
         logger.error(f"❌ ERRO: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_grupo_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_grupo_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -19250,6 +21454,9 @@ async def atualizar_grupo_db(grupo_id, nome_org, lider_nome, lider_telefone, bra
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: desativar_grupo_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: desativar_grupo_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def desativar_grupo_db(grupo_id):
     pool = await get_pool()
     if not pool:
@@ -19263,6 +21470,9 @@ async def desativar_grupo_db(grupo_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_compra_grupo_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_compra_grupo_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def registrar_compra_grupo_db(grupo_id, tipo, quantidade, valor):
     pool = await get_pool()
     if not pool:
@@ -19273,6 +21483,9 @@ async def registrar_compra_grupo_db(grupo_id, tipo, quantidade, valor):
     except Exception as e:
         logger.error(f"❌ ERRO: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_compras_grupo_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_compras_grupo_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -19295,6 +21508,9 @@ async def carregar_compras_grupo_db(grupo_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_grupo_por_organizacao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_grupo_por_organizacao
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_grupo_por_organizacao(nome_org):
     pool = await get_pool()
     if not pool:
@@ -19306,6 +21522,9 @@ async def buscar_grupo_por_organizacao(nome_org):
         logger.error(f"❌ Erro ao buscar grupo por organização: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: recriar_painel_grupos
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: recriar_painel_grupos
 # ────────────────────────────────────────────────────────────────────────────────
@@ -19333,6 +21552,9 @@ async def recriar_painel_grupos():
         logger.error(f"❌ ERRO AO RECRIAR PAINEL: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_grupos
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_grupos
 # ────────────────────────────────────────────────────────────────────────────────
@@ -19383,7 +21605,13 @@ async def enviar_painel_grupos():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: PainelGruposView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: PainelGruposView
+# ────────────────────────────────────────────────────────────────────────────────
 class PainelGruposView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, grupos, pagina_atual=0):
         super().__init__(timeout=None)
         self.grupos = grupos
@@ -19424,6 +21652,9 @@ class PainelGruposView(discord.ui.View):
         self.add_item(discord.ui.Button(label="🔄 ATUALIZAR", style=discord.ButtonStyle.secondary, custom_id="atualizar_padrao", emoji="🔄", row=2))
         self.add_item(discord.ui.Button(label="📋 RELATÓRIO", style=discord.ButtonStyle.success, custom_id="relatorio_grupos_btn", emoji="📋", row=2))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: select_callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def select_callback(self, interaction: discord.Interaction):
         try:
             grupo_id = interaction.data["values"][0]
@@ -19466,6 +21697,9 @@ class PainelGruposView(discord.ui.View):
             logger.error(f"❌ ERRO: {e}")
             await interaction.followup.send(f"❌ ERRO: {str(e)[:100]}", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         if custom_id == "novo_padrao":
@@ -19537,6 +21771,9 @@ class PainelGruposView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: recarregar_painel
+    # ────────────────────────────────────────────────────────────────────────────────
     async def recarregar_painel(self, interaction, nova_pagina):
         try:
             grupos = await carregar_grupos_db()
@@ -19569,7 +21806,13 @@ class PainelGruposView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: GrupoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: GrupoView
+# ────────────────────────────────────────────────────────────────────────────────
 class GrupoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, grupo_id, nome_org):
         super().__init__(timeout=300)
         self.grupo_id = grupo_id
@@ -19581,6 +21824,9 @@ class GrupoView(discord.ui.View):
         self.add_item(discord.ui.Button(label="📊 COMPRAS", style=discord.ButtonStyle.success, custom_id=f"compras_{self.uid}", emoji="📦"))
         self.add_item(discord.ui.Button(label="🚫 DESATIVAR", style=discord.ButtonStyle.danger, custom_id=f"desativar_{self.uid}", emoji="🚫", row=2))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: desativar
+    # ────────────────────────────────────────────────────────────────────────────────
     async def desativar(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -19590,6 +21836,9 @@ class GrupoView(discord.ui.View):
         view = ConfirmarDesativarView(self.grupo_id, self.nome_org)
         await interaction.response.send_message(f"⚠️ **DESATIVAR GRUPO {self.nome_org}?**\nO grupo não aparecerá mais no painel.", view=view, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         if custom_id.startswith(f"desativar_{self.uid}"):
@@ -19606,6 +21855,9 @@ class GrupoView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar
+    # ────────────────────────────────────────────────────────────────────────────────
     async def editar(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -19632,6 +21884,9 @@ class GrupoView(discord.ui.View):
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: excluir
+    # ────────────────────────────────────────────────────────────────────────────────
     async def excluir(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID] for r in interaction.user.roles)
@@ -19641,6 +21896,9 @@ class GrupoView(discord.ui.View):
         view = ConfirmarExcluirView(self.grupo_id, self.nome_org)
         await interaction.response.send_message(f"⚠️ **EXCLUIR {self.nome_org}?**", view=view, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: compras
+    # ────────────────────────────────────────────────────────────────────────────────
     async def compras(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         compras = await carregar_compras_grupo_db(self.grupo_id)
@@ -19662,7 +21920,13 @@ class GrupoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarExcluirView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarExcluirView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarExcluirView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, grupo_id, nome_org):
         super().__init__(timeout=60)
         self.grupo_id = grupo_id
@@ -19672,6 +21936,9 @@ class ConfirmarExcluirView(discord.ui.View):
         self.add_item(discord.ui.Button(label="✅ SIM", style=discord.ButtonStyle.danger, custom_id=f"conf_{self.uid}", emoji="✅"))
         self.add_item(discord.ui.Button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id=f"cancel_{self.uid}", emoji="❌"))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         if custom_id.startswith("conf_"):
@@ -19682,6 +21949,9 @@ class ConfirmarExcluirView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     async def confirmar(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -19718,13 +21988,22 @@ class ConfirmarExcluirView(discord.ui.View):
         await recriar_painel_grupos()
         await interaction.followup.send(f"✅ **GRUPO {self.nome_org} EXCLUÍDO!**", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     async def cancelar(self, interaction: discord.Interaction):
         await interaction.response.send_message("❌ CANCELADO.", ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarDesativarView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarDesativarView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarDesativarView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, grupo_id, nome_org):
         super().__init__(timeout=60)
         self.grupo_id = grupo_id
@@ -19734,6 +22013,9 @@ class ConfirmarDesativarView(discord.ui.View):
         self.add_item(discord.ui.Button(label="✅ SIM, DESATIVAR", style=discord.ButtonStyle.danger, custom_id=f"des_confirm_{self.uid}", emoji="✅"))
         self.add_item(discord.ui.Button(label="❌ CANCELAR", style=discord.ButtonStyle.secondary, custom_id=f"des_cancel_{self.uid}", emoji="❌"))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         if custom_id.startswith("des_confirm_"):
@@ -19744,6 +22026,9 @@ class ConfirmarDesativarView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     async def confirmar(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -19783,13 +22068,22 @@ class ConfirmarDesativarView(discord.ui.View):
         await recriar_painel_grupos()
         await interaction.followup.send(f"✅ **GRUPO {self.nome_org} DESATIVADO!**", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar
+    # ────────────────────────────────────────────────────────────────────────────────
     async def cancelar(self, interaction: discord.Interaction):
         await interaction.response.send_message("❌ CANCELADO.", ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EscolherTipoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EscolherTipoView
+# ────────────────────────────────────────────────────────────────────────────────
 class EscolherTipoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, acao, dados=None):
         super().__init__(timeout=120)
         self.acao = acao
@@ -19801,6 +22095,9 @@ class EscolherTipoView(discord.ui.View):
         self.add_item(discord.ui.Button(label="🔧 MECÂNICA ILEGAL", style=discord.ButtonStyle.primary, custom_id="tipo_mecanica", emoji="🔧"))
         self.add_item(discord.ui.Button(label="❌ CANCELAR", style=discord.ButtonStyle.danger, custom_id="cancelar_tipo", emoji="❌"))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction):
         custom_id = interaction.data.get("custom_id", "")
         if custom_id == "cancelar_tipo":
@@ -19832,7 +22129,13 @@ class EscolherTipoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarGrupoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistrarGrupoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, tipo_escolhido, produtos_texto):
         super().__init__(timeout=300)
         self.tipo_escolhido = tipo_escolhido
@@ -19847,6 +22150,9 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
         self.add_item(self.produto)
         self.add_item(self.tipo_org)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         lider_parts = self.lider.value.strip().split(" - ")
@@ -19896,7 +22202,13 @@ class RegistrarGrupoModal(discord.ui.Modal, title="📋 REGISTRAR NOVO GRUPO"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EditarGrupoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EditarGrupoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, grupo_id, dados, tipo_escolhido, produtos_texto):
         super().__init__(timeout=300)
         self.grupo_id = grupo_id
@@ -19919,6 +22231,9 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
         self.add_item(self.produto)
         self.add_item(self.tipo_org)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         lider_parts = self.lider.value.strip().split(" - ")
@@ -19977,12 +22292,18 @@ class EditarGrupoModal(discord.ui.Modal, title="✏️ EDITAR GRUPO"):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: limpar_mensagem_andamento
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: limpar_mensagem_andamento
+# ────────────────────────────────────────────────────────────────────────────────
 async def limpar_mensagem_andamento(user_id):
     if user_id in mensagens_em_andamento:
         mensagens_em_andamento.remove(user_id)
     if user_id in mensagens_timers:
         del mensagens_timers[user_id]
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: limpar_timer_mensagem
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: limpar_timer_mensagem
 # ────────────────────────────────────────────────────────────────────────────────
@@ -19993,11 +22314,20 @@ async def limpar_timer_mensagem(user_id, tempo_segundos):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CopiarMensagemView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CopiarMensagemView
+# ────────────────────────────────────────────────────────────────────────────────
 class CopiarMensagemView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, mensagem):
         super().__init__(timeout=120)
         self.mensagem = mensagem
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: copiar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📋 Copiar Mensagem", style=discord.ButtonStyle.success, custom_id="copiar_mensagem", emoji="📋")
     async def copiar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
@@ -20005,6 +22335,9 @@ class CopiarMensagemView(discord.ui.View):
             ephemeral=True
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: fechar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="❌ Fechar", style=discord.ButtonStyle.secondary, custom_id="fechar_copiar", emoji="❌")
     async def fechar(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -20015,11 +22348,20 @@ class CopiarMensagemView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MensagemPedidoProntoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MensagemPedidoProntoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class MensagemPedidoProntoModal(discord.ui.Modal, title="📦 Pedido Pronto"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
     nome = discord.ui.TextInput(label="👤 Nome do comprador", placeholder="Ex: Leon Winchester", required=True, max_length=100)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await limpar_mensagem_andamento(interaction.user.id)
         mensagem = f"""📝 PEDIDO PRONTO!
@@ -20040,6 +22382,9 @@ class MensagemPedidoProntoModal(discord.ui.Modal, title="📦 Pedido Pronto"):
         view = CopiarMensagemView(mensagem)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_error
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         await limpar_mensagem_andamento(interaction.user.id)
         logger.error(f"Erro no modal: {error}")
@@ -20047,11 +22392,20 @@ class MensagemPedidoProntoModal(discord.ui.Modal, title="📦 Pedido Pronto"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MensagemPedidoCanceladoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MensagemPedidoCanceladoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class MensagemPedidoCanceladoModal(discord.ui.Modal, title="❌ Pedido Cancelado"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
     nome = discord.ui.TextInput(label="👤 Nome do comprador", placeholder="Ex: Leon Winchester", required=True, max_length=100)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await limpar_mensagem_andamento(interaction.user.id)
         mensagem = f"""❌ PEDIDO CANCELADO
@@ -20071,11 +22425,20 @@ Caso ainda tenha interesse, será necessário realizar um novo pedido.
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MensagemPedidoFinalizadoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MensagemPedidoFinalizadoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class MensagemPedidoFinalizadoModal(discord.ui.Modal, title="✅ Pedido Finalizado"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
     nome = discord.ui.TextInput(label="👤 Nome do comprador", placeholder="Ex: Leon Winchester", required=True, max_length=100)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await limpar_mensagem_andamento(interaction.user.id)
         mensagem = f"""✅ PEDIDO FINALIZADO
@@ -20095,13 +22458,22 @@ Agradecemos pela preferência!
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MensagemPagamentoPendenteModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MensagemPagamentoPendenteModal
+# ────────────────────────────────────────────────────────────────────────────────
 class MensagemPagamentoPendenteModal(discord.ui.Modal, title="🔔 Pagamento Pendente"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
     nome = discord.ui.TextInput(label="👤 Nome do comprador", placeholder="Ex: Leon Winchester", required=True, max_length=100)
     valor = discord.ui.TextInput(label="💰 Valor pendente", placeholder="Ex: 50000", required=True, max_length=50)
     pix = discord.ui.TextInput(label="📱 Chave PIX", placeholder="Ex: 820 - Leon", required=True, max_length=100)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await limpar_mensagem_andamento(interaction.user.id)
         try:
@@ -20126,12 +22498,21 @@ class MensagemPagamentoPendenteModal(discord.ui.Modal, title="🔔 Pagamento Pen
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MensagemPendenciaPagamentoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MensagemPendenciaPagamentoModal
+# ────────────────────────────────────────────────────────────────────────────────
 class MensagemPendenciaPagamentoModal(discord.ui.Modal, title="💰 Pendência de Pagamento"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
     valor = discord.ui.TextInput(label="💰 Valor pendente", placeholder="Ex: 50000", required=True, max_length=50)
     pix = discord.ui.TextInput(label="📱 Chave PIX", placeholder="Ex: 820 - Leon", required=True, max_length=100)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await limpar_mensagem_andamento(interaction.user.id)
         try:
@@ -20158,12 +22539,21 @@ Obrigado!"""
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MensagemEntregaParcialModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MensagemEntregaParcialModal
+# ────────────────────────────────────────────────────────────────────────────────
 class MensagemEntregaParcialModal(discord.ui.Modal, title="📦 Entrega Parcial"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
     entrega_atual = discord.ui.TextInput(label="📦 Entrega atual", placeholder="Ex: 1", required=True, max_length=10)
     total_entregas = discord.ui.TextInput(label="📦 Total de entregas", placeholder="Ex: 3", required=True, max_length=10)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await limpar_mensagem_andamento(interaction.user.id)
         try:
@@ -20192,7 +22582,13 @@ class MensagemEntregaParcialModal(discord.ui.Modal, title="📦 Entrega Parcial"
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MensagemAvisoEntregaParcialModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MensagemAvisoEntregaParcialModal
+# ────────────────────────────────────────────────────────────────────────────────
 class MensagemAvisoEntregaParcialModal(discord.ui.Modal, title="🔔 Aviso Entrega Parcial"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
     entrega_atual = discord.ui.TextInput(label="📦 Entrega atual", placeholder="Ex: 1", required=True, max_length=10)
@@ -20200,6 +22596,9 @@ class MensagemAvisoEntregaParcialModal(discord.ui.Modal, title="🔔 Aviso Entre
     valor = discord.ui.TextInput(label="💰 Valor desta entrega", placeholder="Ex: 50000", required=True, max_length=50)
     pix = discord.ui.TextInput(label="📱 Chave PIX do entregador", placeholder="Ex: 820 - Leon", required=True, max_length=100)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await limpar_mensagem_andamento(interaction.user.id)
         try:
@@ -20227,12 +22626,21 @@ class MensagemAvisoEntregaParcialModal(discord.ui.Modal, title="🔔 Aviso Entre
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MensagemPendenciaProximaEntregaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MensagemPendenciaProximaEntregaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class MensagemPendenciaProximaEntregaModal(discord.ui.Modal, title="🔔 Pendência Próxima Entrega"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=300)
     valor = discord.ui.TextInput(label="💰 Valor pendente", placeholder="Ex: 50000", required=True, max_length=50)
     pix = discord.ui.TextInput(label="📱 Chave PIX", placeholder="Ex: 820 - Leon", required=True, max_length=100)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await limpar_mensagem_andamento(interaction.user.id)
         try:
@@ -20261,7 +22669,13 @@ Assim que o pagamento for identificado, daremos continuidade às próximas entre
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: SelecionarMensagemView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: SelecionarMensagemView
+# ────────────────────────────────────────────────────────────────────────────────
 class SelecionarMensagemView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=120)
         self.add_item(discord.ui.Button(label="📦 Pedido Pronto", style=discord.ButtonStyle.success, custom_id="msg_pedido_pronto", emoji="📦", row=0))
@@ -20274,6 +22688,9 @@ class SelecionarMensagemView(discord.ui.View):
         self.add_item(discord.ui.Button(label="🔔 Pendência Próxima Entrega", style=discord.ButtonStyle.danger, custom_id="msg_pendencia_proxima_entrega", emoji="🔔", row=2))
         self.add_item(discord.ui.Button(label="❌ Fechar", style=discord.ButtonStyle.secondary, custom_id="fechar_mensagens", emoji="❌", row=2))
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: interaction_check
+    # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         custom_id = interaction.data.get("custom_id", "")
         if custom_id == "fechar_mensagens":
@@ -20299,6 +22716,9 @@ class SelecionarMensagemView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: handle_pedido_pronto
+    # ────────────────────────────────────────────────────────────────────────────────
     async def handle_pedido_pronto(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
             await limpar_mensagem_andamento(interaction.user.id)
@@ -20307,6 +22727,9 @@ class SelecionarMensagemView(discord.ui.View):
         modal = MensagemPedidoProntoModal()
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: handle_pedido_cancelado
+    # ────────────────────────────────────────────────────────────────────────────────
     async def handle_pedido_cancelado(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
             await limpar_mensagem_andamento(interaction.user.id)
@@ -20315,6 +22738,9 @@ class SelecionarMensagemView(discord.ui.View):
         modal = MensagemPedidoCanceladoModal()
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: handle_pedido_finalizado
+    # ────────────────────────────────────────────────────────────────────────────────
     async def handle_pedido_finalizado(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
             await limpar_mensagem_andamento(interaction.user.id)
@@ -20323,6 +22749,9 @@ class SelecionarMensagemView(discord.ui.View):
         modal = MensagemPedidoFinalizadoModal()
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: handle_pagamento_pendente
+    # ────────────────────────────────────────────────────────────────────────────────
     async def handle_pagamento_pendente(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
             await limpar_mensagem_andamento(interaction.user.id)
@@ -20331,6 +22760,9 @@ class SelecionarMensagemView(discord.ui.View):
         modal = MensagemPagamentoPendenteModal()
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: handle_pendencia_pagamento
+    # ────────────────────────────────────────────────────────────────────────────────
     async def handle_pendencia_pagamento(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
             await limpar_mensagem_andamento(interaction.user.id)
@@ -20339,6 +22771,9 @@ class SelecionarMensagemView(discord.ui.View):
         modal = MensagemPendenciaPagamentoModal()
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: handle_entrega_parcial
+    # ────────────────────────────────────────────────────────────────────────────────
     async def handle_entrega_parcial(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
             await limpar_mensagem_andamento(interaction.user.id)
@@ -20347,6 +22782,9 @@ class SelecionarMensagemView(discord.ui.View):
         modal = MensagemEntregaParcialModal()
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: handle_aviso_entrega_parcial
+    # ────────────────────────────────────────────────────────────────────────────────
     async def handle_aviso_entrega_parcial(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
             await limpar_mensagem_andamento(interaction.user.id)
@@ -20355,6 +22793,9 @@ class SelecionarMensagemView(discord.ui.View):
         modal = MensagemAvisoEntregaParcialModal()
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: handle_pendencia_proxima_entrega
+    # ────────────────────────────────────────────────────────────────────────────────
     async def handle_pendencia_proxima_entrega(self, interaction: discord.Interaction):
         if interaction.user.id in mensagens_em_andamento:
             await limpar_mensagem_andamento(interaction.user.id)
@@ -20366,10 +22807,19 @@ class SelecionarMensagemView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MenuMensagensView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MenuMensagensView
+# ────────────────────────────────────────────────────────────────────────────────
 class MenuMensagensView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: gerar_mensagem
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📝 Gerar Mensagem", style=discord.ButtonStyle.primary, custom_id="gerar_mensagem_venda", emoji="📝")
     async def gerar_mensagem(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
@@ -20396,6 +22846,9 @@ class MenuMensagensView(discord.ui.View):
         view = SelecionarMensagemView()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_mensagens
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_mensagens
 # ────────────────────────────────────────────────────────────────────────────────
@@ -20448,6 +22901,9 @@ async def enviar_painel_mensagens():
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_message_delete
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_message_delete
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_message_delete(message):
     if message.author.bot:
@@ -20465,6 +22921,9 @@ async def on_message_delete(message):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_member_join
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_member_join
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_member_join(member):
@@ -20521,6 +22980,9 @@ async def on_member_join(member):
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_member_remove
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_member_remove
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_member_remove(member):
     if member.bot:
@@ -20551,6 +23013,9 @@ async def on_member_remove(member):
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_voice_state_update
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_voice_state_update
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_voice_state_update(member, before, after):
     canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
@@ -20572,6 +23037,9 @@ async def on_voice_state_update(member, before, after):
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_guild_channel_create
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_guild_channel_create
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_guild_channel_create(channel):
     canal_log = bot.get_channel(CANAL_LOGS_GERAIS_ID)
@@ -20585,6 +23053,9 @@ async def on_guild_channel_create(channel):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_guild_channel_delete
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_guild_channel_delete
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_guild_channel_delete(channel):
@@ -20614,6 +23085,9 @@ async def on_guild_channel_delete(channel):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_member_update
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_member_update
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_member_update(before, after):
@@ -20779,6 +23253,9 @@ async def on_member_update(before, after):
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_message_edit
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_message_edit
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_message_edit(before, after):
     if after.author.id == 1100419913971150868:
@@ -20872,6 +23349,9 @@ async def on_message_edit(before, after):
 # ────────────────────────────────────────────────────────────────────────────────
 # TASK: relatorio_semanal_polvoras
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: relatorio_semanal_polvoras
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=1)
 async def relatorio_semanal_polvoras():
     agora_br = agora()
@@ -20901,10 +23381,19 @@ async def relatorio_semanal_polvoras():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarPagamentoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarPagamentoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarPagamentoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="Confirmar pagamento", style=discord.ButtonStyle.success, custom_id="confirmar_pagamento")
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.message.edit(content=interaction.message.content + "\n\n✅ **PAGO**", view=None)
@@ -20912,6 +23401,9 @@ class ConfirmarPagamentoView(discord.ui.View):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # TASK: verificar_ausencias_expiradas
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_ausencias_expiradas
 # ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=60)
 async def verificar_ausencias_expiradas():
@@ -20930,6 +23422,9 @@ async def verificar_ausencias_expiradas():
 # ────────────────────────────────────────────────────────────────────────────────
 # TASK: limpar_lavagens_pendentes
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: limpar_lavagens_pendentes
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=15)
 async def limpar_lavagens_pendentes():
     global lavagens_pendentes
@@ -20939,6 +23434,9 @@ async def limpar_lavagens_pendentes():
 
 # ────────────────────────────────────────────────────────────────────────────────
 # TASK: limpar_cache_lives
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: limpar_cache_lives
 # ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=10)
 async def limpar_cache_lives():
@@ -20953,6 +23451,9 @@ async def limpar_cache_lives():
     if keys_to_remove:
         logger.info(f"🧹 Cache de lives limpo: {len(keys_to_remove)} entradas removidas")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: iniciar_tarefas_background
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: iniciar_tarefas_background
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21027,6 +23528,12 @@ async def iniciar_tarefas_background():
     try:
         if not verificar_vencimento_blindados.is_running(): verificar_vencimento_blindados.start()
     except Exception as e: logger.error(f"Erro loop blindados: {e}")
+    try:
+        if not backup_loop.is_running(): backup_loop.start()
+    except Exception as e: logger.error(f"Erro loop backup: {e}")
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: heartbeat_producao_loop
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: heartbeat_producao_loop
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21055,6 +23562,9 @@ async def heartbeat_producao_loop():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: limpeza_cache_periodica
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: limpeza_cache_periodica
+# ────────────────────────────────────────────────────────────────────────────────
 async def limpeza_cache_periodica():
     while True:
         try:
@@ -21065,6 +23575,9 @@ async def limpeza_cache_periodica():
         except Exception as e:
             logger.error(f"Erro na limpeza de cache: {e}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: edit_worker
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: edit_worker
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21085,6 +23598,9 @@ async def edit_worker():
             logger.error(f"Erro no edit_worker: {e}")
         edit_queue.task_done()
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: health_check_avancado
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: health_check_avancado
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21137,7 +23653,13 @@ async def health_check_avancado():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: setup_status
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: setup_status
+# ────────────────────────────────────────────────────────────────────────────────
 async def setup_status():
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: get_stats
+    # ────────────────────────────────────────────────────────────────────────────────
     async def get_stats():
         return {
             "membros": len([m for m in bot.get_guild(GUILD_ID).members if not m.bot]) if bot.get_guild(GUILD_ID) else 0,
@@ -21147,6 +23669,9 @@ async def setup_status():
             "estoque_sub": (await carregar_estoque()).get('SUB', 0),
         }
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: atualizar_status
+    # ────────────────────────────────────────────────────────────────────────────────
     @tasks.loop(minutes=3)
     async def atualizar_status():
         try:
@@ -21170,6 +23695,9 @@ async def setup_status():
 # RESUMO DIÁRIO COM IA (GROQ / LLAMA 3.3)
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: gerar_resumo_ia
+# ────────────────────────────────────────────────────────────────────────────────
 async def gerar_resumo_ia(logs: list, data_str: str = None) -> str:
     """
     Usa Groq (grátis, super rápido) para resumir os logs do dia em PT-BR.
@@ -21261,6 +23789,9 @@ LOGS:
         return f"⚠️ Erro ao gerar resumo: {str(e)[:150]}"
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _executar_resumo_ia
+# ────────────────────────────────────────────────────────────────────────────────
 async def _executar_resumo_ia(data_inicio=None):
     """
     Gera o arquivo .txt completo e envia um resumo compacto para a IA.
@@ -21377,6 +23908,9 @@ FORMATO EXATO:
         return f"⚠️ Erro: {str(e)[:150]}"
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_resumo_diario_ia
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=5)
 async def enviar_resumo_diario_ia():
     """
@@ -21447,6 +23981,9 @@ async def enviar_resumo_diario_ia():
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !testar_resumo_ia
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_testar_resumo_ia
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="testar_resumo_ia")
 @commands.has_permissions(administrator=True)
 async def cmd_testar_resumo_ia(ctx):
@@ -21460,6 +23997,9 @@ async def cmd_testar_resumo_ia(ctx):
     # Pergunta se quer só HOJE ou últimos 7 dias
     view = discord.ui.View(timeout=60)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: responder_hoje
+    # ────────────────────────────────────────────────────────────────────────────────
     async def responder_hoje(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
         resumo = await _executar_resumo_ia()
@@ -21467,6 +24007,9 @@ async def cmd_testar_resumo_ia(ctx):
             await interaction.followup.send(resumo[i:i + 1900])
             await asyncio.sleep(0.5)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: responder_7dias
+    # ────────────────────────────────────────────────────────────────────────────────
     async def responder_7dias(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
         inicio = agora() - timedelta(days=7)
@@ -21497,6 +24040,9 @@ async def cmd_testar_resumo_ia(ctx):
 # ║  BLOCO 19 — SISTEMA DE AUDITORIA                                            ║
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AuditAcao
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AuditAcao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21540,6 +24086,9 @@ class AuditAcao:
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AuditModulo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AuditModulo
+# ────────────────────────────────────────────────────────────────────────────────
 class AuditModulo:
     METAS = "metas"
     HORAS = "horas"
@@ -21551,6 +24100,9 @@ class AuditModulo:
     PRODUCAO = "producao"
     BAU = "bau"
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _audit_emoji_acao
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: _audit_emoji_acao
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21567,6 +24119,9 @@ def _audit_emoji_acao(acao: str) -> str:
             return emoji
     return "📋"
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _audit_cor_modulo
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: _audit_cor_modulo
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21587,6 +24142,9 @@ def _audit_cor_modulo(modulo: str) -> int:
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: _audit_nome_modulo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _audit_nome_modulo
+# ────────────────────────────────────────────────────────────────────────────────
 def _audit_nome_modulo(modulo: str) -> str:
     mapa = {
         "metas": "📊 Metas",
@@ -21604,9 +24162,15 @@ def _audit_nome_modulo(modulo: str) -> str:
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: _audit_nome_acao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _audit_nome_acao
+# ────────────────────────────────────────────────────────────────────────────────
 def _audit_nome_acao(acao: str) -> str:
     return acao.replace("_", " ").title()
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _audit_formatar_valor
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: _audit_formatar_valor
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21628,6 +24192,9 @@ def _audit_formatar_valor(chave: str, valor):
         return f"{valor:,}".replace(",", ".")
     return str(valor)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _audit_gerar_diff
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: _audit_gerar_diff
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21663,6 +24230,9 @@ def _audit_gerar_diff(antes: dict, depois: dict) -> str:
 
     return "\n".join(linhas)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_auditoria
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_auditoria
 # ────────────────────────────────────────────────────────────────────────────────
@@ -21787,6 +24357,9 @@ async def registrar_auditoria(
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_auditoria
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_auditoria
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_auditoria(
     user_id: str = None,
     autor_id: str = None,
@@ -21859,6 +24432,9 @@ async def buscar_auditoria(
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: estatisticas_auditoria
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: estatisticas_auditoria
+# ────────────────────────────────────────────────────────────────────────────────
 async def estatisticas_auditoria(dias: int = 7):
     pool = await get_pool()
     if not pool:
@@ -21908,6 +24484,9 @@ async def estatisticas_auditoria(dias: int = 7):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AuditoriaUsuarioModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AuditoriaUsuarioModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AuditoriaUsuarioModal(discord.ui.Modal, title="👤 AUDITORIA POR USUÁRIO"):
     alvo = discord.ui.TextInput(
         label="👤 ID do usuário ou @menção",
@@ -21916,6 +24495,9 @@ class AuditoriaUsuarioModal(discord.ui.Modal, title="👤 AUDITORIA POR USUÁRIO
         max_length=100
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         alvo_str = self.alvo.value.strip()
@@ -21975,6 +24557,9 @@ class AuditoriaUsuarioModal(discord.ui.Modal, title="👤 AUDITORIA POR USUÁRIO
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AuditoriaBuscarModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AuditoriaBuscarModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AuditoriaBuscarModal(discord.ui.Modal, title="🔎 BUSCAR NA AUDITORIA"):
     termo = discord.ui.TextInput(
         label="🔍 Termo de busca",
@@ -21983,6 +24568,9 @@ class AuditoriaBuscarModal(discord.ui.Modal, title="🔎 BUSCAR NA AUDITORIA"):
         max_length=100
     )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         termo = self.termo.value.strip()
@@ -22019,10 +24607,19 @@ class AuditoriaBuscarModal(discord.ui.Modal, title="🔎 BUSCAR NA AUDITORIA"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: EscolherModuloView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EscolherModuloView
+# ────────────────────────────────────────────────────────────────────────────────
 class EscolherModuloView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=60)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _mostrar
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _mostrar(self, interaction: discord.Interaction, modulo: str, nome: str):
         await interaction.response.defer(ephemeral=True)
         registros = await buscar_auditoria(modulo=modulo, limite=20)
@@ -22049,30 +24646,51 @@ class EscolherModuloView(discord.ui.View):
         embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: m_metas
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📊 Metas", style=discord.ButtonStyle.primary, custom_id="audit_mod_metas", emoji="📊")
     async def m_metas(self, interaction, button):
         await self._mostrar(interaction, "metas", "📊 Metas")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: m_horas
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⏰ Horas", style=discord.ButtonStyle.primary, custom_id="audit_mod_horas", emoji="⏰")
     async def m_horas(self, interaction, button):
         await self._mostrar(interaction, "horas", "⏰ Horas (Mecânica)")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: m_vendas
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🛒 Vendas", style=discord.ButtonStyle.primary, custom_id="audit_mod_vendas", emoji="🛒")
     async def m_vendas(self, interaction, button):
         await self._mostrar(interaction, "vendas", "🛒 Vendas")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: m_estoque
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📦 Estoque", style=discord.ButtonStyle.primary, custom_id="audit_mod_estoque", emoji="📦")
     async def m_estoque(self, interaction, button):
         await self._mostrar(interaction, "estoque", "📦 Estoque")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: m_grupos
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="👥 Grupos", style=discord.ButtonStyle.primary, custom_id="audit_mod_grupos", emoji="👥")
     async def m_grupos(self, interaction, button):
         await self._mostrar(interaction, "grupos", "👥 Grupos")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: m_acoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⚔️ Ações", style=discord.ButtonStyle.primary, custom_id="audit_mod_acoes", emoji="⚔️")
     async def m_acoes(self, interaction, button):
         await self._mostrar(interaction, "acoes", "⚔️ Ações")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: m_producao
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🏭 Produção", style=discord.ButtonStyle.primary, custom_id="audit_mod_producao", emoji="🏭")
     async def m_producao(self, interaction, button):
         await self._mostrar(interaction, "producao", "🏭 Produção")
@@ -22080,10 +24698,19 @@ class EscolherModuloView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: PainelAuditoriaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: PainelAuditoriaView
+# ────────────────────────────────────────────────────────────────────────────────
 class PainelAuditoriaView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _checar_permissao
+    # ────────────────────────────────────────────────────────────────────────────────
     async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
         is_admin = interaction.user.guild_permissions.administrator
         is_gerente = any(
@@ -22098,6 +24725,9 @@ class PainelAuditoriaView(discord.ui.View):
             return False
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_recente
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(
         label="🔍 Últimas Ações",
         style=discord.ButtonStyle.primary,
@@ -22135,6 +24765,9 @@ class PainelAuditoriaView(discord.ui.View):
         embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_usuario
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(
         label="👤 Por Usuário",
         style=discord.ButtonStyle.primary,
@@ -22148,6 +24781,9 @@ class PainelAuditoriaView(discord.ui.View):
         modal = AuditoriaUsuarioModal()
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_modulo
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(
         label="🎯 Por Módulo",
         style=discord.ButtonStyle.primary,
@@ -22165,6 +24801,9 @@ class PainelAuditoriaView(discord.ui.View):
             ephemeral=True
         )
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_stats
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(
         label="📊 Estatísticas",
         style=discord.ButtonStyle.success,
@@ -22212,6 +24851,9 @@ class PainelAuditoriaView(discord.ui.View):
         embed.set_footer(text=f"🛡 Vida Rasa 442 • {agora().strftime('%d/%m/%Y %H:%M:%S')}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_buscar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(
         label="🔎 Buscar",
         style=discord.ButtonStyle.secondary,
@@ -22225,6 +24867,9 @@ class PainelAuditoriaView(discord.ui.View):
         modal = AuditoriaBuscarModal()
         await interaction.response.send_modal(modal)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_atualizar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(
         label="🔄 Atualizar",
         style=discord.ButtonStyle.secondary,
@@ -22239,6 +24884,9 @@ class PainelAuditoriaView(discord.ui.View):
         await enviar_painel_auditoria()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: btn_indicacoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="📋 Histórico de Indicações", style=discord.ButtonStyle.primary, custom_id="audit_indicacoes_btn", emoji="📋", row=2)
     async def btn_indicacoes(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._checar_permissao(interaction):
@@ -22284,6 +24932,9 @@ class PainelAuditoriaView(discord.ui.View):
 
         await interaction.followup.send(content="📎 **Arquivo de Histórico de Indicações gerado com sucesso!**", file=arquivo, ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_auditoria
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_auditoria
 # ────────────────────────────────────────────────────────────────────────────────
@@ -22335,6 +24986,9 @@ CARGOS_FACCAO = [
 ]
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _registrar_atividade
+# ────────────────────────────────────────────────────────────────────────────────
 async def _registrar_atividade(user_id, tipo):
     """
     Atualiza o timestamp da última atividade do membro.
@@ -22373,6 +25027,9 @@ async def _registrar_atividade(user_id, tipo):
         logger.error(f"❌ Erro ao registrar atividade ({tipo}) de {user_id}: {e}")
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: calcular_inatividade
+# ────────────────────────────────────────────────────────────────────────────────
 async def calcular_inatividade(dias_minimos: int = 7):
     """
     Retorna dict com membros classificados por nível de inatividade.
@@ -22548,6 +25205,9 @@ async def calcular_inatividade(dias_minimos: int = 7):
     return resultado
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: gerar_embed_inatividade
+# ────────────────────────────────────────────────────────────────────────────────
 async def gerar_embed_inatividade(resultado, dias_minimos=7):
     """Gera o embed do relatório de inatividade."""
     if not resultado:
@@ -22668,6 +25328,9 @@ async def gerar_embed_inatividade(resultado, dias_minimos=7):
     )
     return embed
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_inatividade_semanal
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=24)
 async def verificar_inatividade_semanal():
     """Toda segunda-feira às 10h envia o relatório na gerência."""
@@ -22714,6 +25377,9 @@ async def verificar_inatividade_semanal():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_parcelas_diario
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_parcelas_diario
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=24)
 async def verificar_parcelas_diario():
     try:
@@ -22722,6 +25388,9 @@ async def verificar_parcelas_diario():
         logger.error(f"❌ Erro no loop de parcelas: {e}")
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: relatorio_frequencia_semanal
+# ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=168) # Roda uma vez por semana (168 horas)
 async def relatorio_frequencia_semanal():
     """Envia um resumo de inativos para o canal de controle de frequência."""
@@ -22782,6 +25451,9 @@ async def relatorio_frequencia_semanal():
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !inatividade
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_inatividade
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="inatividade")
 @commands.has_permissions(administrator=True)
 async def cmd_inatividade(ctx, dias: int = 7):
@@ -22819,6 +25491,9 @@ async def cmd_inatividade(ctx, dias: int = 7):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_painel_ultimo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_painel_ultimo
+# ────────────────────────────────────────────────────────────────────────────────
 async def registrar_painel_ultimo(nome, canal_id, mensagem_id):
     pool = await get_pool()
     if not pool:
@@ -22841,6 +25516,9 @@ async def registrar_painel_ultimo(nome, canal_id, mensagem_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_paineis_do_canal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_paineis_do_canal
+# ────────────────────────────────────────────────────────────────────────────────
 async def buscar_paineis_do_canal(canal_id):
     pool = await get_pool()
     if not pool:
@@ -22855,6 +25533,9 @@ async def buscar_paineis_do_canal(canal_id):
         logger.error(f"❌ Erro ao buscar painéis do canal: {e}")
         return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: mover_painel_para_final
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: mover_painel_para_final
 # ────────────────────────────────────────────────────────────────────────────────
@@ -22898,6 +25579,9 @@ async def mover_painel_para_final(nome, canal, mensagem_id_antiga):
 # ────────────────────────────────────────────────────────────────────────────────
 avisos_painel = set()
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_ou_atualizar_painel
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_ou_atualizar_painel
 # ────────────────────────────────────────────────────────────────────────────────
@@ -22948,7 +25632,13 @@ async def enviar_ou_atualizar_painel(nome, canal_id, embed, view):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: BotaoPersistente
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: BotaoPersistente
+# ────────────────────────────────────────────────────────────────────────────────
 class BotaoPersistente:
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: salvar_botao
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     async def salvar_botao(mensagem_id, canal_id, tipo, dados=None):
         pool = await get_pool()
@@ -22964,6 +25654,9 @@ class BotaoPersistente:
         except Exception as e:
             logger.error(f"❌ Erro ao salvar botão persistente: {e}")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: restaurar_botoes
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     async def restaurar_botoes():
         pool = await get_pool()
@@ -23023,6 +25716,9 @@ class BotaoPersistente:
         except Exception as e:
             logger.error(f"❌ Erro ao restaurar botões: {e}")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: criar_view
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     def criar_view(tipo, dados, canal_id=None):
         if tipo == "meta":
@@ -23059,6 +25755,9 @@ class BotaoPersistente:
         return None
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_e_mover_paineis (DELETA + RECRIA IMEDIATAMENTE)
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_e_mover_paineis
 # ────────────────────────────────────────────────────────────────────────────────
 async def verificar_e_mover_paineis(canal):
     try:
@@ -23130,6 +25829,9 @@ async def verificar_e_mover_paineis(canal):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_view_por_painel (ISENTO TAMBÉM TEM VIEW)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_view_por_painel
+# ────────────────────────────────────────────────────────────────────────────────
 def criar_view_por_painel(nome):
     if nome.startswith("meta_v2_"):
         try:
@@ -23156,11 +25858,11 @@ def criar_view_por_painel(nome):
     elif nome == "painel_lives":
         return PainelLivesUnicoView()
     elif nome == "painel_polvora":
-        return PolvoraView()
+        return None  # Não existe PolvoraView; evita falha ao restaurar painel antigo
     elif nome == "painel_bau":
-        return BauView()
+        return BauUnificadoView()
     elif nome == "painel_armas":
-        return ArmasView()
+        return BauUnificadoView()  # Armas integram o baú unificado
     elif nome == "painel_vendas":
         return CalculadoraView()
     elif nome == "painel_fabricacao":
@@ -23212,7 +25914,13 @@ def criar_view_por_painel(nome):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AdvertenciaModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdvertenciaModal
+# ────────────────────────────────────────────────────────────────────────────────
 class AdvertenciaModal(discord.ui.Modal, title="⚠️ Aplicar Advertência"):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, membro: discord.Member):
         super().__init__(timeout=300)
         self.membro = membro
@@ -23226,6 +25934,9 @@ class AdvertenciaModal(discord.ui.Modal, title="⚠️ Aplicar Advertência"):
         )
         self.add_item(self.motivo)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -23313,7 +26024,13 @@ class AdvertenciaModal(discord.ui.Modal, title="⚠️ Aplicar Advertência"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AdvertenciaSelectView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AdvertenciaSelectView
+# ────────────────────────────────────────────────────────────────────────────────
 class AdvertenciaSelectView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, membros):
         super().__init__(timeout=180)
         
@@ -23339,6 +26056,9 @@ class AdvertenciaSelectView(discord.ui.View):
         self.select.callback = self.select_callback
         self.add_item(self.select)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: select_callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def select_callback(self, interaction: discord.Interaction):
         if self.select.values[0] == "none":
             await interaction.response.send_message("❌ Nenhum membro selecionado.", ephemeral=True)
@@ -23360,10 +26080,19 @@ class AdvertenciaSelectView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: PainelAdvertenciasView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: PainelAdvertenciasView
+# ────────────────────────────────────────────────────────────────────────────────
 class PainelAdvertenciasView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: aplicar_adv
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⚠️ Aplicar Advertência", style=discord.ButtonStyle.danger, custom_id="btn_aplicar_adv", emoji="⚠️", row=0)
     async def aplicar_adv(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -23424,6 +26153,9 @@ class PainelAdvertenciasView(discord.ui.View):
         view_grupo = discord.ui.View(timeout=180)
         select_grupo = discord.ui.Select(placeholder="📂 Selecione a categoria do membro...", options=options)
         
+        # ────────────────────────────────────────────────────────────────────────────────
+        # MÉTODO: callback_grupo
+        # ────────────────────────────────────────────────────────────────────────────────
         async def callback_grupo(inter: discord.Interaction):
             escolha = select_grupo.values[0]
             membros_do_grupo = grupos.get(escolha, [])
@@ -23450,6 +26182,9 @@ class PainelAdvertenciasView(discord.ui.View):
         await interaction.followup.send("Selecione a categoria para filtrar os membros:", view=view_grupo, ephemeral=True)
 
     # ─── BOTÃO DE REMOVER ADV ───
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: remover_adv
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🗑️ Remover Advertência", style=discord.ButtonStyle.success, custom_id="btn_remover_adv", emoji="🗑️", row=0)
     async def remover_adv(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -23484,6 +26219,9 @@ class PainelAdvertenciasView(discord.ui.View):
         view = RemoverAdvertenciaView(membros_com_adv)
         await interaction.followup.send("Selecione o membro que deseja remover a advertência:", view=view, ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: atualizar_painel
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔄 Atualizar Painel", style=discord.ButtonStyle.secondary, custom_id="btn_atualizar_adv", emoji="🔄", row=1)
     async def atualizar_painel(self, interaction: discord.Interaction, button: discord.ui.Button):
         is_admin = interaction.user.guild_permissions.administrator
@@ -23496,6 +26234,9 @@ class PainelAdvertenciasView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await enviar_painel_advertencias()
         await interaction.followup.send("✅ Painel atualizado!", ephemeral=True)
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_advertencias
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_advertencias
 # ────────────────────────────────────────────────────────────────────────────────
@@ -23550,7 +26291,13 @@ async def enviar_painel_advertencias():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RemoverAdvertenciaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RemoverAdvertenciaView
+# ────────────────────────────────────────────────────────────────────────────────
 class RemoverAdvertenciaView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, membros):
         super().__init__(timeout=180)
         
@@ -23572,6 +26319,9 @@ class RemoverAdvertenciaView(discord.ui.View):
         self.select.callback = self.select_callback
         self.add_item(self.select)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: select_callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def select_callback(self, interaction: discord.Interaction):
         user_id = self.select.values[0]
         pool = await get_pool()
@@ -23613,7 +26363,13 @@ class RemoverAdvertenciaView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarRemocaoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarRemocaoView
+# ────────────────────────────────────────────────────────────────────────────────
 class ConfirmarRemocaoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, advs):
         super().__init__(timeout=180)
         self.user_id = user_id
@@ -23631,6 +26387,9 @@ class ConfirmarRemocaoView(discord.ui.View):
         self.select.callback = self.select_callback
         self.add_item(self.select)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: select_callback
+    # ────────────────────────────────────────────────────────────────────────────────
     async def select_callback(self, interaction: discord.Interaction):
         adv_id = self.select.values[0]
         pool = await get_pool()
@@ -23687,22 +26446,40 @@ class ConfirmarRemocaoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: Metricas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: Metricas
+# ────────────────────────────────────────────────────────────────────────────────
 class Metricas:
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         self.comandos_executados = 0
         self.erros = 0
         self.requests_api = 0
         self.start_time = time_module.time()
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: incrementar_comando
+    # ────────────────────────────────────────────────────────────────────────────────
     def incrementar_comando(self):
         self.comandos_executados += 1
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: incrementar_erro
+    # ────────────────────────────────────────────────────────────────────────────────
     def incrementar_erro(self):
         self.erros += 1
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: incrementar_api
+    # ────────────────────────────────────────────────────────────────────────────────
     def incrementar_api(self):
         self.requests_api += 1
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: get_uptime
+    # ────────────────────────────────────────────────────────────────────────────────
     def get_uptime(self):
         return time_module.time() - self.start_time
 
@@ -23713,6 +26490,9 @@ metricas = Metricas()
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !status
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_status
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="status")
 async def cmd_status(ctx):
@@ -23744,6 +26524,9 @@ async def cmd_status(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !dashboard
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_dashboard
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="dashboard")
 async def cmd_dashboard(ctx):
@@ -23800,6 +26583,9 @@ async def cmd_dashboard(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !criar_adv (Força a criação do painel de advertências)
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_criar_adv
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="criar_adv")
 @commands.has_permissions(administrator=True)
 async def cmd_criar_adv(ctx):
@@ -23832,6 +26618,9 @@ async def cmd_criar_adv(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !estoque
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_ver_estoque
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="estoque")
 async def cmd_ver_estoque(ctx):
     estoque_municoes = await carregar_estoque()
@@ -23842,6 +26631,9 @@ async def cmd_ver_estoque(ctx):
     await ctx.send(embed=embed)
 
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_limpar_entregas_fantasma
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="limpar_entregas_fantasma")
 @commands.has_permissions(administrator=True)
 async def cmd_limpar_entregas_fantasma(ctx):
@@ -23856,6 +26648,9 @@ async def cmd_limpar_entregas_fantasma(ctx):
         """)
     await ctx.send("✅ Entregas antigas (ID < 1046) foram marcadas como entregues e pagas no banco. Verifique o painel agora.")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_forcar_baixa_pedido
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="forcar_baixa_pedido")
 @commands.has_permissions(administrator=True)
 async def cmd_forcar_baixa_pedido(ctx, pedido_numero: int):
@@ -23896,6 +26691,9 @@ async def cmd_forcar_baixa_pedido(ctx, pedido_numero: int):
         await ctx.send(f"❌ Erro ao forçar baixa: `{str(e)[:150]}`")
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !atualizar_lancamentos
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_atualizar_lancamentos
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="atualizar_lancamentos")
 @commands.has_permissions(administrator=True)
@@ -23975,6 +26773,9 @@ async def cmd_atualizar_lancamentos(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !historico_producao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_historico_producao
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="historico_producao")
 async def cmd_historico_producao(ctx, limite: int = 10):
     pool = await get_pool()
@@ -24000,6 +26801,9 @@ async def cmd_historico_producao(ctx, limite: int = 10):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !historico_vendas_estoque
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_historico_vendas_estoque
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="historico_vendas_estoque")
 async def cmd_historico_vendas_estoque(ctx, limite: int = 10):
@@ -24027,6 +26831,9 @@ async def cmd_historico_vendas_estoque(ctx, limite: int = 10):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !ausentes
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: listar_ausentes
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="ausentes")
 @commands.has_permissions(administrator=True)
 async def listar_ausentes(ctx):
@@ -24046,6 +26853,9 @@ async def listar_ausentes(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !remover_ausencia
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: remover_ausencia_cmd
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="remover_ausencia")
 async def remover_ausencia_cmd(ctx, member: discord.Member):
     if not pode_remover_ausencia(ctx.author):
@@ -24064,6 +26874,9 @@ async def remover_ausencia_cmd(ctx, member: discord.Member):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !testar_live
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: testar_live_cmd
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="testar_live")
 async def testar_live_cmd(ctx, plataforma: str = None, canal: str = None):
@@ -24096,6 +26909,9 @@ async def testar_live_cmd(ctx, plataforma: str = None, canal: str = None):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !listar_lives
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: listar_lives_cmd
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="listar_lives")
 async def listar_lives_cmd(ctx):
     lives = await carregar_lives_db()
@@ -24122,6 +26938,9 @@ async def listar_lives_cmd(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !atualizar_paineis_metas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_atualizar_paineis_metas
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="atualizar_paineis_metas")
 @commands.has_permissions(administrator=True)
 async def cmd_atualizar_paineis_metas(ctx):
@@ -24146,6 +26965,9 @@ async def cmd_atualizar_paineis_metas(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !atualizar_metas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_atualizar_metas
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="atualizar_metas")
 @commands.has_permissions(administrator=True)
 async def cmd_atualizar_metas(ctx):
@@ -24164,6 +26986,9 @@ async def cmd_atualizar_metas(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !definir_meta
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_definir_meta
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="definir_meta")
 @commands.has_permissions(administrator=True)
@@ -24228,6 +27053,9 @@ async def cmd_definir_meta(ctx, tipo: str = None):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !ver_dividas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_ver_dividas
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="ver_dividas")
 @commands.has_permissions(administrator=True)
 async def cmd_ver_dividas(ctx):
@@ -24288,6 +27116,9 @@ async def cmd_ver_dividas(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !relatorio_bonificacao
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_relatorio_bonificacao
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="relatorio_bonificacao")
 @commands.has_permissions(administrator=True)
 async def cmd_relatorio_bonificacao(ctx):
@@ -24345,6 +27176,9 @@ async def cmd_relatorio_bonificacao(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !recriar_metas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_recriar_metas
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="recriar_metas")
 @commands.has_permissions(administrator=True)
 async def cmd_recriar_metas(ctx):
@@ -24367,6 +27201,9 @@ async def cmd_recriar_metas(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !recriar_meta
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_recriar_meta
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="recriar_meta")
 @commands.has_permissions(administrator=True)
 async def cmd_recriar_meta(ctx, member: discord.Member):
@@ -24380,6 +27217,9 @@ async def cmd_recriar_meta(ctx, member: discord.Member):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !listar_dividas
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_listar_dividas
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="listar_dividas")
 @commands.has_permissions(administrator=True)
@@ -24415,6 +27255,9 @@ async def cmd_listar_dividas(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !quitar_divida
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_quitar_divida
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="quitar_divida")
 @commands.has_permissions(administrator=True)
 async def cmd_quitar_divida(ctx, member: discord.Member):
@@ -24445,6 +27288,9 @@ async def cmd_quitar_divida(ctx, member: discord.Member):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !ver_divida
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_ver_divida
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="ver_divida")
 async def cmd_ver_divida(ctx, member: discord.Member = None):
@@ -24493,6 +27339,9 @@ async def cmd_ver_divida(ctx, member: discord.Member = None):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !atualizar_acesso_resp
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_atualizar_acesso_resp
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="atualizar_acesso_resp")
 @commands.has_permissions(administrator=True)
 async def cmd_atualizar_acesso_resp(ctx):
@@ -24502,6 +27351,9 @@ async def cmd_atualizar_acesso_resp(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !resetar_horas
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_resetar_horas
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="resetar_horas")
 @commands.has_permissions(administrator=True)
@@ -24564,6 +27416,9 @@ async def cmd_resetar_horas(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !testar_aviso_quarta
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_testar_aviso_quarta
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="testar_aviso_quarta")
 @commands.has_permissions(administrator=True)
 async def cmd_testar_aviso_quarta(ctx):
@@ -24576,6 +27431,9 @@ async def cmd_testar_aviso_quarta(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !limpar_sala
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_limpar_sala
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="limpar_sala")
 @commands.has_permissions(administrator=True)
@@ -24621,6 +27479,9 @@ async def cmd_limpar_sala(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !recriar_vendas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_recriar_vendas
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="recriar_vendas")
 @commands.has_permissions(administrator=True)
 async def cmd_recriar_vendas(ctx):
@@ -24630,6 +27491,9 @@ async def cmd_recriar_vendas(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !atualizar_vendas_antigas
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_atualizar_vendas_antigas
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="atualizar_vendas_antigas")
 @commands.has_permissions(administrator=True)
@@ -24752,6 +27616,9 @@ async def cmd_atualizar_vendas_antigas(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !previsao_estoque
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_previsao_estoque
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="previsao_estoque")
 @commands.has_permissions(administrator=True)
 async def cmd_previsao_estoque(ctx):
@@ -24766,6 +27633,9 @@ async def cmd_previsao_estoque(ctx):
     sub = dados["sub"]
 
     # Emoji de status por urgência
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: emoji_status
+    # ────────────────────────────────────────────────────────────────────────────────
     def emoji_status(dias):
         if dias < 1:
             return "🔴"
@@ -24834,6 +27704,9 @@ async def cmd_previsao_estoque(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !testar_alertas_divida
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_testar_alertas_divida
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="testar_alertas_divida")
 @commands.has_permissions(administrator=True)
@@ -24958,6 +27831,9 @@ async def cmd_testar_alertas_divida(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !forcar_alertas_divida
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_forcar_alertas_divida
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="forcar_alertas_divida")
 @commands.has_permissions(administrator=True)
 async def cmd_forcar_alertas_divida(ctx):
@@ -24972,6 +27848,9 @@ async def cmd_forcar_alertas_divida(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !perfil
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_perfil
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="perfil")
 async def cmd_perfil(ctx, member: discord.Member = None):
@@ -25112,6 +27991,9 @@ async def cmd_perfil(ctx, member: discord.Member = None):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !migrar_pedidos_finalizados
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_migrar_pedidos_finalizados
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="migrar_pedidos_finalizados")
 @commands.has_permissions(administrator=True)
@@ -25296,6 +28178,9 @@ async def cmd_migrar_pedidos_finalizados(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !checar_banco
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_checar_banco
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="checar_banco")
 @commands.has_permissions(administrator=True)
 async def cmd_checar_banco(ctx):
@@ -25443,6 +28328,9 @@ async def cmd_checar_banco(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !painel_caixa
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_painel_caixa
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="painel_caixa")
 @commands.has_permissions(administrator=True)
 async def cmd_painel_caixa(ctx):
@@ -25457,6 +28345,9 @@ async def cmd_painel_caixa(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !painel_emprestimos
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_painel_emprestimos
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="painel_emprestimos")
 @commands.has_permissions(administrator=True)
 async def cmd_painel_emprestimos(ctx):
@@ -25470,6 +28361,9 @@ async def cmd_painel_emprestimos(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !ver_emprestimos
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_ver_emprestimos
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="ver_emprestimos")
 @commands.has_permissions(administrator=True)
@@ -25511,6 +28405,9 @@ async def cmd_ver_emprestimos(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !ver_parcelas_hoje
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_ver_parcelas_hoje
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="ver_parcelas_hoje")
 @commands.has_permissions(administrator=True)
@@ -25569,6 +28466,9 @@ async def cmd_ver_parcelas_hoje(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !testar_parcelas
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_testar_parcelas
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="testar_parcelas")
 @commands.has_permissions(administrator=True)
@@ -25664,6 +28564,9 @@ async def cmd_testar_parcelas(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !enviar_bau
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_enviar_bau
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="enviar_bau")
 @commands.has_permissions(administrator=True)
 async def cmd_enviar_bau(ctx):
@@ -25674,15 +28577,21 @@ async def cmd_enviar_bau(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !enviar_armas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_enviar_armas
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="enviar_armas")
 @commands.has_permissions(administrator=True)
 async def cmd_enviar_armas(ctx):
     await ctx.send("🔄 Enviando painel de armas...")
-    await enviar_painel_armas()
-    await ctx.send("✅ Painel de armas enviado!")
+    await enviar_painel_bau()
+    await ctx.send("✅ Painel de baú e armas unificado enviado!")
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !atualizar_avisos
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_atualizar_avisos
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="atualizar_avisos")
 @commands.has_permissions(administrator=True)
@@ -25693,6 +28602,9 @@ async def cmd_atualizar_avisos(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !desativar_vendas_concluidas
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_desativar_vendas_concluidas
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="desativar_vendas_concluidas")
 @commands.has_permissions(administrator=True)
@@ -25747,6 +28659,9 @@ async def cmd_desativar_vendas_concluidas(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !restaurar_producoes
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_restaurar_producoes
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="restaurar_producoes")
 @commands.has_permissions(administrator=True)
 async def cmd_restaurar_producoes(ctx):
@@ -25756,6 +28671,9 @@ async def cmd_restaurar_producoes(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !recriar_categorias
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_recriar_categorias
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="recriar_categorias")
 @commands.has_permissions(administrator=True)
@@ -25771,6 +28689,9 @@ async def cmd_recriar_categorias(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !recriar_grupos
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_recriar_grupos
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="recriar_grupos")
 @commands.has_permissions(administrator=True)
 async def cmd_recriar_grupos(ctx):
@@ -25784,6 +28705,9 @@ async def cmd_recriar_grupos(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !limpar_erro_painel
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_limpar_erro_painel
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="limpar_erro_painel")
 @commands.has_permissions(administrator=True)
@@ -25811,6 +28735,9 @@ async def cmd_limpar_erro_painel(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: adicionar_suspeito_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: adicionar_suspeito_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def adicionar_suspeito_db(user_id, motivo, adicionado_por):
     pool = await get_pool()
     if not pool:
@@ -25826,6 +28753,9 @@ async def adicionar_suspeito_db(user_id, motivo, adicionado_por):
         logger.error(f"❌ Erro ao adicionar suspeito: {e}")
         return False
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: remover_suspeito_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: remover_suspeito_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -25847,6 +28777,9 @@ async def remover_suspeito_db(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_suspeito_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_suspeito_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def verificar_suspeito_db(user_id):
     pool = await get_pool()
     if not pool:
@@ -25861,6 +28794,9 @@ async def verificar_suspeito_db(user_id):
         logger.error(f"❌ Erro ao verificar suspeito: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: listar_suspeitos_db
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: listar_suspeitos_db
 # ────────────────────────────────────────────────────────────────────────────────
@@ -25880,6 +28816,9 @@ async def listar_suspeitos_db():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_verificacao_db
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_verificacao_db
+# ────────────────────────────────────────────────────────────────────────────────
 async def registrar_verificacao_db(user_id, verificador, resultado, servidor=None):
     pool = await get_pool()
     if not pool:
@@ -25896,12 +28835,21 @@ async def registrar_verificacao_db(user_id, verificador, resultado, servidor=Non
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AcaoSuspeitoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AcaoSuspeitoView
+# ────────────────────────────────────────────────────────────────────────────────
 class AcaoSuspeitoView(discord.ui.View):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, mensagem_original):
         super().__init__(timeout=60)
         self.user_id = user_id
         self.mensagem_original = mensagem_original
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: banir
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🔨 Banir", style=discord.ButtonStyle.danger, emoji="🔨")
     async def banir(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
@@ -25918,6 +28866,9 @@ class AcaoSuspeitoView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message(f"❌ Erro ao banir: {e}", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: expulsar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🚫 Expulsar", style=discord.ButtonStyle.danger, emoji="🚫")
     async def expulsar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
@@ -25934,6 +28885,9 @@ class AcaoSuspeitoView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message(f"❌ Erro ao expulsar: {e}", ephemeral=True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ignorar
+    # ────────────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="⏭️ Ignorar", style=discord.ButtonStyle.secondary, emoji="⏭️")
     async def ignorar(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
@@ -25941,6 +28895,9 @@ class AcaoSuspeitoView(discord.ui.View):
             return
         await interaction.response.send_message(f"✅ Usuário ignorado.", ephemeral=True)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_seguranca_entrada
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_seguranca_entrada
 # ────────────────────────────────────────────────────────────────────────────────
@@ -26055,6 +29012,9 @@ async def verificar_seguranca_entrada(member):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !verificar
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_verificar
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="verificar")
 async def cmd_verificar(ctx, *, alvo: str = None):
@@ -26173,6 +29133,9 @@ async def cmd_verificar(ctx, *, alvo: str = None):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !add_suspeito
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_add_suspeito
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="add_suspeito")
 @commands.has_permissions(administrator=True)
 async def cmd_add_suspeito(ctx, member: discord.Member, *, motivo: str = "Não informado"):
@@ -26186,6 +29149,9 @@ async def cmd_add_suspeito(ctx, member: discord.Member, *, motivo: str = "Não i
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !remove_suspeito
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_remove_suspeito
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="remove_suspeito")
 @commands.has_permissions(administrator=True)
 async def cmd_remove_suspeito(ctx, member: discord.Member):
@@ -26198,6 +29164,9 @@ async def cmd_remove_suspeito(ctx, member: discord.Member):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !suspeitos
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_listar_suspeitos
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="suspeitos")
 @commands.has_permissions(administrator=True)
@@ -26217,6 +29186,9 @@ async def cmd_listar_suspeitos(ctx):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !auditoria_recente
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_auditoria_recente
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="auditoria_recente")
 async def cmd_auditoria_recente(ctx, quantidade: int = 20):
@@ -26279,6 +29251,9 @@ async def cmd_auditoria_recente(ctx, quantidade: int = 20):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !auditoria_usuario
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_auditoria_usuario
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="auditoria_usuario")
 async def cmd_auditoria_usuario(ctx, alvo: str = None, quantidade: int = 20):
@@ -26371,6 +29346,9 @@ async def cmd_auditoria_usuario(ctx, alvo: str = None, quantidade: int = 20):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !auditoria_modulo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_auditoria_modulo
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="auditoria_modulo")
 async def cmd_auditoria_modulo(ctx, modulo: str = None, quantidade: int = 20):
     is_admin = ctx.author.guild_permissions.administrator
@@ -26443,6 +29421,9 @@ async def cmd_auditoria_modulo(ctx, modulo: str = None, quantidade: int = 20):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !auditoria_stats
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_auditoria_stats
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="auditoria_stats")
 async def cmd_auditoria_stats(ctx, dias: int = 7):
     is_admin = ctx.author.guild_permissions.administrator
@@ -26511,6 +29492,9 @@ async def cmd_auditoria_stats(ctx, dias: int = 7):
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !auditoria_buscar
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_auditoria_buscar
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="auditoria_buscar")
 async def cmd_auditoria_buscar(ctx, *, termo: str = None):
@@ -26586,6 +29570,9 @@ async def cmd_auditoria_buscar(ctx, *, termo: str = None):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_dados_iniciais
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: carregar_dados_iniciais
+# ────────────────────────────────────────────────────────────────────────────────
 async def carregar_dados_iniciais():
     try:
         rows = await carregar_metas_db()
@@ -26604,6 +29591,9 @@ async def carregar_dados_iniciais():
         bot.loop.create_task(heartbeat_producao_loop())
         bot.heartbeat_producao_started = True
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restaurar_botoes_metas
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_botoes_metas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -26658,6 +29648,9 @@ async def restaurar_botoes_metas():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_paineis_iniciais
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_paineis_iniciais
+# ────────────────────────────────────────────────────────────────────────────────
 async def enviar_paineis_iniciais(guild):
     try:
         paineis = [
@@ -26708,12 +29701,17 @@ async def enviar_paineis_iniciais(guild):
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_ready
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_ready
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
     global http_session
-    if hasattr(bot, "ja_iniciado"):
+    if getattr(bot, "ja_iniciado", False):
         return
-    bot.ja_iniciado = True
+    if getattr(bot, "inicializando", False):
+        return
+    bot.inicializando = True
     logger.info("🔄 Iniciando configuração do bot...")
     logger.info(f"✅ Logado como {bot.user}")
     if not http_session:
@@ -26721,6 +29719,7 @@ async def on_ready():
     db_pool = await conectar_db()
     if not db_pool:
         logger.critical("❌ Não foi possível conectar ao banco de dados!")
+        bot.inicializando = False
         return
     guild = bot.get_guild(GUILD_ID)
     if guild:
@@ -26754,6 +29753,8 @@ async def on_ready():
     logger.info(f"✅ {registradas} views registradas em massa. {ignoradas} views precisam de argumentos (serão restauradas do banco).")
 
     await carregar_metas_cache()
+    await criar_tabelas_extras()
+    await Notificacoes.carregar()
     await iniciar_tarefas_background()
     bot.loop.create_task(limpeza_cache_periodica())
     bot.loop.create_task(health_check_avancado())
@@ -26768,6 +29769,7 @@ async def on_ready():
     await enviar_paineis_iniciais(guild)
     await BotaoPersistente.restaurar_botoes()
     await restaurar_botoes_vendas()
+    await restaurar_transferencias_finalizadas()
     await restaurar_acoes()
     await restaurar_botoes_metas()
     await setup_status()
@@ -26795,12 +29797,17 @@ async def on_ready():
     except Exception as e:
         logger.error(f"❌ Erro ao restaurar painéis últimos: {e}")
     gc.collect()
+    bot.ja_iniciado = True
+    bot.inicializando = False
     logger.info("=" * 50)
     logger.info("✅ BOT ONLINE 100% COMPLETO - v8.0")
     logger.info("=" * 50)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_message (MOVE PAINÉIS PRO FINAL SEMPRE)
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_message
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_message(message: discord.Message):
@@ -26867,8 +29874,14 @@ async def on_message(message: discord.Message):
         except Exception as e:
             logger.error(f"❌ Erro ao mover painéis do canal {canal.name}: {e}")
 
-    await on_message_lavagem(message)
-    await on_message_bau_ocr(message)
+    try:
+        await on_message_lavagem(message)
+    except Exception as e:
+        logger.exception("❌ Falha isolada no processamento de lavagem: %s", e)
+    try:
+        await on_message_bau_ocr(message)
+    except Exception as e:
+        logger.exception("❌ Falha isolada no OCR do baú: %s", e)
 
     # Registra atividade (inatividade detector)
     try:
@@ -26878,6 +29891,9 @@ async def on_message(message: discord.Message):
         logger.error(f"❌ Erro ao registrar atividade mensagem: {e}")
 
     await bot.process_commands(message)
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: shutdown
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: shutdown
 # ────────────────────────────────────────────────────────────────────────────────
@@ -26907,6 +29923,9 @@ async def shutdown():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: Conquistas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: Conquistas
+# ────────────────────────────────────────────────────────────────────────────────
 class Conquistas:
     CONQUISTAS = {
         "primeira_meta": {"nome": "🎯 Primeira Meta", "desc": "Bateu a meta pela primeira vez", "emoji": "🎯", "categoria": "metas"},
@@ -26926,6 +29945,9 @@ class Conquistas:
         "sem_divida_5sem": {"nome": "✅ Sem Dívidas", "desc": "5 semanas sem dívidas", "emoji": "✅", "categoria": "metas"},
     }
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: verificar_e_conceder
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     async def verificar_e_conceder(user_id: int, tipo: str, guild: discord.Guild, contexto: dict = None):
         try:
@@ -26970,10 +29992,16 @@ class Conquistas:
         except Exception as e:
             logger.error(f"❌ Erro conquistas: {e}")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _tem
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     async def _tem(conn, user_id, chave):
         return await conn.fetchval("SELECT 1 FROM conquistas_usuario WHERE user_id = $1 AND chave = $2", str(user_id), chave) is not None
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _dar
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     async def _dar(conn, user_id, chave):
         try:
@@ -26984,6 +30012,9 @@ class Conquistas:
         except:
             pass
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: listar_usuario
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     async def listar_usuario(user_id):
         pool = await get_pool()
@@ -26996,6 +30027,9 @@ class Conquistas:
         except:
             return []
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: criar_tabelas_extras
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_tabelas_extras
 # ────────────────────────────────────────────────────────────────────────────────
@@ -27038,11 +30072,20 @@ async def criar_tabelas_extras():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AntiSpam
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: AntiSpam
+# ────────────────────────────────────────────────────────────────────────────────
 class AntiSpam:
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         self._cooldowns: Dict[str, float] = {}
         self._user_commands: Dict[int, List[float]] = defaultdict(list)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: check
+    # ────────────────────────────────────────────────────────────────────────────────
     def check(self, user_id: int, comando: str, cooldown: float = 3.0) -> bool:
         chave = f"{user_id}:{comando}"
         agora_ts = time_module.time()
@@ -27051,6 +30094,9 @@ class AntiSpam:
         self._cooldowns[chave] = agora_ts
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: check_global
+    # ────────────────────────────────────────────────────────────────────────────────
     def check_global(self, user_id: int, max_por_minuto: int = 15) -> bool:
         agora_ts = time_module.time()
         cmds = [c for c in self._user_commands[user_id] if agora_ts - c < 60]
@@ -27060,6 +30106,9 @@ class AntiSpam:
         cmds.append(agora_ts)
         return True
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: tempo_restante
+    # ────────────────────────────────────────────────────────────────────────────────
     def tempo_restante(self, user_id: int, comando: str, cooldown: float = 3.0) -> float:
         chave = f"{user_id}:{comando}"
         agora_ts = time_module.time()
@@ -27075,8 +30124,17 @@ anti_spam = AntiSpam()
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: cooldown
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cooldown
+# ────────────────────────────────────────────────────────────────────────────────
 def cooldown(segundos: float = 3.0):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: decorator
+    # ────────────────────────────────────────────────────────────────────────────────
     def decorator(func):
+        # ────────────────────────────────────────────────────────────────────────────────
+        # MÉTODO: wrapper
+        # ────────────────────────────────────────────────────────────────────────────────
         @wraps(func)
         async def wrapper(ctx_or_interaction, *args, **kwargs):
             user = ctx_or_interaction.author if isinstance(ctx_or_interaction, commands.Context) else ctx_or_interaction.user
@@ -27106,48 +30164,57 @@ def cooldown(segundos: float = 3.0):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: backup_tabelas_criticas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: backup_tabelas_criticas
+# ────────────────────────────────────────────────────────────────────────────────
 async def backup_tabelas_criticas():
+    """Backup dos dados do bot; falha inteira se qualquer tabela falhar."""
+    pool = await get_pool()
+    canal = bot.get_channel(CANAL_AUDITORIA_ID)
+    if not pool or not canal:
+        logger.error("❌ Banco ou canal de auditoria indisponível para backup")
+        return False
     try:
-        pool = await get_pool()
-        if not pool:
-            return
-        canal = bot.get_channel(CANAL_AUDITORIA_ID)
-        if not canal:
-            return
-        tabelas = ["metas", "vendas", "caixa", "emprestimos", "metas_dividas", "estoque_municoes", "estoque_polvora"]
+        # Seleção automática de todas as tabelas públicas, sem sobrescrever falhas com [].
         backup = {}
         async with pool.acquire() as conn:
-            for t in tabelas:
-                try:
-                    rows = await conn.fetch(f"SELECT * FROM {t}")
-                    backup[t] = [dict(r) for r in rows]
-                except Exception as e:
-                    logger.error(f"❌ Erro ao exportar {t}: {e}")
-                    backup[t] = []
-
-        def default_serializer(o):
-            if isinstance(o, datetime):
-                return o.isoformat()
-            return str(o)
-        data_str = agora().strftime("%Y%m%d_%H%M%S")
-        json_data = json.dumps(backup, default=default_serializer, ensure_ascii=False, indent=2)
-        arquivo = discord.File(io.BytesIO(json_data.encode('utf-8')), filename=f"backup_vdr_{data_str}.json")
-        embed = discord.Embed(
-            title="💾 ── BACKUP AUTOMÁTICO ── 💾",
+            async with conn.transaction(isolation='repeatable_read', readonly=True):
+                tabelas = await conn.fetch("""SELECT tablename FROM pg_tables
+                   WHERE schemaname='public' ORDER BY tablename""")
+                for row in tabelas:
+                    tabela = row['tablename']
+                    if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', tabela):
+                        raise ValueError(f'Tabela com nome inesperado: {tabela}')
+                    registros = await conn.fetch(f'SELECT * FROM "{tabela}"')
+                    backup[tabela] = [dict(r) for r in registros]
+        # ────────────────────────────────────────────────────────────────────────────────
+        # MÉTODO: serializar
+        # ────────────────────────────────────────────────────────────────────────────────
+        def serializar(obj):
+            if isinstance(obj, (datetime,)): return obj.isoformat()
+            if hasattr(obj, 'isoformat'): return obj.isoformat()
+            return str(obj)
+        agora_str = agora().strftime('%Y%m%d_%H%M%S')
+        json_data = json.dumps(backup, default=serializar, ensure_ascii=False, indent=2)
+        arquivo = discord.File(io.BytesIO(json_data.encode('utf-8')),
+                               filename=f'backup_vdr_{agora_str}.json')
+        embed = discord.Embed(title="💾 ── BACKUP AUTOMÁTICO ── 💾",
             description=f"📅 {agora().strftime('%d/%m/%Y às %H:%M')}",
-            color=0x2ECC71,
-            timestamp=agora()
-        )
-        embed.add_field(name="📦 Tabelas", value=f"```yaml\n{len(backup)}\n```", inline=True)
-        embed.add_field(name="📊 Total de registros", value=f"```yaml\n{sum(len(v) for v in backup.values())}\n```", inline=True)
-        embed.set_footer(text="🛡 Vida Rasa 442 • Backup")
-        await canal.send(embed=embed, file=arquivo)
-        logger.info(f"✅ Backup automático enviado: {data_str}")
+            color=0x2ECC71,timestamp=agora())
+        embed.add_field(name="📦 Tabelas",value=str(len(backup)),inline=True)
+        embed.add_field(name="📊 Registros",value=str(sum(map(len,backup.values()))),inline=True)
+        await canal.send(embed=embed,file=arquivo)
+        logger.info("✅ Backup enviado: %s (%s tabelas)",agora_str,len(backup))
+        return True
     except Exception as e:
-        logger.error(f"❌ Erro no backup automático: {e}")
+        logger.exception("❌ Backup não realizado (nenhum arquivo parcial foi considerado completo): %s",e)
+        return False
 
 # ────────────────────────────────────────────────────────────────────────────────
 # TASK: backup_loop
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: backup_loop
 # ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=6)
 async def backup_loop():
@@ -27158,6 +30225,9 @@ async def backup_loop():
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !backup
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_backup
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="backup")
 @commands.has_permissions(administrator=True)
@@ -27178,29 +30248,61 @@ async def cmd_backup(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: Notificacoes
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: Notificacoes
+# ────────────────────────────────────────────────────────────────────────────────
 class Notificacoes:
     TIPOS = {
-        "backup": True,
-        "meta_fechada": True,
-        "venda_concluida": True,
-        "producao_finalizada": True,
-        "acao_ganha": True,
-        "divida_nova": True,
-        "conquista": True,
-        "emprestimo_vencendo": True,
+        "backup": True, "meta_fechada": True, "venda_concluida": True,
+        "producao_finalizada": True, "acao_ganha": True, "divida_nova": True,
+        "conquista": True, "emprestimo_vencendo": True,
     }
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ativo
+    # ────────────────────────────────────────────────────────────────────────────────
     @classmethod
     def ativo(cls, tipo: str) -> bool:
         return cls.TIPOS.get(tipo, True)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: carregar
+    # ────────────────────────────────────────────────────────────────────────────────
     @classmethod
-    def toggle(cls, tipo: str) -> bool:
-        cls.TIPOS[tipo] = not cls.TIPOS.get(tipo, True)
-        return cls.TIPOS[tipo]
+    async def carregar(cls):
+        pool = await get_pool()
+        if not pool: return False
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT tipo,ativo FROM notificacoes_config")
+                for r in rows:
+                    if r['tipo'] in cls.TIPOS: cls.TIPOS[r['tipo']]=r['ativo']
+            return True
+        except Exception as e:
+            logger.error("❌ Não foi possível carregar notificações: %s",e)
+            return False
+
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: toggle
+    # ────────────────────────────────────────────────────────────────────────────────
+    @classmethod
+    async def toggle(cls, tipo: str) -> bool:
+        if tipo not in cls.TIPOS: raise ValueError('Notificação inválida')
+        pool = await get_pool()
+        if not pool: raise RuntimeError('Banco de dados indisponível')
+        novo = not cls.TIPOS[tipo]
+        async with pool.acquire() as conn:
+            await conn.execute("""INSERT INTO notificacoes_config (tipo,ativo,atualizado_em)
+                VALUES($1,$2,NOW()) ON CONFLICT(tipo) DO UPDATE SET
+                ativo=EXCLUDED.ativo,atualizado_em=NOW()""",tipo,novo)
+        cls.TIPOS[tipo]=novo
+        return novo
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !notificacoes
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_notificacoes
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="notificacoes")
 @commands.has_permissions(administrator=True)
@@ -27216,13 +30318,16 @@ async def cmd_notificacoes(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !toggle_notif
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_toggle_notif
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="toggle_notif")
 @commands.has_permissions(administrator=True)
 async def cmd_toggle_notif(ctx, tipo: str = None):
     if not tipo or tipo not in Notificacoes.TIPOS:
         await ctx.send(f"❌ Uso: `!toggle_notif <tipo>`\nTipos: {', '.join(Notificacoes.TIPOS.keys())}")
         return
-    novo = Notificacoes.toggle(tipo)
+    novo = await Notificacoes.toggle(tipo)
     await ctx.send(f"{'🟢' if novo else '🔴'} Notificação `{tipo}` → **{'ATIVADA' if novo else 'DESATIVADA'}**")
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -27237,7 +30342,13 @@ async def cmd_toggle_notif(ctx, tipo: str = None):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: Mood
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: Mood
+# ────────────────────────────────────────────────────────────────────────────────
 class Mood:
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: saudacao
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     def saudacao() -> str:
         h = agora().hour
@@ -27249,11 +30360,17 @@ class Mood:
             return "🌙 Fala, malandragem! Boa noite"
         return "🦉 A madrugada é nossa, cria"
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: emoji_aleatorio
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     def emoji_aleatorio() -> str:
         emojis = ["🔥", "⚡", "🚀", "💎", "🛡️", "⭐", "🎯", "💪"]
         return random.choice(emojis)
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: frase_motivacional
+    # ────────────────────────────────────────────────────────────────────────────────
     @staticmethod
     def frase_motivacional() -> str:
         frases = [
@@ -27267,6 +30384,9 @@ class Mood:
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !mood
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_mood
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="mood")
 async def cmd_mood(ctx):
@@ -27287,6 +30407,9 @@ async def cmd_mood(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !conquistas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_conquistas
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="conquistas")
 async def cmd_conquistas(ctx, member: discord.Member = None):
     target = member or ctx.author
@@ -27304,6 +30427,9 @@ async def cmd_conquistas(ctx, member: discord.Member = None):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !cache_stats
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_cache_stats
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="cache_stats")
 @commands.has_permissions(administrator=True)
 async def cmd_cache_stats(ctx):
@@ -27318,6 +30444,9 @@ async def cmd_cache_stats(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !limpar_cache
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: cmd_limpar_cache
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.command(name="limpar_cache")
 @commands.has_permissions(administrator=True)
 async def cmd_limpar_cache(ctx):
@@ -27329,6 +30458,9 @@ async def cmd_limpar_cache(ctx):
 # ════════════════════════════════════════════════════════════════════════════════
 # BLINDAGEM GLOBAL — ESCUDO ANTI-CRASH E ANTI "INTERACTION FAILED"
 # ════════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_app_command_error
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
     logger.error(f"❌ Erro em comando slash: {error}")
@@ -27338,11 +30470,17 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
     except:
         pass
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: on_error
+# ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_error(event, *args, **kwargs):
     import traceback
     logger.error(f"❌ Erro não tratado no evento '{event}':\n{traceback.format_exc()}")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _safe_view_error_handler
+# ────────────────────────────────────────────────────────────────────────────────
 async def _safe_view_error_handler(interaction: discord.Interaction, error: Exception):
     logger.error(f"❌ Erro em interação ({interaction.data.get('custom_id', '?')}): {error}")
     try:
@@ -27358,6 +30496,9 @@ for name, obj in list(globals().items()):
         if issubclass(obj, (discord.ui.View, discord.ui.Modal)) and obj not in (discord.ui.View, discord.ui.Modal):
             original_on_error = getattr(obj, "on_error", None)
             
+            # ────────────────────────────────────────────────────────────────────────────────
+            # MÉTODO: new_on_error
+            # ────────────────────────────────────────────────────────────────────────────────
             async def new_on_error(self, interaction, error, _original=original_on_error):
                 if _original:
                     try: await _original(interaction, error)
