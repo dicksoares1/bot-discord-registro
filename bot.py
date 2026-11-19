@@ -1,4 +1,4 @@
-# ════════════════════════════════════════════════════════════════════════════════
+#════════════════════════════════════════════════════════════════════════════════
 # ║  BOT VDR v8.0 — COMPLETO E ORGANIZADO                                      ║
 # ║  Vida Rasa 442 • Sistema de Gerenciamento                                  ║
 # ════════════════════════════════════════════════════════════════════════════════
@@ -9947,12 +9947,188 @@ class FinalizadosView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: class StatusView
 # ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: StatusView (Com Transferência e Blindada)
-# ────────────────────────────────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 12 — FUNÇÃO: confirmar_pagamento_venda_com_caixa
+# ════════════════════════════════════════════════════════════════════════════════
+async def confirmar_pagamento_venda_com_caixa(pedido_numero, entrega_id, numero_parcela,
+                                               pt, sub, valor, recebido_por):
+    """Grava pagamento e movimentação no caixa uma única vez, em uma transação.
+
+    A linha de entregas_status é bloqueada (FOR UPDATE) para que dois cliques,
+    reconexões ou views simultâneas nunca creditem o mesmo pagamento duas vezes.
+    Se qualquer gravação falhar, a transação desfaz as duas operações.
+    """
+    try:
+        pedido_numero = int(pedido_numero)
+        entrega_id = int(entrega_id or 0)
+        numero_parcela = int(numero_parcela) if entrega_id else pedido_numero
+        pt, sub, valor = int(pt), int(sub), int(valor)
+        recebido_por = str(int(recebido_por))
+        if pedido_numero <= 0 or entrega_id < 0 or numero_parcela <= 0:
+            raise ValueError("Pedido/parcela inválidos")
+        if pt < 0 or sub < 0 or valor <= 0:
+            raise ValueError("Quantidade ou valor inválido")
+    except (TypeError, ValueError) as erro:
+        return {"ok": False, "motivo": str(erro)}
+
+    pool = await get_pool()
+    if not pool:
+        return {"ok": False, "motivo": "PostgreSQL indisponível. Nada foi creditado."}
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                pedido = await conn.fetchrow(
+                    "SELECT pedido_numero, cancelado, finalizado, valor FROM vendas WHERE pedido_numero=$1",
+                    pedido_numero
+                )
+                if not pedido:
+                    raise RuntimeError("Pedido não existe na tabela vendas.")
+                if pedido["cancelado"]:
+                    raise RuntimeError("Pedido cancelado: não é permitido registrar recebimento.")
+
+                await conn.execute("""
+                    INSERT INTO entregas_status (entrega_id,numero_parcela,pedido_numero,pt,sub)
+                    VALUES ($1,$2,$3,$4,$5)
+                    ON CONFLICT(entrega_id,numero_parcela) DO NOTHING
+                """, entrega_id, numero_parcela, pedido_numero, pt, sub)
+                estado = await conn.fetchrow("""
+                    SELECT id,pedido_numero,entregue,pago,cancelado,finalizado,pt,sub
+                      FROM entregas_status
+                     WHERE entrega_id=$1 AND numero_parcela=$2 FOR UPDATE
+                """, entrega_id, numero_parcela)
+                if not estado or int(estado["pedido_numero"]) != pedido_numero:
+                    raise RuntimeError("Conflito entre pedido e parcela. Nada foi creditado.")
+                if estado["cancelado"]:
+                    raise RuntimeError("Parcela cancelada: pagamento recusado.")
+                if estado["pago"]:
+                    return {"ok": True, "ja_pago": True, "entregue": bool(estado["entregue"])}
+                if estado["finalizado"]:
+                    raise RuntimeError("Parcela finalizada sem registro de pagamento: solicitar auditoria.")
+                pt_salvo, sub_salvo = int(estado["pt"] or 0), int(estado["sub"] or 0)
+                if (pt_salvo or sub_salvo) and (pt_salvo != pt or sub_salvo != sub):
+                    raise RuntimeError("Quantidade diverge do registro da parcela no banco.")
+
+                alterou = await conn.fetchval("""
+                    UPDATE entregas_status SET pago=true,pago_por=$1,pago_em=NOW(),pt=$2,sub=$3
+                     WHERE id=$4 AND pago=false AND cancelado=false RETURNING id
+                """, recebido_por, pt, sub, estado["id"])
+                if not alterou:
+                    raise RuntimeError("Falha ao registrar o pagamento no banco.")
+
+                valor_creditado = await movimentar_caixa(
+                    tipo="venda", valor=valor,
+                    motivo=f"Venda #{pedido_numero:04d} (Entrega {numero_parcela})",
+                    autor=recebido_por, tipo_dinheiro="limpo", conn=conn
+                )
+                if not valor_creditado:
+                    raise RuntimeError("Falha ao creditar o caixa; pagamento revertido.")
+                return {"ok": True, "ja_pago": False, "entregue": bool(estado["entregue"])}
+    except Exception as erro:
+        logger.exception("❌ Pagamento do pedido #%s não concluído: %s", pedido_numero, erro)
+        return {"ok": False, "motivo": str(erro)}
+# FIM — confirmar_pagamento_venda_com_caixa
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 12 — FUNÇÃO: finalizar_venda_quando_quitada
+# ════════════════════════════════════════════════════════════════════════════════
+async def finalizar_venda_quando_quitada(interaction, dados, embed_original):
+    """Move cada entrega quitada para Finalizados, sem repetir caixa nem estoque.
+
+    A trava na linha da parcela serializa dois cliques simultâneos. Somente
+    remove o card de origem DEPOIS de publicar o histórico e registrar o banco.
+    Se Discord falhar, mantém o card para nova tentativa pelo botão de recuperação.
+    """
+    pedido_numero = int(dados["pedido_numero"])
+    entrega_id = int(dados.get("entrega_id") or 0)
+    parcela = int(dados["entrega_atual"]) if entrega_id else pedido_numero
+    pool = await get_pool()
+    if not pool:
+        return {"ok": False, "motivo": "PostgreSQL indisponível; pedido preservado em Aberto."}
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("""
+                    SELECT id,pedido_numero,entregue,pago,finalizado,cancelado
+                    FROM entregas_status
+                    WHERE entrega_id=$1 AND numero_parcela=$2 FOR UPDATE
+                """, entrega_id, parcela)
+                if not row or int(row["pedido_numero"]) != pedido_numero:
+                    raise RuntimeError("Status da entrega não encontrado ou divergente.")
+                if row["cancelado"]:
+                    raise RuntimeError("Pedido/entrega cancelado; não é permitido finalizar.")
+                if not (row["entregue"] and row["pago"]):
+                    return {"ok": True, "finalizado": False, "entregue": bool(row["entregue"]),
+                            "pago": bool(row["pago"])}
+                if not row["finalizado"]:
+                    enviado = await enviar_embed_pedido_finalizado(
+                        pedido_numero=pedido_numero,
+                        pt=dados["pt"], sub=dados["sub"],
+                        organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
+                        pago_por=None, pago_em=None, entregue_por=None, entregue_em=None,
+                        transferido_para=None, transferido_por=None, transferido_em=None,
+                        tipo="finalizado", entrega_id=entrega_id or None
+                    )
+                    if not enviado:
+                        raise RuntimeError("Falha ao publicar em Pedidos Finalizados; card original preservado.")
+                    alterou = await conn.fetchval("""
+                        UPDATE entregas_status
+                           SET finalizado=true,finalizado_em=COALESCE(finalizado_em,NOW()),
+                               finalizado_por=COALESCE(finalizado_por,$1)
+                         WHERE id=$2 AND entregue=true AND pago=true AND cancelado=false
+                         RETURNING id
+                    """, str(interaction.user.id), row["id"])
+                    if not alterou:
+                        raise RuntimeError("Registro de finalização não confirmado.")
+
+                # O pedido geral só termina quando TODAS as parcelas foram
+                # encerradas, inclusive as que ainda não têm card no Discord.
+                total = 1
+                if entrega_id:
+                    total = await conn.fetchval(
+                        "SELECT total_entregas FROM entregas_parceladas WHERE id=$1", entrega_id
+                    ) or 1
+                encerradas = await conn.fetchval("""
+                    SELECT COUNT(*) FROM entregas_status
+                     WHERE entrega_id=$1 AND (finalizado=true OR cancelado=true)
+                """, entrega_id) or 0
+                if int(encerradas) >= int(total):
+                    await conn.execute("""
+                        UPDATE vendas SET finalizado=true,
+                            finalizado_em=COALESCE(finalizado_em,NOW()),
+                            tipo_finalizacao='finalizado'
+                         WHERE pedido_numero=$1 AND cancelado=false
+                    """, pedido_numero)
+
+        # Somente ações fora do PostgreSQL após commit.
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM botoes_persistentes WHERE mensagem_id=$1",
+                                   str(interaction.message.id))
+        except Exception as erro:
+            logger.warning("⚠️ Limpeza de persistência do pedido #%s: %s", pedido_numero, erro)
+        try:
+            await interaction.message.delete()
+        except discord.NotFound:
+            pass
+        except Exception as erro:
+            logger.warning("⚠️ Não foi possível remover card já finalizado #%s: %s",
+                           pedido_numero, erro)
+        return {"ok": True, "finalizado": True}
+    except Exception as erro:
+        logger.exception("❌ Finalização do pedido #%s: %s", pedido_numero, erro)
+        return {"ok": False, "motivo": str(erro)}
+# FIM — finalizar_venda_quando_quitada
+# ════════════════════════════════════════════════════════════════════════════════
+
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: StatusView
 # ────────────────────────────────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 12 — CLASSE: StatusView
+# ════════════════════════════════════════════════════════════════════════════════
 class StatusView(discord.ui.View):
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
@@ -9979,25 +10155,26 @@ class StatusView(discord.ui.View):
         if not self.is_doacao:
             self.add_item(discord.ui.Button(
                 label="Pago", style=discord.ButtonStyle.primary,
-                custom_id="status_pago_fixo", emoji="💰", 
+                custom_id="status_pago_fixo", emoji="💰",
                 disabled=self.pago_ja_clicado or self.transferencia_confirmada
             ))
             self.add_item(discord.ui.Button(
                 label="Pedido cancelado", style=discord.ButtonStyle.danger,
-                custom_id="status_cancelado_fixo", emoji="❌", 
-                disabled=self.transferencia_confirmada
+                custom_id="status_cancelado_fixo", emoji="❌",
+                disabled=self.transferencia_confirmada or (self.pago_ja_clicado and self.entrega_ja_entregue)
             ))
 
         self.add_item(discord.ui.Button(
-            label="Entregue", style=discord.ButtonStyle.success,
-            custom_id="status_entregue_fixo", emoji="✅", 
-            disabled=self.entrega_ja_entregue or self.transferencia_confirmada
+            label=("🔄 Concluir Pedido" if self.entrega_ja_entregue and self.pago_ja_clicado else "Entregue"),
+            style=discord.ButtonStyle.success,
+            custom_id="status_entregue_fixo", emoji="✅",
+            disabled=(self.entrega_ja_entregue and not self.pago_ja_clicado) or self.transferencia_confirmada
         ))
-        
+
         self.add_item(discord.ui.Button(
             label="Editar Venda", style=discord.ButtonStyle.primary,
-            custom_id="editar_venda_fixo", emoji="✏️", 
-            disabled=self.transferencia_confirmada
+            custom_id="editar_venda_fixo", emoji="✏️",
+            disabled=self.transferencia_confirmada or (self.pago_ja_clicado and self.entrega_ja_entregue)
         ))
 
         if not self.is_doacao:
@@ -10011,36 +10188,43 @@ class StatusView(discord.ui.View):
     # MÉTODO: interaction_check
     # ────────────────────────────────────────────────────────────────────────────────
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        custom_id = interaction.data.get("custom_id", "")
-        
-        if self.transferencia_confirmada:
-            await interaction.response.send_message("⚠️ Esta venda já foi finalizada.", ephemeral=True)
-            return False
-
+        # Todos os botões de StatusView consultam o estado real da mensagem e do
+        # PostgreSQL; os booleans da view podem ser antigos após um redeploy.
+        custom_id = (interaction.data or {}).get("custom_id", "")
         try:
             if custom_id == "transformar_doacao":
-                embed = discord.Embed(title="⚠️ CONFIRMAR DOAÇÃO", description=f"Transformar o **Pedido #{self.pedido_numero:04d}** em DOAÇÃO?", color=0xE74C3C)
-                view = ConfirmarDoacaoView(mensagem_original=interaction.message, pedido_numero=self.pedido_numero, entrega_id=self.entrega_id)
+                dados, _ = await self._contexto_venda(interaction)
+                embed = discord.Embed(
+                    title="⚠️ CONFIRMAR DOAÇÃO",
+                    description=f"Transformar o **Pedido #{dados['pedido_numero']:04d}** em DOAÇÃO?",
+                    color=0xE74C3C
+                )
+                view = ConfirmarDoacaoView(
+                    mensagem_original=interaction.message,
+                    pedido_numero=dados["pedido_numero"],
+                    entrega_id=dados["entrega_id"] or None
+                )
                 await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
             elif custom_id == "status_pago_fixo":
-                if self.pago_ja_clicado: return False
-                await interaction.response.defer()
+                await interaction.response.defer(ephemeral=True)
                 await self.pago(interaction, None)
             elif custom_id == "status_entregue_fixo":
-                if self.entrega_ja_entregue: return False
-                await interaction.response.defer()
+                await interaction.response.defer(ephemeral=True)
                 await self.entregue(interaction, None)
             elif custom_id == "editar_venda_fixo":
                 await self.editar_venda(interaction, None)
             elif custom_id == "status_cancelado_fixo":
-                await interaction.response.defer()
+                await interaction.response.defer(ephemeral=True)
                 await self.cancelado(interaction, None)
-        except Exception as e:
-            logger.error(f"❌ Erro no botão {custom_id}: {e}")
+        except Exception as erro:
+            logger.exception("❌ Botão %s de venda: %s", custom_id, erro)
             try:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message("❌ Ocorreu um erro interno.", ephemeral=True)
-            except: pass
+                if interaction.response.is_done():
+                    await interaction.followup.send(f"❌ Falha: {erro}", ephemeral=True)
+                else:
+                    await interaction.response.send_message(f"❌ Falha: {erro}", ephemeral=True)
+            except Exception:
+                logger.exception("❌ Falha ao responder à interação de venda")
         return False
 
     # ─── ATUALIZADO PARA LER OS BLOCOS DE CÓDIGO DO NOVO VISUAL ───
@@ -10049,7 +10233,7 @@ class StatusView(discord.ui.View):
     # ────────────────────────────────────────────────────────────────────────────────
     def extrair_dados_venda(self, embed):
         dados = {"pt": 0, "sub": 0, "organizacao": "Desconhecida", "vendedor": "Desconhecido", "pedido_numero": 0}
-        
+
         # Tenta pegar o ID pelo título ou rodapé
         if embed.title and "#" in embed.title:
             try: dados["pedido_numero"] = int(embed.title.split("#")[1].strip())
@@ -10061,7 +10245,7 @@ class StatusView(discord.ui.View):
         for field in embed.fields:
             nome = field.name.upper()
             valor = field.value.replace("```yaml\n", "").replace("\n```", "").strip()
-            
+
             if "VENDEDOR" in nome:
                 dados["vendedor"] = valor
             elif "ORGANIZA" in nome:
@@ -10072,264 +10256,281 @@ class StatusView(discord.ui.View):
             elif "SUB" in nome:
                 try: dados["sub"] = int(valor.split("\n")[0].replace(" munições", "").replace(".", "").strip())
                 except: pass
-                
+
         return dados
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: pago
     # ────────────────────────────────────────────────────────────────────────────────
-    async def pago(self, interaction: discord.Interaction, button):
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _contexto_venda
+    # ────────────────────────────────────────────────────────────────────────────────
+    async def _contexto_venda(self, interaction):
+        """Lê o card da mensagem clicada, e nunca da view global compartilhada."""
+        if not interaction.message.embeds:
+            raise ValueError("Card sem informações da encomenda.")
         embed = interaction.message.embeds[0]
         dados = self.extrair_dados_venda(embed)
-        pedido_numero = dados["pedido_numero"] if dados["pedido_numero"] > 0 else self.pedido_numero
+        encontrado = re.search(r"#\s*(\d+)", embed.title or "")
+        dados["pedido_numero"] = int(encontrado.group(1)) if encontrado else int(self.pedido_numero or 0)
+        if dados["pedido_numero"] <= 0:
+            raise ValueError("Número do pedido não identificado no card.")
+        rodape = embed.footer.text if embed.footer and embed.footer.text else ""
+        achado = re.search(r"ID:\s*(\d+)", rodape)
+        dados["entrega_id"] = int(achado.group(1)) if achado else int(self.entrega_id or 0)
+        parcela = re.search(r"Entrega\s+(\d+)\s+de\s+(\d+)",
+                            embed.description or "", flags=re.IGNORECASE)
+        dados["entrega_atual"], dados["total_entregas"] = (
+            (int(parcela.group(1)), int(parcela.group(2))) if parcela
+            else (int(self.entrega_atual or 1), int(self.total_entregas or 1))
+        )
+        if dados["total_entregas"] > 1 and not dados["entrega_id"]:
+            raise ValueError("Parcela sem ID de entrega válido.")
+        if dados["entrega_atual"] < 1 or dados["entrega_atual"] > dados["total_entregas"]:
+            raise ValueError("Índice de parcela inválido.")
+        # Os campos específicos dos tipos de munição são a origem do valor,
+        # mesmo em views genéricas reconstituídas após o Railway reiniciar.
+        quantidades = {}
+        for campo in embed.fields:
+            nome = (campo.name or "").upper()
+            tipo = ("PT" if re.search(r"(?:^|\W)PT(?:$|\W)", nome) else
+                    "SUB" if re.search(r"(?:^|\W)SUB(?:$|\W)", nome) else None)
+            if tipo:
+                numero = re.search(r"([\d.]+)\s*muniç", campo.value or "", re.IGNORECASE)
+                if numero:
+                    quantidades[tipo] = int(numero.group(1).replace(".", ""))
+        if "PT" not in quantidades or "SUB" not in quantidades:
+            raise ValueError("Não foi possível ler PT/SUB do card.")
+        dados["pt"], dados["sub"] = quantidades["PT"], quantidades["SUB"]
+        dados["valor_total"] = dados["pt"] * 50 + dados["sub"] * 90
+        # Respeita valor explícito em reais: sempre validar contra o card.
+        for campo in embed.fields:
+            if "VALOR" in (campo.name or "").upper():
+                achado_valor = re.search(r"R\$\s*([\d.]+),(\d{2})", campo.value or "")
+                if achado_valor:
+                    if achado_valor.group(2) != "00":
+                        raise ValueError("Valor com centavos incompatível com o caixa inteiro.")
+                    dados["valor_total"] = int(achado_valor.group(1).replace(".", ""))
+                    break
+        return dados, embed
 
-        agora_str = agora().strftime("%d/%m/%Y %H:%M")
-        pagador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
-        
-        # Atualiza o campo de Status
-        for i, field in enumerate(embed.fields):
-            if "Status" in field.name:
-                embed.set_field_at(i, name="🚦 Status", value=f"```yaml\n🟢 Pagamento recebido por {pagador_apelido} • {agora_str}\n```", inline=False)
-                break
-
-        try: 
-            await marcar_status_parcela(entrega_id=self.entrega_id if self.entrega_id else 0, numero_parcela=self.entrega_atual, pedido_numero=pedido_numero, campo="pago", autor_id=interaction.user.id)
-            await movimentar_caixa(tipo="venda", valor=self.valor_total, motivo=f"Venda #{pedido_numero:04d} (Entrega {self.entrega_atual}/{self.total_entregas})", autor=interaction.user.id, tipo_dinheiro="limpo")
-        except Exception as e: logger.error(f"⚠️ Erro ao processar pagamento: {e}")
-
-        try:
-            await interaction.message.edit(embed=embed, view=StatusView(entrega_id=self.entrega_id, total_entregas=self.total_entregas, entrega_atual=self.entrega_atual, pago_ja_clicado=True, mensagem_original=interaction.message, valor_total=self.valor_total, pt=self.pt, sub=self.sub, pedido_numero=pedido_numero, entregue_ja_clicado=self.entrega_ja_entregue, is_doacao=self.is_doacao))
-        except: pass
-
-        if self.entrega_ja_entregue:
-            try: await interaction.message.delete()
-            except: pass
-            
-            await enviar_embed_pedido_finalizado(
-                pedido_numero=pedido_numero, pt=dados["pt"], sub=dados["sub"],
-                organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
-                pago_por=pagador_apelido, pago_em=agora_str, entregue_por=None, entregue_em=None,
-                transferido_para=None, transferido_por=None, transferido_em=None, tipo="finalizado",
-                entrega_id=self.entrega_id
-            )
-            if self.entrega_atual >= self.total_entregas: await marcar_pedido_finalizado(pedido_numero, tipo="finalizado")
-            await interaction.followup.send(f"✅ **Pagamento registrado no caixa!**\nCard removido (já estava entregue).\n🎉 Pedido finalizado!", ephemeral=True)
+    # ────────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _atualizar_card_pelo_banco
+    # ────────────────────────────────────────────────────────────────────────────────
+    async def _atualizar_card_pelo_banco(self, interaction, dados, embed):
+        """Reconstrói os dois status a partir do banco sem apagar o histórico."""
+        pool = await get_pool()
+        if not pool:
+            raise RuntimeError("PostgreSQL indisponível.")
+        entrega = int(dados["entrega_id"] or 0)
+        parcela = int(dados["entrega_atual"]) if entrega else int(dados["pedido_numero"])
+        async with pool.acquire() as conn:
+            estado = await conn.fetchrow("""
+                SELECT entregue,pago,finalizado,cancelado,entregue_por,entregue_em,pago_por,pago_em
+                  FROM entregas_status WHERE entrega_id=$1 AND numero_parcela=$2
+            """, entrega, parcela)
+        if not estado:
+            raise RuntimeError("Status da encomenda não encontrado.")
+        entregue, pago = bool(estado["entregue"]), bool(estado["pago"])
+        linhas = []
+        if entregue:
+            nome = await _nome_responsavel_venda(estado["entregue_por"], interaction.guild)
+            quando = estado["entregue_em"].strftime("%d/%m/%Y %H:%M") if estado["entregue_em"] else "—"
+            linhas.append(f"🟢 Entregue por {nome or 'Não identificado'} • {quando}")
         else:
-            await interaction.followup.send(f"✅ **Pagamento registrado no caixa!**\nAguardando entrega...", ephemeral=True)
-        
-        await enviar_painel_vendas()
-        
+            linhas.append("🟡 Entrega pendente")
+        if pago:
+            nome = await _nome_responsavel_venda(estado["pago_por"], interaction.guild)
+            quando = estado["pago_em"].strftime("%d/%m/%Y %H:%M") if estado["pago_em"] else "—"
+            linhas.append(f"🟢 Pagamento recebido por {nome or 'Não identificado'} • {quando}")
+        else:
+            linhas.append("🟡 Pagamento pendente")
+        if entregue and pago and not estado["finalizado"]:
+            linhas.append("🔄 Aguardando envio ao canal Finalizados")
+        for indice, campo in enumerate(embed.fields):
+            if "STATUS" in (campo.name or "").upper():
+                embed.set_field_at(indice, name="🚦 Status",
+                                   value="```yaml\n" + "\n".join(linhas) + "\n```", inline=False)
+                break
+        view = StatusView(
+            entrega_id=entrega or None,
+            total_entregas=dados["total_entregas"],
+            entrega_atual=dados["entrega_atual"],
+            pago_ja_clicado=pago, entregue_ja_clicado=entregue,
+            valor_total=dados["valor_total"], pt=dados["pt"], sub=dados["sub"],
+            pedido_numero=dados["pedido_numero"], is_doacao=self.is_doacao
+        )
+        await interaction.message.edit(embed=embed, view=view)
+        try:
+            await BotaoPersistente.salvar_botao(
+                interaction.message.id, interaction.channel.id, "venda", {
+                    "entrega_id": entrega or None,
+                    "total_entregas": dados["total_entregas"],
+                    "entrega_atual": dados["entrega_atual"],
+                    "valor_total": dados["valor_total"], "pt": dados["pt"], "sub": dados["sub"],
+                    "pedido_numero": dados["pedido_numero"],
+                    "pago_ja_clicado": pago, "entregue_ja_clicado": entregue,
+                    "is_doacao": self.is_doacao
+                }
+            )
+        except Exception as erro:
+            logger.warning("⚠️ Persistência do pedido #%s: %s", dados["pedido_numero"], erro)
+        return estado
+
+    async def pago(self, interaction: discord.Interaction, button):
+        dados, embed = await self._contexto_venda(interaction)
+        if self.is_doacao:
+            await interaction.followup.send("⚠️ Doações não geram pagamentos.", ephemeral=True)
+            return
+        resultado = await confirmar_pagamento_venda_com_caixa(
+            pedido_numero=dados["pedido_numero"], entrega_id=dados["entrega_id"],
+            numero_parcela=dados["entrega_atual"], pt=dados["pt"], sub=dados["sub"],
+            valor=dados["valor_total"], recebido_por=interaction.user.id
+        )
+        if not resultado["ok"]:
+            await interaction.followup.send(
+                f"❌ Pagamento NÃO processado: {resultado['motivo']}", ephemeral=True
+            )
+            return
+
+        # PAGAMENTO JÁ EXISTENTE: recupera o estado sem creditar o caixa outra vez.
+        if resultado["entregue"]:
+            conclusao = await finalizar_venda_quando_quitada(interaction, dados, embed)
+            if conclusao["ok"] and conclusao["finalizado"]:
+                await interaction.followup.send(
+                    f"✅ Pedido #{dados['pedido_numero']:04d} entregue e pago: movido para Finalizados."
+                    + (" O pagamento anterior foi preservado." if resultado["ja_pago"] else ""),
+                    ephemeral=True
+                )
+            else:
+                try:
+                    await self._atualizar_card_pelo_banco(interaction, dados, embed)
+                except Exception as erro:
+                    logger.error("❌ Sincronização de venda #%s: %s", dados["pedido_numero"], erro)
+                await interaction.followup.send(
+                    f"⚠️ Pagamento salvo, mas o pedido ainda não foi movido: "
+                    f"{conclusao.get('motivo','pendência de finalização')}. "
+                    "Use 🔄 Concluir Pedido para tentar novamente; não registre o pagamento outra vez.",
+                    ephemeral=True
+                )
+        else:
+            try:
+                await self._atualizar_card_pelo_banco(interaction, dados, embed)
+                await interaction.followup.send(
+                    ("ℹ️ Pagamento já registrado." if resultado["ja_pago"]
+                     else "✅ Pagamento recebido e creditado no caixa.")
+                    + " Aguardando a entrega.", ephemeral=True
+                )
+            except Exception as erro:
+                logger.exception("❌ Erro visual do pedido pago #%s: %s", dados["pedido_numero"], erro)
+                await interaction.followup.send(
+                    "⚠️ Pagamento salvo no banco; falha ao atualizar o card. "
+                    "Não clique novamente para cobrar. Contate a gerência.", ephemeral=True
+                )
+        try:
+            await enviar_painel_vendas()
+        except Exception as erro:
+            logger.warning("⚠️ Painel de vendas após pagamento: %s", erro)
+
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: entregue
     # ────────────────────────────────────────────────────────────────────────────────
     async def entregue(self, interaction: discord.Interaction, button):
-        # A interação é deferida por interaction_check antes desta função.
-        # Não desabilitar o botão em memória ANTES do commit no PostgreSQL.
-        if self.entrega_ja_entregue:
-            await interaction.followup.send("⚠️ Essa entrega já está marcada como concluída.", ephemeral=True)
-            return
-        if not interaction.message.embeds:
-            await interaction.followup.send("❌ Card da entrega indisponível.", ephemeral=True)
-            return
-
-        embed = interaction.message.embeds[0]
-        dados = self.extrair_dados_venda(embed)
-        encontrado = re.search(r"#\s*(\d+)", embed.title or "")
-        pedido_numero = int(encontrado.group(1)) if encontrado else int(self.pedido_numero or 0)
-
-        # Ler o que está EFETIVAMENTE no card, evitando usar dados zerados
-        # de views globais criadas automaticamente após reinícios.
-        quantidades = {}
-        for field in embed.fields:
-            nome = (field.name or "").upper()
-            tipo = "PT" if re.search(r"(?:^|\W)PT(?:$|\W)", nome) else (
-                   "SUB" if re.search(r"(?:^|\W)SUB(?:$|\W)", nome) else None)
-            if tipo:
-                valor = re.search(r"([\d.]+)\s*muniç", field.value or "", re.IGNORECASE)
-                if valor is not None:
-                    quantidades[tipo] = int(valor.group(1).replace(".", ""))
-
-        if pedido_numero <= 0 or "PT" not in quantidades or "SUB" not in quantidades:
-            await interaction.followup.send(
-                "❌ Não consegui identificar o pedido ou as quantidades PT/SUB no card. "
-                "Nenhuma munição foi descontada.", ephemeral=True
-            )
-            return
-
-        entrega_id = int(self.entrega_id or 0)
-        rodape = embed.footer.text if embed.footer and embed.footer.text else ""
-        id_encontrado = re.search(r"ID:\s*(\d+)", rodape)
-        if id_encontrado:
-            entrega_id = int(id_encontrado.group(1))
-
-        entrega_atual = int(self.entrega_atual or 1)
-        total_entregas = int(self.total_entregas or 1)
-        if embed.description:
-            parcela = re.search(r"Entrega\s+(\d+)\s+de\s+(\d+)",
-                                embed.description, re.IGNORECASE)
-            if parcela:
-                entrega_atual, total_entregas = map(int, parcela.groups())
-        if total_entregas > 1 and not entrega_id:
-            await interaction.followup.send(
-                "❌ Entrega parcelada sem ID válido. Nenhuma baixa foi realizada.",
-                ephemeral=True
-            )
-            return
-
+        dados, embed = await self._contexto_venda(interaction)
         resultado = await confirmar_entrega_com_baixa_estoque(
-            pedido_numero=pedido_numero,
-            entrega_id=entrega_id,
-            numero_parcela=entrega_atual,
-            pt=quantidades["PT"],
-            sub=quantidades["SUB"],
+            pedido_numero=dados["pedido_numero"],
+            entrega_id=dados["entrega_id"],
+            numero_parcela=dados["entrega_atual"],
+            pt=dados["pt"], sub=dados["sub"],
             entregador_id=interaction.user.id
         )
-        if not resultado["ok"]:
+        # Uma entrega já baixada no banco NÃO é erro e NÃO recebe outra baixa.
+        ja_entregue = bool(resultado.get("ja_entregue"))
+        # Mesmo quando a função retorna "já entregue" ou "finalizada", a
+        # reconciliação consulta o banco e não executa uma segunda baixa.
+
+        # Busca estado sempre no PostgreSQL para processar também pedidos presos.
+        pool = await get_pool()
+        if not pool:
             await interaction.followup.send(
-                f"⚠️ **Entrega não processada:** {resultado['motivo']}",
-                ephemeral=True
+                "⚠️ Entrega salva, mas banco indisponível para sincronização.", ephemeral=True
             )
             return
-
-        # A partir deste ponto, estoque + histórico + status já estão
-        # COMMITADOS. Falhas na API Discord não podem repetir a baixa.
-        # NÃO alterar self.entrega_ja_entregue aqui: views globais sem message_id
-        # podem atender outros pedidos. A proteção real está no PostgreSQL.
-        pago_ja_clicado = bool(resultado["pago"])
-        agora_str = agora().strftime("%d/%m/%Y %H:%M")
-        try:
-            entregador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
-        except Exception as e:
-            logger.warning("⚠️ Nome do entregador indisponível: %s", e)
-            entregador_apelido = str(interaction.user.id)
-
-        for i, field in enumerate(embed.fields):
-            if "STATUS" in (field.name or "").upper():
-                texto_status = f"🟢 Entregue por {entregador_apelido} • {agora_str}"
-                if not pago_ja_clicado:
-                    texto_status += "\n🟡 Pagamento pendente"
-                embed.set_field_at(i, name="🚦 Status",
-                                   value=f"```yaml\n{texto_status}\n```", inline=False)
-                break
-
-        valor_total = quantidades["PT"] * 50 + quantidades["SUB"] * 90
-        view_entregue = StatusView(
-            entrega_id=entrega_id or None, total_entregas=total_entregas,
-            entrega_atual=entrega_atual, pago_ja_clicado=pago_ja_clicado,
-            mensagem_original=interaction.message, valor_total=valor_total,
-            pt=quantidades["PT"], sub=quantidades["SUB"],
-            pedido_numero=pedido_numero, entregue_ja_clicado=True,
-            is_doacao=self.is_doacao
-        )
-
-        # O registro de view é atualizado para não ressuscitar o botão
-        # de entrega ao reiniciar o Railway.
-        try:
-            await BotaoPersistente.salvar_botao(
-                interaction.message.id, interaction.channel.id, "venda", {
-                    "entrega_id": entrega_id or None,
-                    "total_entregas": total_entregas,
-                    "entrega_atual": entrega_atual,
-                    "valor_total": valor_total,
-                    "pt": quantidades["PT"], "sub": quantidades["SUB"],
-                    "pedido_numero": pedido_numero,
-                    "pago_ja_clicado": pago_ja_clicado,
-                    "entregue_ja_clicado": True,
-                    "is_doacao": self.is_doacao
-                }
+        parcela = int(dados["entrega_atual"]) if dados["entrega_id"] else int(dados["pedido_numero"])
+        async with pool.acquire() as conn:
+            estado = await conn.fetchrow("""
+                SELECT entregue,pago FROM entregas_status
+                WHERE entrega_id=$1 AND numero_parcela=$2
+            """, int(dados["entrega_id"] or 0), parcela)
+        if not estado or not estado["entregue"]:
+            await interaction.followup.send(
+                f"❌ Entrega não concluída: {resultado.get('motivo', 'não confirmada no banco')}. "
+                "Nenhuma baixa será repetida.", ephemeral=True
             )
-        except Exception as e:
-            logger.error("❌ Falha ao atualizar persistência da venda #%s: %s",
-                         pedido_numero, e)
+            return
+        if not resultado["ok"]:
+            ja_entregue = True
 
-        try:
-            await _registrar_atividade(interaction.user.id, "venda")
-        except Exception as e:
-            logger.warning("⚠️ Falha ao registrar atividade da venda: %s", e)
-
-        msg_nova = None
-        if entrega_atual < total_entregas:
-            # Nova view, com dados locais desta mensagem: uma view genérica
-            # compartilhada não pode contaminar a identidade de outra venda.
-            proxima_view = StatusView(
-                entrega_id=entrega_id, entrega_atual=entrega_atual,
-                total_entregas=total_entregas, pedido_numero=pedido_numero
-            )
-            msg_nova = await proxima_view.criar_proxima_entrega(
-                interaction, embed, pedido_numero
-            )
-
-        if pago_ja_clicado and entrega_atual >= total_entregas:
-            enviado = await enviar_embed_pedido_finalizado(
-                pedido_numero=pedido_numero,
-                pt=quantidades["PT"], sub=quantidades["SUB"],
-                organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
-                pago_por=None, pago_em=None,
-                entregue_por=entregador_apelido, entregue_em=agora_str,
-                transferido_para=None, transferido_por=None,
-                transferido_em=None, tipo="finalizado",
-                entrega_id=entrega_id or None
-            )
-            if enviado:
-                try:
-                    await marcar_pedido_finalizado(pedido_numero, tipo="finalizado")
-                except Exception as e:
-                    logger.error("❌ Falha ao finalizar pedido #%s: %s", pedido_numero, e)
-                try:
-                    await interaction.message.delete()
-                except Exception as e:
-                    logger.warning("⚠️ Falha ao remover card concluído #%s: %s", pedido_numero, e)
-                resposta = (
-                    f"✅ **Entrega e baixa de estoque confirmadas!** Pedido #{pedido_numero:04d} finalizado."
-                )
+        if estado["pago"]:
+            conclusao = await finalizar_venda_quando_quitada(interaction, dados, embed)
+            if conclusao["ok"] and conclusao["finalizado"]:
+                mensagem = (f"✅ Pedido #{dados['pedido_numero']:04d} movido para Finalizados. "
+                            + ("Estoque preservado: entrega já havia sido registrada." if ja_entregue
+                               else f"Estoque descontado: {dados['pt']//50} PT e {dados['sub']//50} SUB."))
+                await interaction.followup.send(mensagem, ephemeral=True)
             else:
                 try:
-                    await interaction.message.edit(embed=embed, view=view_entregue)
-                except Exception as e:
-                    logger.error("❌ Falha ao atualizar card #%s: %s", pedido_numero, e)
-                resposta = (
-                    f"✅ **Entrega #{pedido_numero:04d} registrada e estoque descontado.** "
-                    "⚠️ Não foi possível publicar em Finalizados. Avise a gerência; "
-                    "não clique novamente para descontar."
+                    await self._atualizar_card_pelo_banco(interaction, dados, embed)
+                except Exception as erro:
+                    logger.error("❌ Sincronização de venda #%s: %s", dados["pedido_numero"], erro)
+                await interaction.followup.send(
+                    f"⚠️ Entrega e pagamento estão registrados, mas faltou mover o card: "
+                    f"{conclusao.get('motivo','pendência')}. "
+                    "Use 🔄 Concluir Pedido para repetir somente a finalização.",
+                    ephemeral=True
                 )
-        elif pago_ja_clicado:
-            # Parcelas anteriores pagas: descartar o card antigo apenas
-            # quando a próxima entrega estiver visível.
-            try:
-                if msg_nova:
-                    await interaction.message.delete()
-                else:
-                    await interaction.message.edit(embed=embed, view=view_entregue)
-            except Exception as e:
-                logger.error("❌ Falha ao atualizar card de parcela #%s: %s", pedido_numero, e)
-            resposta = (
-                f"✅ **Entrega {entrega_atual}/{total_entregas} registrada!** "
-                f"Estoque: -{resultado['pacotes_pt']} PT e -{resultado['pacotes_sub']} SUB."
-            )
-            resposta += (" Próxima entrega criada." if msg_nova else
-                         " ⚠️ Próxima entrega não criada; avise a gerência.")
         else:
             try:
-                await interaction.message.edit(embed=embed, view=view_entregue)
-            except Exception as e:
-                logger.error("❌ Falha ao atualizar card entregue #%s: %s", pedido_numero, e)
-            resposta = (
-                f"✅ **Entrega {entrega_atual}/{total_entregas} registrada e estoque descontado!** "
-                f"(-{resultado['pacotes_pt']} PT / -{resultado['pacotes_sub']} SUB). "
-                "Aguardando pagamento."
-            )
-            if entrega_atual < total_entregas:
-                resposta += (" Próxima entrega gerada." if msg_nova else
-                             " ⚠️ Próxima entrega não criada; avise a gerência.")
+                await self._atualizar_card_pelo_banco(interaction, dados, embed)
+                await interaction.followup.send(
+                    ("ℹ️ Entrega já constava no banco. Nenhuma nova baixa foi feita. "
+                     if ja_entregue else
+                     f"✅ Entrega registrada! Estoque: -{dados['pt']//50} PT e -{dados['sub']//50} SUB. ")
+                    + "Aguardando pagamento.", ephemeral=True
+                )
+            except Exception as erro:
+                logger.exception("❌ Erro visual após entrega #%s: %s", dados["pedido_numero"], erro)
+                await interaction.followup.send(
+                    "⚠️ Entrega registrada, mas falha ao atualizar o card. "
+                    "Nenhuma nova baixa será permitida; avise a gerência.", ephemeral=True
+                )
 
-        await interaction.followup.send(resposta, ephemeral=True)
-
-        # Falha em painel secundário não altera uma entrega já confirmada.
-        for atualizar_painel in (enviar_painel_vendas, enviar_painel_fabricacao):
+        # A próxima parcela também deve ser criada quando o pagamento foi
+        # recebido antes da entrega. Clique repetido nunca a cria outra vez.
+        if dados["entrega_atual"] < dados["total_entregas"] and not ja_entregue:
             try:
-                await atualizar_painel()
-            except Exception as e:
-                logger.warning("⚠️ Falha ao atualizar painel após entrega: %s", e)
+                proxima_view = StatusView(
+                    entrega_id=dados["entrega_id"],
+                    entrega_atual=dados["entrega_atual"],
+                    total_entregas=dados["total_entregas"],
+                    pedido_numero=dados["pedido_numero"]
+                )
+                await proxima_view.criar_proxima_entrega(
+                    interaction, embed, dados["pedido_numero"]
+                )
+            except Exception as erro:
+                logger.warning("⚠️ Próxima entrega #%s: %s", dados["pedido_numero"], erro)
+
+        if not ja_entregue:
+            try:
+                await _registrar_atividade(interaction.user.id, "venda")
+            except Exception as erro:
+                logger.warning("⚠️ Registro de atividade da entrega: %s", erro)
+        for painel in (enviar_painel_vendas, enviar_painel_fabricacao):
+            try:
+                await painel()
+            except Exception as erro:
+                logger.warning("⚠️ Atualização do painel pós-entrega: %s", erro)
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: editar_venda
@@ -10361,7 +10562,7 @@ class StatusView(discord.ui.View):
 
         agora_str = agora().strftime("%d/%m/%Y %H:%M")
         cancelador_apelido = await pegar_apelido(interaction.user.id, interaction.guild)
-        
+
         for i, field in enumerate(embed.fields):
             if "Status" in field.name:
                 embed.set_field_at(i, name="🚦 Status", value=f"```yaml\n❌ Cancelado por {cancelador_apelido} • {agora_str}\n```", inline=False)
@@ -10381,10 +10582,10 @@ class StatusView(discord.ui.View):
             cancelado_por=cancelador_apelido, cancelado_em=agora_str, tipo="cancelado",
             entrega_id=self.entrega_id
         )
-        
+
         try: await interaction.message.delete()
         except: pass
-        
+
         await interaction.followup.send(f"✅ **Pedido #{pedido_numero:04d} cancelado!**\n(A quantidade de munição foi devolvida ao estoque de produção).", ephemeral=True)
         await enviar_painel_vendas()
         await enviar_painel_fabricacao()
@@ -10415,14 +10616,14 @@ class StatusView(discord.ui.View):
             if idx >= len(entregas_lista): return False
             e_data = entregas_lista[idx]
             pt_e, sub_e = e_data.get("pt", 0), e_data.get("sub", 0)
-            
+
             if pt_e == 0 and sub_e == 0: return False
 
             organizacao = entrega["organizacao"]
             config = ORGANIZACOES_CONFIG.get(organizacao, {"emoji": "🏷️", "cor": 0x1a1a2e})
-            
+
             msg_nova = await criar_embed_entrega(interaction=interaction, pedido_numero=pedido_original, entrega_atual=proxima, total_entregas=total_entregas, pt=pt_e, sub=sub_e, org_nome=organizacao, config=config, observacoes=entrega["observacoes"], entrega_id=self.entrega_id, vendedor_id=entrega["vendedor_id"], grupo=None, entregas_lista=entregas_lista)
-            
+
             if msg_nova:
                 self.entrega_criada = True
                 return True
@@ -10430,6 +10631,8 @@ class StatusView(discord.ui.View):
         except Exception as e:
             logger.error(f"❌ Erro ao criar próxima entrega: {e}")
             return False
+# FIM — StatusView
+# ════════════════════════════════════════════════════════════════════════════════
             
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: VendaModal (Original - Sem DM e sem comprovantes)
@@ -11216,112 +11419,102 @@ async def finalizar_e_mover_pedido(
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_botoes_vendas
 # ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: restaurar_botoes_vendas
-# ────────────────────────────────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 12 — FUNÇÃO: restaurar_botoes_vendas
+# ════════════════════════════════════════════════════════════════════════════════
 async def restaurar_botoes_vendas():
+    """Restaura 500 cards com identificação por mensagem e status do PostgreSQL.
+
+    Não deduz pagamento da presença de emoji na descrição: status do banco é
+    sempre a fonte de verdade. Cards já encerrados são ignorados.
+    """
+    canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
+    if not canal:
+        logger.error("❌ Canal de encomendas não encontrado.")
+        return
+    pool = await get_pool()
+    if not pool:
+        logger.error("❌ Banco indisponível para restaurar vendas.")
+        return
+    ativos = 0
+    ignorados = 0
     try:
-        canal = bot.get_channel(CANAL_ENCOMENDAS_ID)
-        if not canal:
-            logger.error("❌ Canal de encomendas não encontrado!")
-            return
-        contador_ativos = 0
-        contador_ignorados = 0
         async for msg in canal.history(limit=500):
-            if msg.author == bot.user and msg.embeds and len(msg.embeds) > 0:
-                titulo = msg.embeds[0].title if msg.embeds[0].title else ""
-                if "ENTREGA" in titulo.upper() or "ENCOMENDA" in titulo.upper() or "VENDA" in titulo.upper():
-                    embed = msg.embeds[0]
-                    pago = False
-                    entregue = False
-                    cancelado = False
-                    concluida = False
-                    transferencia_confirmada = False
-                    if "VENDA CONCLUÍDA" in titulo.upper():
-                        concluida = True
-                        pago = True
-                        entregue = True
-                    for field in embed.fields:
-                        if field.name == "📌 STATUS DO PEDIDO" or field.name == "📌 Status":
-                            valor = field.value
-                            if "TRANSFERÊNCIA CONFIRMADA" in valor:
-                                transferencia_confirmada = True
-                            if "💰" in valor or "Pago" in valor:
-                                pago = True
-                            if "✅" in valor or "Entregue" in valor:
-                                entregue = True
-                            if "❌" in valor or "cancelado" in valor.lower():
-                                cancelado = True
+            if msg.author != bot.user or not msg.embeds:
+                continue
+            embed = msg.embeds[0]
+            titulo = (embed.title or "").upper()
+            if not any(t in titulo for t in ("ENTREGA", "ENCOMENDA", "VENDA")):
+                continue
+            achado = re.search(r"#\s*(\d+)", embed.title or "")
+            if not achado:
+                continue
+            pedido = int(achado.group(1))
+            footer = embed.footer.text if embed.footer and embed.footer.text else ""
+            id_achado = re.search(r"ID:\s*(\d+)", footer)
+            entrega_id = int(id_achado.group(1)) if id_achado else 0
+            parcela = re.search(r"Entrega\s+(\d+)\s+de\s+(\d+)",
+                                embed.description or "", re.IGNORECASE)
+            atual, total = ((int(parcela.group(1)), int(parcela.group(2))) if parcela else (1, 1))
+            chave_parcela = atual if entrega_id else pedido
+            try:
+                async with pool.acquire() as conn:
+                    estado = await conn.fetchrow("""
+                        SELECT entregue,pago,finalizado,cancelado,pt,sub
+                          FROM entregas_status
+                         WHERE entrega_id=$1 AND numero_parcela=$2
+                    """, entrega_id, chave_parcela)
+                    venda = await conn.fetchrow("""
+                        SELECT finalizado,cancelado FROM vendas WHERE pedido_numero=$1
+                    """, pedido)
+                if (estado and estado["cancelado"]) or (venda and venda["cancelado"]):
+                    ignorados += 1
+                    continue
+                # vendas.finalizado não deve fechar antecipadamente uma parcela
+                # ainda aberta do mesmo pedido parcelado.
+                if not entrega_id and venda and venda["finalizado"] and not estado:
+                    ignorados += 1
+                    continue
+                pt = sub = 0
+                for campo in embed.fields:
+                    nome = (campo.name or "").upper()
+                    tipo = ("PT" if re.search(r"(?:^|\W)PT(?:$|\W)", nome) else
+                            "SUB" if re.search(r"(?:^|\W)SUB(?:$|\W)", nome) else None)
+                    if tipo:
+                        qtd = re.search(r"([\d.]+)\s*muniç", campo.value or "", re.IGNORECASE)
+                        if qtd:
+                            if tipo == "PT": pt = int(qtd.group(1).replace(".", ""))
+                            else: sub = int(qtd.group(1).replace(".", ""))
+                if estado and (int(estado["pt"] or 0) or int(estado["sub"] or 0)):
+                    pt, sub = int(estado["pt"] or 0), int(estado["sub"] or 0)
+                valor = pt * 50 + sub * 90
+                for campo in embed.fields:
+                    if "VALOR" in (campo.name or "").upper():
+                        money = re.search(r"R\$\s*([\d.]+),(\d{2})", campo.value or "")
+                        if money and money.group(2) == "00":
+                            valor = int(money.group(1).replace(".", ""))
                             break
+                view = StatusView(
+                    entrega_id=entrega_id or None,
+                    total_entregas=total, entrega_atual=atual,
+                    pago_ja_clicado=bool(estado["pago"]) if estado else False,
+                    entregue_ja_clicado=bool(estado["entregue"]) if estado else False,
+                    mensagem_original=msg, valor_total=valor,
+                    pt=pt, sub=sub, pedido_numero=pedido
+                )
+                await safe_request(msg.edit, view=view)
+                bot.add_view(view, message_id=msg.id)
+                ativos += 1
+                await asyncio.sleep(0.35)
+            except Exception as erro:
+                logger.exception("❌ Falha restaurando encomenda #%s: %s", pedido, erro)
+        logger.info("✅ Pedidos em aberto restaurados: %s; ignorados: %s", ativos, ignorados)
+    except Exception as erro:
+        logger.exception("❌ Erro geral ao restaurar vendas: %s", erro)
+# FIM — restaurar_botoes_vendas
+# ════════════════════════════════════════════════════════════════════════════════
 
-                    if cancelado or concluida or transferencia_confirmada:
-                        contador_ignorados += 1
-                        continue
-
-                    entrega_id = None
-                    if embed.footer:
-                        texto_footer = embed.footer.text
-                        if "ID:" in texto_footer:
-                            try:
-                                parte_id = texto_footer.split("ID:")[1].strip().split(" ")[0]
-                                entrega_id = safe_int(parte_id)
-                            except:
-                                pass
-                    total_entregas = 1
-                    entrega_atual = 1
-                    if embed.description:
-                        if "entregas no total" in embed.description:
-                            try:
-                                total_entregas = safe_int(embed.description.split("tem")[1].split("entregas")[0].strip())
-                            except:
-                                pass
-                    if "ENTREGA" in titulo:
-                        try:
-                            parte = titulo.split("ENTREGA")[1].strip().split("/")[0].strip()
-                            entrega_atual = safe_int(parte)
-                        except:
-                            pass
-                    valor_total = 0
-                    pt = 0
-                    sub = 0
-                    pedido_numero = safe_int(titulo.split("#")[1]) if "#" in titulo else 0
-                    for field in embed.fields:
-                        if field.name == "💰 VALOR TOTAL" or field.name == "💰 Valor (esta entrega)" or field.name == "💰 Valor":
-                            try:
-                                valor_total = safe_int(field.value.replace("R$", "").replace(".", "").replace(",", "").strip())
-                            except:
-                                pass
-                        if field.name == "🔫 PT":
-                            try:
-                                pt = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
-                            except:
-                                pass
-                        if field.name == "🔫 SUB":
-                            try:
-                                sub = int(field.value.split(" munições")[0].replace(".", "").replace(",", ""))
-                            except:
-                                pass
-                    view = StatusView(
-                        disabled=False,
-                        entrega_id=entrega_id,
-                        total_entregas=total_entregas,
-                        entrega_atual=entrega_atual,
-                        pago_ja_clicado=pago,
-                        mensagem_original=msg,
-                        transferencia_confirmada=False,
-                        valor_total=valor_total,
-                        pt=pt,
-                        sub=sub,
-                        pedido_numero=pedido_numero
-                    )
-                    await safe_request(msg.edit, view=view)
-                    contador_ativos += 1
-                    await asyncio.sleep(0.5)
-
-        logger.info(f"✅ {contador_ativos} pedidos EM ABERTO com botões restaurados")
-        logger.info(f"⏭️ {contador_ignorados} pedidos FINALIZADOS/CANCELADOS ignorados")
-    except Exception as e:
-        logger.error(f"❌ Erro ao restaurar botões de vendas: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: recriar_mensagens_vendas
