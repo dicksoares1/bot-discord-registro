@@ -1713,25 +1713,31 @@ def membro_deve_ter_meta(member):
         return "obrigado"
     return None
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: obter_regra_meta_membro (SOLDADO VISUAL SOBRESCREVE, MAS NÃO REMOVE ISENÇÃO)
-# ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: obter_regra_meta_membro
 # ────────────────────────────────────────────────────────────────────────────────
 async def obter_regra_meta_membro(member):
     if not member:
         return None
+
     roles_ids = [r.id for r in member.roles]
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # PRIORIDADE #1: SM — ISENTO TOTAL (nem aparece no painel de soldado)
+    # PRIORIDADE #1: SM — ISENTO TOTAL
     # ═══════════════════════════════════════════════════════════════════════════
     if CARGO_SEM_META_ID in roles_ids:
-        return {"isento": True, "tipo": None, "meta_dinheiro": 0, "meta_polvora": 0, "meta_acoes": 0, "meta_soldado": 0}
+        return {
+            "isento": True,
+            "tipo": None,
+            "meta_dinheiro": 0,
+            "meta_polvora": 0,
+            "meta_acoes": 0,
+            "meta_soldado": 0
+        }
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # CARGO ISENTO? (Gerente, Gerente Geral, 01, 02, 03)
+    # CARGOS DE LIDERANÇA E GERÊNCIA — ISENTOS
     # ═══════════════════════════════════════════════════════════════════════════
     cargos_isento_lideranca = [
         CARGO_GERENTE_ID,
@@ -1741,17 +1747,19 @@ async def obter_regra_meta_membro(member):
         CARGO_02_ID,
         CARGO_03_ID,
     ]
-    is_isento_lideranca = any(r in roles_ids for r in cargos_isento_lideranca)
+
+    is_isento_lideranca = any(
+        r in roles_ids
+        for r in cargos_isento_lideranca
+    )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # PRIORIDADE #2: SOLDADO
-    # - Se é SOLDADO + cargo isento (Gerente, 01, etc.):
-    #   → Mostra painel de SOLDADO (visual), MAS continua isento de cobrança
-    # - Se é SOLDADO + cargo NÃO isento:
-    #   → É SOLDADO normal (cobra meta, gera dívida)
+    # Mantém a meta coletiva e a isenção da liderança.
     # ═══════════════════════════════════════════════════════════════════════════
     if CARGO_SOLDADO_ID in roles_ids:
         meta_soldado = await buscar_meta_soldado()
+
         return {
             "isento": is_isento_lideranca,
             "tipo": "soldado",
@@ -1763,45 +1771,140 @@ async def obter_regra_meta_membro(member):
         }
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # CARGO ISENTO SEM SOLDADO — ISENTO TOTAL
+    # CARGO ISENTO SEM SOLDADO
     # ═══════════════════════════════════════════════════════════════════════════
     if is_isento_lideranca:
-        return {"isento": True, "tipo": None, "meta_dinheiro": 0, "meta_polvora": 0, "meta_acoes": 0, "meta_soldado": 0}
+        return {
+            "isento": True,
+            "tipo": None,
+            "meta_dinheiro": 0,
+            "meta_polvora": 0,
+            "meta_acoes": 0,
+            "meta_soldado": 0
+        }
 
     if membro_deve_ter_meta(member) == "isento":
-        return {"isento": True, "tipo": None, "meta_dinheiro": 0, "meta_polvora": 0, "meta_acoes": 0, "meta_soldado": 0}
+        return {
+            "isento": True,
+            "tipo": None,
+            "meta_dinheiro": 0,
+            "meta_polvora": 0,
+            "meta_acoes": 0,
+            "meta_soldado": 0
+        }
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # DEMAIS CARGOS — segue lógica normal
+    # HIERARQUIA ORIGINAL
+    # Responsáveis e Mecânicos continuam com prioridade.
     # ═══════════════════════════════════════════════════════════════════════════
     hierarquia = [
-        CARGO_RESP_METAS_ID, CARGO_RESP_ACAO_ID, CARGO_RESP_P1_ID, CARGO_RESP_VENDAS_ID,
-        CARGO_RESP_PRODUCAO_ID, CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
-        CARGO_MECANICO_ID, CARGO_MEMBRO_ID, CARGO_MORADOR_ID, CARGO_AGREGADO_ID
+        CARGO_RESP_METAS_ID,
+        CARGO_RESP_ACAO_ID,
+        CARGO_RESP_P1_ID,
+        CARGO_RESP_VENDAS_ID,
+        CARGO_RESP_PRODUCAO_ID,
+        CARGO_RESP_AGREGADOS_ID,
+        CARGO_RESP_MECANICA_ID,
+        CARGO_RESP_BAU_ID,
+        CARGO_MECANICO_ID,
+        CARGO_MEMBRO_ID,
+        CARGO_MORADOR_ID,
+        CARGO_AGREGADO_ID
     ]
+
     cargo_principal = None
+
     for c_id in hierarquia:
         if c_id in roles_ids:
             cargo_principal = c_id
             break
 
-    tipo_config, valor_config = await buscar_config_cargo(cargo_principal) if cargo_principal else (None, None)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PRIORIDADE ESPECIAL — AGREGADO
+    #
+    # Se o membro também tiver Membro ou Morador, usa a
+    # configuração de Agregado quando ela existir.
+    #
+    # Se Agregado ainda não estiver configurado, mantém
+    # a prioridade antiga para evitar mudanças inesperadas.
+    #
+    # Não sobrescreve Soldado, Responsáveis ou Mecânico.
+    # ═══════════════════════════════════════════════════════════════════════════
+    if (
+        CARGO_AGREGADO_ID in roles_ids
+        and cargo_principal in (
+            CARGO_MEMBRO_ID,
+            CARGO_MORADOR_ID,
+            CARGO_AGREGADO_ID
+        )
+    ):
+        tipo_agregado, _ = await buscar_config_cargo(
+            CARGO_AGREGADO_ID
+        )
+
+        if tipo_agregado in (
+            "dinheiro",
+            "polvora",
+            "ambos",
+            "acoes",
+            "sem_meta"
+        ):
+            cargo_principal = CARGO_AGREGADO_ID
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # BUSCA CONFIGURAÇÃO DO CARGO SELECIONADO
+    # ═══════════════════════════════════════════════════════════════════════════
+    tipo_config, valor_config = (
+        await buscar_config_cargo(cargo_principal)
+        if cargo_principal
+        else (None, None)
+    )
+
     tipo_global = await buscar_tipo_meta_semana()
     tipo_final = tipo_config if tipo_config else tipo_global
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SEM META — ISENÇÃO CONFIGURADA PELO MENU
+    # ═══════════════════════════════════════════════════════════════════════════
+    if tipo_final == "sem_meta":
+        return {
+            "isento": True,
+            "tipo": None,
+            "meta_dinheiro": 0,
+            "meta_polvora": 0,
+            "meta_acoes": 0,
+            "meta_soldado": 0,
+            "is_isento_lideranca": False
+        }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CÁLCULO DAS METAS
+    # ═══════════════════════════════════════════════════════════════════════════
     meta_dinheiro = 0
     meta_polvora = 0
     meta_acoes = 0
 
     if tipo_final == "acoes":
         meta_acoes = await buscar_meta_global_acoes()
+
     elif tipo_final in ("dinheiro", "ambos"):
-        meta_dinheiro = valor_config if valor_config else await definir_valor_meta_por_id(member.id)
+        meta_dinheiro = (
+            valor_config
+            if valor_config
+            else await definir_valor_meta_por_id(member.id)
+        )
+
         if meta_dinheiro == 0:
-            meta_dinheiro = await definir_valor_meta_por_cargo(member)
+            meta_dinheiro = await definir_valor_meta_por_cargo(
+                member
+            )
 
     if tipo_final in ("polvora", "ambos"):
-        meta_polvora = valor_config if valor_config else await definir_valor_meta_polvora(member.id)
+        meta_polvora = (
+            valor_config
+            if valor_config
+            else await definir_valor_meta_polvora(member.id)
+        )
 
     return {
         "isento": False,
@@ -1812,9 +1915,11 @@ async def obter_regra_meta_membro(member):
         "meta_soldado": 0,
         "is_isento_lideranca": False
     }
+
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: safe_request
+# FIM DA FUNÇÃO: obter_regra_meta_membro
 # ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: safe_request
 # ────────────────────────────────────────────────────────────────────────────────
@@ -20687,117 +20792,262 @@ async def enviar_painel_solicitar_sala():
 
     await enviar_ou_atualizar_painel("painel_solicitar_sala", CANAL_SOLICITAR_SALA_ID, embed, SolicitarSalaView())
 
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: ConfigurarMetaCargoSelect
-# ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfigurarMetaCargoSelect
 # ────────────────────────────────────────────────────────────────────────────────
 class ConfigurarMetaCargoSelect(discord.ui.Select):
-    # ────────────────────────────────────────────────────────────────────────────────
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         options = [
-            discord.SelectOption(label="📦 Resp. Produção", value=str(CARGO_RESP_PRODUCAO_ID)),
-            discord.SelectOption(label="🔫 Soldado", value=str(CARGO_SOLDADO_ID)),
-            discord.SelectOption(label="👤 Membro", value=str(CARGO_MEMBRO_ID)),
-            discord.SelectOption(label="🔧 Mecânico", value=str(CARGO_MECANICO_ID)),
-            discord.SelectOption(label="📋 Resp. Metas", value=str(CARGO_RESP_METAS_ID)),
-            discord.SelectOption(label="💼 Resp. Vendas", value=str(CARGO_RESP_VENDAS_ID)),
+            discord.SelectOption(
+                label="📦 Resp. Produção",
+                value=str(CARGO_RESP_PRODUCAO_ID)
+            ),
+            discord.SelectOption(
+                label="🔫 Soldado",
+                value=str(CARGO_SOLDADO_ID)
+            ),
+            discord.SelectOption(
+                label="👤 Membro",
+                value=str(CARGO_MEMBRO_ID)
+            ),
+            discord.SelectOption(
+                label="👥 Agregado",
+                value=str(CARGO_AGREGADO_ID)
+            ),
+            discord.SelectOption(
+                label="🔧 Mecânico",
+                value=str(CARGO_MECANICO_ID)
+            ),
+            discord.SelectOption(
+                label="📋 Resp. Metas",
+                value=str(CARGO_RESP_METAS_ID)
+            ),
+            discord.SelectOption(
+                label="💼 Resp. Vendas",
+                value=str(CARGO_RESP_VENDAS_ID)
+            ),
         ]
-        super().__init__(placeholder="Selecione o cargo para configurar...", options=options)
 
-    # ────────────────────────────────────────────────────────────────────────────────
+        super().__init__(
+            placeholder="Selecione o cargo para configurar...",
+            options=options
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: callback
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         cargo_id = self.values[0]
+
         view = TipoMetaCargoView(cargo_id)
-        await interaction.response.send_message(f"Configurando o cargo <@&{cargo_id}>. Escolha o tipo de meta:", view=view, ephemeral=True)
+
+        await interaction.response.send_message(
+            (
+                f"Configurando o cargo <@&{cargo_id}>. "
+                "Escolha o tipo de meta:"
+            ),
+            view=view,
+            ephemeral=True
+        )
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: TipoMetaCargoView
+# FIM DA CLASSE: ConfigurarMetaCargoSelect
 # ────────────────────────────────────────────────────────────────────────────────
+
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: TipoMetaCargoView
 # ────────────────────────────────────────────────────────────────────────────────
 class TipoMetaCargoView(discord.ui.View):
-    # ────────────────────────────────────────────────────────────────────────────────
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     def __init__(self, cargo_id):
         super().__init__(timeout=120)
+
         self.cargo_id = cargo_id
+        self.nome_cargo = f"<@&{cargo_id}>"
 
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: btn_dinheiro
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="💰 Dinheiro", style=discord.ButtonStyle.success)
-    async def btn_dinheiro(self, interaction: discord.Interaction, button: discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(
+        label="💰 Dinheiro",
+        style=discord.ButtonStyle.success
+    )
+    async def btn_dinheiro(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
         await definir_config_cargo(self.cargo_id, "dinheiro")
-        await interaction.response.send_message("✅ Cargo configurado para DINHEIRO.", ephemeral=True)
+
+        await interaction.response.send_message(
+            "✅ Cargo configurado para DINHEIRO.",
+            ephemeral=True
+        )
+
         await atualizar_todos_embeds_metas(interaction)
 
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: btn_polvora
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="🧨 Pólvora", style=discord.ButtonStyle.primary)
-    async def btn_polvora(self, interaction: discord.Interaction, button: discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(
+        label="🧨 Pólvora",
+        style=discord.ButtonStyle.primary
+    )
+    async def btn_polvora(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
         await definir_config_cargo(self.cargo_id, "polvora")
-        await interaction.response.send_message("✅ Cargo configurado para PÓLVORA.", ephemeral=True)
+
+        await interaction.response.send_message(
+            "✅ Cargo configurado para PÓLVORA.",
+            ephemeral=True
+        )
+
         await atualizar_todos_embeds_metas(interaction)
 
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: btn_sem_meta
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="🚫 Sem Meta", style=discord.ButtonStyle.danger)
-    async def btn_sem_meta(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Apenas gerentes/ADM!", ephemeral=True)
-        
+    # ────────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(
+        label="🚫 Sem Meta",
+        style=discord.ButtonStyle.danger
+    )
+    async def btn_sem_meta(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        autorizado = (
+            interaction.user.guild_permissions.administrator
+            or any(
+                r.id in [
+                    CARGO_GERENTE_ID,
+                    CARGO_GERENTE_GERAL_ID,
+                    CARGO_DONO_MORRO_ID,
+                    CARGO_01_ID,
+                    CARGO_02_ID
+                ]
+                for r in interaction.user.roles
+            )
+        )
+
+        if not autorizado:
+            await interaction.response.send_message(
+                "❌ Apenas gerentes/ADM!",
+                ephemeral=True
+            )
+            return
+
         await interaction.response.defer(ephemeral=True)
-        sucesso = await definir_config_cargo(self.cargo_id, "sem_meta")
+
+        sucesso = await definir_config_cargo(
+            self.cargo_id,
+            "sem_meta"
+        )
+
         if not sucesso:
-            return await interaction.followup.send("❌ Erro ao salvar!", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Erro ao salvar!",
+                ephemeral=True
+            )
+            return
 
         guild = bot.get_guild(GUILD_ID)
         atualizados = 0
+
         if guild:
             cargo = guild.get_role(int(self.cargo_id))
+
             if cargo:
                 for member in guild.members:
-                    if cargo in member.roles and str(member.id) in metas_cache:
+                    if (
+                        cargo in member.roles
+                        and str(member.id) in metas_cache
+                    ):
                         try:
                             await atualizar_embed_meta(member.id)
                             atualizados += 1
                             await asyncio.sleep(0.3)
-                        except: pass
+                        except Exception as erro:
+                            logger.error(
+                                "Erro ao atualizar isenção de %s: %s",
+                                member.id,
+                                erro
+                            )
 
-        embed = discord.Embed(title="✅ CARGO ISENTO DE META", description=f"Cargo **{self.nome_cargo}** agora está **ISENTO**.\n\n👥 {atualizados} membros atualizados.", color=0x2ECC71)
-        await interaction.followup.send(embed=embed, ephemeral=True) 
+        embed = discord.Embed(
+            title="✅ CARGO ISENTO DE META",
+            description=(
+                f"Cargo **{self.nome_cargo}** agora está "
+                f"**ISENTO**.\n\n"
+                f"👥 {atualizados} membros atualizados."
+            ),
+            color=0x2ECC71
+        )
 
-    # ────────────────────────────────────────────────────────────────────────────────
+        await interaction.followup.send(
+            embed=embed,
+            ephemeral=True
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: btn_acoes
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="🎯 Ações", style=discord.ButtonStyle.danger)
-    async def btn_acoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(
+        label="🎯 Ações",
+        style=discord.ButtonStyle.danger
+    )
+    async def btn_acoes(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
         await definir_config_cargo(self.cargo_id, "acoes")
-        await interaction.response.send_message("✅ Cargo configurado para AÇÕES.", ephemeral=True)
+
+        await interaction.response.send_message(
+            "✅ Cargo configurado para AÇÕES.",
+            ephemeral=True
+        )
+
         await atualizar_todos_embeds_metas(interaction)
 
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: btn_ambos
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="⚖️ Ambos", style=discord.ButtonStyle.secondary)
-    async def btn_ambos(self, interaction: discord.Interaction, button: discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(
+        label="⚖️ Ambos",
+        style=discord.ButtonStyle.secondary
+    )
+    async def btn_ambos(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
         await definir_config_cargo(self.cargo_id, "ambos")
-        await interaction.response.send_message("✅ Cargo configurado para AMBOS.", ephemeral=True)
+
+        await interaction.response.send_message(
+            "✅ Cargo configurado para AMBOS.",
+            ephemeral=True
+        )
+
         await atualizar_todos_embeds_metas(interaction)
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_todos_embeds_metas
+# FIM DA CLASSE: TipoMetaCargoView
 # ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_todos_embeds_metas
 # ────────────────────────────────────────────────────────────────────────────────
@@ -28277,6 +28527,7 @@ async def verificar_e_mover_paineis(canal):
     except Exception as e:
         logger.error(f"❌ Erro geral em verificar_e_mover_paineis: {e}")
 
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_view_por_painel
 # ────────────────────────────────────────────────────────────────────────────────
@@ -28344,16 +28595,26 @@ def criar_view_por_painel(nome):
     elif nome == "painel_relatorio_metas":
         view = discord.ui.View(timeout=None)
 
+        # ────────────────────────────────────────────────────────────────────────
+        # BOTÕES DE RELATÓRIO E FECHAMENTO
+        # ────────────────────────────────────────────────────────────────────────
         view.add_item(RelatorioMetasButton())
         view.add_item(FecharMetasAutomaticoButton())
         view.add_item(RelatorioHorasButton())
         view.add_item(ResetarHorasSemanaButton())
-        view.add_item(TrocarTipoMetaButton())
-        view.add_item(VerDividasButton())
-        view.add_item(DefinirMetaSoldadoButton())
-        view.add_item(LimparDividasButton())
 
-        # NOVO: botão de limpeza geral persistente.
+        # ────────────────────────────────────────────────────────────────────────
+        # CONFIGURAÇÃO DE METAS
+        # ────────────────────────────────────────────────────────────────────────
+        view.add_item(TrocarTipoMetaButton())
+        view.add_item(ConfigurarMetaCargoButton())
+        view.add_item(DefinirMetaSoldadoButton())
+
+        # ────────────────────────────────────────────────────────────────────────
+        # GERENCIAMENTO DE DÍVIDAS
+        # ────────────────────────────────────────────────────────────────────────
+        view.add_item(VerDividasButton())
+        view.add_item(LimparDividasButton())
         view.add_item(LimparTodasDividasButton())
 
         return view
@@ -28384,6 +28645,7 @@ def criar_view_por_painel(nome):
 # ────────────────────────────────────────────────────────────────────────────────
 # FIM DA FUNÇÃO: criar_view_por_painel
 # ────────────────────────────────────────────────────────────────────────────────
+
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  FIM DO BLOCO 20 — PAINEL GLOBAL + BOTÕES PERSISTENTES                      ║
