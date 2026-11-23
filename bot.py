@@ -20001,6 +20001,197 @@ class ConfirmarDepositoView(discord.ui.View):
 # ────────────────────────────────────────────────────────────────────────────────
 
 # ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restaurar_confirmacoes_depositos_metas
+# ────────────────────────────────────────────────────────────────────────────────
+async def restaurar_confirmacoes_depositos_metas():
+    """
+    Restaura os botões Confirmar/Rejeitar de TODAS as
+    solicitações pendentes usando o ID exato da mensagem.
+
+    Não existe filtro por idade.
+    Não envia depósitos duplicados.
+    Não modifica dinheiro, pólvora ou dívidas.
+    """
+    pool = await get_pool()
+
+    if not pool:
+        logger.error(
+            "❌ PostgreSQL indisponível: restauração "
+            "de depósitos adiada."
+        )
+        return 0
+
+    try:
+        async with pool.acquire() as conn:
+            pendentes = await conn.fetch("""
+                SELECT id, user_id, tipo, valor, mensagem_id
+                FROM metas_confirmacoes
+                WHERE status = 'pendente'
+                ORDER BY id ASC
+            """)
+
+    except Exception:
+        logger.exception(
+            "❌ Falha buscando depósitos pendentes para restauração."
+        )
+        return 0
+
+    registrados = getattr(
+        bot,
+        "_vdr_views_confirmacoes_metas",
+        None
+    )
+
+    if registrados is None:
+        registrados = {}
+        bot._vdr_views_confirmacoes_metas = registrados
+
+    ids_ativos = set()
+    recuperados = 0
+    ignorados = 0
+
+    for row in pendentes:
+        try:
+            mensagem_id = str(
+                row["mensagem_id"] or ""
+            ).strip()
+
+            if (
+                not mensagem_id.isdecimal()
+                or int(mensagem_id) <= 0
+            ):
+                logger.warning(
+                    "⚠️ Depósito pendente #%s sem "
+                    "mensagem_id válido; não será associado "
+                    "a outra mensagem.",
+                    row["id"]
+                )
+                ignorados += 1
+                continue
+
+            mid = int(mensagem_id)
+            ids_ativos.add(mid)
+
+            tipo = str(
+                row["tipo"] or ""
+            ).strip().lower()
+
+            if (
+                tipo not in ("dinheiro", "polvora")
+                or int(row["valor"] or 0) <= 0
+            ):
+                logger.warning(
+                    "⚠️ Depósito #%s com tipo/valor inválidos; "
+                    "não restaurado.",
+                    row["id"]
+                )
+                ignorados += 1
+                continue
+
+            anterior = registrados.get(mid)
+
+            if (
+                anterior is not None
+                and not anterior.is_finished()
+            ):
+                continue
+
+            view = ConfirmarDepositoView(
+                int(row["id"]),
+                str(row["user_id"]),
+                tipo,
+                int(row["valor"])
+            )
+
+            if not view.is_persistent():
+                raise RuntimeError(
+                    "ConfirmarDepositoView não é persistente: "
+                    "verificar timeout/custom_id."
+                )
+
+            # O ID da mensagem impede misturar solicitações
+            # diferentes que usam os mesmos custom_ids.
+            bot.add_view(
+                view,
+                message_id=mid
+            )
+
+            registrados[mid] = view
+            recuperados += 1
+
+        except Exception:
+            logger.exception(
+                "❌ Falha restaurando confirmação de "
+                "depósito #%s.",
+                row["id"]
+            )
+            ignorados += 1
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # LIBERA REGISTROS QUE JÁ FORAM PROCESSADOS
+    # ────────────────────────────────────────────────────────────────────────────
+    for mid in list(registrados):
+        if mid not in ids_ativos:
+            antiga = registrados.pop(mid)
+
+            try:
+                antiga.stop()
+            except Exception:
+                logger.exception(
+                    "⚠️ Falha liberando View encerrada "
+                    "da mensagem %s.",
+                    mid
+                )
+
+    logger.info(
+        "🔒 Depósitos: %s pendentes no banco, "
+        "%s Views restauradas agora, "
+        "%s com pendência de dados.",
+        len(pendentes),
+        recuperados,
+        ignorados
+    )
+
+    return recuperados
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FIM DA FUNÇÃO: restaurar_confirmacoes_depositos_metas
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: vigiar_confirmacoes_depositos_metas
+# ────────────────────────────────────────────────────────────────────────────────
+async def vigiar_confirmacoes_depositos_metas():
+    """
+    Reconcilia os registros a cada cinco minutos.
+
+    Se o banco falhar temporariamente na inicialização,
+    tenta registrar os botões novamente sem precisar
+    de outro deploy.
+    """
+    while not bot.is_closed():
+        await asyncio.sleep(300)
+
+        if bot.is_closed():
+            break
+
+        try:
+            await restaurar_confirmacoes_depositos_metas()
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception:
+            logger.exception(
+                "❌ Erro no vigilante de botões de depósitos."
+            )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FIM DA FUNÇÃO: vigiar_confirmacoes_depositos_metas
+# ────────────────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AdicionarDinheiroModal
 # ────────────────────────────────────────────────────────────────────────────────
 class AdicionarDinheiroModal(discord.ui.Modal, title="💰 Adicionar Dinheiro Sujo"):
@@ -32571,60 +32762,160 @@ async def carregar_dados_iniciais():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_botoes_metas
 # ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_botoes_metas
 # ────────────────────────────────────────────────────────────────────────────────
 async def restaurar_botoes_metas():
-    try:
-        guild = bot.get_guild(GUILD_ID)
-        if not guild:
-            logger.error("❌ Guild não encontrada!")
-            return 0
-        await carregar_metas_cache()
-        contador = 0
-        for uid, dados in list(metas_cache.items()):
-            canal = guild.get_channel(dados["canal_id"])
-            if not canal:
-                continue
-            try:
-                mensagem_encontrada = False
-                eh_v2 = False
+    """
+    Restaura os callbacks das mensagens V2 existentes
+    sem apagar seus conteúdos.
 
-                async for msg in canal.history(limit=30):
-                    if msg.author != bot.user:
-                        continue
+    Cada View é registrada com o ID da mensagem original.
+    """
+    guild = bot.get_guild(GUILD_ID)
 
-                    # Detecta V2 (components com custom_id v2_)
-                    if msg.components:
-                        for row_comp in msg.components:
-                            for c in getattr(row_comp, "children", []):
-                                cid = getattr(c, "custom_id", "") or ""
-                                if cid.startswith("v2_"):
-                                    mensagem_encontrada = True
-                                    eh_v2 = True
-                                    break
-                            if eh_v2:
-                                break
-
-                    if eh_v2:
-                        break
-
-                # Se não achou nenhum painel (ou achou V1 legado) → recria V2
-                if not mensagem_encontrada:
-                    await atualizar_embed_meta(int(uid))
-                    contador += 1
-                    await asyncio.sleep(1.5)
-            except Exception as e:
-                logger.error(f"❌ Erro ao restaurar meta {uid}: {e}")
-        logger.info(f"✅ {contador} painéis de metas restaurados com botões!")
-        return contador
-    except Exception as e:
-        logger.error(f"❌ Erro ao restaurar botões das metas: {e}")
+    if not guild:
+        logger.error(
+            "❌ Guild indisponível ao restaurar "
+            "botões das metas."
+        )
         return 0
 
+    if not await carregar_metas_cache():
+        logger.warning(
+            "⚠️ Não foi possível atualizar cache de metas "
+            "para restaurar painéis."
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # FUNÇÃO INTERNA: tem_botao_v2
+    # ────────────────────────────────────────────────────────────────────────────
+    def tem_botao_v2(componentes):
+        for componente in componentes or []:
+            custom_id = getattr(
+                componente,
+                "custom_id",
+                None
+            )
+
+            if (
+                isinstance(custom_id, str)
+                and custom_id.startswith("v2_")
+            ):
+                return True
+
+            if tem_botao_v2(
+                getattr(componente, "children", None)
+            ):
+                return True
+
+        return False
+
+    restaurados = 0
+    reconstruidos = 0
+    falhas = 0
+
+    for uid, dados in list(metas_cache.items()):
+        try:
+            canal_id = int(dados["canal_id"])
+            canal = guild.get_channel(canal_id)
+
+            if canal is None:
+                logger.warning(
+                    "⚠️ Canal de metas %s não localizado "
+                    "para %s.",
+                    canal_id,
+                    uid
+                )
+                continue
+
+            mensagem_v2 = None
+
+            async for msg in canal.history(limit=50):
+                if (
+                    msg.author.id == bot.user.id
+                    and tem_botao_v2(msg.components)
+                ):
+                    mensagem_v2 = msg
+                    break
+
+            # ────────────────────────────────────────────────────────────────────
+            # SALA SEM PAINEL V2: MANTÉM RECRIAÇÃO ORIGINAL
+            # ────────────────────────────────────────────────────────────────────
+            if mensagem_v2 is None:
+                await atualizar_embed_meta(int(uid))
+                reconstruidos += 1
+                await asyncio.sleep(0.35)
+                continue
+
+            # ────────────────────────────────────────────────────────────────────
+            # SALA COM PAINEL V2: RECONSTRÓI OS CALLBACKS
+            # ────────────────────────────────────────────────────────────────────
+            container, cargos_info = (
+                await _v2_montar_container(int(uid))
+            )
+
+            if container is None or cargos_info is None:
+                logger.error(
+                    "❌ Falha criando a View V2 de %s. "
+                    "Mensagem preservada.",
+                    uid
+                )
+                falhas += 1
+                continue
+
+            view = V2MetaView(
+                int(uid),
+                container,
+                cargos_info
+            )
+
+            if not view.is_persistent():
+                logger.error(
+                    "❌ V2MetaView de %s não é persistente: "
+                    "verificar IDs dos botões.",
+                    uid
+                )
+                falhas += 1
+                continue
+
+            bot.add_view(
+                view,
+                message_id=mensagem_v2.id
+            )
+
+            restaurados += 1
+
+        except discord.Forbidden:
+            logger.exception(
+                "❌ Sem permissão para ler/restaurar "
+                "sala de meta %s.",
+                uid
+            )
+            falhas += 1
+
+        except Exception:
+            logger.exception(
+                "❌ Falha restaurando painel V2 de %s.",
+                uid
+            )
+            falhas += 1
+
+    logger.info(
+        "🔒 Metas V2: %s reativados, "
+        "%s reconstruídos, %s falhas.",
+        restaurados,
+        reconstruidos,
+        falhas
+    )
+
+    return restaurados + reconstruidos
+
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: enviar_paineis_iniciais
+# FIM DA FUNÇÃO: restaurar_botoes_metas
 # ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_paineis_iniciais
 # ────────────────────────────────────────────────────────────────────────────────
@@ -32675,114 +32966,240 @@ async def enviar_paineis_iniciais(guild):
             logger.error(f"❌ Erro ao forçar atualização grupos: {e}")
     except Exception as e:
         logger.error(f"❌ Erro geral ao enviar painéis: {e}")
+
 # ────────────────────────────────────────────────────────────────────────────────
 # EVENTO: on_ready
-# ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: on_ready
 # ────────────────────────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
     global http_session
+
     if getattr(bot, "ja_iniciado", False):
         return
+
     if getattr(bot, "inicializando", False):
         return
+
     bot.inicializando = True
+
     logger.info("🔄 Iniciando configuração do bot...")
     logger.info(f"✅ Logado como {bot.user}")
+
     if not http_session:
         http_session = aiohttp.ClientSession()
+
     db_pool = await conectar_db()
+
     if not db_pool:
-        logger.critical("❌ Não foi possível conectar ao banco de dados!")
+        logger.critical(
+            "❌ Não foi possível conectar ao banco de dados!"
+        )
         bot.inicializando = False
         return
+
     guild = bot.get_guild(GUILD_ID)
+
     if guild:
         try:
             await guild.chunk()
         except Exception as e:
-            logger.error(f"Erro ao carregar membros: {e}")
-    logger.info(f"🕒 Horário Brasília: {agora().strftime('%d/%m/%Y %H:%M:%S')}")
+            logger.error(
+                f"Erro ao carregar membros: {e}"
+            )
+
+    logger.info(
+        f"🕒 Horário Brasília: "
+        f"{agora().strftime('%d/%m/%Y %H:%M:%S')}"
+    )
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # RESTAURAÇÃO URGENTE: CONFIRMAÇÕES DE METAS POR ID DA MENSAGEM
+    # ────────────────────────────────────────────────────────────────────────────
+    try:
+        await restaurar_confirmacoes_depositos_metas()
+
+    except Exception:
+        logger.exception(
+            "❌ Erro ao registrar confirmações "
+            "de metas na inicialização."
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # VIGILANTE: RECONCILIA QUANDO O BANCO VOLTAR
+    # ────────────────────────────────────────────────────────────────────────────
+    tarefa_confirmacoes = getattr(
+        bot,
+        "_vdr_tarefa_confirmacoes_metas",
+        None
+    )
+
+    if (
+        tarefa_confirmacoes is None
+        or tarefa_confirmacoes.done()
+    ):
+        bot._vdr_tarefa_confirmacoes_metas = asyncio.create_task(
+            vigiar_confirmacoes_depositos_metas(),
+            name="vdr442_vigiar_confirmacoes_metas"
+        )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # REGISTRO GLOBAL E AUTOMÁTICO DE VIEWS (NOVO)
+    # REGISTRO GLOBAL E AUTOMÁTICO DE VIEWS
     # ═══════════════════════════════════════════════════════════════════════════
     logger.info("🔧 Registrando TODAS as views persistentes...")
+
     registradas = 0
     ignoradas = 0
+
     for name, obj in list(globals().items()):
         if isinstance(obj, type):
-            if issubclass(obj, discord.ui.View) or issubclass(obj, discord.ui.LayoutView):
-                if obj in (discord.ui.View, discord.ui.LayoutView):
+            if (
+                issubclass(obj, discord.ui.View)
+                or issubclass(obj, discord.ui.LayoutView)
+            ):
+                if obj in (
+                    discord.ui.View,
+                    discord.ui.LayoutView
+                ):
                     continue
+
                 try:
                     view_instance = obj()
                     view_instance.timeout = None
+
                     bot.add_view(view_instance)
                     registradas += 1
+
                 except TypeError:
                     ignoradas += 1
-                except Exception as e:
-                    logger.error(f"❌ Erro ao registrar view {name}: {e}")
-                    ignoradas += 1
-    logger.info(f"✅ {registradas} views registradas em massa. {ignoradas} views precisam de argumentos (serão restauradas do banco).")
 
+                except Exception as e:
+                    logger.error(
+                        f"❌ Erro ao registrar view {name}: {e}"
+                    )
+                    ignoradas += 1
+
+    logger.info(
+        f"✅ {registradas} views registradas em massa. "
+        f"{ignoradas} views precisam de argumentos "
+        "(serão restauradas do banco)."
+    )
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # CARREGAMENTO DOS DADOS INICIAIS
+    # ────────────────────────────────────────────────────────────────────────────
     await carregar_metas_cache()
     await criar_tabelas_extras()
     await Notificacoes.carregar()
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # INICIALIZAÇÃO DAS TAREFAS DE FUNDO
+    # ────────────────────────────────────────────────────────────────────────────
     await iniciar_tarefas_background()
-    bot.loop.create_task(limpeza_cache_periodica())
-    bot.loop.create_task(health_check_avancado())
+
+    bot.loop.create_task(
+        limpeza_cache_periodica()
+    )
+
+    bot.loop.create_task(
+        health_check_avancado()
+    )
+
     if not hasattr(bot, "edit_worker_started"):
-        bot.loop.create_task(edit_worker())
+        bot.loop.create_task(
+            edit_worker()
+        )
         bot.edit_worker_started = True
+
     await carregar_dados_iniciais()
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MIGRAÇÃO DE ENTREGAS
+    # ────────────────────────────────────────────────────────────────────────────
     try:
         await migrar_entregas_status_antigas()
+
     except Exception as e:
-        logger.error(f"❌ Erro na migração de entregas_status: {e}")
+        logger.error(
+            f"❌ Erro na migração de entregas_status: {e}"
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # RESTAURAÇÃO DOS PAINÉIS E SISTEMAS EXISTENTES
+    # ────────────────────────────────────────────────────────────────────────────
     await enviar_paineis_iniciais(guild)
+
     await BotaoPersistente.restaurar_botoes()
     await restaurar_botoes_vendas()
     await restaurar_transferencias_finalizadas()
     await restaurar_acoes()
     await restaurar_botoes_metas()
+
     await setup_status()
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # HEARTBEAT DE PRODUÇÃO
+    # ────────────────────────────────────────────────────────────────────────────
     if not hasattr(bot, "heartbeat_producao_started"):
-        bot.loop.create_task(heartbeat_producao_loop())
+        bot.loop.create_task(
+            heartbeat_producao_loop()
+        )
         bot.heartbeat_producao_started = True
+
     # ═══════════════════════════════════════════════════════════════════════════
     # RESTAURA PAINÉIS COMO ÚLTIMO EM TODOS OS CANAIS
     # ═══════════════════════════════════════════════════════════════════════════
     try:
         pool = await get_pool()
+
         if pool:
             async with pool.acquire() as conn:
-                paineis_rows = await conn.fetch("SELECT DISTINCT canal_id FROM paineis_ultimos WHERE ativo = true")
+                paineis_rows = await conn.fetch(
+                    "SELECT DISTINCT canal_id "
+                    "FROM paineis_ultimos "
+                    "WHERE ativo = true"
+                )
+
             for row in paineis_rows:
                 canal_id = int(row["canal_id"])
                 canal = bot.get_channel(canal_id)
+
                 if canal:
                     try:
                         await verificar_e_mover_paineis(canal)
                         await asyncio.sleep(1)
+
                     except Exception as e:
-                        logger.error(f"❌ Erro ao restaurar painel do canal {canal_id}: {e}")
-        logger.info("✅ Painéis restaurados como último em todos os canais")
+                        logger.error(
+                            "❌ Erro ao restaurar painel "
+                            f"do canal {canal_id}: {e}"
+                        )
+
+        logger.info(
+            "✅ Painéis restaurados como último "
+            "em todos os canais"
+        )
+
     except Exception as e:
-        logger.error(f"❌ Erro ao restaurar painéis últimos: {e}")
+        logger.error(
+            f"❌ Erro ao restaurar painéis últimos: {e}"
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # FINALIZAÇÃO DA INICIALIZAÇÃO
+    # ────────────────────────────────────────────────────────────────────────────
     gc.collect()
+
     bot.ja_iniciado = True
     bot.inicializando = False
+
     logger.info("=" * 50)
     logger.info("✅ BOT ONLINE 100% COMPLETO - v8.0")
     logger.info("=" * 50)
 
 # ────────────────────────────────────────────────────────────────────────────────
-# EVENTO: on_message (MOVE PAINÉIS PRO FINAL SEMPRE)
+# FIM DO EVENTO: on_ready
 # ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: on_message
 # ────────────────────────────────────────────────────────────────────────────────
