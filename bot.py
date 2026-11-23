@@ -1714,18 +1714,19 @@ def membro_deve_ter_meta(member):
     return None
 
 
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: obter_regra_meta_membro
 # ────────────────────────────────────────────────────────────────────────────────
 async def obter_regra_meta_membro(member):
-    if not member:
+    if member is None:
         return None
 
-    roles_ids = [r.id for r in member.roles]
+    roles_ids = {r.id for r in member.roles}
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # PRIORIDADE #1: SM — ISENTO TOTAL
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ────────────────────────────────────────────────────────────────────────────
+    # PRIORIDADE 1: SEM META (CARGO ESPECIAL)
+    # ────────────────────────────────────────────────────────────────────────────
     if CARGO_SEM_META_ID in roles_ids:
         return {
             "isento": True,
@@ -1733,70 +1734,62 @@ async def obter_regra_meta_membro(member):
             "meta_dinheiro": 0,
             "meta_polvora": 0,
             "meta_acoes": 0,
-            "meta_soldado": 0
+            "meta_soldado": 0,
+            "is_isento_lideranca": False
         }
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # CARGOS DE LIDERANÇA E GERÊNCIA — ISENTOS
-    # ═══════════════════════════════════════════════════════════════════════════
-    cargos_isento_lideranca = [
+    # ────────────────────────────────────────────────────────────────────────────
+    # PRIORIDADE 2: LIDERANÇA E GERÊNCIA (ISENTOS)
+    # ────────────────────────────────────────────────────────────────────────────
+    cargos_lideranca = (
         CARGO_GERENTE_ID,
         CARGO_GERENTE_GERAL_ID,
         CARGO_GERENTE_MECANICA_ID,
         CARGO_01_ID,
         CARGO_02_ID,
-        CARGO_03_ID,
-    ]
-
-    is_isento_lideranca = any(
-        r in roles_ids
-        for r in cargos_isento_lideranca
+        CARGO_03_ID
     )
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # PRIORIDADE #2: SOLDADO
-    # Mantém a meta coletiva e a isenção da liderança.
-    # ═══════════════════════════════════════════════════════════════════════════
-    if CARGO_SOLDADO_ID in roles_ids:
+    is_isento_lideranca = any(
+        c in roles_ids for c in cargos_lideranca
+    )
+
+    # Preserva o comportamento visual para liderança
+    # que também possui o cargo Soldado.
+    if (
+        is_isento_lideranca
+        and CARGO_SOLDADO_ID in roles_ids
+    ):
         meta_soldado = await buscar_meta_soldado()
 
         return {
-            "isento": is_isento_lideranca,
+            "isento": True,
             "tipo": "soldado",
             "meta_dinheiro": 0,
             "meta_polvora": 0,
             "meta_acoes": meta_soldado,
             "meta_soldado": meta_soldado,
+            "is_isento_lideranca": True
+        }
+
+    if (
+        is_isento_lideranca
+        or membro_deve_ter_meta(member) == "isento"
+    ):
+        return {
+            "isento": True,
+            "tipo": None,
+            "meta_dinheiro": 0,
+            "meta_polvora": 0,
+            "meta_acoes": 0,
+            "meta_soldado": 0,
             "is_isento_lideranca": is_isento_lideranca
         }
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # CARGO ISENTO SEM SOLDADO
-    # ═══════════════════════════════════════════════════════════════════════════
-    if is_isento_lideranca:
-        return {
-            "isento": True,
-            "tipo": None,
-            "meta_dinheiro": 0,
-            "meta_polvora": 0,
-            "meta_acoes": 0,
-            "meta_soldado": 0
-        }
-
-    if membro_deve_ter_meta(member) == "isento":
-        return {
-            "isento": True,
-            "tipo": None,
-            "meta_dinheiro": 0,
-            "meta_polvora": 0,
-            "meta_acoes": 0,
-            "meta_soldado": 0
-        }
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # HIERARQUIA ORIGINAL
-    # Responsáveis e Mecânicos continuam com prioridade.
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ────────────────────────────────────────────────────────────────────────────
+    # PRIORIDADE 3: CONFIGURAÇÃO INDIVIDUAL DO CARGO
+    # Preserva hierarquia e prioridade do Agregado.
+    # ────────────────────────────────────────────────────────────────────────────
     hierarquia = [
         CARGO_RESP_METAS_ID,
         CARGO_RESP_ACAO_ID,
@@ -1812,24 +1805,12 @@ async def obter_regra_meta_membro(member):
         CARGO_AGREGADO_ID
     ]
 
-    cargo_principal = None
+    cargo_principal = next(
+        (c for c in hierarquia if c in roles_ids),
+        None
+    )
 
-    for c_id in hierarquia:
-        if c_id in roles_ids:
-            cargo_principal = c_id
-            break
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # PRIORIDADE ESPECIAL — AGREGADO
-    #
-    # Se o membro também tiver Membro ou Morador, usa a
-    # configuração de Agregado quando ela existir.
-    #
-    # Se Agregado ainda não estiver configurado, mantém
-    # a prioridade antiga para evitar mudanças inesperadas.
-    #
-    # Não sobrescreve Soldado, Responsáveis ou Mecânico.
-    # ═══════════════════════════════════════════════════════════════════════════
+    # Agregado configurado prevalece sobre Membro e Morador.
     if (
         CARGO_AGREGADO_ID in roles_ids
         and cargo_principal in (
@@ -1851,22 +1832,23 @@ async def obter_regra_meta_membro(member):
         ):
             cargo_principal = CARGO_AGREGADO_ID
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # BUSCA CONFIGURAÇÃO DO CARGO SELECIONADO
-    # ═══════════════════════════════════════════════════════════════════════════
+    # Soldado também pode ter configuração específica.
+    if (
+        cargo_principal is None
+        and CARGO_SOLDADO_ID in roles_ids
+    ):
+        cargo_principal = CARGO_SOLDADO_ID
+
     tipo_config, valor_config = (
         await buscar_config_cargo(cargo_principal)
-        if cargo_principal
+        if cargo_principal is not None
         else (None, None)
     )
 
-    tipo_global = await buscar_tipo_meta_semana()
-    tipo_final = tipo_config if tipo_config else tipo_global
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SEM META — ISENÇÃO CONFIGURADA PELO MENU
-    # ═══════════════════════════════════════════════════════════════════════════
-    if tipo_final == "sem_meta":
+    # ────────────────────────────────────────────────────────────────────────────
+    # ISENÇÃO CONFIGURADA NO MENU
+    # ────────────────────────────────────────────────────────────────────────────
+    if tipo_config == "sem_meta":
         return {
             "isento": True,
             "tipo": None,
@@ -1877,9 +1859,51 @@ async def obter_regra_meta_membro(member):
             "is_isento_lideranca": False
         }
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # CÁLCULO DAS METAS
-    # ═══════════════════════════════════════════════════════════════════════════
+    tipo_global = await buscar_tipo_meta_semana()
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # PRIORIDADE 4: SEMANA GLOBAL DE PÓLVORA
+    #
+    # Vale para Soldado, Resp. Ação e demais cargos.
+    # Preserva as configurações por cargo no PostgreSQL.
+    # Não cobra simultaneamente a meta coletiva de Soldado.
+    # ────────────────────────────────────────────────────────────────────────────
+    if tipo_global == "polvora":
+        meta_polvora = int(
+            await definir_valor_meta_polvora(member.id) or 0
+        )
+
+        return {
+            "isento": False,
+            "tipo": "polvora",
+            "meta_dinheiro": 0,
+            "meta_polvora": meta_polvora,
+            "meta_acoes": 0,
+            "meta_soldado": 0,
+            "is_isento_lideranca": False
+        }
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # SEMANA NORMAL: META COLETIVA DOS SOLDADOS
+    # ────────────────────────────────────────────────────────────────────────────
+    if CARGO_SOLDADO_ID in roles_ids:
+        meta_soldado = await buscar_meta_soldado()
+
+        return {
+            "isento": False,
+            "tipo": "soldado",
+            "meta_dinheiro": 0,
+            "meta_polvora": 0,
+            "meta_acoes": meta_soldado,
+            "meta_soldado": meta_soldado,
+            "is_isento_lideranca": False
+        }
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # SEMANA NORMAL: REGRAS DOS OUTROS CARGOS
+    # ────────────────────────────────────────────────────────────────────────────
+    tipo_final = tipo_config if tipo_config else tipo_global
+
     meta_dinheiro = 0
     meta_polvora = 0
     meta_acoes = 0
@@ -1894,7 +1918,7 @@ async def obter_regra_meta_membro(member):
             else await definir_valor_meta_por_id(member.id)
         )
 
-        if meta_dinheiro == 0:
+        if not meta_dinheiro:
             meta_dinheiro = await definir_valor_meta_por_cargo(
                 member
             )
@@ -1919,6 +1943,7 @@ async def obter_regra_meta_membro(member):
 # ────────────────────────────────────────────────────────────────────────────────
 # FIM DA FUNÇÃO: obter_regra_meta_membro
 # ────────────────────────────────────────────────────────────────────────────────
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: safe_request
@@ -20793,6 +20818,7 @@ async def enviar_painel_solicitar_sala():
     await enviar_ou_atualizar_painel("painel_solicitar_sala", CANAL_SOLICITAR_SALA_ID, embed, SolicitarSalaView())
 
 
+
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfigurarMetaCargoSelect
 # ────────────────────────────────────────────────────────────────────────────────
@@ -20806,6 +20832,10 @@ class ConfigurarMetaCargoSelect(discord.ui.Select):
             discord.SelectOption(
                 label="📦 Resp. Produção",
                 value=str(CARGO_RESP_PRODUCAO_ID)
+            ),
+            discord.SelectOption(
+                label="⚔️ Resp. Ação",
+                value=str(CARGO_RESP_ACAO_ID)
             ),
             discord.SelectOption(
                 label="🔫 Soldado",
@@ -20835,7 +20865,9 @@ class ConfigurarMetaCargoSelect(discord.ui.Select):
 
         super().__init__(
             placeholder="Selecione o cargo para configurar...",
-            options=options
+            options=options,
+            min_values=1,
+            max_values=1
         )
 
     # ────────────────────────────────────────────────────────────────────────────
@@ -20843,14 +20875,10 @@ class ConfigurarMetaCargoSelect(discord.ui.Select):
     # ────────────────────────────────────────────────────────────────────────────
     async def callback(self, interaction: discord.Interaction):
         cargo_id = self.values[0]
-
         view = TipoMetaCargoView(cargo_id)
 
         await interaction.response.send_message(
-            (
-                f"Configurando o cargo <@&{cargo_id}>. "
-                "Escolha o tipo de meta:"
-            ),
+            f"Configurando o cargo <@&{cargo_id}>. Escolha o tipo de meta:",
             view=view,
             ephemeral=True
         )
@@ -20858,8 +20886,6 @@ class ConfigurarMetaCargoSelect(discord.ui.Select):
 # ────────────────────────────────────────────────────────────────────────────────
 # FIM DA CLASSE: ConfigurarMetaCargoSelect
 # ────────────────────────────────────────────────────────────────────────────────
-
-
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: TipoMetaCargoView
@@ -23618,163 +23644,104 @@ async def verificar_meta_concluida(user_id, valor_total):
             return False
     return False
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: verificar_avisos_quarta
-# ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_avisos_quarta
 # ────────────────────────────────────────────────────────────────────────────────
 async def verificar_avisos_quarta():
     hoje = agora()
+
     if hoje.weekday() != 2:
         return
 
     pool = await get_pool()
+
     if not pool:
-        logger.error("❌ Banco de dados indisponível!")
-        return
+        logger.error(
+            "❌ Banco indisponível para avisos de quarta"
+        )
+        return False
 
     try:
         guild = bot.get_guild(GUILD_ID)
+
         if not guild:
-            logger.error("❌ Guild não encontrada!")
-            return
-
-        tipo_semana = await buscar_tipo_meta_semana()
-
-        cargos_obrigados = [
-            CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
-            CARGO_01_ID, CARGO_02_ID, CARGO_03_ID, CARGO_RESP_METAS_ID, CARGO_RESP_P1_ID,
-            CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID,
-            CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
-            CARGO_MECANICO_ID, CARGO_MORADOR_ID
-        ]
-
-        async with pool.acquire() as conn:
-            avisos_enviados = 0
-
-            for member in guild.members:
-                if member.bot:
-                    continue
-                tem_cargo = any(r.id in cargos_obrigados for r in member.roles)
-                if not tem_cargo:
-                    continue
-                if CARGO_SEM_META_ID in [r.id for r in member.roles]:
-                    continue
-
-                user_id = str(member.id)
-                meta = await conn.fetchrow(
-                    "SELECT dinheiro, dinheiro_acoes, polvora_atual FROM metas WHERE user_id = $1",
-                    user_id
-                )
-                if not meta:
-                    continue
-
-                dinheiro = meta["dinheiro"] or 0
-                dinheiro_acoes = meta["dinheiro_acoes"] or 0
-                polvora = meta["polvora_atual"] or 0
-
-                if tipo_semana == "polvora":
-                    total = polvora
-                    emoji_tipo = "🧨"
-                    nome_tipo = "PÓLVORA"
-                else:
-                    total = dinheiro + dinheiro_acoes
-                    emoji_tipo = "💰"
-                    nome_tipo = "DINHEIRO SUJO"
-
-                if total == 0:
-                    ja_avisado = await conn.fetchval(
-                        "SELECT 1 FROM metas_avisos WHERE user_id = $1 AND tipo = 'quarta' AND data::date = $2",
-                        user_id, hoje.date()
-                    )
-                    if not ja_avisado:
-                        await conn.execute(
-                            "INSERT INTO metas_avisos (user_id, tipo, data) VALUES ($1, 'quarta', $2)",
-                            user_id, agora_db()
-                        )
-                        canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", user_id)
-                        if canal_id:
-                            canal = bot.get_channel(int(canal_id))
-                            if canal:
-                                embed = discord.Embed(
-                                    title=f"⚠️ AVISO DE META SEMANAL ({nome_tipo})",
-                                    description=f"{member.mention} **atenção!**",
-                                    color=0xe74c3c
-                                )
-                                embed.add_field(
-                                    name=f"📌 Você ainda NÃO fez nenhum depósito na meta de {nome_tipo}!",
-                                    value=(
-                                        f"⏰ **Você tem até domingo para completar sua meta!**\n\n"
-                                        f"⚠️ **Consequências:**\n"
-                                        f"• Se NÃO fechar a meta: **DÍVIDA**\n"
-                                        f"• Dívida prolongada: **PD/REMOÇÃO** da facção\n\n"
-                                        f"{emoji_tipo} **Corra atrás do prejuízo!**"
-                                    ),
-                                    inline=False
-                                )
-                                embed.set_footer(text=f"Meta semanal • VDR 442 • Tipo: {nome_tipo}")
-                                await canal.send(embed=embed)
-                                avisos_enviados += 1
-
-        logger.info(f"✅ Avisos de quarta enviados: {avisos_enviados}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Erro ao verificar avisos de quarta: {e}")
-        return False
-
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: verificar_avisos_quarta_forcado
-# ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: verificar_avisos_quarta_forcado
-# ────────────────────────────────────────────────────────────────────────────────
-async def verificar_avisos_quarta_forcado():
-    logger.info("📨 TESTE FORÇADO: Verificando avisos de quarta-feira...")
-    pool = await get_pool()
-    if not pool:
-        logger.error("❌ Banco de dados indisponível!")
-        return False
-    try:
-        hoje = agora()
-        guild = bot.get_guild(GUILD_ID)
-        if not guild:
-            logger.error("❌ Guild não encontrada!")
+            logger.error(
+                "❌ Guild não encontrada para avisos de quarta"
+            )
             return False
 
         tipo_semana = await buscar_tipo_meta_semana()
 
         cargos_obrigados = [
-            CARGO_AGREGADO_ID, CARGO_MEMBRO_ID, CARGO_SOLDADO_ID,
-            CARGO_01_ID, CARGO_02_ID, CARGO_03_ID, CARGO_RESP_P1_ID, CARGO_RESP_METAS_ID,
-            CARGO_RESP_ACAO_ID, CARGO_RESP_VENDAS_ID, CARGO_RESP_PRODUCAO_ID,
-            CARGO_RESP_AGREGADOS_ID, CARGO_RESP_MECANICA_ID, CARGO_RESP_BAU_ID,
-            CARGO_MECANICO_ID, CARGO_MORADOR_ID
+            CARGO_AGREGADO_ID,
+            CARGO_MEMBRO_ID,
+            CARGO_SOLDADO_ID,
+            CARGO_01_ID,
+            CARGO_02_ID,
+            CARGO_03_ID,
+            CARGO_RESP_METAS_ID,
+            CARGO_RESP_P1_ID,
+            CARGO_RESP_ACAO_ID,
+            CARGO_RESP_VENDAS_ID,
+            CARGO_RESP_PRODUCAO_ID,
+            CARGO_RESP_AGREGADOS_ID,
+            CARGO_RESP_MECANICA_ID,
+            CARGO_RESP_BAU_ID,
+            CARGO_MECANICO_ID,
+            CARGO_MORADOR_ID
         ]
 
+        avisos_enviados = 0
+
         async with pool.acquire() as conn:
-            avisos_enviados = 0
             for member in guild.members:
                 if member.bot:
                     continue
-                tem_cargo = any(r.id in cargos_obrigados for r in member.roles)
-                if not tem_cargo:
+
+                if not any(
+                    r.id in cargos_obrigados
+                    for r in member.roles
+                ):
                     continue
-                if CARGO_SEM_META_ID in [r.id for r in member.roles]:
+
+                # ────────────────────────────────────────────────────────────────
+                # VERIFICA ISENÇÕES E REGRA REAL DO MEMBRO
+                # ────────────────────────────────────────────────────────────────
+                regra = await obter_regra_meta_membro(member)
+
+                if (
+                    not regra
+                    or regra.get("isento", False)
+                    or regra.get("is_isento_lideranca", False)
+                    or not regra.get("tipo")
+                ):
                     continue
 
                 user_id = str(member.id)
+
                 meta = await conn.fetchrow(
-                    "SELECT dinheiro, dinheiro_acoes, polvora_atual FROM metas WHERE user_id = $1",
+                    """
+                    SELECT dinheiro, dinheiro_acoes,
+                           polvora_atual, canal_id
+                    FROM metas
+                    WHERE user_id = $1
+                    """,
                     user_id
                 )
+
                 if not meta:
                     continue
 
-                dinheiro = meta["dinheiro"] or 0
-                dinheiro_acoes = meta.get("dinheiro_acoes") or 0
-                polvora = meta.get("polvora_atual") or 0
+                dinheiro = int(meta["dinheiro"] or 0)
+                dinheiro_acoes = int(
+                    meta["dinheiro_acoes"] or 0
+                )
+                polvora = int(meta["polvora_atual"] or 0)
 
+                # ────────────────────────────────────────────────────────────────
+                # TIPO DA SEMANA
+                # ────────────────────────────────────────────────────────────────
                 if tipo_semana == "polvora":
                     total = polvora
                     emoji_tipo = "🧨"
@@ -23784,40 +23751,294 @@ async def verificar_avisos_quarta_forcado():
                     emoji_tipo = "💰"
                     nome_tipo = "DINHEIRO SUJO"
 
-                if total == 0:
-                    canal_id = await conn.fetchval("SELECT canal_id FROM metas WHERE user_id = $1", user_id)
-                    if canal_id:
-                        canal = bot.get_channel(int(canal_id))
-                        if canal:
-                            embed = discord.Embed(
-                                title=f"⚠️ [TESTE] AVISO DE META SEMANAL ({nome_tipo})",
-                                description=f"{member.mention} **atenção!**",
-                                color=0xe74c3c
-                            )
-                            embed.add_field(
-                                name=f"📌 Você ainda NÃO fez nenhum depósito na meta de {nome_tipo}!",
-                                value=(
-                                    f"⏰ **Você tem até domingo para completar sua meta!**\n\n"
-                                    f"⚠️ **Consequências:**\n"
-                                    f"• Se NÃO fechar a meta: **DÍVIDA**\n"
-                                    f"• Dívida prolongada: **PD/REMOÇÃO** da facção\n\n"
-                                    f"{emoji_tipo} **Corra atrás do prejuízo!**\n\n"
-                                ),
-                                inline=False
-                            )
-                            embed.set_footer(text=f"Meta semanal • VDR 442 • Tipo: {nome_tipo} • TESTE")
-                            await canal.send(embed=embed)
-                            avisos_enviados += 1
+                if total != 0:
+                    continue
 
-        logger.info(f"✅ [TESTE] Avisos enviados: {avisos_enviados} membros (tipo: {tipo_semana.upper()})")
+                # ────────────────────────────────────────────────────────────────
+                # EVITA AVISOS REPETIDOS NA MESMA QUARTA
+                # ────────────────────────────────────────────────────────────────
+                ja_avisado = await conn.fetchval(
+                    """
+                    SELECT 1
+                    FROM metas_avisos
+                    WHERE user_id = $1
+                      AND tipo = 'quarta'
+                      AND data::date = $2
+                    """,
+                    user_id,
+                    hoje.date()
+                )
+
+                if ja_avisado:
+                    continue
+
+                canal = (
+                    bot.get_channel(int(meta["canal_id"]))
+                    if meta["canal_id"]
+                    else None
+                )
+
+                if not canal:
+                    continue
+
+                # ────────────────────────────────────────────────────────────────
+                # EMBED DO AVISO
+                # ────────────────────────────────────────────────────────────────
+                embed = discord.Embed(
+                    title=(
+                        f"⚠️ AVISO DE META SEMANAL "
+                        f"({nome_tipo})"
+                    ),
+                    description=(
+                        f"{member.mention} **atenção!**"
+                    ),
+                    color=0xE74C3C
+                )
+
+                embed.add_field(
+                    name=(
+                        "📌 Você ainda NÃO fez nenhum depósito "
+                        f"na meta de {nome_tipo}!"
+                    ),
+                    value=(
+                        "⏰ **Você tem até domingo para completar "
+                        "sua meta!**\n\n"
+                        "⚠️ **Consequências:**\n"
+                        "• Se NÃO fechar a meta: **DÍVIDA**\n"
+                        "• Dívida prolongada: **PD/REMOÇÃO** "
+                        "da facção\n\n"
+                        f"{emoji_tipo} **Corra atrás do prejuízo!**"
+                    ),
+                    inline=False
+                )
+
+                embed.set_footer(
+                    text=(
+                        "Meta semanal • VDR 442 • "
+                        f"Tipo: {nome_tipo}"
+                    )
+                )
+
+                try:
+                    await canal.send(embed=embed)
+                except discord.HTTPException:
+                    logger.exception(
+                        "❌ Falha enviando aviso de meta para %s",
+                        user_id
+                    )
+                    continue
+
+                # Registra somente após enviar o aviso.
+                await conn.execute(
+                    """
+                    INSERT INTO metas_avisos
+                        (user_id, tipo, data)
+                    VALUES ($1, 'quarta', $2)
+                    """,
+                    user_id,
+                    agora_db()
+                )
+
+                avisos_enviados += 1
+
+        logger.info(
+            "✅ Avisos de quarta enviados: %s",
+            avisos_enviados
+        )
+
         return True
-    except Exception as e:
-        logger.error(f"❌ Erro no teste de aviso: {e}")
+
+    except Exception:
+        logger.exception(
+            "❌ Erro ao verificar avisos de quarta"
+        )
         return False
 
 # ────────────────────────────────────────────────────────────────────────────────
-# LOOP: verificar_avisos_meta
+# FIM DA FUNÇÃO: verificar_avisos_quarta
 # ────────────────────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: verificar_avisos_quarta_forcado
+# ────────────────────────────────────────────────────────────────────────────────
+async def verificar_avisos_quarta_forcado():
+    logger.info(
+        "📨 TESTE FORÇADO: Verificando avisos de quarta-feira..."
+    )
+
+    pool = await get_pool()
+
+    if not pool:
+        logger.error(
+            "❌ Banco indisponível no teste dos avisos"
+        )
+        return False
+
+    try:
+        guild = bot.get_guild(GUILD_ID)
+
+        if not guild:
+            logger.error("❌ Guild não encontrada")
+            return False
+
+        tipo_semana = await buscar_tipo_meta_semana()
+
+        cargos_obrigados = [
+            CARGO_AGREGADO_ID,
+            CARGO_MEMBRO_ID,
+            CARGO_SOLDADO_ID,
+            CARGO_01_ID,
+            CARGO_02_ID,
+            CARGO_03_ID,
+            CARGO_RESP_P1_ID,
+            CARGO_RESP_METAS_ID,
+            CARGO_RESP_ACAO_ID,
+            CARGO_RESP_VENDAS_ID,
+            CARGO_RESP_PRODUCAO_ID,
+            CARGO_RESP_AGREGADOS_ID,
+            CARGO_RESP_MECANICA_ID,
+            CARGO_RESP_BAU_ID,
+            CARGO_MECANICO_ID,
+            CARGO_MORADOR_ID
+        ]
+
+        avisos_enviados = 0
+
+        async with pool.acquire() as conn:
+            for member in guild.members:
+                if member.bot:
+                    continue
+
+                if not any(
+                    r.id in cargos_obrigados
+                    for r in member.roles
+                ):
+                    continue
+
+                # ────────────────────────────────────────────────────────────────
+                # RESPEITA ISENÇÕES
+                # ────────────────────────────────────────────────────────────────
+                regra = await obter_regra_meta_membro(member)
+
+                if (
+                    not regra
+                    or regra.get("isento", False)
+                    or regra.get("is_isento_lideranca", False)
+                    or not regra.get("tipo")
+                ):
+                    continue
+
+                user_id = str(member.id)
+
+                meta = await conn.fetchrow(
+                    """
+                    SELECT dinheiro, dinheiro_acoes,
+                           polvora_atual, canal_id
+                    FROM metas
+                    WHERE user_id = $1
+                    """,
+                    user_id
+                )
+
+                if not meta:
+                    continue
+
+                # ────────────────────────────────────────────────────────────────
+                # IDENTIFICA O TIPO GLOBAL DA SEMANA
+                # ────────────────────────────────────────────────────────────────
+                if tipo_semana == "polvora":
+                    total = int(
+                        meta["polvora_atual"] or 0
+                    )
+                    emoji_tipo = "🧨"
+                    nome_tipo = "PÓLVORA"
+                else:
+                    total = (
+                        int(meta["dinheiro"] or 0)
+                        + int(meta["dinheiro_acoes"] or 0)
+                    )
+                    emoji_tipo = "💰"
+                    nome_tipo = "DINHEIRO SUJO"
+
+                if total != 0:
+                    continue
+
+                canal = (
+                    bot.get_channel(int(meta["canal_id"]))
+                    if meta["canal_id"]
+                    else None
+                )
+
+                if not canal:
+                    continue
+
+                # ────────────────────────────────────────────────────────────────
+                # EMBED DE TESTE
+                # ────────────────────────────────────────────────────────────────
+                embed = discord.Embed(
+                    title=(
+                        "⚠️ [TESTE] AVISO DE META SEMANAL "
+                        f"({nome_tipo})"
+                    ),
+                    description=(
+                        f"{member.mention} **atenção!**"
+                    ),
+                    color=0xE74C3C
+                )
+
+                embed.add_field(
+                    name=(
+                        "📌 Você ainda NÃO fez nenhum depósito "
+                        f"na meta de {nome_tipo}!"
+                    ),
+                    value=(
+                        "⏰ **Você tem até domingo para completar "
+                        "sua meta!**\n\n"
+                        "⚠️ **Consequências:**\n"
+                        "• Se NÃO fechar a meta: **DÍVIDA**\n"
+                        "• Dívida prolongada: **PD/REMOÇÃO** "
+                        "da facção\n\n"
+                        f"{emoji_tipo} **Corra atrás do prejuízo!**"
+                    ),
+                    inline=False
+                )
+
+                embed.set_footer(
+                    text=(
+                        "Meta semanal • VDR 442 • "
+                        f"Tipo: {nome_tipo} • TESTE"
+                    )
+                )
+
+                try:
+                    await canal.send(embed=embed)
+                    avisos_enviados += 1
+
+                except discord.HTTPException:
+                    logger.exception(
+                        "❌ Falha enviando aviso de teste para %s",
+                        user_id
+                    )
+
+        logger.info(
+            "✅ [TESTE] Avisos enviados: %s membros (tipo: %s)",
+            avisos_enviados,
+            tipo_semana.upper()
+        )
+
+        return True
+
+    except Exception:
+        logger.exception(
+            "❌ Erro no teste de aviso de quarta"
+        )
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FIM DA FUNÇÃO: verificar_avisos_quarta_forcado
+# ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: verificar_avisos_meta
 # ────────────────────────────────────────────────────────────────────────────────
@@ -23835,9 +24056,6 @@ async def verificar_avisos_meta():
 # ║  BLOCO 14 (FECHAMENTO) — FUNÇÃO FALTANTE                                   ║
 # ════════════════════════════════════════════════════════════════════════════════
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: enviar_painel_relatorio_metas
-# ────────────────────────────────────────────────────────────────────────────────
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_relatorio_metas
@@ -23846,7 +24064,9 @@ async def enviar_painel_relatorio_metas():
     canal = bot.get_channel(CANAL_RELATORIO_METAS_ID)
 
     if not canal:
-        logger.error("❌ Canal de relatório de metas não encontrado.")
+        logger.error(
+            "❌ Canal de Gerenciamento de Metas não encontrado"
+        )
         return
 
     embed = discord.Embed(
@@ -23858,52 +24078,64 @@ async def enviar_painel_relatorio_metas():
             "> 📌 **STATUS:** `🟢 OPERACIONAL`\n"
             "> 👤 **ACESSO:** `GERÊNCIA`\n\n"
             "**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
+            "### 🧨 TROCAR TIPO DE META DA SEMANA\n"
+            "> Escolha Pólvora para que todos os cargos obrigados,\n"
+            "> inclusive Soldado e Resp. Ação, cumpram pólvora.\n"
+            "> Gerência, Liderança e Sem Meta continuam isentos.\n\n"
+            "### ⚙️ CONFIGURAR CARGOS\n"
+            "> Configure individualmente os cargos, incluindo Agregado,\n"
+            "> Soldado e Responsável de Ação.\n\n"
             "### 🔒 FECHAR METAS\n"
-            "> Feche a semana anterior (Segunda a Domingo).\n"
-            "> Salva o histórico e zera os valores da semana.\n"
-            "> Somente o valor restante vira dívida.\n\n"
-            "### 📊 GERAR RELATÓRIO\n"
-            "> Consulte o histórico de metas fechadas.\n\n"
-            "### ⚙️ CONFIGURAR METAS POR CARGO\n"
-            "> Defina as metas de dinheiro, pólvora e isenções.\n\n"
-            "### 📋 FERRAMENTAS\n"
-            "> • Ver as dívidas dos membros\n"
-            "> • Limpar dívidas de um membro específico\n"
-            "> • Limpar TODAS as dívidas com um clique\n"
-            "> • Definir meta de soldado\n\n"
-            "⚠️ **Limpar Todas as Dívidas:** perdoa os "
-            "valores pendentes de todos os membros."
+            "> Fecha a semana anterior, salva o histórico e zera a semana.\n"
+            "> A dívida deve ser somente o valor restante.\n\n"
+            "### 📊 RELATÓRIOS E HORAS\n"
+            "> Relatórios de metas e horas; reinício de horas quando autorizado.\n\n"
+            "### 📋 GERENCIAMENTO DE DÍVIDAS\n"
+            "> Ver dívidas, limpar individualmente ou perdoar todas.\n"
         ),
         color=0xC0392B,
         timestamp=agora()
     )
 
+    foto = bot.user.display_avatar.url if bot.user else None
+
     embed.set_author(
         name="🕴️ VDR 442 • METAS",
-        icon_url=bot.user.display_avatar.url if bot.user else None
+        icon_url=foto
     )
 
-    embed.set_thumbnail(
-        url=bot.user.display_avatar.url if bot.user else None
-    )
+    embed.set_thumbnail(url=foto)
 
     embed.set_footer(
         text=(
             "🛡️ VDR 442 • Sistema de Metas • "
             f"{agora().strftime('%d/%m/%Y')}"
         ),
-        icon_url=bot.user.display_avatar.url if bot.user else None
+        icon_url=foto
     )
 
     view = discord.ui.View(timeout=None)
 
+    # ────────────────────────────────────────────────────────────────────────────
+    # BOTÕES: RELATÓRIOS, FECHAMENTO E HORAS
+    # ────────────────────────────────────────────────────────────────────────────
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharMetasAutomaticoButton())
+    view.add_item(RelatorioHorasButton())
+    view.add_item(ResetarHorasSemanaButton())
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # BOTÕES: TIPO SEMANAL E CONFIGURAÇÃO POR CARGO
+    # ────────────────────────────────────────────────────────────────────────────
+    view.add_item(TrocarTipoMetaButton())
     view.add_item(ConfigurarMetaCargoButton())
+    view.add_item(DefinirMetaSoldadoButton())
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # BOTÕES: DÍVIDAS — INDIVIDUAL E COLETIVA
+    # ────────────────────────────────────────────────────────────────────────────
     view.add_item(VerDividasButton())
     view.add_item(LimparDividasButton())
-
-    # NOVO BOTÃO — LIMPEZA GERAL
     view.add_item(LimparTodasDividasButton())
 
     await enviar_ou_atualizar_painel(
@@ -23916,6 +24148,7 @@ async def enviar_painel_relatorio_metas():
 # ────────────────────────────────────────────────────────────────────────────────
 # FIM DA FUNÇÃO: enviar_painel_relatorio_metas
 # ────────────────────────────────────────────────────────────────────────────────
+
 
 
 # ════════════════════════════════════════════════════════════════════════════════
