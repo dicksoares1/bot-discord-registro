@@ -5828,61 +5828,575 @@ class GerenciarLiveView(discord.ui.View):
 
 
 # ────────────────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: pode_cadastrar_live_de_membro
+# ────────────────────────────────────────────────────────────────────────────────
+def pode_cadastrar_live_de_membro(interaction):
+    """Somente membros do servidor com cargo 01."""
+    return (
+        interaction.guild is not None
+        and any(
+            cargo.id == CARGO_01_ID
+            for cargo in getattr(interaction.user, "roles", [])
+        )
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: normalizar_live_de_membro
+# ────────────────────────────────────────────────────────────────────────────────
+def normalizar_live_de_membro(texto):
+    """Retorna plataforma, canal e link ou três valores None."""
+    from urllib.parse import urlsplit
+
+    try:
+        url = urlsplit(str(texto or "").strip())
+
+        if url.scheme.lower() not in ("http", "https"):
+            return None, None, None
+
+        if (
+            url.username
+            or url.password
+            or url.port not in (None, 80, 443)
+        ):
+            return None, None, None
+
+        dominio = (url.hostname or "").lower()
+
+        if dominio in ("twitch.tv", "www.twitch.tv"):
+            plataforma = "twitch"
+        elif dominio in ("kick.com", "www.kick.com"):
+            plataforma = "kick"
+        else:
+            return None, None, None
+
+        partes = [
+            p.lower()
+            for p in url.path.strip("/").split("/")
+            if p
+        ]
+
+        if (
+            plataforma == "kick"
+            and len(partes) == 2
+            and partes[0] == "live"
+        ):
+            partes = partes[1:]
+
+        if len(partes) != 1:
+            return None, None, None
+
+        canal = partes[0]
+
+        if not (1 <= len(canal) <= 50):
+            return None, None, None
+
+        if not all(
+            c in "abcdefghijklmnopqrstuvwxyz0123456789_-"
+            for c in canal
+        ):
+            return None, None, None
+
+        caminhos_reservados = {
+            "twitch": {
+                "directory", "videos", "search", "login",
+                "signup", "settings", "downloads",
+                "subscriptions", "clips", "collections", "teams"
+            },
+            "kick": {
+                "categories", "category", "browse",
+                "video", "videos", "login", "signup",
+                "settings", "search", "following"
+            }
+        }
+
+        if canal in caminhos_reservados[plataforma]:
+            return None, None, None
+
+        dominio_final = (
+            "twitch.tv"
+            if plataforma == "twitch"
+            else "kick.com"
+        )
+
+        return (
+            plataforma,
+            canal,
+            f"https://{dominio_final}/{canal}"
+        )
+
+    except (ValueError, TypeError):
+        return None, None, None
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CadastrarLiveParaMembroModal
+# ────────────────────────────────────────────────────────────────────────────────
+class CadastrarLiveParaMembroModal(
+    discord.ui.Modal,
+    title="👑 Cadastrar Live de Membro"
+):
+
+    link = discord.ui.TextInput(
+        label="Link Twitch ou Kick do membro",
+        placeholder="https://kick.com/canal ou https://twitch.tv/canal",
+        required=True,
+        max_length=200
+    )
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────
+    def __init__(self, streamer_id):
+        super().__init__(timeout=300)
+        self.streamer_id = int(streamer_id)
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ────────────────────────────────────────────────────────────────────────────
+    async def on_submit(self, interaction: discord.Interaction):
+        if not pode_cadastrar_live_de_membro(interaction):
+            await interaction.response.send_message(
+                "❌ Somente o cargo **01** pode cadastrar "
+                "lives de outros membros.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(
+            ephemeral=True,
+            thinking=True
+        )
+
+        guild = interaction.guild
+
+        # ────────────────────────────────────────────────────────────────────────
+        # VALIDA O STREAMER
+        # ────────────────────────────────────────────────────────────────────────
+        try:
+            membro = guild.get_member(self.streamer_id)
+
+            if membro is None:
+                membro = await guild.fetch_member(
+                    self.streamer_id
+                )
+
+        except discord.NotFound:
+            await interaction.followup.send(
+                "❌ Esse membro não está mais no servidor. "
+                "Cadastro cancelado.",
+                ephemeral=True
+            )
+            return
+
+        except discord.HTTPException:
+            logger.exception(
+                "❌ Falha ao consultar membro %s para live",
+                self.streamer_id
+            )
+
+            await interaction.followup.send(
+                "❌ Não foi possível consultar o membro. "
+                "Tente novamente.",
+                ephemeral=True
+            )
+            return
+
+        if membro.bot:
+            await interaction.followup.send(
+                "❌ Não é permitido cadastrar live para bots.",
+                ephemeral=True
+            )
+            return
+
+        # ────────────────────────────────────────────────────────────────────────
+        # VALIDA LINK TWITCH / KICK
+        # ────────────────────────────────────────────────────────────────────────
+        plataforma, canal, novo_link = (
+            normalizar_live_de_membro(self.link.value)
+        )
+
+        if not novo_link:
+            await interaction.followup.send(
+                "❌ Link inválido. Envie o link do **canal** "
+                "Twitch ou Kick, como "
+                "`https://kick.com/seucanal` ou "
+                "`https://twitch.tv/seucanal`.",
+                ephemeral=True
+            )
+            return
+
+        pool = await get_pool()
+
+        if not pool:
+            await interaction.followup.send(
+                "❌ Banco de dados indisponível. "
+                "Nada foi cadastrado.",
+                ephemeral=True
+            )
+            return
+
+        # ────────────────────────────────────────────────────────────────────────
+        # GRAVAÇÃO SEGURA NO POSTGRESQL
+        # ────────────────────────────────────────────────────────────────────────
+        try:
+            situacao = None
+            outra_pessoa_id = None
+            cadastro_id = None
+
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+
+                    # Evita dois cadastros administrativos simultâneos.
+                    await conn.fetchval(
+                        "SELECT pg_advisory_xact_lock(hashtext($1))",
+                        f"vdr_lives:{plataforma}:{canal}"
+                    )
+
+                    registros = await conn.fetch(
+                        "SELECT user_id, link FROM lives"
+                    )
+
+                    for registro in registros:
+                        link_existente = registro["link"] or ""
+
+                        if (
+                            detectar_plataforma(link_existente) == plataforma
+                            and extrair_canal(link_existente) == canal
+                        ):
+                            if (
+                                str(registro["user_id"])
+                                == str(membro.id)
+                            ):
+                                situacao = "ja_cadastrada"
+                            else:
+                                situacao = "vinculada_a_outro"
+                                outra_pessoa_id = str(
+                                    registro["user_id"]
+                                )
+                            break
+
+                    if situacao is None:
+                        cadastro_id = await conn.fetchval(
+                            """
+                            INSERT INTO lives (
+                                user_id, link, divulgado
+                            )
+                            VALUES ($1, $2, FALSE)
+                            RETURNING id
+                            """,
+                            str(membro.id),
+                            novo_link
+                        )
+
+        except Exception:
+            logger.exception(
+                "❌ Erro cadastrando live %s para %s "
+                "pelo cargo 01 (usuário %s)",
+                novo_link,
+                membro.id,
+                interaction.user.id
+            )
+
+            await interaction.followup.send(
+                "❌ Falha no PostgreSQL. Nenhum novo "
+                "cadastro foi confirmado.",
+                ephemeral=True
+            )
+            return
+
+        # ────────────────────────────────────────────────────────────────────────
+        # IMPEDIR CADASTROS DUPLICADOS
+        # ────────────────────────────────────────────────────────────────────────
+        if situacao == "ja_cadastrada":
+            await interaction.followup.send(
+                f"ℹ️ O canal **{plataforma.upper()} / {canal}** "
+                f"já está cadastrado para {membro.mention}. "
+                "Não criei duplicata.",
+                ephemeral=True
+            )
+            return
+
+        if situacao == "vinculada_a_outro":
+            await interaction.followup.send(
+                f"⚠️ Esse canal já está cadastrado para "
+                f"<@{outra_pessoa_id}>. Para não marcar "
+                "a pessoa errada, o cadastro anterior "
+                "precisa ser corrigido antes.",
+                ephemeral=True
+            )
+            return
+
+        # ────────────────────────────────────────────────────────────────────────
+        # AUDITORIA EM LOG
+        # ────────────────────────────────────────────────────────────────────────
+        logger.info(
+            "👑 Cadastro de live por cargo 01: "
+            "autor=%s streamer=%s plataforma=%s "
+            "canal=%s id=%s",
+            interaction.user.id,
+            membro.id,
+            plataforma,
+            canal,
+            cadastro_id
+        )
+
+        # ────────────────────────────────────────────────────────────────────────
+        # CONFIRMAÇÃO DO CADASTRO
+        # ────────────────────────────────────────────────────────────────────────
+        embed = discord.Embed(
+            title="✅ Live cadastrada para outro membro",
+            description=(
+                f"👤 **Streamer:** {membro.mention}\n"
+                f"👑 **Cadastrado por:** "
+                f"{interaction.user.mention}\n"
+                f"📺 **Plataforma:** {plataforma.upper()}\n"
+                f"🔗 **Canal:** {novo_link}\n\n"
+                "Quando o canal entrar ao vivo, o anúncio "
+                "e o cargo 🔴 AO VIVO serão vinculados "
+                "ao **streamer**, não ao responsável "
+                "pelo cadastro."
+            ),
+            color=0x2ECC71
+        )
+
+        await interaction.followup.send(
+            embed=embed,
+            ephemeral=True
+        )
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: SelecionarStreamerLiveSelect
+# ────────────────────────────────────────────────────────────────────────────────
+class SelecionarStreamerLiveSelect(discord.ui.UserSelect):
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────
+    def __init__(self, autor_id):
+        super().__init__(
+            placeholder="Selecione o membro que fará a live...",
+            min_values=1,
+            max_values=1
+        )
+
+        self.autor_id = int(autor_id)
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ────────────────────────────────────────────────────────────────────────────
+    async def callback(self, interaction: discord.Interaction):
+        if (
+            interaction.user.id != self.autor_id
+            or not pode_cadastrar_live_de_membro(interaction)
+        ):
+            await interaction.response.send_message(
+                "❌ Apenas quem iniciou o cadastro "
+                "com cargo 01 pode continuar.",
+                ephemeral=True
+            )
+            return
+
+        selecionado = self.values[0]
+
+        try:
+            membro = interaction.guild.get_member(
+                selecionado.id
+            )
+
+            if membro is None:
+                membro = await interaction.guild.fetch_member(
+                    selecionado.id
+                )
+
+        except discord.NotFound:
+            await interaction.response.send_message(
+                "❌ Esse usuário não pertence ao servidor.",
+                ephemeral=True
+            )
+            return
+
+        except discord.HTTPException:
+            logger.exception(
+                "❌ Erro buscando streamer selecionado %s",
+                selecionado.id
+            )
+
+            await interaction.response.send_message(
+                "❌ Não foi possível validar "
+                "o membro selecionado.",
+                ephemeral=True
+            )
+            return
+
+        if membro.bot:
+            await interaction.response.send_message(
+                "❌ Selecione uma pessoa, não um bot.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(
+            CadastrarLiveParaMembroModal(membro.id)
+        )
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: SelecionarStreamerLiveView
+# ────────────────────────────────────────────────────────────────────────────────
+class SelecionarStreamerLiveView(discord.ui.View):
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ────────────────────────────────────────────────────────────────────────────
+    def __init__(self, autor_id):
+        super().__init__(timeout=180)
+
+        self.add_item(
+            SelecionarStreamerLiveSelect(autor_id)
+        )
+
+
+# ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: PainelLivesUnicoView
 # ────────────────────────────────────────────────────────────────────────────────
 class PainelLivesUnicoView(discord.ui.View):
-    # ────────────────────────────────────────────────────────────────────────────────
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__(timeout=None)
 
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: cadastrar_twitch
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label='🎥 Cadastrar Twitch/Kick', style=discord.ButtonStyle.primary,
-                       custom_id='cadastrar_twitch', emoji='🎥')
-    async def cadastrar_twitch(self, interaction: discord.Interaction,
-                               button: discord.ui.Button):
-        await interaction.response.send_modal(CadastrarLiveModal())
-
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: publicar_live
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label='📢 Publicar Live', style=discord.ButtonStyle.success,
-                       custom_id='publicar_live', emoji='📢')
-    async def publicar_live(self, interaction: discord.Interaction,
-                            button: discord.ui.Button):
+    # ────────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(
+        label="🎥 Cadastrar Twitch/Kick",
+        style=discord.ButtonStyle.primary,
+        custom_id="cadastrar_twitch",
+        emoji="🎥"
+    )
+    async def cadastrar_twitch(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
         await interaction.response.send_modal(
-            PublicarLiveManualModal(interaction.user.id, interaction.user.display_name)
+            CadastrarLiveModal()
         )
 
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: minha_live
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label='🎥 Minha Live', style=discord.ButtonStyle.primary,
-                       custom_id='minha_live_manual', emoji='🎥')
-    async def minha_live(self, interaction: discord.Interaction,
-                         button: discord.ui.Button):
-        view = GerenciarLiveView(interaction.user.id, interaction.user.display_name)
-        embed = discord.Embed(
-            title='🎥 GERENCIAR MINHA LIVE',
-            description=(
-                '**📌 Como funciona:**\n\n'
-                '1. Clique em **Cadastrar Twitch/Kick** no painel para ativar o monitoramento automático.\n'
-                '2. Para divulgar outras plataformas manualmente, clique em **Publicar Live**.\n'
-                '3. Os botões de gerenciamento manual continuam disponíveis abaixo.\n\n'
-                '✅ **Plataformas:**\n'
-                '• 🟣 Twitch — automática\n'
-                '• 🟢 Kick — automática\n'
-                '• 📱 TikTok — manual\n'
-                '• ▶️ YouTube — manual\n'
-                '• Outras — manual'
-            ),
-            color=0x3498DB,
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: publicar_live
+    # ────────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(
+        label="📢 Publicar Live",
+        style=discord.ButtonStyle.success,
+        custom_id="publicar_live",
+        emoji="📢"
+    )
+    async def publicar_live(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        await interaction.response.send_modal(
+            PublicarLiveManualModal(
+                interaction.user.id,
+                interaction.user.display_name
+            )
         )
-        embed.set_footer(text='Sistema de Lives • VDR')
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: minha_live
+    # ────────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(
+        label="🎥 Minha Live",
+        style=discord.ButtonStyle.primary,
+        custom_id="minha_live_manual",
+        emoji="🎥"
+    )
+    async def minha_live(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        view = GerenciarLiveView(
+            interaction.user.id,
+            interaction.user.display_name
+        )
+
+        embed = discord.Embed(
+            title="🎥 GERENCIAR MINHA LIVE",
+            description=(
+                "**📌 Como funciona:**\n\n"
+                "1. Clique em **Cadastrar Twitch/Kick** "
+                "para o monitoramento automático.\n"
+                "2. Use **Publicar Live** "
+                "para divulgação manual.\n"
+                "3. Os controles manuais abaixo "
+                "continuam disponíveis.\n\n"
+                "✅ **Plataformas:**\n"
+                "• 🟣 Twitch — automática\n"
+                "• 🟢 Kick — automática\n"
+                "• 📱 TikTok — manual\n"
+                "• ▶️ YouTube — manual\n"
+                "• Outras — manual"
+            ),
+            color=0x3498DB
+        )
+
+        embed.set_footer(
+            text="Sistema de Lives • VDR"
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            view=view,
+            ephemeral=True
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cadastrar_live_membro_01
+    # ────────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(
+        label="👑 Cadastrar Live de Membro",
+        style=discord.ButtonStyle.secondary,
+        custom_id="vdr_cadastrar_live_membro_01",
+        emoji="👑",
+        row=1
+    )
+    async def cadastrar_live_membro_01(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        if not pode_cadastrar_live_de_membro(interaction):
+            await interaction.response.send_message(
+                "❌ Esse botão é exclusivo dos membros "
+                "com o cargo **01**.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "👑 **Cadastro em nome de outro membro**\n"
+            "Escolha abaixo quem receberá os anúncios "
+            "e o cargo 🔴 AO VIVO. "
+            "Depois informe o link do canal Twitch ou Kick.",
+            view=SelecionarStreamerLiveView(
+                interaction.user.id
+            ),
+            ephemeral=True
+        )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FIM DA CLASSE: PainelLivesUnicoView
+# ────────────────────────────────────────────────────────────────────────────────
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_lives
