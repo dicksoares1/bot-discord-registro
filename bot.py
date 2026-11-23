@@ -17348,89 +17348,181 @@ async def fechar_ponto(user_id):
         logger.error(f"❌ Erro ao fechar ponto: {e}")
         return None
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: calcular_horas_semana
-# ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: calcular_horas_semana
-# ────────────────────────────────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 14 — FUNÇÃO: calcular_horas_semana
+# ════════════════════════════════════════════════════════════════════════════════
 async def calcular_horas_semana(user_id):
+    """
+    Calcula horas da semana atual.
+
+    Inclui:
+    - Pontos fechados.
+    - Ajustes manuais positivos e negativos.
+    - Tempo dos pontos ainda abertos.
+
+    Pontos abertos contam somente a partir do início
+    da semana atual, sem trazer horas indevidas.
+    """
     pool = await get_pool()
+
     if not pool:
+        logger.error(
+            "❌ Banco indisponível para calcular horas semanais."
+        )
         return 0
+
     try:
-        hoje = agora()
-        dia_semana = hoje.weekday()
-        segunda = (hoje - timedelta(days=dia_semana)).replace(hour=0, minute=0, second=0, microsecond=0)
-        domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        agora_local = agora_db()
+
+        segunda = (
+            agora_local - timedelta(days=agora_local.weekday())
+        ).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+
+        proxima_segunda = segunda + timedelta(days=7)
 
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT tempo_segundos FROM pontos_mecanica WHERE user_id = $1 AND ativo = false AND entrada >= $2 AND entrada <= $3",
-                str(user_id), para_db_naive(segunda), para_db_naive(domingo)
+            fechado = await conn.fetchval("""
+                SELECT COALESCE(SUM(tempo_segundos), 0)
+                FROM pontos_mecanica
+                WHERE user_id = $1
+                  AND ativo = FALSE
+                  AND entrada >= $2
+                  AND entrada < $3
+            """,
+                str(user_id),
+                segunda,
+                proxima_segunda
             )
-            total_fechados = sum(r["tempo_segundos"] for r in rows)
 
-            aberto = await conn.fetchrow(
-                "SELECT entrada FROM pontos_mecanica WHERE user_id = $1 AND ativo = true",
-                str(user_id)
+            abertos = await conn.fetch("""
+                SELECT entrada
+                FROM pontos_mecanica
+                WHERE user_id = $1
+                  AND ativo = TRUE
+                  AND entrada < $2
+            """,
+                str(user_id),
+                agora_local
             )
-            total_aberto = 0
-            if aberto:
-                entrada_aberto = aberto["entrada"]
-                if isinstance(entrada_aberto, datetime) and entrada_aberto.tzinfo is None:
-                    entrada_aberto = entrada_aberto.replace(tzinfo=BRASIL)
-                total_aberto = int((agora() - entrada_aberto).total_seconds())
 
-            return total_fechados + total_aberto
-    except Exception as e:
-        logger.error(f"❌ Erro ao calcular horas da semana: {e}")
+        segundos_abertos = sum(
+            max(
+                0,
+                int(
+                    (
+                        agora_local
+                        - max(p["entrada"], segunda)
+                    ).total_seconds()
+                )
+            )
+            for p in abertos
+            if p["entrada"]
+        )
+
+        total = int(fechado or 0) + segundos_abertos
+
+        return max(0, total)
+
+    except Exception as erro:
+        logger.exception(
+            "❌ Erro ao calcular horas da semana "
+            "do membro %s: %s",
+            user_id,
+            erro
+        )
         return 0
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: calcular_horas_periodo
-# ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: calcular_horas_periodo
-# ────────────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DA FUNÇÃO: calcular_horas_semana
+# ════════════════════════════════════════════════════════════════════════════════
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 14 — FUNÇÃO: calcular_horas_periodo
+# ════════════════════════════════════════════════════════════════════════════════
 async def calcular_horas_periodo(user_id, data_inicio, data_fim):
+    """
+    Calcula horas de um período específico.
+
+    Considera pontos fechados, ajustes manuais positivos
+    e negativos, e pontos abertos dentro do período.
+    """
     pool = await get_pool()
-    if not pool:
+
+    if not pool or not data_inicio or not data_fim:
         return 0
+
     try:
-        inicio_naive = para_db_naive(data_inicio) if data_inicio else None
-        fim_naive = para_db_naive(data_fim) if data_fim else None
+        inicio = para_db_naive(data_inicio)
+        fim = para_db_naive(data_fim)
+
+        if fim < inicio:
+            return 0
+
+        agora_local = agora_db()
 
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """SELECT tempo_segundos FROM pontos_mecanica 
-                   WHERE user_id = $1 AND ativo = false 
-                   AND entrada >= $2 AND entrada <= $3""",
-                str(user_id), inicio_naive, fim_naive
+            fechado = await conn.fetchval("""
+                SELECT COALESCE(SUM(tempo_segundos), 0)
+                FROM pontos_mecanica
+                WHERE user_id = $1
+                  AND ativo = FALSE
+                  AND entrada >= $2
+                  AND entrada <= $3
+            """,
+                str(user_id),
+                inicio,
+                fim
             )
-            total_fechados = sum(r["tempo_segundos"] or 0 for r in rows)
 
-            aberto = await conn.fetchrow(
-                """SELECT entrada FROM pontos_mecanica 
-                   WHERE user_id = $1 AND ativo = true 
-                   AND entrada >= $2 AND entrada <= $3""",
-                str(user_id), inicio_naive, fim_naive
+            abertos = await conn.fetch("""
+                SELECT entrada
+                FROM pontos_mecanica
+                WHERE user_id = $1
+                  AND ativo = TRUE
+                  AND entrada <= $2
+            """,
+                str(user_id),
+                min(fim, agora_local)
             )
-            total_aberto = 0
-            if aberto:
-                entrada_aberto = aberto["entrada"]
-                if isinstance(entrada_aberto, datetime) and entrada_aberto.tzinfo is None:
-                    entrada_aberto = entrada_aberto.replace(tzinfo=BRASIL)
-                total_aberto = int((agora() - entrada_aberto).total_seconds())
 
-            return total_fechados + total_aberto
-    except Exception as e:
-        logger.error(f"❌ Erro ao calcular horas do período: {e}")
+        segundos_abertos = sum(
+            max(
+                0,
+                int(
+                    (
+                        min(agora_local, fim)
+                        - max(p["entrada"], inicio)
+                    ).total_seconds()
+                )
+            )
+            for p in abertos
+            if p["entrada"]
+        )
+
+        total = int(fechado or 0) + segundos_abertos
+
+        return max(0, total)
+
+    except Exception as erro:
+        logger.exception(
+            "❌ Erro calculando horas do período "
+            "para %s: %s",
+            user_id,
+            erro
+        )
         return 0
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: resetar_pontos_semana
-# ────────────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DA FUNÇÃO: calcular_horas_periodo
+# ════════════════════════════════════════════════════════════════════════════════
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: resetar_pontos_semana
 # ────────────────────────────────────────────────────────────────────────────────
@@ -17662,93 +17754,226 @@ async def criar_sala_meta(member: discord.Member):
         logger.error(f"❌ Erro ao criar sala meta para {member.display_name}: {e}")
         return None
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: ajustar_permissoes_sala
-# ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: ajustar_permissoes_sala
-# ────────────────────────────────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 14 — FUNÇÃO: ajustar_permissoes_sala
+# ════════════════════════════════════════════════════════════════════════════════
 async def ajustar_permissoes_sala(canal, member, is_mecanico):
     try:
         guild = member.guild
 
+        # ────────────────────────────────────────────────────────────────────────
+        # ACESSO DO CARGO 01
+        # ────────────────────────────────────────────────────────────────────────
+        cargo_01 = guild.get_role(CARGO_01_ID)
+
+        if cargo_01:
+            await canal.set_permissions(
+                cargo_01,
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True
+            )
+
+        # ────────────────────────────────────────────────────────────────────────
+        # ACESSO DOS RESPONSÁVEIS DE METAS
+        # ────────────────────────────────────────────────────────────────────────
         cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
+
         if cargo_resp:
             for resp_member in guild.members:
                 if cargo_resp in resp_member.roles:
                     try:
                         perms = canal.permissions_for(resp_member)
-                        if not perms.view_channel:
-                            await canal.set_permissions(resp_member, view_channel=True, send_messages=True)
-                    except Exception as e:
-                        logger.error(f"❌ Erro ao dar acesso a {resp_member.display_name}: {e}")
 
-        cargo_gerente_mec = guild.get_role(CARGO_GERENTE_MECANICA_ID)
+                        if not perms.view_channel:
+                            await canal.set_permissions(
+                                resp_member,
+                                view_channel=True,
+                                send_messages=True
+                            )
+
+                    except Exception as erro:
+                        logger.error(
+                            "❌ Erro ao dar acesso a %s: %s",
+                            resp_member.display_name,
+                            erro
+                        )
+
+        # ────────────────────────────────────────────────────────────────────────
+        # ACESSO DA GERÊNCIA DE MECÂNICA
+        # ────────────────────────────────────────────────────────────────────────
+        cargo_gerente_mec = guild.get_role(
+            CARGO_GERENTE_MECANICA_ID
+        )
+
         if cargo_gerente_mec:
             if is_mecanico:
-                await canal.set_permissions(cargo_gerente_mec, view_channel=True, send_messages=True)
-                logger.info(f"👁️ Gerente Mecânica ganhou acesso à sala de {member.display_name}")
+                await canal.set_permissions(
+                    cargo_gerente_mec,
+                    view_channel=True,
+                    send_messages=True
+                )
+
+                logger.info(
+                    "👁️ Gerente Mecânica ganhou acesso "
+                    "à sala de %s",
+                    member.display_name
+                )
+
             else:
                 try:
-                    await canal.set_permissions(cargo_gerente_mec, overwrite=None)
-                    logger.info(f"🚫 Gerente Mecânica sem acesso à sala de {member.display_name} (não é mecânico)")
-                except:
+                    await canal.set_permissions(
+                        cargo_gerente_mec,
+                        overwrite=None
+                    )
+
+                    logger.info(
+                        "🚫 Gerente Mecânica sem acesso "
+                        "à sala de %s (não é mecânico)",
+                        member.display_name
+                    )
+
+                except Exception:
                     pass
 
-    except Exception as e:
-        logger.error(f"❌ Erro ao ajustar permissões da sala: {e}")
+    except Exception as erro:
+        logger.exception(
+            "❌ Erro ao ajustar permissões da sala: %s",
+            erro
+        )
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_acesso_responsaveis
-# ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_acesso_responsaveis
-# ────────────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DA FUNÇÃO: ajustar_permissoes_sala
+# ════════════════════════════════════════════════════════════════════════════════
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 14 — FUNÇÃO: atualizar_acesso_responsaveis
+# ════════════════════════════════════════════════════════════════════════════════
 async def atualizar_acesso_responsaveis():
     try:
         guild = bot.get_guild(GUILD_ID)
+
         if not guild:
-            logger.error("❌ Guild não encontrada em atualizar_acesso_responsaveis")
+            logger.error(
+                "❌ Guild não encontrada em atualizar_acesso_responsaveis"
+            )
             return
 
         cargo_resp = guild.get_role(CARGO_RESP_METAS_ID)
-        if not cargo_resp:
-            logger.error("❌ Cargo de Responsável de Metas não encontrado")
-            return
 
-        responsaveis = [m for m in guild.members if cargo_resp in m.roles]
+        if not cargo_resp:
+            logger.warning(
+                "⚠️ Cargo de Responsável de Metas não encontrado"
+            )
+
+        responsaveis = (
+            [
+                m for m in guild.members
+                if cargo_resp in m.roles
+            ]
+            if cargo_resp
+            else []
+        )
+
         if not responsaveis:
-            logger.info("ℹ️ Nenhum responsável encontrado")
-            return
+            logger.info(
+                "ℹ️ Nenhum responsável encontrado; "
+                "acesso do cargo 01 será atualizado."
+            )
+
+        lider = guild.get_role(CARGO_01_ID)
 
         rows = await carregar_metas_db()
+
         if not rows:
-            logger.info("ℹ️ Nenhuma sala de meta para atualizar")
+            logger.info(
+                "ℹ️ Nenhuma sala de meta para atualizar."
+            )
             return
 
         contador = 0
+
         for meta in rows:
             canal_id = int(meta["canal_id"])
             canal = guild.get_channel(canal_id)
+
             if not canal:
                 continue
 
+            # ────────────────────────────────────────────────────────────────────
+            # CARGO 01 — TODAS AS SALAS EXISTENTES
+            # ────────────────────────────────────────────────────────────────────
+            if lider:
+                try:
+                    perm = canal.overwrites_for(lider)
+
+                    if (
+                        not perm.view_channel
+                        or not perm.send_messages
+                        or not perm.read_message_history
+                    ):
+                        perm.view_channel = True
+                        perm.send_messages = True
+                        perm.read_message_history = True
+
+                        await canal.set_permissions(
+                            lider,
+                            overwrite=perm
+                        )
+
+                        contador += 1
+
+                except Exception as erro:
+                    logger.error(
+                        "❌ Erro ao dar acesso ao cargo 01 "
+                        "em %s: %s",
+                        canal.name,
+                        erro
+                    )
+
+            # ────────────────────────────────────────────────────────────────────
+            # RESPONSÁVEIS — MANTER ACESSO EXISTENTE
+            # ────────────────────────────────────────────────────────────────────
             for resp in responsaveis:
                 try:
-                    await canal.set_permissions(resp, view_channel=True, send_messages=True)
+                    await canal.set_permissions(
+                        resp,
+                        view_channel=True,
+                        send_messages=True
+                    )
+
                     contador += 1
-                except Exception as e:
-                    logger.error(f"❌ Erro ao dar acesso a {resp.display_name} em {canal.name}: {e}")
+
+                except Exception as erro:
+                    logger.error(
+                        "❌ Erro ao dar acesso a %s "
+                        "em %s: %s",
+                        resp.display_name,
+                        canal.name,
+                        erro
+                    )
 
             await asyncio.sleep(0.2)
 
-        logger.info(f"✅ {contador} permissões atualizadas para {len(responsaveis)} responsáveis")
-    except Exception as e:
-        logger.error(f"❌ Erro em atualizar_acesso_responsaveis: {e}")
+        logger.info(
+            "✅ %s permissões atualizadas; "
+            "%s responsáveis encontrados.",
+            contador,
+            len(responsaveis)
+        )
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: carregar_metas_cache
-# ────────────────────────────────────────────────────────────────────────────────
+    except Exception as erro:
+        logger.exception(
+            "❌ Erro em atualizar_acesso_responsaveis: %s",
+            erro
+        )
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DA FUNÇÃO: atualizar_acesso_responsaveis
+# ════════════════════════════════════════════════════════════════════════════════
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_metas_cache
 # ────────────────────────────────────────────────────────────────────────────────
@@ -18832,17 +19057,20 @@ async def _v2_montar_container(user_id):
         logger.error(f"❌ Erro ao montar container V2: {e}")
         return None, None
 
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: V2MetaView
-# ────────────────────────────────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 14 — CLASSE: V2MetaView
+# ════════════════════════════════════════════════════════════════════════════════
 class V2MetaView(discord.ui.LayoutView):
     """
-    LayoutView Híbrido para painel de meta.
-    Botões mudam conforme cargos do membro (soldado, mecânico, isento).
+    Painel V2 de metas.
+    Cargo 01 pode operar botões em qualquer sala.
+    Liderança e Gerência isentas podem depositar pólvora.
     """
-    # ────────────────────────────────────────────────────────────────────────────────
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, container, cargos_info):
         super().__init__(timeout=None)
         self.user_id = user_id
@@ -18866,14 +19094,14 @@ class V2MetaView(discord.ui.LayoutView):
         btn_add_din.callback = self._add_dinheiro
         row1.add_item(btn_add_din)
 
-        if not is_isento or is_soldado:
-            btn_add_pol = discord.ui.Button(
-                label="Adicionar Pólvora", emoji="🧨",
-                style=discord.ButtonStyle.success,
-                custom_id=f"v2_add_pol_{user_id}"
-            )
-            btn_add_pol.callback = self._add_polvora
-            row1.add_item(btn_add_pol)
+        # Agora também aparece para os membros isentos.
+        btn_add_pol = discord.ui.Button(
+            label="Adicionar Pólvora", emoji="🧨",
+            style=discord.ButtonStyle.success,
+            custom_id=f"v2_add_pol_{user_id}"
+        )
+        btn_add_pol.callback = self._add_polvora
+        row1.add_item(btn_add_pol)
 
         if is_mecanico:
             if ponto_ativo:
@@ -18884,8 +19112,10 @@ class V2MetaView(discord.ui.LayoutView):
                 label_ponto = "Abrir Ponto"
                 emoji_ponto = "🟢"
                 style_ponto = discord.ButtonStyle.success
+
             btn_ponto = discord.ui.Button(
-                label=label_ponto, emoji=emoji_ponto,
+                label=label_ponto,
+                emoji=emoji_ponto,
                 style=style_ponto,
                 custom_id=f"v2_ponto_{user_id}"
             )
@@ -18895,12 +19125,13 @@ class V2MetaView(discord.ui.LayoutView):
         self.add_item(row1)
 
         # ═══════════════════════════════════════════════════════════════════════
-        # LINHA 2 — Editar Meta, Editar Valor, Editar Ações (soldado), Editar Pólvora
+        # LINHA 2 — Edições e controles
         # ═══════════════════════════════════════════════════════════════════════
         row2 = discord.ui.ActionRow()
 
         btn_edit_meta = discord.ui.Button(
-            label="Editar Meta", emoji="✏️",
+            label="Editar Meta",
+            emoji="✏️",
             style=discord.ButtonStyle.primary,
             custom_id=f"v2_edit_meta_{user_id}"
         )
@@ -18908,7 +19139,8 @@ class V2MetaView(discord.ui.LayoutView):
         row2.add_item(btn_edit_meta)
 
         btn_edit_valor = discord.ui.Button(
-            label="Editar Valor", emoji="⚙️",
+            label="Editar Valor",
+            emoji="⚙️",
             style=discord.ButtonStyle.secondary,
             custom_id=f"v2_edit_valor_{user_id}"
         )
@@ -18917,7 +19149,8 @@ class V2MetaView(discord.ui.LayoutView):
 
         if is_soldado:
             btn_edit_acoes = discord.ui.Button(
-                label="Editar Ações", emoji="⚔️",
+                label="Editar Ações",
+                emoji="⚔️",
                 style=discord.ButtonStyle.primary,
                 custom_id=f"v2_edit_acoes_{user_id}"
             )
@@ -18926,7 +19159,8 @@ class V2MetaView(discord.ui.LayoutView):
 
         if is_mecanico:
             btn_edit_horas = discord.ui.Button(
-                label="Editar Horas", emoji="⏰",
+                label="Editar Horas",
+                emoji="⏰",
                 style=discord.ButtonStyle.primary,
                 custom_id=f"v2_edit_horas_{user_id}"
             )
@@ -18935,65 +19169,121 @@ class V2MetaView(discord.ui.LayoutView):
 
         self.add_item(row2)
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # CALLBACKS — Adicionar dinheiro
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _pode_acionar_sala
+    # ────────────────────────────────────────────────────────────────────────────
+    def _pode_acionar_sala(self, membro):
+        return (
+            str(membro.id) == str(self.user_id)
+            or any(
+                cargo.id == CARGO_01_ID
+                for cargo in getattr(membro, "roles", [])
+            )
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: _add_dinheiro
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     async def _add_dinheiro(self, interaction: discord.Interaction):
-        if str(interaction.user.id) != str(self.user_id):
-            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
+        if not self._pode_acionar_sala(interaction.user):
+            await interaction.response.send_message(
+                "❌ Apenas o dono da sala ou o cargo 01 podem usar este botão!",
+                ephemeral=True
+            )
             return
-        pool = await get_pool()
-        if not pool:
-            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
-            return
-        async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
-        if not meta:
-            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
-            return
-        await interaction.response.send_modal(AdicionarDinheiroModal(self.user_id))
 
-    # ────────────────────────────────────────────────────────────────────────────────
+        pool = await get_pool()
+
+        if not pool:
+            await interaction.response.send_message(
+                "❌ Banco indisponível!",
+                ephemeral=True
+            )
+            return
+
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow(
+                "SELECT * FROM metas WHERE user_id = $1",
+                str(self.user_id)
+            )
+
+        if not meta:
+            await interaction.response.send_message(
+                "❌ Meta não encontrada!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(
+            AdicionarDinheiroModal(self.user_id)
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: _add_polvora
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     async def _add_polvora(self, interaction: discord.Interaction):
-        if str(interaction.user.id) != str(self.user_id):
-            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
+        if not self._pode_acionar_sala(interaction.user):
+            await interaction.response.send_message(
+                "❌ Apenas o dono da sala ou o cargo 01 podem usar este botão!",
+                ephemeral=True
+            )
             return
-        pool = await get_pool()
-        if not pool:
-            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
-            return
-        async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
-        if not meta:
-            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
-            return
-        await interaction.response.send_modal(AdicionarPolvoraModal(self.user_id))
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # CALLBACKS — Ponto (mecânico)
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: _ponto_dinamico
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def _ponto_dinamico(self, interaction: discord.Interaction):
-        if str(interaction.user.id) != str(self.user_id):
-            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
+        pool = await get_pool()
+
+        if not pool:
+            await interaction.response.send_message(
+                "❌ Banco indisponível!",
+                ephemeral=True
+            )
             return
+
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow(
+                "SELECT * FROM metas WHERE user_id = $1",
+                str(self.user_id)
+            )
+
+        if not meta:
+            await interaction.response.send_message(
+                "❌ Meta não encontrada!",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(
+            AdicionarPolvoraModal(self.user_id)
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _ponto_dinamico
+    # ────────────────────────────────────────────────────────────────────────────
+    async def _ponto_dinamico(self, interaction: discord.Interaction):
+        if not self._pode_acionar_sala(interaction.user):
+            await interaction.response.send_message(
+                "❌ Apenas o dono da sala ou o cargo 01 podem usar este botão!",
+                ephemeral=True
+            )
+            return
+
         await interaction.response.defer(ephemeral=True)
 
         ponto_ativo = await buscar_ponto_ativo(self.user_id)
+
         if ponto_ativo:
             resultado = await fechar_ponto(self.user_id)
+
             if not resultado:
-                await interaction.followup.send("⚠️ Erro ao fechar ponto. Tente novamente.", ephemeral=True)
+                await interaction.followup.send(
+                    "⚠️ Erro ao fechar ponto. Tente novamente.",
+                    ephemeral=True
+                )
                 return
+
             await atualizar_embed_meta(self.user_id)
+
             tempo_formatado = formatar_horas(resultado["tempo"])
+
             await interaction.followup.send(
                 f"✅ **Ponto fechado!**\n"
                 f"⏰ **Entrada:** {resultado['entrada'].strftime('%H:%M:%S')}\n"
@@ -19001,91 +19291,201 @@ class V2MetaView(discord.ui.LayoutView):
                 f"⏱️ **Tempo desta sessão:** {tempo_formatado}",
                 ephemeral=True
             )
+
         else:
             sucesso = await abrir_ponto(self.user_id)
+
             if not sucesso:
-                await interaction.followup.send("❌ Erro ao abrir ponto. Tente novamente.", ephemeral=True)
+                await interaction.followup.send(
+                    "❌ Erro ao abrir ponto. Tente novamente.",
+                    ephemeral=True
+                )
                 return
+
             await atualizar_embed_meta(self.user_id)
+
             await interaction.followup.send(
-                f"✅ **Ponto aberto às {agora().strftime('%H:%M:%S')}!**\n⏰ O tempo está contando...",
+                f"✅ **Ponto aberto às {agora().strftime('%H:%M:%S')}!\n"
+                "⏰ O tempo está contando...",
                 ephemeral=True
             )
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # CALLBACKS — Edições (BLOQUEIO DO DONO DA SALA APLICADO)
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: _editar_meta
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     async def _editar_meta(self, interaction: discord.Interaction):
-        # REGRA: Apenas gerentes ou ADM. O dono da sala NÃO PODE.
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
+        is_gerente = any(
+            r.id in [
+                CARGO_GERENTE_ID,
+                CARGO_GERENTE_GERAL_ID,
+                CARGO_GERENTE_MECANICA_ID,
+                CARGO_DONO_MORRO_ID,
+                CARGO_01_ID,
+                CARGO_02_ID
+            ]
+            for r in interaction.user.roles
+        )
         is_admin = interaction.user.guild_permissions.administrator
+
         if not is_gerente and not is_admin:
-            await interaction.response.send_message("❌ Apenas **GERENTES**, **LIDERANÇA** ou **ADM** podem editar a meta!", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Apenas GERENTES, LIDERANÇA ou ADM podem editar a meta!",
+                ephemeral=True
+            )
             return
+
         pool = await get_pool()
+
         if not pool:
-            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Banco indisponível!",
+                ephemeral=True
+            )
             return
+
         async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
+            meta = await conn.fetchrow(
+                "SELECT * FROM metas WHERE user_id = $1",
+                str(self.user_id)
+            )
+
         if not meta:
-            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Meta não encontrada!",
+                ephemeral=True
+            )
             return
+
         dados = {
             "dinheiro": meta["dinheiro"] or 0,
             "saldo_excedente": meta.get("saldo_excedente") or 0
         }
-        await interaction.response.send_modal(EditarMetaModal(self.user_id, dados))
 
-    # ────────────────────────────────────────────────────────────────────────────────
+        await interaction.response.send_modal(
+            EditarMetaModal(self.user_id, dados)
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: _editar_valor
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     async def _editar_valor(self, interaction: discord.Interaction):
-        # REGRA: Apenas gerentes ou ADM. O dono da sala NÃO PODE.
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
+        is_gerente = any(
+            r.id in [
+                CARGO_GERENTE_ID,
+                CARGO_GERENTE_GERAL_ID,
+                CARGO_GERENTE_MECANICA_ID,
+                CARGO_DONO_MORRO_ID,
+                CARGO_01_ID,
+                CARGO_02_ID
+            ]
+            for r in interaction.user.roles
+        )
         is_admin = interaction.user.guild_permissions.administrator
+
         if not is_gerente and not is_admin:
-            await interaction.response.send_message("❌ Apenas **GERENTES**, **LIDERANÇA** ou **ADM** podem editar o valor da meta!", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Apenas GERENTES, LIDERANÇA ou ADM podem editar o valor da meta!",
+                ephemeral=True
+            )
             return
+
         meta_total = await definir_valor_meta_por_id(self.user_id)
-        await interaction.response.send_modal(EditarValorMetaModal(self.user_id, meta_total))
 
-    # ────────────────────────────────────────────────────────────────────────────────
+        await interaction.response.send_modal(
+            EditarValorMetaModal(self.user_id, meta_total)
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: _editar_acoes
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     async def _editar_acoes(self, interaction: discord.Interaction):
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_DONO_MORRO_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
+        is_gerente = any(
+            r.id in [
+                CARGO_GERENTE_ID,
+                CARGO_GERENTE_GERAL_ID,
+                CARGO_GERENTE_MECANICA_ID,
+                CARGO_DONO_MORRO_ID,
+                CARGO_01_ID,
+                CARGO_02_ID
+            ]
+            for r in interaction.user.roles
+        )
         is_admin = interaction.user.guild_permissions.administrator
-        if not is_gerente and not is_admin:
-            await interaction.response.send_message("❌ Apenas **GERENTES**, **LIDERANÇA** ou **ADM**!", ephemeral=True)
-            return
-        pool = await get_pool()
-        if not pool:
-            await interaction.response.send_message("❌ Banco indisponível!", ephemeral=True)
-            return
-        async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(self.user_id))
-        if not meta:
-            await interaction.response.send_message("❌ Meta não encontrada!", ephemeral=True)
-            return
-        valor_atual = meta.get("dinheiro_acoes") or 0
-        await interaction.response.send_modal(EditarDinheiroAcoesModal(self.user_id, valor_atual))
 
-    # ────────────────────────────────────────────────────────────────────────────────
+        if not is_gerente and not is_admin:
+            await interaction.response.send_message(
+                "❌ Apenas GERENTES, LIDERANÇA ou ADM podem editar ações!",
+                ephemeral=True
+            )
+            return
+
+        pool = await get_pool()
+
+        if not pool:
+            await interaction.response.send_message(
+                "❌ Banco indisponível!",
+                ephemeral=True
+            )
+            return
+
+        async with pool.acquire() as conn:
+            meta = await conn.fetchrow(
+                "SELECT * FROM metas WHERE user_id = $1",
+                str(self.user_id)
+            )
+
+        if not meta:
+            await interaction.response.send_message(
+                "❌ Meta não encontrada!",
+                ephemeral=True
+            )
+            return
+
+        valor_atual = meta.get("dinheiro_acoes") or 0
+
+        await interaction.response.send_modal(
+            EditarDinheiroAcoesModal(self.user_id, valor_atual)
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: _editar_horas
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     async def _editar_horas(self, interaction: discord.Interaction):
         is_dono = str(interaction.user.id) == str(self.user_id)
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
+
+        is_gerente = any(
+            r.id in [
+                CARGO_GERENTE_ID,
+                CARGO_GERENTE_GERAL_ID,
+                CARGO_GERENTE_MECANICA_ID
+            ]
+            for r in interaction.user.roles
+        )
+
+        is_lider_01 = any(
+            r.id == CARGO_01_ID
+            for r in interaction.user.roles
+        )
+
         is_admin = interaction.user.guild_permissions.administrator
-        if not is_dono and not is_gerente and not is_admin:
-            await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+
+        if not (is_dono or is_gerente or is_lider_01 or is_admin):
+            await interaction.response.send_message(
+                "❌ Sem permissão para editar horas!",
+                ephemeral=True
+            )
             return
+
         segundos_atuais = await calcular_horas_semana(self.user_id)
-        await interaction.response.send_modal(EditarHorasModal(self.user_id, segundos_atuais))
+
+        await interaction.response.send_modal(
+            EditarHorasModal(self.user_id, segundos_atuais)
+        )
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DA CLASSE: V2MetaView
+# ════════════════════════════════════════════════════════════════════════════════
+
 
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -19839,172 +20239,338 @@ class EditarValorMetaModal(discord.ui.Modal, title="⚙️ Editar Valor da Meta"
         embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Metas")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: EditarHorasModal
-# ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: EditarHorasModal
-# ────────────────────────────────────────────────────────────────────────────────
-class EditarHorasModal(discord.ui.Modal, title="⏰ Editar Horas (Mecânica)"):
-    # ────────────────────────────────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BLOCO 14 — CLASSE: EditarHorasModal
+# ════════════════════════════════════════════════════════════════════════════════
+class EditarHorasModal(
+    discord.ui.Modal,
+    title="⏰ Editar Horas (Mecânica)"
+):
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, segundos_atuais=0):
         super().__init__(timeout=300)
+
         self.user_id = user_id
         self.segundos_atuais = segundos_atuais
 
         self.acao = discord.ui.TextInput(
             label="Ação: ADICIONAR ou REMOVER",
-            placeholder="Digite ADICIONAR ou REMOVER",
+            placeholder="ADICIONAR ou REMOVER",
             default="ADICIONAR",
             required=True,
             max_length=10
         )
+
         self.horas = discord.ui.TextInput(
-            label="Horas (ex: 2 para 2h, 0.5 para 30min)",
-            placeholder="Digite o número de horas (aceita decimal)",
+            label="Horas (ex: 2 ou 0.5 para 30min)",
+            placeholder="Digite o número de horas",
             required=True,
             max_length=10
         )
+
         self.add_item(self.acao)
         self.add_item(self.horas)
 
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
+        papeis = getattr(interaction.user, "roles", [])
+
+        autorizado = (
+            str(interaction.user.id) == str(self.user_id)
+            or any(
+                r.id in (
+                    CARGO_01_ID,
+                    CARGO_GERENTE_ID,
+                    CARGO_GERENTE_GERAL_ID,
+                    CARGO_GERENTE_MECANICA_ID
+                )
+                for r in papeis
+            )
+            or interaction.user.guild_permissions.administrator
+        )
+
+        if not autorizado:
+            await interaction.followup.send(
+                "❌ Sem permissão para editar estas horas.",
+                ephemeral=True
+            )
+            return
+
         acao = self.acao.value.strip().upper()
-        if acao not in ["ADICIONAR", "REMOVER"]:
-            await interaction.followup.send("❌ Ação inválida! Use **ADICIONAR** ou **REMOVER**.", ephemeral=True)
+
+        if acao not in ("ADICIONAR", "REMOVER"):
+            await interaction.followup.send(
+                "❌ Ação inválida: use ADICIONAR ou REMOVER.",
+                ephemeral=True
+            )
             return
 
+        # ────────────────────────────────────────────────────────────────────────
+        # VALIDAÇÃO DO VALOR
+        # ────────────────────────────────────────────────────────────────────────
         try:
-            horas_float = float(self.horas.value.strip().replace(",", "."))
-            if horas_float <= 0:
-                raise ValueError
-        except:
-            await interaction.followup.send("❌ Valor de horas inválido! Digite um número positivo (ex: 2 ou 0.5).", ephemeral=True)
+            from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+            horas = Decimal(
+                self.horas.value.strip().replace(",", ".")
+            )
+
+            if not horas.is_finite() or horas <= 0:
+                raise ValueError("Horas devem ser positivas.")
+
+            segundos = int(
+                (horas * 3600).to_integral_value(
+                    rounding=ROUND_HALF_UP
+                )
+            )
+
+            if segundos <= 0 or segundos > 7 * 24 * 3600:
+                raise ValueError(
+                    "O ajuste deve ter de 1 segundo até 168 horas."
+                )
+
+        except (InvalidOperation, ValueError, OverflowError):
+            await interaction.followup.send(
+                "❌ Horas inválidas. Exemplos: "
+                "2 ou 0.5 (30min). Máximo 168h por ajuste.",
+                ephemeral=True
+            )
             return
 
-        segundos_delta = int(horas_float * 3600)
-        if acao == "REMOVER":
-            segundos_delta = -segundos_delta
+        delta = segundos if acao == "ADICIONAR" else -segundos
 
         pool = await get_pool()
+
         if not pool:
-            await interaction.followup.send("❌ Banco de dados indisponível!", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Banco indisponível. Nenhuma hora alterada.",
+                ephemeral=True
+            )
             return
 
+        # ────────────────────────────────────────────────────────────────────────
+        # ATUALIZAÇÃO TRANSACIONAL
+        # ────────────────────────────────────────────────────────────────────────
         try:
-            hoje = agora()
-            dia_semana = hoje.weekday()
-            segunda = (hoje - timedelta(days=dia_semana)).replace(hour=0, minute=0, second=0, microsecond=0)
-            domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
-
-            segundos_antes = await calcular_horas_semana(self.user_id)
-
             async with pool.acquire() as conn:
-                if acao == "ADICIONAR":
-                    entrada = agora() - timedelta(seconds=segundos_delta)
+                async with conn.transaction():
+
                     await conn.execute(
-                        """INSERT INTO pontos_mecanica 
-                           (user_id, entrada, saida, tempo_segundos, ativo) 
-                           VALUES ($1, $2, $3, $4, false)""",
-                        str(self.user_id),
-                        para_db_naive(entrada),
-                        para_db_naive(agora()),
-                        segundos_delta
-                    )
-                    logger.info(f"➕ [EDIT HORAS] +{horas_float}h para {self.user_id} (ponto manual)")
-                else:
-                    pontos = await conn.fetch(
-                        """SELECT id, tempo_segundos, ativo FROM pontos_mecanica 
-                           WHERE user_id = $1 
-                           AND entrada >= $2 AND entrada <= $3
-                           ORDER BY entrada DESC""",
-                        str(self.user_id),
-                        para_db_naive(segunda),
-                        para_db_naive(domingo)
+                        "SELECT pg_advisory_xact_lock(hashtext($1))",
+                        f"ajuste_horas:{self.user_id}"
                     )
 
-                    segundos_restantes = abs(segundos_delta)
-                    pontos_afetados = 0
+                    momento = agora_db()
 
-                    for ponto in pontos:
-                        if segundos_restantes <= 0:
-                            break
-                        tempo_atual = ponto["tempo_segundos"] or 0
-                        if tempo_atual <= 0:
-                            continue
-                        if tempo_atual <= segundos_restantes:
-                            await conn.execute("DELETE FROM pontos_mecanica WHERE id = $1", ponto["id"])
-                            segundos_restantes -= tempo_atual
-                        else:
-                            novo_tempo = tempo_atual - segundos_restantes
-                            await conn.execute("UPDATE pontos_mecanica SET tempo_segundos = $1 WHERE id = $2", novo_tempo, ponto["id"])
-                            segundos_restantes = 0
-                        pontos_afetados += 1
-                    logger.info(f"➖ [EDIT HORAS] -{horas_float}h para {self.user_id} ({pontos_afetados} pontos afetados)")
+                    segunda = (
+                        momento - timedelta(
+                            days=momento.weekday()
+                        )
+                    ).replace(
+                        hour=0,
+                        minute=0,
+                        second=0,
+                        microsecond=0
+                    )
 
-            segundos_final = await calcular_horas_semana(self.user_id)
+                    proxima_segunda = segunda + timedelta(days=7)
 
+                    fechado = await conn.fetchval("""
+                        SELECT COALESCE(SUM(tempo_segundos), 0)
+                        FROM pontos_mecanica
+                        WHERE user_id = $1
+                          AND ativo = FALSE
+                          AND entrada >= $2
+                          AND entrada < $3
+                    """,
+                        str(self.user_id),
+                        segunda,
+                        proxima_segunda
+                    )
+
+                    abertos = await conn.fetch("""
+                        SELECT entrada
+                        FROM pontos_mecanica
+                        WHERE user_id = $1
+                          AND ativo = TRUE
+                          AND entrada < $2
+                    """,
+                        str(self.user_id),
+                        momento
+                    )
+
+                    total_aberto = sum(
+                        max(
+                            0,
+                            int(
+                                (
+                                    momento
+                                    - max(
+                                        p["entrada"],
+                                        segunda
+                                    )
+                                ).total_seconds()
+                            )
+                        )
+                        for p in abertos
+                        if p["entrada"]
+                    )
+
+                    antes = max(
+                        0,
+                        int(fechado or 0) + total_aberto
+                    )
+
+                    # Nunca permitir total negativo.
+                    if delta < 0 and segundos > antes:
+                        raise ValueError(
+                            "Não é possível remover "
+                            f"{formatar_horas(segundos)}; "
+                            "o total atual é "
+                            f"{formatar_horas(antes)}."
+                        )
+
+                    # Salva ajuste da semana atual.
+                    # Não apaga nem modifica pontos anteriores.
+                    # Tempo negativo representa remoção manual.
+                    await conn.execute("""
+                        INSERT INTO pontos_mecanica (
+                            user_id,
+                            entrada,
+                            saida,
+                            tempo_segundos,
+                            ativo
+                        )
+                        VALUES ($1, $2, $2, $3, FALSE)
+                    """,
+                        str(self.user_id),
+                        momento,
+                        delta
+                    )
+
+                    depois = antes + delta
+
+            # ────────────────────────────────────────────────────────────────────
+            # REGISTRO NA AUDITORIA
+            # ────────────────────────────────────────────────────────────────────
             try:
-                membro_nome = "Desconhecido"
-                guild = bot.get_guild(GUILD_ID)
-                if guild:
-                    membro = guild.get_member(int(self.user_id))
-                    if membro:
-                        membro_nome = membro.display_name
                 await registrar_auditoria(
                     user_id=str(interaction.user.id),
                     acao=AuditAcao.EDITAR_HORAS,
                     modulo=AuditModulo.HORAS,
                     item_id=str(self.user_id),
-                    item_nome=membro_nome,
-                    dados_antes={"tempo": segundos_antes},
-                    dados_depois={"tempo": segundos_final},
-                    detalhes=f"{acao}: {formatar_horas(abs(segundos_delta))} ({formatar_horas(segundos_antes)} → {formatar_horas(segundos_final)})"
+                    item_nome=await pegar_apelido(
+                        self.user_id,
+                        interaction.guild
+                    ),
+                    dados_antes={"tempo": antes},
+                    dados_depois={"tempo": depois},
+                    detalhes=(
+                        f"{acao}: {formatar_horas(segundos)} "
+                        f"por {interaction.user.id}; "
+                        "ajuste manual preservado"
+                    )
                 )
-            except Exception as e:
-                logger.error(f"❌ Erro ao auditar edição de horas: {e}")
 
+            except Exception as erro:
+                logger.exception(
+                    "⚠️ Ajuste de horas salvo, mas "
+                    "falha na auditoria: %s",
+                    erro
+                )
+
+            # ────────────────────────────────────────────────────────────────────
+            # ATUALIZAÇÃO DO PAINEL
+            # ────────────────────────────────────────────────────────────────────
             try:
                 await atualizar_embed_meta(self.user_id)
-            except Exception as e:
-                logger.error(f"❌ Erro ao atualizar embed da meta: {e}")
 
-            guild = bot.get_guild(GUILD_ID)
-            member = guild.get_member(int(self.user_id)) if guild else None
-            nome = member.display_name if member else str(self.user_id)
+            except Exception as erro:
+                logger.exception(
+                    "⚠️ Ajuste de horas salvo, mas "
+                    "falha na atualização visual: %s",
+                    erro
+                )
 
+            # ────────────────────────────────────────────────────────────────────
+            # RESPOSTA
+            # ────────────────────────────────────────────────────────────────────
             embed = discord.Embed(
                 title="✅ HORAS ATUALIZADAS!",
-                description=f"**👤 {nome}**",
-                color=0x2ecc71,
+                description=f"**👤 <@{self.user_id}>**",
+                color=0x2ECC71,
                 timestamp=agora()
             )
-            emoji_acao = "➕" if acao == "ADICIONAR" else "➖"
+
             embed.add_field(
-                name=f"{emoji_acao} {acao}",
-                value=f"```yaml\n{formatar_horas(abs(segundos_delta))}\n```",
+                name="⏰ Alteração",
+                value=(
+                    f"{acao}: {formatar_horas(segundos)}"
+                ),
                 inline=True
             )
+
             embed.add_field(
-                name="⏰ Novo total da semana",
-                value=f"```yaml\n{formatar_horas(segundos_final)}\n```",
+                name="⏰ Total antes",
+                value=formatar_horas(antes),
                 inline=True
             )
-            embed.add_field(name="👤 Editado por", value=interaction.user.mention, inline=False)
-            embed.set_footer(text="🛡 Vida Rasa 442 • Sistema de Horas (Mecânica)")
 
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            embed.add_field(
+                name="⏰ Novo total",
+                value=formatar_horas(depois),
+                inline=True
+            )
 
-        except Exception as e:
-            logger.error(f"❌ Erro ao editar horas: {e}")
-            await interaction.followup.send(f"❌ Erro: {str(e)[:150]}", ephemeral=True)
+            embed.add_field(
+                name="👤 Editado por",
+                value=interaction.user.mention,
+                inline=False
+            )
+
+            embed.set_footer(
+                text=(
+                    "🛡 Vida Rasa 442 • "
+                    "Sistema de Horas (Mecânica)"
+                )
+            )
+
+            await interaction.followup.send(
+                embed=embed,
+                ephemeral=True
+            )
+
+        except ValueError as erro:
+            await interaction.followup.send(
+                f"❌ {erro}",
+                ephemeral=True
+            )
+
+        except Exception as erro:
+            logger.exception(
+                "❌ Falha editando horas de %s: %s",
+                self.user_id,
+                erro
+            )
+
+            await interaction.followup.send(
+                "❌ Horas não alteradas. "
+                "Verifique os logs do Railway.",
+                ephemeral=True
+            )
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FIM DA CLASSE: EditarHorasModal
+# ════════════════════════════════════════════════════════════════════════════════
+
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  BLOCO 14 — SISTEMA DE METAS (PARTE 4/4)                                   ║
