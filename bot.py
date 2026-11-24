@@ -9692,55 +9692,179 @@ async def verificar_pedido_finalizado(pedido_numero):
 
 # ────────────────────────────────────────────────────────────────────────────────
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: buscar_responsaveis_venda — dados persistidos na entrega e no caixa
-# ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_responsaveis_venda
 # ────────────────────────────────────────────────────────────────────────────────
-async def buscar_responsaveis_venda(pedido_numero, entrega_id=None, guild=None):
-    resposta = {"entregue_por": None, "entregue_em": None, "pago_por": None, "pago_em": None}
+async def buscar_responsaveis_venda(
+    pedido_numero,
+    entrega_id=None,
+    guild=None,
+    numero_parcela=None
+):
+    resposta = {
+        "entregue_por": None,
+        "entregue_em": None,
+        "pago_por": None,
+        "pago_em": None
+    }
+
     pool = await get_pool()
-    if not pool: return resposta
+
+    if not pool:
+        return resposta
+
     try:
         async with pool.acquire() as conn:
+
+            # ────────────────────────────────────────────────────────────────────
+            # LOCALIZA A PARCELA REAL
+            # ────────────────────────────────────────────────────────────────────
             row = await conn.fetchrow("""
-                SELECT entregue_por, entregue_em, pago_por, pago_em FROM entregas_status
-                WHERE pedido_numero=$1 AND ($2::integer IS NULL OR entrega_id=$2)
-                ORDER BY entregue_em DESC NULLS LAST, pago_em DESC NULLS LAST LIMIT 1
-            """, int(pedido_numero), int(entrega_id) if entrega_id else None)
+                SELECT
+                    entregue_por,
+                    entregue_em,
+                    pago_por,
+                    pago_em
+                FROM entregas_status
+                WHERE pedido_numero = $1
+                  AND (
+                      $2::integer IS NULL
+                      OR entrega_id = $2
+                  )
+                  AND (
+                      $3::integer IS NULL
+                      OR numero_parcela = $3
+                  )
+                ORDER BY
+                    entregue_em DESC NULLS LAST,
+                    pago_em DESC NULLS LAST
+                LIMIT 1
+            """,
+                int(pedido_numero),
+                (
+                    int(entrega_id)
+                    if entrega_id
+                    else None
+                ),
+                (
+                    int(numero_parcela)
+                    if numero_parcela is not None
+                    else None
+                )
+            )
+
             if row:
-                for tipo in ("entregue", "pago"):
-                    autor = row[f"{tipo}_por"]
+                for tipo in (
+                    "entregue",
+                    "pago"
+                ):
+                    autor = row[
+                        f"{tipo}_por"
+                    ]
+
                     if autor:
-                        resposta[f"{tipo}_por"] = await _nome_responsavel_venda(autor, guild)
-                    data = row[f"{tipo}_em"]
-                    if data: resposta[f"{tipo}_em"] = data.strftime('%d/%m/%Y %H:%M')
-            # Históricos antigos que não persistiram a entrega: recuperar da saída real do estoque.
-            if not resposta["entregue_por"]:
+                        resposta[
+                            f"{tipo}_por"
+                        ] = await _nome_responsavel_venda(
+                            autor,
+                            guild
+                        )
+
+                    data = row[
+                        f"{tipo}_em"
+                    ]
+
+                    if data:
+                        resposta[
+                            f"{tipo}_em"
+                        ] = data.strftime(
+                            "%d/%m/%Y %H:%M"
+                        )
+
+            # ────────────────────────────────────────────────────────────────────
+            # FALLBACK PARA VENDAS ANTIGAS: ESTOQUE
+            # ────────────────────────────────────────────────────────────────────
+            if (
+                not resposta["entregue_por"]
+                and numero_parcela is None
+            ):
                 row = await conn.fetchrow("""
-                    SELECT retirado_por, data FROM saida_estoque
-                    WHERE pedido_numero=$1 AND retirado_por IS NOT NULL
-                    ORDER BY data DESC LIMIT 1""", int(pedido_numero))
+                    SELECT
+                        retirado_por,
+                        data
+                    FROM saida_estoque
+                    WHERE pedido_numero = $1
+                      AND retirado_por IS NOT NULL
+                    ORDER BY data DESC
+                    LIMIT 1
+                """, int(pedido_numero))
+
                 if row:
-                    resposta["entregue_por"] = await _nome_responsavel_venda(row["retirado_por"], guild)
-                    if row["data"]: resposta["entregue_em"] = row["data"].strftime('%d/%m/%Y %H:%M')
-            # Para dados legados, tentar o autor que registrou o recebimento no caixa.
-            if not resposta["pago_por"]:
+                    resposta["entregue_por"] = (
+                        await _nome_responsavel_venda(
+                            row["retirado_por"],
+                            guild
+                        )
+                    )
+
+                    if row["data"]:
+                        resposta["entregue_em"] = (
+                            row["data"].strftime(
+                                "%d/%m/%Y %H:%M"
+                            )
+                        )
+
+            # ────────────────────────────────────────────────────────────────────
+            # FALLBACK PARA VENDAS ANTIGAS: CAIXA
+            # ────────────────────────────────────────────────────────────────────
+            if (
+                not resposta["pago_por"]
+                and numero_parcela is None
+            ):
                 row = await conn.fetchrow("""
-                    SELECT autor, data FROM caixa_movimentacoes
-                    WHERE motivo ILIKE $1 AND tipo='venda' AND autor IS NOT NULL
-                    ORDER BY data ASC LIMIT 1""", f"%Venda #{int(pedido_numero):04d}%")
+                    SELECT
+                        autor,
+                        data
+                    FROM caixa_movimentacoes
+                    WHERE motivo ILIKE $1
+                      AND tipo = 'venda'
+                      AND autor IS NOT NULL
+                    ORDER BY data ASC
+                    LIMIT 1
+                """,
+                    f"%Venda #{int(pedido_numero):04d}%"
+                )
+
                 if row:
-                    resposta["pago_por"] = await _nome_responsavel_venda(row["autor"], guild)
-                    if row["data"]: resposta["pago_em"] = row["data"].strftime('%d/%m/%Y %H:%M')
+                    resposta["pago_por"] = (
+                        await _nome_responsavel_venda(
+                            row["autor"],
+                            guild
+                        )
+                    )
+
+                    if row["data"]:
+                        resposta["pago_em"] = (
+                            row["data"].strftime(
+                                "%d/%m/%Y %H:%M"
+                            )
+                        )
+
     except Exception as e:
-        logger.error("❌ Falha ao rastrear responsáveis da venda #%s: %s", pedido_numero, e)
+        logger.error(
+            "❌ Falha ao rastrear responsáveis "
+            "da venda #%s: %s",
+            pedido_numero,
+            e
+        )
+
     return resposta
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: _nome_responsavel_venda — resolve ID sem inventar responsável
+# FIM DA FUNÇÃO: buscar_responsaveis_venda
 # ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: _nome_responsavel_venda
 # ────────────────────────────────────────────────────────────────────────────────
@@ -9755,76 +9879,320 @@ async def _nome_responsavel_venda(autor, guild=None):
         logger.warning("⚠️ Falha ao obter apelido %s: %s", autor, e)
         return str(autor)
 
+
+# ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_embed_pedido_finalizado
 # ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: enviar_embed_pedido_finalizado
-# ────────────────────────────────────────────────────────────────────────────────
-async def enviar_embed_pedido_finalizado(pedido_numero, pt, sub, organizacao, vendedor_nome, pago_por, pago_em,
-                                         entregue_por, entregue_em, transferido_para, transferido_por, transferido_em,
-                                         cancelado_por=None, cancelado_em=None, tipo="finalizado", entrega_id=None):
+async def enviar_embed_pedido_finalizado(
+    pedido_numero,
+    pt,
+    sub,
+    organizacao,
+    vendedor_nome,
+    pago_por,
+    pago_em,
+    entregue_por,
+    entregue_em,
+    transferido_para,
+    transferido_por,
+    transferido_em,
+    cancelado_por=None,
+    cancelado_em=None,
+    tipo="finalizado",
+    entrega_id=None,
+    numero_parcela=None
+):
     try:
-        canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
+        # ────────────────────────────────────────────────────────────────────────
+        # VALIDAÇÃO DA PARCELA
+        # ────────────────────────────────────────────────────────────────────────
+        if (
+            entrega_id
+            and numero_parcela is not None
+            and int(numero_parcela) < 1
+        ):
+            raise ValueError(
+                "Número de parcela inválido "
+                "para card finalizado."
+            )
+
+        canal = bot.get_channel(
+            CANAL_PEDIDOS_FINALIZADOS_ID
+        )
+
         if not canal:
-            logger.error("❌ Canal de finalizados indisponível: %s", CANAL_PEDIDOS_FINALIZADOS_ID)
+            logger.error(
+                "❌ Canal de finalizados indisponível: %s",
+                CANAL_PEDIDOS_FINALIZADOS_ID
+            )
             return False
-        pt, sub = int(pt), int(sub)
-        valor_total = (pt * 50) + (sub * 90)
+
+        pt = int(pt)
+        sub = int(sub)
+
+        valor_total = (
+            pt * 50
+            + sub * 90
+        )
+
+        # ────────────────────────────────────────────────────────────────────────
+        # RESPONSÁVEIS REAIS DA PARCELA
+        # ────────────────────────────────────────────────────────────────────────
         if tipo == "finalizado":
-            rastreio = await buscar_responsaveis_venda(pedido_numero, entrega_id, canal.guild)
-            entregue_por = rastreio["entregue_por"] or (entregue_por if entregue_por != "Sistema" else None)
-            entregue_em = rastreio["entregue_em"] or entregue_em
-            pago_por = rastreio["pago_por"] or (pago_por if pago_por != "Sistema" else None)
-            pago_em = rastreio["pago_em"] or pago_em
-        cancelada = tipo == "cancelado"
+            rastreio = await buscar_responsaveis_venda(
+                pedido_numero,
+                entrega_id,
+                canal.guild,
+                numero_parcela=numero_parcela
+            )
+
+            entregue_por = (
+                rastreio["entregue_por"]
+                or (
+                    entregue_por
+                    if entregue_por != "Sistema"
+                    else None
+                )
+            )
+
+            entregue_em = (
+                rastreio["entregue_em"]
+                or entregue_em
+            )
+
+            pago_por = (
+                rastreio["pago_por"]
+                or (
+                    pago_por
+                    if pago_por != "Sistema"
+                    else None
+                )
+            )
+
+            pago_em = (
+                rastreio["pago_em"]
+                or pago_em
+            )
+
+        cancelada = (
+            tipo == "cancelado"
+        )
+
+        # ────────────────────────────────────────────────────────────────────────
+        # EMBED DA VENDA
+        # ────────────────────────────────────────────────────────────────────────
         embed = discord.Embed(
-            title=f"{'❌ • PEDIDO CANCELADO' if cancelada else '✅ • VENDA FINALIZADA'} - Pedido #{pedido_numero:04d}",
-            color=0xC0392B if cancelada else 0x2ECC71,
+            title=(
+                f"{'❌ • PEDIDO CANCELADO' if cancelada else '✅ • VENDA FINALIZADA'}"
+                f" - Pedido #{pedido_numero:04d}"
+            ),
+            color=(
+                0xC0392B
+                if cancelada
+                else 0x2ECC71
+            ),
             timestamp=agora()
         )
+
         if bot.user and bot.user.display_avatar:
-            embed.set_thumbnail(url=bot.user.display_avatar.url)
-        embed.add_field(name="👤 VENDEDOR", value=f"```yaml\n{vendedor_nome}\n```", inline=True)
-        embed.add_field(name="📍 ORGANIZAÇÃO", value=f"```yaml\n{organizacao}\n```", inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-        embed.add_field(name="🔫 PT", value=f"```yaml\n{fmt_num(pt)} munições\n📦 {pt//50} pacotes\n```", inline=True)
-        embed.add_field(name="🔫 SUB", value=f"```yaml\n{fmt_num(sub)} munições\n📦 {sub//50} pacotes\n```", inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-        embed.add_field(name="💰 VALOR TOTAL", value=f"```yaml\n{formatar_dinheiro(valor_total)}\n```", inline=False)
-        texto = "🔴 **PEDIDO CANCELADO**" if cancelada else "🟢 **VENDA FINALIZADA**"
+            embed.set_thumbnail(
+                url=bot.user.display_avatar.url
+            )
+
+        embed.add_field(
+            name="👤 VENDEDOR",
+            value=f"```yaml\n{vendedor_nome}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="📍 ORGANIZAÇÃO",
+            value=f"```yaml\n{organizacao}\n```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="\u200b",
+            value="\u200b",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🔫 PT",
+            value=(
+                "```yaml\n"
+                f"{fmt_num(pt)} munições\n"
+                f"📦 {pt // 50} pacotes\n"
+                "```"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="🔫 SUB",
+            value=(
+                "```yaml\n"
+                f"{fmt_num(sub)} munições\n"
+                f"📦 {sub // 50} pacotes\n"
+                "```"
+            ),
+            inline=True
+        )
+
+        embed.add_field(
+            name="\u200b",
+            value="\u200b",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💰 VALOR TOTAL",
+            value=(
+                "```yaml\n"
+                f"{formatar_dinheiro(valor_total)}\n"
+                "```"
+            ),
+            inline=False
+        )
+
+        # ────────────────────────────────────────────────────────────────────────
+        # STATUS DETALHADO
+        # ────────────────────────────────────────────────────────────────────────
+        texto = (
+            "🔴 **PEDIDO CANCELADO**"
+            if cancelada
+            else "🟢 **VENDA FINALIZADA**"
+        )
+
         if cancelada:
-            if cancelado_por: texto += f"\n❌ Cancelado por: {cancelado_por} ({cancelado_em or '—'})"
+            if cancelado_por:
+                texto += (
+                    f"\n❌ Cancelado por: "
+                    f"{cancelado_por} "
+                    f"({cancelado_em or '—'})"
+                )
+
         else:
-            texto += f"\n🚚 Entregue por: {entregue_por or 'Não identificado'} ({entregue_em or '—'})"
-            texto += f"\n💰 Pagamento recebido por: {pago_por or 'Não identificado'} ({pago_em or '—'})"
+            texto += (
+                f"\n🚚 Entregue por: "
+                f"{entregue_por or 'Não identificado'} "
+                f"({entregue_em or '—'})"
+            )
+
+            texto += (
+                f"\n💰 Pagamento recebido por: "
+                f"{pago_por or 'Não identificado'} "
+                f"({pago_em or '—'})"
+            )
+
             if transferido_para:
-                texto += f"\n📤 Transferido para: {transferido_para}"
+                texto += (
+                    f"\n📤 Transferido para: "
+                    f"{transferido_para}"
+                )
+
                 if transferido_por:
-                    texto += f"\n👤 Transferência confirmada por: {transferido_por} ({transferido_em or '—'})"
-        embed.add_field(name="🚦 STATUS DETALHADO", value=f"```yaml\n{texto}\n```", inline=False)
-        footer = f"👑 Sistema de Encomendas - VDR 442 • Pedido #{pedido_numero:04d}"
-        if entrega_id: footer += f" • ID: {int(entrega_id)}"
-        footer += f" • {agora().strftime('%d/%m/%Y, %H:%M')}"
-        embed.set_footer(text=footer)
+                    texto += (
+                        f"\n👤 Transferência confirmada por: "
+                        f"{transferido_por} "
+                        f"({transferido_em or '—'})"
+                    )
+
+        embed.add_field(
+            name="🚦 STATUS DETALHADO",
+            value=f"```yaml\n{texto}\n```",
+            inline=False
+        )
+
+        # ────────────────────────────────────────────────────────────────────────
+        # RODAPÉ: PEDIDO + ENTREGA + PARCELA
+        # ────────────────────────────────────────────────────────────────────────
+        footer = (
+            "👑 Sistema de Encomendas - VDR 442 "
+            f"• Pedido #{pedido_numero:04d}"
+        )
+
+        if entrega_id:
+            footer += (
+                f" • ID: {int(entrega_id)}"
+            )
+
+            if numero_parcela is not None:
+                footer += (
+                    f" • Parcela: {int(numero_parcela)}"
+                )
+
+        footer += (
+            f" • {agora().strftime('%d/%m/%Y, %H:%M')}"
+        )
+
+        embed.set_footer(
+            text=footer
+        )
+
+        # ────────────────────────────────────────────────────────────────────────
+        # BOTÃO INDIVIDUAL DO CARD
+        # ────────────────────────────────────────────────────────────────────────
         view = None
+
         if not cancelada and not transferido_para:
-            view = FinalizadosView(entrega_id=entrega_id, pedido_numero=pedido_numero,
-                                   valor_total=valor_total, pt=pt, sub=sub)
-        msg = await safe_request(canal.send, embed=embed, view=view)
+            view = FinalizadosView(
+                entrega_id=entrega_id,
+                pedido_numero=pedido_numero,
+                valor_total=valor_total,
+                pt=pt,
+                sub=sub,
+                numero_parcela=numero_parcela
+            )
+
+        # ────────────────────────────────────────────────────────────────────────
+        # ENVIA O CARD
+        # ────────────────────────────────────────────────────────────────────────
+        msg = await safe_request(
+            canal.send,
+            embed=embed,
+            view=view
+        )
+
         if not msg:
             return False
+
+        # ────────────────────────────────────────────────────────────────────────
+        # GUARDA O ID EXATO DA MENSAGEM NO POSTGRESQL
+        # ────────────────────────────────────────────────────────────────────────
         if view:
-            await BotaoPersistente.salvar_botao(msg.id, canal.id, "finalizado_transferencia", {
-                "entrega_id": entrega_id, "pedido_numero": pedido_numero,
-                "valor_total": valor_total, "pt": pt, "sub": sub
-            })
+            await BotaoPersistente.salvar_botao(
+                msg.id,
+                canal.id,
+                "finalizado_transferencia",
+                {
+                    "entrega_id": entrega_id,
+                    "pedido_numero": pedido_numero,
+                    "valor_total": valor_total,
+                    "pt": pt,
+                    "sub": sub,
+                    "numero_parcela": (
+                        int(numero_parcela)
+                        if numero_parcela is not None
+                        else None
+                    )
+                }
+            )
+
         return True
+
     except Exception as e:
-        logger.error("❌ Falha ao enviar pedido finalizado #%s: %s", pedido_numero, e)
+        logger.error(
+            "❌ Falha ao enviar pedido finalizado #%s: %s",
+            pedido_numero,
+            e
+        )
         return False
+
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: extrair_dados_pedido_do_embed
+# FIM DA FUNÇÃO: enviar_embed_pedido_finalizado
 # ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: extrair_dados_pedido_do_embed
 # ────────────────────────────────────────────────────────────────────────────────
@@ -10418,13 +10786,437 @@ async def verificar_estoque_suficiente(tipo, pacotes_necessarios):
 # ║  BLOCO 12 (CONTINUAÇÃO) — SISTEMA DE VENDAS                                ║
 # ════════════════════════════════════════════════════════════════════════════════
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BLOCO 12 — TRANSFERÊNCIA INDIVIDUAL POR CARD DE ENTREGA
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: migrar_chave_transferencias_por_card
+# ────────────────────────────────────────────────────────────────────────────────
+async def migrar_chave_transferencias_por_card():
+    """
+    Troca a restrição antiga de transferência por pedido/parcela
+    pela identidade da mensagem individual da entrega.
+
+    Preserva todos os registros existentes.
+    Recusa alterações caso encontre dados históricos duplicados.
+    """
+    pool = await get_pool()
+
+    if not pool:
+        logger.error(
+            "❌ PostgreSQL indisponível para migração de transferências."
+        )
+        return False
+
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+
+                # Evita migrações simultâneas.
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(442, 12012)"
+                )
+
+                existe = await conn.fetchval(
+                    "SELECT to_regclass('public.vendas_transferencias') "
+                    "IS NOT NULL"
+                )
+
+                if not existe:
+                    raise RuntimeError(
+                        "Tabela vendas_transferencias ausente. "
+                        "Verificar criação das tabelas."
+                    )
+
+                # Não permite um ID de mensagem com duas transferências.
+                repetidos = await conn.fetchrow("""
+                    SELECT mensagem_id, COUNT(*) AS total
+                    FROM vendas_transferencias
+                    WHERE mensagem_id IS NOT NULL
+                      AND TRIM(mensagem_id) <> ''
+                    GROUP BY mensagem_id
+                    HAVING COUNT(*) > 1
+                    LIMIT 1
+                """)
+
+                if repetidos:
+                    raise RuntimeError(
+                        f"Mensagem {repetidos['mensagem_id']} possui "
+                        f"{repetidos['total']} transferências antigas. "
+                        "Auditar antes de criar o índice único."
+                    )
+
+                # Uma transferência por CARD.
+                await conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS
+                        uq_vdr_vendas_transf_mensagem
+                    ON vendas_transferencias (mensagem_id)
+                    WHERE mensagem_id IS NOT NULL
+                      AND mensagem_id <> ''
+                """)
+
+                # Localiza a restrição antiga que impedia diversas
+                # transferências dentro do mesmo pedido e entrega.
+                restricoes = await conn.fetch("""
+                    SELECT c.conname
+                    FROM pg_constraint c
+                    WHERE c.conrelid =
+                        'vendas_transferencias'::regclass
+                      AND c.contype = 'u'
+                      AND (
+                          SELECT array_agg(
+                              a.attname::text ORDER BY u.ord
+                          )
+                          FROM unnest(c.conkey)
+                          WITH ORDINALITY AS u(attnum, ord)
+                          JOIN pg_attribute a
+                            ON a.attrelid = c.conrelid
+                           AND a.attnum = u.attnum
+                      ) = ARRAY[
+                          'pedido_numero',
+                          'entrega_id',
+                          'numero_parcela'
+                      ]::text[]
+                """)
+
+                for restricao in restricoes:
+                    nome_sql = (
+                        '"'
+                        + restricao["conname"].replace('"', '""')
+                        + '"'
+                    )
+
+                    await conn.execute(
+                        "ALTER TABLE vendas_transferencias "
+                        f"DROP CONSTRAINT {nome_sql}"
+                    )
+
+                # Índices auxiliares.
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS
+                        idx_vdr_transf_pedido_entrega
+                    ON vendas_transferencias (
+                        pedido_numero,
+                        entrega_id,
+                        numero_parcela
+                    )
+                """)
+
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS
+                        idx_vdr_botoes_finalizados
+                    ON botoes_persistentes (tipo, canal_id)
+                """)
+
+                # Confirma que a regra antiga realmente saiu.
+                antigas = await conn.fetchval("""
+                    SELECT COUNT(*)
+                    FROM pg_constraint c
+                    WHERE c.conrelid =
+                        'vendas_transferencias'::regclass
+                      AND c.contype = 'u'
+                      AND (
+                          SELECT array_agg(
+                              a.attname::text ORDER BY u.ord
+                          )
+                          FROM unnest(c.conkey)
+                          WITH ORDINALITY AS u(attnum, ord)
+                          JOIN pg_attribute a
+                            ON a.attrelid = c.conrelid
+                           AND a.attnum = u.attnum
+                      ) = ARRAY[
+                          'pedido_numero',
+                          'entrega_id',
+                          'numero_parcela'
+                      ]::text[]
+                """)
+
+                if antigas:
+                    raise RuntimeError(
+                        "A restrição antiga de parcela ainda está presente."
+                    )
+
+        logger.info(
+            "✅ Transferências: identidade única por mensagem_id; "
+            "histórico preservado."
+        )
+        return True
+
+    except Exception:
+        logger.exception(
+            "❌ Migração de transferências por card NÃO concluída."
+        )
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FIM DA FUNÇÃO: migrar_chave_transferencias_por_card
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: buscar_identidade_card_transferencia
+# ────────────────────────────────────────────────────────────────────────────────
+async def buscar_identidade_card_transferencia(
+    mensagem,
+    pedido_embed
+):
+    """
+    Identifica entrega e parcela usando exclusivamente
+    o card clicado e seu registro persistente.
+
+    Nunca usa MAX(numero_parcela) do pedido.
+    """
+    embed = (
+        mensagem.embeds[0]
+        if mensagem.embeds
+        else None
+    )
+
+    if not embed:
+        raise ValueError(
+            "Card sem embed da venda."
+        )
+
+    footer = (
+        embed.footer.text
+        if embed.footer and embed.footer.text
+        else ""
+    )
+
+    id_achado = re.search(
+        r"\bID:\s*(\d+)",
+        footer
+    )
+
+    parcela_achada = re.search(
+        r"\bParcela:\s*(\d+)",
+        footer,
+        re.IGNORECASE
+    )
+
+    entrega_footer = (
+        int(id_achado.group(1))
+        if id_achado
+        else 0
+    )
+
+    parcela_footer = (
+        int(parcela_achada.group(1))
+        if parcela_achada
+        else None
+    )
+
+    pool = await get_pool()
+
+    if not pool:
+        raise RuntimeError(
+            "PostgreSQL indisponível."
+        )
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT dados
+            FROM botoes_persistentes
+            WHERE mensagem_id = $1
+              AND tipo = 'finalizado_transferencia'
+            ORDER BY criado_em DESC
+            LIMIT 1
+        """, str(mensagem.id))
+
+    dados = row["dados"] if row else None
+
+    if isinstance(dados, str):
+        dados = json.loads(dados)
+
+    dados = (
+        dados
+        if isinstance(dados, dict)
+        else {}
+    )
+
+    pedido_salvo = int(
+        dados.get("pedido_numero") or 0
+    )
+
+    if (
+        pedido_salvo
+        and pedido_salvo != int(pedido_embed)
+    ):
+        raise ValueError(
+            "Pedido do card diverge do cadastro persistente."
+        )
+
+    entrega_salva = int(
+        dados.get("entrega_id") or 0
+    )
+
+    if (
+        entrega_footer
+        and entrega_salva
+        and entrega_footer != entrega_salva
+    ):
+        raise ValueError(
+            "ID da entrega diverge entre card e PostgreSQL."
+        )
+
+    entrega = entrega_footer or entrega_salva
+
+    parcela_salva = dados.get(
+        "numero_parcela"
+    )
+
+    parcela_salva = (
+        int(parcela_salva)
+        if parcela_salva not in (
+            None,
+            "",
+            0,
+            "0"
+        )
+        else None
+    )
+
+    if (
+        parcela_footer
+        and parcela_salva
+        and parcela_footer != parcela_salva
+    ):
+        raise ValueError(
+            "Parcela do card diverge do cadastro persistente."
+        )
+
+    parcela = parcela_footer or parcela_salva
+
+    if (
+        entrega
+        and parcela is not None
+        and parcela < 1
+    ):
+        raise ValueError(
+            "Número da parcela inválido."
+        )
+
+    return (
+        entrega,
+        parcela if entrega else int(pedido_embed)
+    )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FIM DA FUNÇÃO: buscar_identidade_card_transferencia
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: conferir_transferencia_card_no_banco
+# ────────────────────────────────────────────────────────────────────────────────
+async def conferir_transferencia_card_no_banco(mensagem_id):
+    """
+    Consulta exclusivamente a transferência confirmada
+    da mensagem indicada.
+    """
+    pool = await get_pool()
+
+    if not pool:
+        return None
+
+    async with pool.acquire() as conn:
+        return await conn.fetchrow("""
+            SELECT
+                nome_destino,
+                confirmado_por,
+                confirmado_em,
+                valor
+            FROM vendas_transferencias
+            WHERE mensagem_id = $1
+            LIMIT 1
+        """, str(mensagem_id))
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FIM DA FUNÇÃO: conferir_transferencia_card_no_banco
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_card_transferencia_confirmada
+# ────────────────────────────────────────────────────────────────────────────────
+async def atualizar_card_transferencia_confirmada(
+    mensagem,
+    registro,
+    guild=None
+):
+    """
+    Atualiza somente o card da transferência confirmada.
+    Não modifica outras entregas do mesmo pedido.
+    """
+    if not mensagem.embeds:
+        raise ValueError(
+            "Card não possui embed para atualização."
+        )
+
+    embed = mensagem.embeds[0].copy()
+
+    transferencia_ja_exibida = any(
+        "TRANSFERÊNCIA" in (campo.name or "").upper()
+        and "Transferido para:" in (campo.value or "")
+        for campo in embed.fields
+    )
+
+    if not transferencia_ja_exibida:
+        autor = await _nome_responsavel_venda(
+            registro["confirmado_por"],
+            guild
+        )
+
+        data = registro["confirmado_em"]
+
+        data_str = (
+            data.strftime("%d/%m/%Y %H:%M")
+            if data
+            else "—"
+        )
+
+        embed.add_field(
+            name="📤 TRANSFERÊNCIA CONFIRMADA",
+            value=(
+                f"**Transferido para:** "
+                f"{registro['nome_destino']}\n"
+                f"**Confirmado por:** "
+                f"{autor or registro['confirmado_por']}\n"
+                f"**Data:** {data_str}"
+            ),
+            inline=False
+        )
+
+    embed.color = 0x2ECC71
+
+    await mensagem.edit(
+        embed=embed,
+        view=None
+    )
+
+    await apagar_botao_transferencia_persistente(
+        mensagem.id
+    )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FIM DA FUNÇÃO: atualizar_card_transferencia_confirmada
+# ────────────────────────────────────────────────────────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FIM DAS FUNÇÕES NOVAS — TRANSFERÊNCIAS POR CARD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarTransferenciaModal
 # ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: ConfirmarTransferenciaModal
-# ────────────────────────────────────────────────────────────────────────────────
-class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSFERÊNCIA"):
+class ConfirmarTransferenciaModal(
+    discord.ui.Modal,
+    title="📤 CONFIRMAR TRANSFERÊNCIA"
+):
+
     transferido_para = discord.ui.TextInput(
         label="📤 Transferido para:",
         placeholder="Digite o nome da pessoa (ex: Dreck ou Leon)",
@@ -10432,134 +11224,545 @@ class ConfirmarTransferenciaModal(discord.ui.Modal, title="📤 CONFIRMAR TRANSF
         max_length=50
     )
 
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
-    def __init__(self, interaction, mensagem_original, entrega_id, pedido_numero, valor, pt, sub):
+    # ────────────────────────────────────────────────────────────────────────────
+    def __init__(
+        self,
+        interaction,
+        mensagem_original,
+        entrega_id,
+        pedido_numero,
+        valor,
+        pt,
+        sub,
+        numero_parcela=None
+    ):
         super().__init__(timeout=300)
-        self.interaction = interaction
-        self.mensagem_original = mensagem_original
-        self.entrega_id = entrega_id
-        self.pedido_numero = pedido_numero
-        self.valor_total = valor
-        self.pt = pt
-        self.sub = sub
 
-    # ────────────────────────────────────────────────────────────────────────────────
+        self.mensagem_original = mensagem_original
+        self.entrega_id = int(entrega_id or 0)
+        self.pedido_numero = int(pedido_numero)
+        self.valor_total = int(valor or 0)
+        self.pt = int(pt or 0)
+        self.sub = int(sub or 0)
+
+        self.numero_parcela = (
+            int(numero_parcela)
+            if numero_parcela is not None
+            else None
+        )
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        nome_destino = self.transferido_para.value.strip().upper()
-        if not nome_destino:
-            await interaction.followup.send("❌ Informe quem recebeu a transferência.", ephemeral=True)
+    # ────────────────────────────────────────────────────────────────────────────
+    async def on_submit(
+        self,
+        interaction: discord.Interaction
+    ):
+        await interaction.response.defer(
+            ephemeral=True
+        )
+
+        destino = (
+            self.transferido_para.value
+            .strip()
+            .upper()
+        )
+
+        if not destino:
+            await interaction.followup.send(
+                "❌ Informe quem recebeu a transferência.",
+                ephemeral=True
+            )
             return
+
         pool = await get_pool()
+
         if not pool:
-            await interaction.followup.send("❌ Banco de dados indisponível. Tente novamente.", ephemeral=True)
+            await interaction.followup.send(
+                "❌ PostgreSQL indisponível; "
+                "nada foi confirmado.",
+                ephemeral=True
+            )
             return
+
+        mensagem = self.mensagem_original
+
+        if not mensagem or not mensagem.embeds:
+            await interaction.followup.send(
+                "❌ Card original indisponível. "
+                "Nada foi registrado.",
+                ephemeral=True
+            )
+            return
+
         try:
-            embed = self.mensagem_original.embeds[0] if self.mensagem_original.embeds else None
-            if not embed:
-                await interaction.followup.send("❌ Histórico da venda não encontrado.", ephemeral=True)
-                return
-            dados = await extrair_dados_pedido_do_embed(embed)
-            pedido = int(self.pedido_numero or dados.get('pedido_numero') or 0)
-            if pedido <= 0:
-                await interaction.followup.send("❌ Número do pedido inválido.", ephemeral=True)
-                return
-            entrega = int(self.entrega_id or 0)
-            if not entrega and embed.footer and embed.footer.text and 'ID:' in embed.footer.text:
-                match = re.search(r'ID:\s*(\d+)', embed.footer.text)
-                if match: entrega = int(match.group(1))
-            pt = int(self.pt or dados.get('pt') or 0)
-            sub = int(self.sub or dados.get('sub') or 0)
-            valor = int(self.valor_total or ((pt * 50) + (sub * 90)))
-            numero_parcela = 1
-            if entrega:
-                async with pool.acquire() as c:
-                    numero_parcela = int(await c.fetchval("""
-                        SELECT COALESCE(MAX(numero_parcela),1) FROM entregas_status
-                        WHERE entrega_id=$1 AND pedido_numero=$2 AND entregue=true AND pago=true
-                    """, entrega, pedido) or 1)
-            # A chave de transferência NÃO é vendas.finalizado: a venda precisa estar
-            # finalizada para exibir este botão. Evitar repetição por pedido/parcela.
+            # ────────────────────────────────────────────────────────────────────
+            # GARANTE QUE A MIGRAÇÃO DE IDENTIDADE FOI CONCLUÍDA
+            # ────────────────────────────────────────────────────────────────────
+            if not getattr(
+                bot,
+                "_vdr_transf_por_card_migrada",
+                False
+            ):
+                migrada = (
+                    await migrar_chave_transferencias_por_card()
+                )
+
+                if not migrada:
+                    raise RuntimeError(
+                        "Migração do identificador do card pendente. "
+                        "Consulte os logs do Railway; "
+                        "nada foi alterado."
+                    )
+
+                bot._vdr_transf_por_card_migrada = True
+
+            # ────────────────────────────────────────────────────────────────────
+            # CONFERE O CARD ORIGINAL
+            # ────────────────────────────────────────────────────────────────────
+            embed = mensagem.embeds[0]
+
+            dados = await extrair_dados_pedido_do_embed(
+                embed
+            )
+
+            pedido = int(
+                dados.get("pedido_numero") or 0
+            )
+
+            if (
+                pedido <= 0
+                or pedido != self.pedido_numero
+            ):
+                raise ValueError(
+                    "Número do pedido diverge do card original."
+                )
+
+            if (
+                "VENDA FINALIZADA"
+                not in (embed.title or "").upper()
+            ):
+                raise ValueError(
+                    "A mensagem não é um card de venda finalizada."
+                )
+
+            # O card pode ter sido editado após outro clique.
+            if any(
+                "Transferido para:" in str(campo.value)
+                for campo in embed.fields
+            ):
+                anterior = (
+                    await conferir_transferencia_card_no_banco(
+                        mensagem.id
+                    )
+                )
+
+                if not anterior:
+                    raise ValueError(
+                        "O card já mostra uma transferência, "
+                        "mas o histórico não a confirma. "
+                        "Solicite auditoria; nada foi duplicado."
+                    )
+
+            # ────────────────────────────────────────────────────────────────────
+            # IDENTIDADE REAL DA ENTREGA / PARCELA
+            # ────────────────────────────────────────────────────────────────────
+            entrega, parcela = (
+                await buscar_identidade_card_transferencia(
+                    mensagem,
+                    pedido
+                )
+            )
+
+            if entrega != self.entrega_id:
+                raise ValueError(
+                    "A entrega mudou durante a confirmação. "
+                    "Abra novamente."
+                )
+
+            if parcela != self.numero_parcela:
+                raise ValueError(
+                    "A parcela mudou durante a confirmação. "
+                    "Abra novamente."
+                )
+
+            # ────────────────────────────────────────────────────────────────────
+            # VERIFICA QUANTIDADE E VALOR
+            # ────────────────────────────────────────────────────────────────────
+            pt_card = int(
+                dados.get("pt") or 0
+            )
+
+            sub_card = int(
+                dados.get("sub") or 0
+            )
+
+            valor = (
+                pt_card * 50
+                + sub_card * 90
+            )
+
+            if valor <= 0:
+                raise ValueError(
+                    "Card sem valor válido. "
+                    "Solicite auditoria da venda."
+                )
+
+            if (
+                self.valor_total
+                and valor != self.valor_total
+            ):
+                raise ValueError(
+                    "Valor do card foi alterado. "
+                    "Abra novamente."
+                )
+
+            if (
+                self.pt,
+                self.sub
+            ) != (
+                pt_card,
+                sub_card
+            ):
+                raise ValueError(
+                    "Quantidades do card mudaram. "
+                    "Abra novamente."
+                )
+
+            # ────────────────────────────────────────────────────────────────────
+            # CARD LEGADO SEM PARCELA EXATA
+            #
+            # Permite confirmação pelo ID da mensagem,
+            # mas NÃO inventa qual parcela foi transferida.
+            # ────────────────────────────────────────────────────────────────────
+            parcela_banco = (
+                int(parcela)
+                if parcela is not None
+                else 0
+            )
+
+            registro = None
+            duplicada = False
+
+            # ────────────────────────────────────────────────────────────────────
+            # TRANSAÇÃO SEGURA POR MENSAGEM
+            # ────────────────────────────────────────────────────────────────────
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    venda = await conn.fetchrow("SELECT finalizado,cancelado FROM vendas WHERE pedido_numero=$1 FOR UPDATE", pedido)
-                    if venda and venda['cancelado']:
-                        await interaction.followup.send("❌ Pedido cancelado. Transferência bloqueada.", ephemeral=True)
-                        return
+
+                    # Uma confirmação simultânea por card.
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock($1::bigint)",
+                        int(mensagem.id)
+                    )
+
                     anterior = await conn.fetchrow("""
-                        SELECT nome_destino, confirmado_por, confirmado_em
+                        SELECT
+                            nome_destino,
+                            confirmado_por,
+                            confirmado_em,
+                            valor
                         FROM vendas_transferencias
-                        WHERE pedido_numero=$1 AND entrega_id=$2 AND numero_parcela=$3
-                    """, pedido, entrega, numero_parcela)
+                        WHERE mensagem_id = $1
+                        FOR UPDATE
+                    """, str(mensagem.id))
+
                     if anterior:
-                        await interaction.followup.send(
-                            f"⚠️ Transferência já registrada para **{anterior['nome_destino']}**. Não foi duplicada.", ephemeral=True)
-                        return
-                    await conn.execute("""INSERT INTO vendas_transferencias
-                        (pedido_numero,entrega_id,numero_parcela,mensagem_id,nome_destino,confirmado_por,valor,confirmado_em)
-                        VALUES($1,$2,$3,$4,$5,$6,$7,NOW())""",
-                        pedido, entrega, numero_parcela, str(self.mensagem_original.id), nome_destino,
-                        str(interaction.user.id), valor)
-                    if entrega:
-                        await conn.execute("""UPDATE entregas_status SET
-                            finalizado=true, finalizado_por=$1, finalizado_em=COALESCE(finalizado_em,NOW()), transferido_para=$2
-                            WHERE entrega_id=$3 AND numero_parcela=$4""",
-                            str(interaction.user.id), nome_destino, entrega, numero_parcela)
+                        registro = anterior
+                        duplicada = True
+
                     else:
-                        # Os pedidos antigos podem não ter a linha de status: preservar o histórico.
-                        await conn.execute("""INSERT INTO entregas_status (entrega_id,numero_parcela,pedido_numero)
-                            VALUES(0,$1,$1) ON CONFLICT(entrega_id,numero_parcela) DO NOTHING""", pedido)
-                        await conn.execute("""UPDATE entregas_status SET
-                            finalizado=true, finalizado_por=$1, finalizado_em=COALESCE(finalizado_em,NOW()), transferido_para=$2
-                            WHERE entrega_id=0 AND numero_parcela=$3""",
-                            str(interaction.user.id), nome_destino, pedido)
-            # O pagamento JÁ foi lançado quando a pessoa clicou "Pago".
-            # Confirmar transferência NÃO deve creditar o caixa novamente.
+                        # ────────────────────────────────────────────────────────
+                        # CONFERE SE O PEDIDO ESTÁ VÁLIDO
+                        # ────────────────────────────────────────────────────────
+                        venda = await conn.fetchrow("""
+                            SELECT
+                                pedido_numero,
+                                cancelado
+                            FROM vendas
+                            WHERE pedido_numero = $1
+                            FOR UPDATE
+                        """, pedido)
+
+                        if venda is None:
+                            raise ValueError(
+                                "Pedido não encontrado no PostgreSQL."
+                            )
+
+                        if venda["cancelado"]:
+                            raise ValueError(
+                                "Pedido cancelado. "
+                                "Transferência bloqueada."
+                            )
+
+                        # ────────────────────────────────────────────────────────
+                        # VALIDA A PARCELA EXATA
+                        # ────────────────────────────────────────────────────────
+                        if (
+                            entrega
+                            and parcela is not None
+                        ):
+                            estado = await conn.fetchrow("""
+                                SELECT
+                                    id,
+                                    pedido_numero,
+                                    entregue,
+                                    pago,
+                                    cancelado,
+                                    pt,
+                                    sub
+                                FROM entregas_status
+                                WHERE entrega_id = $1
+                                  AND numero_parcela = $2
+                                FOR UPDATE
+                            """, entrega, parcela)
+
+                            if (
+                                not estado
+                                or int(
+                                    estado["pedido_numero"]
+                                ) != pedido
+                            ):
+                                raise ValueError(
+                                    "Registro exato desta parcela "
+                                    "não encontrado. "
+                                    "Transferência não lançada; "
+                                    "solicite auditoria."
+                                )
+
+                            if (
+                                estado["cancelado"]
+                                or not (
+                                    estado["entregue"]
+                                    and estado["pago"]
+                                )
+                            ):
+                                raise ValueError(
+                                    "A parcela ainda não está "
+                                    "entregue e paga, "
+                                    "ou foi cancelada. "
+                                    "Transferência bloqueada."
+                                )
+
+                            pt_salvo = int(
+                                estado["pt"] or 0
+                            )
+
+                            sub_salvo = int(
+                                estado["sub"] or 0
+                            )
+
+                            if (
+                                pt_salvo or sub_salvo
+                            ) and (
+                                pt_salvo,
+                                sub_salvo
+                            ) != (
+                                pt_card,
+                                sub_card
+                            ):
+                                raise ValueError(
+                                    "Quantidades da parcela "
+                                    "divergem do card."
+                                )
+
+                        # ────────────────────────────────────────────────────────
+                        # INSERE TRANSFERÊNCIA POR ID DE MENSAGEM
+                        # ────────────────────────────────────────────────────────
+                        await conn.execute("""
+                            INSERT INTO vendas_transferencias (
+                                pedido_numero,
+                                entrega_id,
+                                numero_parcela,
+                                mensagem_id,
+                                nome_destino,
+                                confirmado_por,
+                                valor,
+                                confirmado_em
+                            )
+                            VALUES (
+                                $1, $2, $3, $4,
+                                $5, $6, $7, NOW()
+                            )
+                        """,
+                            pedido,
+                            entrega,
+                            parcela_banco,
+                            str(mensagem.id),
+                            destino,
+                            str(interaction.user.id),
+                            valor
+                        )
+
+                        # ────────────────────────────────────────────────────────
+                        # ATUALIZA APENAS A PARCELA CORRETA
+                        # ────────────────────────────────────────────────────────
+                        if (
+                            entrega
+                            and parcela is not None
+                        ):
+                            await conn.execute("""
+                                UPDATE entregas_status
+                                SET transferido_para = $1
+                                WHERE entrega_id = $2
+                                  AND numero_parcela = $3
+                                  AND pedido_numero = $4
+                            """,
+                                destino,
+                                entrega,
+                                parcela,
+                                pedido
+                            )
+
+                        elif not entrega:
+                            await conn.execute("""
+                                UPDATE entregas_status
+                                SET transferido_para = $1
+                                WHERE entrega_id = 0
+                                  AND numero_parcela = $2
+                                  AND pedido_numero = $2
+                                  AND entregue = true
+                                  AND pago = true
+                            """,
+                                destino,
+                                pedido
+                            )
+
+                        # ────────────────────────────────────────────────────────
+                        # CONSULTA O REGISTRO RECÉM-GRAVADO
+                        # ────────────────────────────────────────────────────────
+                        registro = await conn.fetchrow("""
+                            SELECT
+                                nome_destino,
+                                confirmado_por,
+                                confirmado_em,
+                                valor
+                            FROM vendas_transferencias
+                            WHERE mensagem_id = $1
+                        """, str(mensagem.id))
+
+            # ────────────────────────────────────────────────────────────────────
+            # BANCO CONFIRMADO: ATUALIZA SOMENTE O CARD
+            # ────────────────────────────────────────────────────────────────────
             try:
-                atualizado = embed.copy()
-                detalhes = (f"📤 **Transferido para:** {nome_destino}\n"
-                            f"👤 **Transferência confirmada por:** {interaction.user.display_name}\n"
-                            f"📅 **Em:** {agora().strftime('%d/%m/%Y %H:%M')}")
-                for i, field in enumerate(atualizado.fields):
-                    if 'STATUS' in field.name.upper():
-                        texto_antigo = field.value.replace('```yaml', '').replace('```','').strip()
-                        atualizado.set_field_at(i, name=field.name,
-                            value=f"```yaml\n{texto_antigo}\n{detalhes}\n```", inline=field.inline)
-                        break
-                else:
-                    atualizado.add_field(name="🚦 STATUS DETALHADO", value=detalhes, inline=False)
-                atualizado.color = 0x2ECC71
-                atualizado.set_footer(text=f"VDR 442 • Transferência confirmada • Pedido #{pedido:04d}")
-                await self.mensagem_original.edit(embed=atualizado, view=None)
-                await apagar_botao_transferencia_persistente(self.mensagem_original.id)
-            except Exception as e:
-                logger.error("⚠️ Transferência gravada mas mensagem #%s não pôde ser atualizada: %s", pedido, e)
+                await atualizar_card_transferencia_confirmada(
+                    mensagem,
+                    registro,
+                    interaction.guild
+                )
+
+            except Exception:
+                logger.exception(
+                    "⚠️ Transferência salva mas falhou "
+                    "edição do card %s",
+                    mensagem.id
+                )
+
                 await interaction.followup.send(
-                    "✅ Transferência salva no banco, mas não foi possível atualizar o card. "
-                    "A recuperação tentará sincronizá-lo após o reinício.", ephemeral=True)
+                    "✅ Transferência salva com segurança "
+                    "no PostgreSQL, mas não foi possível "
+                    "atualizar o card no Discord. "
+                    "A restauração tentará corrigir o visual.",
+                    ephemeral=True
+                )
                 return
-            canal_log = interaction.guild.get_channel(CANAL_LOGS_GERAIS_ID) if interaction.guild else None
+
+            # ────────────────────────────────────────────────────────────────────
+            # DUPLICIDADE: SOMENTE PARA O MESMO CARD
+            # ────────────────────────────────────────────────────────────────────
+            if duplicada:
+                await interaction.followup.send(
+                    f"ℹ️ Esta entrega já tinha transferência "
+                    f"para **{registro['nome_destino']}**; "
+                    "nada foi duplicado.",
+                    ephemeral=True
+                )
+                return
+
+            # ────────────────────────────────────────────────────────────────────
+            # LOG SEM LANÇAR NOVO PAGAMENTO NO CAIXA
+            # ────────────────────────────────────────────────────────────────────
+            canal_log = (
+                interaction.guild.get_channel(
+                    CANAL_LOGS_GERAIS_ID
+                )
+                if interaction.guild
+                else None
+            )
+
             if canal_log:
                 try:
-                    await canal_log.send(embed=discord.Embed(
-                        title="📤 TRANSFERÊNCIA CONFIRMADA",
-                        description=f"Pedido #{pedido:04d} • Destino: **{nome_destino}**\n"
-                                    f"Confirmada por {interaction.user.mention} • {formatar_dinheiro(valor)}",
-                        color=0x2ECC71, timestamp=agora()))
-                except Exception as e:
-                    logger.warning("⚠️ Erro no log de transferência: %s", e)
+                    await canal_log.send(
+                        embed=discord.Embed(
+                            title=(
+                                "📤 TRANSFERÊNCIA CONFIRMADA "
+                                "— ENTREGA"
+                            ),
+                            description=(
+                                f"Pedido #{pedido:04d} "
+                                f"• Card `{mensagem.id}`\n"
+                                f"{'Parcela ' + str(parcela) if entrega and parcela else 'Card legado/entrega única'}\n"
+                                f"Destino: **{destino}**\n"
+                                f"Confirmado por: "
+                                f"{interaction.user.mention}\n"
+                                f"Valor: {formatar_dinheiro(valor)}"
+                            ),
+                            color=0x2ECC71,
+                            timestamp=agora()
+                        )
+                    )
+
+                except Exception:
+                    logger.exception(
+                        "⚠️ Erro ao escrever log "
+                        "da transferência %s",
+                        mensagem.id
+                    )
+
+            # ────────────────────────────────────────────────────────────────────
+            # RETORNO FINAL
+            # ────────────────────────────────────────────────────────────────────
             await interaction.followup.send(
-                f"✅ Transferência confirmada para **{nome_destino}**, por {interaction.user.mention}. "
-                "Pagamento não foi lançado novamente no caixa.", ephemeral=True)
+                f"✅ Transferência DESTA ENTREGA "
+                f"confirmada para **{destino}**. "
+                "Os outros cards não foram alterados "
+                "e o caixa não foi creditado novamente.",
+                ephemeral=True
+            )
+
         except asyncpg.UniqueViolationError:
-            await interaction.followup.send("⚠️ Esta transferência já foi confirmada.", ephemeral=True)
-        except Exception as e:
-            logger.exception("❌ Erro ao confirmar transferência do pedido %s: %s", self.pedido_numero, e)
-            await interaction.followup.send("❌ Erro ao confirmar transferência. Operação não concluída; consulte os logs.", ephemeral=True)
+            await interaction.followup.send(
+                "⚠️ Esta mensagem já possui transferência. "
+                "Nenhum lançamento duplicado foi feito.",
+                ephemeral=True
+            )
+
+        except (ValueError, RuntimeError) as erro:
+            await interaction.followup.send(
+                f"❌ {erro}",
+                ephemeral=True
+            )
+
+        except Exception:
+            logger.exception(
+                "❌ Transferência não concluída "
+                "no card %s",
+                mensagem.id
+            )
+
+            await interaction.followup.send(
+                "❌ Erro ao confirmar. "
+                "Nada deve ser repetido sem consultar "
+                "o status desse card no PostgreSQL.",
+                ephemeral=True
+            )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FIM DA CLASSE: ConfirmarTransferenciaModal
+# ────────────────────────────────────────────────────────────────────────────────
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: criar_embed_entrega
@@ -10832,114 +12035,447 @@ async def apagar_botao_transferencia_persistente(mensagem_id):
         logger.error("❌ Falha ao limpar botão da transferência: %s", e)
         return False
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: restaurar_transferencias_finalizadas
-# ────────────────────────────────────────────────────────────────────────────────
+
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_transferencias_finalizadas
 # ────────────────────────────────────────────────────────────────────────────────
 async def restaurar_transferencias_finalizadas():
-    canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
-    if not canal: return
-    pool = await get_pool()
-    if not pool: return
-    contador = 0
-    try:
-        # O registro global da FinalizadosView cobre também cards legados fora do histórico recente.
-        async for msg in canal.history(limit=1000):
-            if not msg.embeds or not msg.components or msg.author.id != bot.user.id: continue
-            embed = msg.embeds[0]
-            if 'VENDA FINALIZADA' not in (embed.title or '').upper(): continue
-            dados = await extrair_dados_pedido_do_embed(embed)
-            pedido = dados['pedido_numero']
-            if not pedido: continue
-            async with pool.acquire() as conn:
-                transferencia = await conn.fetchrow("""
-                    SELECT nome_destino, confirmado_por, confirmado_em FROM vendas_transferencias
-                    WHERE mensagem_id=$1 OR pedido_numero=$2 ORDER BY confirmado_em DESC LIMIT 1
-                """, str(msg.id), pedido)
-            if transferencia:
-                if not any('Transferido para:' in str(f.value) for f in embed.fields):
-                    novo = embed.copy()
-                    destino = transferencia['nome_destino']
-                    autor = await _nome_responsavel_venda(transferencia['confirmado_por'], canal.guild)
-                    novo.add_field(name="📤 TRANSFERÊNCIA", value=f"Transferido para: {destino}\nConfirmado por: {autor}", inline=False)
-                    await msg.edit(embed=novo, view=None)
-                else:
-                    await msg.edit(view=None)
-                await apagar_botao_transferencia_persistente(msg.id)
-            else:
-                entrega = None
-                if embed.footer and embed.footer.text:
-                    achado = re.search(r'ID:\s*(\d+)', embed.footer.text)
-                    if achado: entrega = int(achado.group(1))
-                view = FinalizadosView(entrega_id=entrega, pedido_numero=pedido,
-                    pt=dados['pt'], sub=dados['sub'],
-                    valor_total=(dados['pt']*50 + dados['sub']*90))
-                bot.add_view(view, message_id=msg.id)
-                contador += 1
-        logger.info("✅ Views de transferência restauradas: %s", contador)
-    except Exception as e:
-        logger.error("❌ Erro ao restaurar botões do canal Finalizados: %s", e)
+    """
+    Restaura todos os cards com botão persistente
+    identificados no PostgreSQL.
 
-# CLASSE: FinalizadosView (Apenas com o botão de Transferência)
+    Não confunde diferentes entregas do mesmo pedido.
+    Não depende das últimas 1.000 mensagens do Discord.
+    """
+    canal = bot.get_channel(
+        CANAL_PEDIDOS_FINALIZADOS_ID
+    )
+
+    if not canal:
+        logger.error(
+            "❌ Canal de Finalizados indisponível."
+        )
+        return 0
+
+    pool = await get_pool()
+
+    if not pool:
+        logger.error(
+            "❌ Banco indisponível para restaurar transferências."
+        )
+        return 0
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # MIGRAÇÃO DE IDENTIDADE POR CARD
+    # ────────────────────────────────────────────────────────────────────────────
+    migrou = (
+        await migrar_chave_transferencias_por_card()
+    )
+
+    if not migrou:
+        logger.error(
+            "❌ Restauração interrompida: "
+            "chave única por mensagem não habilitada."
+        )
+        return 0
+
+    bot._vdr_transf_por_card_migrada = True
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # FALLBACK PARA CARDS LEGADOS
+    # ────────────────────────────────────────────────────────────────────────────
+    try:
+        view_global = FinalizadosView()
+
+        bot.add_view(
+            view_global
+        )
+
+    except Exception:
+        logger.exception(
+            "❌ Falha registrando View global "
+            "de transferências antigas."
+        )
+
+    try:
+        # ────────────────────────────────────────────────────────────────────────
+        # CARREGA TODOS OS CARDS SALVOS
+        # ────────────────────────────────────────────────────────────────────────
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    mensagem_id,
+                    canal_id,
+                    dados
+                FROM botoes_persistentes
+                WHERE tipo = 'finalizado_transferencia'
+                  AND canal_id = $1
+                ORDER BY criado_em ASC
+            """, str(canal.id))
+
+            confirmados = await conn.fetch("""
+                SELECT
+                    mensagem_id,
+                    nome_destino,
+                    confirmado_por,
+                    confirmado_em,
+                    valor
+                FROM vendas_transferencias
+                WHERE mensagem_id IS NOT NULL
+                  AND mensagem_id <> ''
+            """)
+
+        por_msg = {
+            str(registro["mensagem_id"]): registro
+            for registro in confirmados
+        }
+
+        restaurados = 0
+        corrigidos = 0
+        falhas = 0
+
+        # ────────────────────────────────────────────────────────────────────────
+        # RESTAURA CADA MENSAGEM INDEPENDENTEMENTE
+        # ────────────────────────────────────────────────────────────────────────
+        for row in rows:
+            mid_str = str(
+                row["mensagem_id"] or ""
+            )
+
+            if not mid_str.isdecimal():
+                logger.warning(
+                    "⚠️ ID de card inválido "
+                    "na persistência: %s",
+                    mid_str
+                )
+                falhas += 1
+                continue
+
+            mid = int(mid_str)
+
+            # ────────────────────────────────────────────────────────────────────
+            # CARD JÁ CONFIRMADO
+            # ────────────────────────────────────────────────────────────────────
+            if mid_str in por_msg:
+                try:
+                    msg = await canal.fetch_message(
+                        mid
+                    )
+
+                    if msg.embeds and msg.components:
+                        await atualizar_card_transferencia_confirmada(
+                            msg,
+                            por_msg[mid_str],
+                            canal.guild
+                        )
+
+                    else:
+                        await apagar_botao_transferencia_persistente(
+                            mid
+                        )
+
+                    corrigidos += 1
+
+                except discord.NotFound:
+                    await apagar_botao_transferencia_persistente(
+                        mid
+                    )
+
+                except Exception:
+                    logger.exception(
+                        "⚠️ Falha reconciliando "
+                        "card confirmado %s",
+                        mid
+                    )
+                    falhas += 1
+
+                continue
+
+            # ────────────────────────────────────────────────────────────────────
+            # CARD PENDENTE: REGISTRA SUA PRÓPRIA VIEW
+            # ────────────────────────────────────────────────────────────────────
+            try:
+                dados = row["dados"]
+
+                if isinstance(dados, str):
+                    dados = json.loads(dados)
+
+                dados = (
+                    dados
+                    if isinstance(dados, dict)
+                    else {}
+                )
+
+                view = FinalizadosView(
+                    entrega_id=dados.get(
+                        "entrega_id"
+                    ),
+                    numero_parcela=dados.get(
+                        "numero_parcela"
+                    ),
+                    pedido_numero=dados.get(
+                        "pedido_numero",
+                        0
+                    ),
+                    valor_total=dados.get(
+                        "valor_total",
+                        0
+                    ),
+                    pt=dados.get("pt", 0),
+                    sub=dados.get("sub", 0),
+                    is_doacao=False
+                )
+
+                if not view.is_persistent():
+                    raise RuntimeError(
+                        "FinalizadosView não é persistente."
+                    )
+
+                bot.add_view(
+                    view,
+                    message_id=mid
+                )
+
+                restaurados += 1
+
+            except Exception:
+                logger.exception(
+                    "❌ Falha reativando "
+                    "botão do card %s",
+                    mid
+                )
+                falhas += 1
+
+        logger.info(
+            "✅ Transferências por card: "
+            "%s botões restaurados, "
+            "%s cards confirmados reconciliados, "
+            "%s falhas.",
+            restaurados,
+            corrigidos,
+            falhas
+        )
+
+        return restaurados
+
+    except Exception:
+        logger.exception(
+            "❌ Erro geral na restauração de transferências."
+        )
+        return 0
+
 # ────────────────────────────────────────────────────────────────────────────────
+# FIM DA FUNÇÃO: restaurar_transferencias_finalizadas
+# ────────────────────────────────────────────────────────────────────────────────
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: FinalizadosView
 # ────────────────────────────────────────────────────────────────────────────────
 class FinalizadosView(discord.ui.View):
-    # ────────────────────────────────────────────────────────────────────────────────
+
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
-    def __init__(self, entrega_id=None, pedido_numero=0, valor_total=0, pt=0, sub=0, is_doacao=False):
+    # ────────────────────────────────────────────────────────────────────────────
+    def __init__(
+        self,
+        entrega_id=None,
+        pedido_numero=0,
+        valor_total=0,
+        pt=0,
+        sub=0,
+        is_doacao=False,
+        numero_parcela=None
+    ):
         super().__init__(timeout=None)
+
         self.entrega_id = entrega_id
-        self.pedido_numero = pedido_numero
-        self.valor_total = valor_total
-        self.pt = pt
-        self.sub = sub
+        self.pedido_numero = int(
+            pedido_numero or 0
+        )
+        self.valor_total = int(
+            valor_total or 0
+        )
+        self.pt = int(
+            pt or 0
+        )
+        self.sub = int(
+            sub or 0
+        )
         self.is_doacao = is_doacao
+        self.numero_parcela = numero_parcela
+
+        # ────────────────────────────────────────────────────────────────────────
+        # BOTÃO PERSISTENTE DA TRANSFERÊNCIA
+        # ────────────────────────────────────────────────────────────────────────
         if not is_doacao:
-            botao = discord.ui.Button(label="📤 Confirmar Transferência",
-                 style=discord.ButtonStyle.success, custom_id="confirmar_transferencia_fixo", emoji="📤")
-            botao.callback = self.abrir_modal_transferencia
+            botao = discord.ui.Button(
+                label="📤 Confirmar Transferência",
+                style=discord.ButtonStyle.success,
+                custom_id="confirmar_transferencia_fixo",
+                emoji="📤"
+            )
+
+            botao.callback = (
+                self.abrir_modal_transferencia
+            )
+
             self.add_item(botao)
 
-    # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: abrir_modal_transferencia
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def abrir_modal_transferencia(self, interaction: discord.Interaction):
-        # View global pode ser reutilizada após reinício: dados vêm do card clicado.
-        embed = interaction.message.embeds[0] if interaction.message.embeds else None
-        if not embed:
-            await interaction.response.send_message("❌ Card da venda indisponível.", ephemeral=True)
+    # ────────────────────────────────────────────────────────────────────────────
+    async def abrir_modal_transferencia(
+        self,
+        interaction: discord.Interaction
+    ):
+        msg = interaction.message
+
+        if not msg or not msg.embeds:
+            await interaction.response.send_message(
+                "❌ Card de venda indisponível.",
+                ephemeral=True
+            )
             return
-        dados = await extrair_dados_pedido_do_embed(embed)
-        pedido = self.pedido_numero or dados['pedido_numero']
-        pt = self.pt or dados['pt']
-        sub = self.sub or dados['sub']
-        entrega = self.entrega_id
-        if not entrega and embed.footer and embed.footer.text and 'ID:' in embed.footer.text:
-            match = re.search(r'ID:\s*(\d+)', embed.footer.text)
-            if match: entrega = int(match.group(1))
-        if not pedido:
-            await interaction.response.send_message("❌ Número do pedido não localizado.", ephemeral=True)
-            return
-        pool = await get_pool()
-        if not pool:
-            await interaction.response.send_message("❌ Banco indisponível.", ephemeral=True)
-            return
-        if any('Transferido para:' in str(f.value) for f in embed.fields):
-            await interaction.response.send_message("⚠️ Este card já indica transferência confirmada.", ephemeral=True)
-            return
-        modal = ConfirmarTransferenciaModal(
-            interaction=interaction, mensagem_original=interaction.message,
-            entrega_id=entrega, pedido_numero=pedido,
-            valor=self.valor_total or (pt*50 + sub*90), pt=pt, sub=sub)
-        await interaction.response.send_modal(modal)
+
+        try:
+            embed = msg.embeds[0]
+
+            if (
+                "VENDA FINALIZADA"
+                not in (embed.title or "").upper()
+            ):
+                raise ValueError(
+                    "Essa mensagem não é uma venda finalizada."
+                )
+
+            # ────────────────────────────────────────────────────────────────────
+            # IDENTIFICA O PEDIDO DO CARD REALMENTE CLICADO
+            # ────────────────────────────────────────────────────────────────────
+            dados = await extrair_dados_pedido_do_embed(
+                embed
+            )
+
+            pedido = int(
+                dados.get("pedido_numero") or 0
+            )
+
+            if pedido <= 0:
+                raise ValueError(
+                    "Número do pedido não encontrado no card."
+                )
+
+            # Não consulta o banco antes de responder à
+            # interação para evitar timeout do Discord.
+            if any(
+                "Transferido para:" in str(campo.value)
+                for campo in embed.fields
+            ):
+                raise ValueError(
+                    "Esse card já exibe "
+                    "uma transferência confirmada."
+                )
+
+            # ────────────────────────────────────────────────────────────────────
+            # ENTREGA E PARCELA DO PRÓPRIO CARD
+            # ────────────────────────────────────────────────────────────────────
+            footer = (
+                embed.footer.text
+                if embed.footer and embed.footer.text
+                else ""
+            )
+
+            m_entrega = re.search(
+                r"\bID:\s*(\d+)",
+                footer
+            )
+
+            m_parcela = re.search(
+                r"\bParcela:\s*(\d+)",
+                footer,
+                re.IGNORECASE
+            )
+
+            entrega = (
+                int(m_entrega.group(1))
+                if m_entrega
+                else int(self.entrega_id or 0)
+            )
+
+            parcela = (
+                int(m_parcela.group(1))
+                if m_parcela
+                else (
+                    int(self.numero_parcela)
+                    if self.numero_parcela
+                    else None
+                )
+            )
+
+            # Pedido sem entrega parcelada.
+            if not entrega:
+                parcela = pedido
+
+            # ────────────────────────────────────────────────────────────────────
+            # QUANTIDADES E VALOR DO CARD
+            # ────────────────────────────────────────────────────────────────────
+            pt = int(
+                dados.get("pt") or 0
+            )
+
+            sub = int(
+                dados.get("sub") or 0
+            )
+
+            valor = (
+                pt * 50
+                + sub * 90
+            )
+
+            if valor <= 0:
+                raise ValueError(
+                    "Quantidade/valor inválido no card."
+                )
+
+            # ────────────────────────────────────────────────────────────────────
+            # MODAL INDIVIDUAL DE TRANSFERÊNCIA
+            # ────────────────────────────────────────────────────────────────────
+            await interaction.response.send_modal(
+                ConfirmarTransferenciaModal(
+                    interaction=interaction,
+                    mensagem_original=msg,
+                    entrega_id=entrega,
+                    pedido_numero=pedido,
+                    valor=valor,
+                    pt=pt,
+                    sub=sub,
+                    numero_parcela=parcela
+                )
+            )
+
+        except (RuntimeError, ValueError) as erro:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"❌ {erro}",
+                    ephemeral=True
+                )
+
+        except Exception:
+            logger.exception(
+                "❌ Erro ao abrir transferência "
+                "do card %s",
+                msg.id
+            )
+
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Falha ao abrir transferência. "
+                    "Consulte os logs.",
+                    ephemeral=True
+                )
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: class StatusView
+# FIM DA CLASSE: FinalizadosView
 # ────────────────────────────────────────────────────────────────────────────────
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -11062,7 +12598,10 @@ async def finalizar_venda_quando_quitada(interaction, dados, embed_original):
                         organizacao=dados["organizacao"], vendedor_nome=dados["vendedor"],
                         pago_por=None, pago_em=None, entregue_por=None, entregue_em=None,
                         transferido_para=None, transferido_por=None, transferido_em=None,
-                        tipo="finalizado", entrega_id=entrega_id or None
+                        tipo="finalizado",
+                        entrega_id=entrega_id or None,
+                        numero_parcela=int(dados["entrega_atual"]) if entrega_id else None
+
                     )
                     if not enviado:
                         raise RuntimeError("Falha ao publicar em Pedidos Finalizados; card original preservado.")
@@ -12382,7 +13921,8 @@ async def finalizar_e_mover_pedido(
             cancelado_por=dados["cancelado_por"],
             cancelado_em=dados["cancelado_em"],
             tipo=tipo,
-            entrega_id=entrega_id # <── ADICIONADO AQUI
+            entrega_id=entrega_id,
+            numero_parcela=entrega_atual if entrega_id else None
         )
 
         # ─── Limpa botões persistentes daquela mensagem ───
