@@ -1,5 +1,5 @@
 #════════════════════════════════════════════════════════════════════════════════
-# ║  BOT VDR v8.0 — COMPLETO E ORGANIZADO                                      ║
+# ║  BOT VDR V8.1.0 — PATCH 001-A/F COMPLETO E ORGANIZADO                                      ║
 # ║  Vida Rasa 442 • Sistema de Gerenciamento                                  ║
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  01. Configurações Globais                                                 ║
@@ -96,6 +96,7 @@ bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 # ────────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger('VDR_BOT_V8')
+VERSAO_BOT = 'V8.1.0'  # PATCH 001-A/B/C/D/E/F
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 1.2 — TOKENS E VARIÁVEIS DE AMBIENTE
@@ -2930,7 +2931,15 @@ class RegistroModal(discord.ui.Modal, title="📋 Registro de Entrada"):
             
             # Envia com os botões de aprovar/rejeitar
             view = AprovarRegistroView(membro.id)
-            await canal_aprovacao.send(embed=embed, view=view)
+            msg_registro = await canal_aprovacao.send(embed=embed, view=view)
+            if pool:
+                try:
+                    async with pool.acquire() as conn:
+                        await conn.execute('''UPDATE registros_historico SET aprovacao_mensagem_id=$1
+                            WHERE id=(SELECT id FROM registros_historico WHERE user_id=$2 AND status='Pendente'
+                                ORDER BY id DESC LIMIT 1)''', str(msg_registro.id), str(membro.id))
+                except Exception:
+                    logger.exception('⚠️ Falha vinculando mensagem ao registro pendente')
         
         await interaction.followup.send("✅ **Registro enviado!**\nSua solicitação foi enviada para a gerência. Aguarde a aprovação no seu DM.", ephemeral=True)
 
@@ -3672,363 +3681,537 @@ async def enviar_painel_relatorio_financeiro():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: salvar_compra_db
 # ────────────────────────────────────────────────────────────────────────────────
-async def salvar_compra_db(produto, valor, comprado_por, quantidade=0, tipo="Compra"):
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: salvar_compra_db — PATCH 001-B (compatibilidade)
+# ────────────────────────────────────────────────────────────────────────────────
+async def salvar_compra_db(produto, valor, comprado_por, quantidade=0, tipo='Compra'):
     pool = await get_pool()
     if not pool:
-        return
+        return False
     try:
         async with pool.acquire() as conn:
-            # Salva formatado: [Tipo] Descrição
-            produto_formatado = f"[{tipo}] {produto}"
-            await conn.execute(
-                "INSERT INTO compras (produto, valor, comprado_por, data) VALUES ($1, $2, $3, $4)",
-                produto_formatado, valor, str(comprado_por), agora_db()
-            )
+            async with conn.transaction():
+                compra_id, insumo, total = await registrar_compra_estoque_v810(
+                    conn, tipo, produto, quantidade, 0, valor, comprado_por, debitar_caixa=True)
+        logger.info('✅ Compra %s registrada: %s +%s no estoque', compra_id, insumo, total)
+        return compra_id
+    except Exception:
+        logger.exception('❌ Falha atomicamente salvando compra')
+        return False
 
-            # ─── LÓGICA DE ESTOQUE AUTOMÁTICO ───
-            produto_lower = produto.lower()
-            
-            if "polvora" in produto_lower or "pólvora" in produto_lower:
-                qtd = quantidade if quantidade > 0 else (valor // PRECO_POLVORA)
-                if qtd > 0:
-                    await atualizar_estoque_polvora(qtd, "adicionar")
-                    logger.info(f"🧨 Estoque de pólvora atualizado via lançamento: +{qtd}")
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ReembolsoView
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ReembolsoView
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: preparar_financeiro_v810 — PATCH 001-A/B, V8.1.0
+# ────────────────────────────────────────────────────────────────────────────────
+async def preparar_financeiro_v810():
+    """Migração não destrutiva. Mantém compras, reembolsos e histórico anterior."""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                for sql in (
+                    "ALTER TABLE compras ADD COLUMN IF NOT EXISTS quantidade INTEGER NOT NULL DEFAULT 0",
+                    "ALTER TABLE compras ADD COLUMN IF NOT EXISTS brinde INTEGER NOT NULL DEFAULT 0",
+                    "ALTER TABLE compras ADD COLUMN IF NOT EXISTS estoque_registrado BOOLEAN NOT NULL DEFAULT FALSE",
+                    "ALTER TABLE compras ADD COLUMN IF NOT EXISTS reembolso_mensagem_id VARCHAR(30)",
+                    "ALTER TABLE reembolsos ADD COLUMN IF NOT EXISTS mensagem_id VARCHAR(30)",
+                    "ALTER TABLE registros_historico ADD COLUMN IF NOT EXISTS aprovacao_mensagem_id VARCHAR(30)",
+                    "ALTER TABLE emprestimos_parcelas ADD COLUMN IF NOT EXISTS alerta_mensagem_id VARCHAR(30)",
+                    "ALTER TABLE blindados ADD COLUMN IF NOT EXISTS alerta_mensagem_id VARCHAR(30)",
+                ):
+                    await conn.execute(sql)
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_compras_pendentes_msg_v810 ON compras(reembolso_mensagem_id) WHERE reembolso_mensagem_id IS NOT NULL")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_registro_pendente_msg_v810 ON registros_historico(aprovacao_mensagem_id) WHERE aprovacao_mensagem_id IS NOT NULL")
+        logger.info('✅ PATCH 001-A/B: estrutura de reembolsos e botões persistentes pronta')
+        return True
+    except Exception:
+        logger.exception('❌ PATCH 001: não foi possível preparar migração do financeiro')
+        return False
 
-            elif "embalagem" in produto_lower:
-                # Se a quantidade não foi informada, tenta calcular pelo valor
-                qtd = quantidade if quantidade > 0 else int(valor / PRECO_EMBALAGEM_POR_UNIDADE)
-                if qtd > 0:
-                    await atualizar_estoque_embalagens(qtd, "adicionar")
-                    logger.info(f"📦 Estoque de embalagens atualizado via lançamento: +{qtd}")
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: classificar_insumo_compra_v810 — PATCH 001-B
+# ────────────────────────────────────────────────────────────────────────────────
+def classificar_insumo_compra_v810(produto):
+    """Identifica apenas insumos reconhecidos; impede falsos positivos em texto livre."""
+    texto = normalizar_texto(produto).strip()
+    palavras = set(re.findall(r'[a-z0-9]+', texto))
+    if any(p.startswith('embalag') or p in ('emb', 'embs', 'embal', 'embalagens') for p in palavras):
+        return 'embalagem'
+    if any(p.startswith('polvor') or p in ('polvora', 'polv', 'povora') for p in palavras):
+        return 'polvora'
+    return None
 
-            # Movimenta o caixa
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_compra_estoque_v810 — PATCH 001-B
+# ────────────────────────────────────────────────────────────────────────────────
+async def registrar_compra_estoque_v810(conn, tipo, descricao, qtd, brinde, valor, autor, debitar_caixa):
+    """Compra+estoque+caixa num único COMMIT. Falha significa rollback geral."""
+    tipo_insumo = classificar_insumo_compra_v810(descricao)
+    qtd = int(qtd or 0)
+    brinde = int(brinde or 0)
+    valor = int(valor or 0)
+    if qtd < 0 or brinde < 0 or valor <= 0:
+        raise ValueError('Quantidade, brinde ou valor inválidos.')
+    texto = f'[{tipo}] {descricao}'
+    compra_id = await conn.fetchval(
+        """INSERT INTO compras(produto,valor,comprado_por,data,quantidade,brinde,estoque_registrado)
+           VALUES($1,$2,$3,$4,$5,$6,FALSE) RETURNING id""",
+        texto, valor, str(autor), agora_db(), qtd, brinde)
+    total = qtd + brinde
+    if tipo_insumo and total > 0:
+        if tipo_insumo == 'embalagem':
+            ok = await atualizar_estoque_embalagens(total, 'adicionar', conn=conn)
+        else:
+            ok = await atualizar_estoque_polvora(total, 'adicionar', conn=conn)
+        if not ok:
+            raise RuntimeError('Falhou atualização do estoque; lançamento desfeito.')
+        await conn.execute('UPDATE compras SET estoque_registrado=TRUE WHERE id=$1', compra_id)
+    if debitar_caixa:
+        ok = await movimentar_caixa('compra', valor, f'{tipo}: {descricao}', autor, 'limpo', conn=conn)
+        if not ok:
+            raise RuntimeError('Saldo insuficiente ou erro no caixa; lançamento desfeito.')
+        await conn.execute('UPDATE compras SET reembolsado=TRUE, reembolsado_por=$1, data_reembolso=NOW() WHERE id=$2', str(autor), compra_id)
+    return compra_id, tipo_insumo, total
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: processar_reembolso_compra_v810 — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
+async def processar_reembolso_compra_v810(compra_id, usuario_id, aprovar, motivo_recusa=''):
+    """Pagamento único, com exclusão mútua, saldo e status na MESMA transação."""
+    pool = await get_pool()
+    if not pool:
+        return {'status': 'erro', 'mensagem': 'PostgreSQL indisponível.'}
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                compra = await conn.fetchrow('SELECT * FROM compras WHERE id=$1 FOR UPDATE', int(compra_id))
+                if not compra:
+                    return {'status': 'erro', 'mensagem': 'Compra não encontrada.'}
+                if compra['reembolsado'] or compra['recusado']:
+                    return {'status': 'ja', 'mensagem': 'Esta compra já foi reembolsada ou recusada.'}
+                valor = int(compra['valor'] or 0)
+                if valor <= 0:
+                    return {'status': 'erro', 'mensagem': 'Compra sem valor válido.'}
+                if aprovar:
+                    ok = await movimentar_caixa(
+                        'compra', valor,
+                        f"Reembolso: {compra['produto']} para <@{compra['comprado_por']}>",
+                        usuario_id, 'limpo', conn=conn)
+                    if not ok:
+                        raise ValueError('Saldo limpo insuficiente ou caixa indisponível. Nada foi pago.')
+                    await conn.execute('''UPDATE compras SET reembolsado=TRUE,reembolsado_por=$1,
+                        data_reembolso=NOW() WHERE id=$2''', str(usuario_id), int(compra_id))
+                else:
+                    await conn.execute('''UPDATE compras SET recusado=TRUE,reembolsado_por=$1,
+                        motivo_recusa=$2,data_reembolso=NOW() WHERE id=$3''',
+                        str(usuario_id), motivo_recusa[:1500], int(compra_id))
+        return {'status': 'ok', 'mensagem': 'Aprovado.' if aprovar else 'Recusado.'}
+    except ValueError as e:
+        return {'status': 'erro', 'mensagem': str(e)}
+    except Exception:
+        logger.exception('❌ Falha no reembolso compra #%s', compra_id)
+        return {'status': 'erro', 'mensagem': 'Falha na transação; verifique os logs.'}
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_card_reembolso_v810 — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
+async def atualizar_card_reembolso_v810(mensagem, aprovado, usuario=None, motivo=''):
+    if not mensagem or not mensagem.embeds:
+        return
+    embed = mensagem.embeds[0].copy()
+    estado = '✅ REEMBOLSADO E PAGO' if aprovado else '❌ REEMBOLSO RECUSADO'
+    embed.color = 0x2ecc71 if aprovado else 0xe74c3c
+    descricao = embed.description or ''
+    descricao = descricao.replace('⏳ AGUARDANDO APROVAÇÃO', estado)
+    descricao = descricao.replace('O valor **NÃO** foi descontado do caixa ainda.',
+                                  'Status financeiro atualizado no PostgreSQL.')
+    if estado not in descricao:
+        descricao += f'\n\n**STATUS:** {estado}'
+    if motivo:
+        descricao += f'\n**Motivo:** {discord.utils.escape_markdown(motivo[:300])}'
+    if usuario:
+        descricao += f'\n**Decisão de:** {usuario.mention}'
+    embed.description = descricao[:4096]
+    await mensagem.edit(embed=embed, view=None)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: recuperar_reembolsos_pendentes_v810 — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
+async def recuperar_reembolsos_pendentes_v810(reconciliar_antigos=False):
+    """Registra botões por message_id; backfill antigo SOMENTE com correspondência única."""
+    pool = await get_pool()
+    if not pool:
+        return 0
+    canal = bot.get_channel(CANAL_COMPRAS_REEMBOLSO_ID)
+    if not canal:
+        logger.error('❌ Canal de reembolsos não está no cache')
+        return 0
+    novos = 0
+    try:
+        if reconciliar_antigos:
+            # Histórico completo, sem limite de 100 ou 1000 mensagens; evita adivinhar.
+            async for msg in canal.history(limit=None, oldest_first=False):
+                if not msg.embeds or msg.author.id != bot.user.id:
+                    continue
+                desc = msg.embeds[0].description or ''
+                if 'SOLICITAÇÃO DE REEMBOLSO' not in desc or 'AGUARDANDO APROVAÇÃO' not in desc:
+                    continue
+                if not any(getattr(c, 'children', None) for c in msg.components):
+                    continue
+                compra_id_footer = re.search(r'COMPRA\s*#\s*(\d+)', msg.embeds[0].footer.text or '', re.I)
+                async with pool.acquire() as conn:
+                    if compra_id_footer:
+                        row = await conn.fetchrow('''SELECT id FROM compras WHERE id=$1 AND
+                            reembolsado=FALSE AND recusado=FALSE''', int(compra_id_footer.group(1)))
+                        candidatos = [row] if row else []
+                    else:
+                        membro_m = re.search(r'\*\*Membro:\*\*\s*<@!?(\d+)>', desc)
+                        produto_m = re.search(r'\*\*Item:\*\*\s*`([^`]+)`', desc)
+                        valor_m = re.search(r'\*\*Valor:\*\*\s*`R\$\s*([\d.,]+)`', desc)
+                        if not (membro_m and produto_m and valor_m):
+                            continue
+                        cent = valor_m.group(1).replace('.', '').replace(',', '.')
+                        valor = int(float(cent))
+                        candidatos = await conn.fetch('''SELECT id FROM compras
+                            WHERE comprado_por=$1 AND produto ILIKE $2 AND valor=$3
+                              AND reembolsado=FALSE AND recusado=FALSE
+                              AND reembolso_mensagem_id IS NULL
+                              AND ABS(EXTRACT(EPOCH FROM (data-$4::timestamp))) < 1200
+                            ORDER BY data''', membro_m.group(1), f'%{produto_m.group(1)}%',
+                            valor, msg.created_at.astimezone(BRASIL).replace(tzinfo=None))
+                    if len(candidatos) == 1:
+                        await conn.execute('''UPDATE compras SET reembolso_mensagem_id=$1
+                            WHERE id=$2 AND reembolso_mensagem_id IS NULL''', str(msg.id), candidatos[0]['id'])
+                    elif len(candidatos) != 0:
+                        logger.warning('⚠️ Card de reembolso %s ambíguo; não vinculado', msg.id)
+        async with pool.acquire() as conn:
+            pendentes = await conn.fetch('''SELECT id,valor,produto,comprado_por,reembolso_mensagem_id
+                FROM compras WHERE reembolsado=FALSE AND recusado=FALSE
+                AND reembolso_mensagem_id IS NOT NULL ORDER BY id''')
+        for row in pendentes:
+            mid = int(row['reembolso_mensagem_id'])
             try:
-                await movimentar_caixa(
-                    tipo="compra",
-                    valor=valor,
-                    motivo=f"{tipo}: {produto}",
-                    autor=comprado_por
-                )
-                try:
-                    await enviar_painel_caixa()
-                except:
-                    pass
-            except Exception as e:
-                logger.error(f"⚠️ Erro ao movimentar caixa pelo lançamento: {e}")
+                view = ReembolsoView(row['id'], row['valor'], row['produto'], f"<@{row['comprado_por']}>")
+                if view.is_persistent():
+                    bot.add_view(view, message_id=mid)
+                    novos += 1
+            except Exception:
+                logger.exception('❌ Falha restaurando reembolso #%s mensagem %s', row['id'], mid)
+        # Tabela de reembolsos legada: não misturar IDs com a tabela compras.
+        async with pool.acquire() as conn:
+            legados = await conn.fetch("SELECT id,mensagem_id FROM reembolsos WHERE status='pendente' AND mensagem_id IS NOT NULL")
+        for row in legados:
+            try:
+                bot.add_view(ReembolsoLegadoView(row['id']), message_id=int(row['mensagem_id']))
+                novos += 1
+            except Exception:
+                logger.exception('❌ Falha no reembolso legado #%s', row['id'])
+        logger.info('🔒 PATCH 001-A: %s confirmações de reembolso restauradas', novos)
+        return novos
+    except Exception:
+        logger.exception('❌ Erro global restaurando reembolsos')
+        return novos
 
-    except Exception as e:
-        logger.error(f"❌ Erro ao salvar lançamento: {e}")
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restabelecer_registros_pendentes_v810 — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
+async def restabelecer_registros_pendentes_v810(reconciliar_antigos=False):
+    pool = await get_pool()
+    canal = bot.get_channel(CANAL_LOG_REGISTRO_ID)
+    if not pool or not canal:
+        return 0
+    registrados = 0
+    try:
+        if reconciliar_antigos:
+            async for msg in canal.history(limit=None):
+                if msg.author.id != bot.user.id or not msg.embeds:
+                    continue
+                embed = msg.embeds[0]
+                if 'NOVO REGISTRO PENDENTE' not in (embed.title or ''):
+                    continue
+                uid_match = re.search(r'<@!?(\d+)>', embed.description or '')
+                if not uid_match:
+                    continue
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch('''SELECT id FROM registros_historico
+                        WHERE user_id=$1 AND status='Pendente' AND aprovacao_mensagem_id IS NULL
+                          AND ABS(EXTRACT(EPOCH FROM (data_registro-$2::timestamp))) < 1200''',
+                        uid_match.group(1), msg.created_at.astimezone(BRASIL).replace(tzinfo=None))
+                    if len(rows) == 1:
+                        await conn.execute('UPDATE registros_historico SET aprovacao_mensagem_id=$1 WHERE id=$2', str(msg.id), rows[0]['id'])
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT user_id,aprovacao_mensagem_id FROM registros_historico WHERE status='Pendente' AND aprovacao_mensagem_id IS NOT NULL")
+        for row in rows:
+            try:
+                bot.add_view(AprovarRegistroView(int(row['user_id'])), message_id=int(row['aprovacao_mensagem_id']))
+                registrados += 1
+            except Exception:
+                logger.exception('❌ Falha restaurando registro %s', row['user_id'])
+        logger.info('🔒 PATCH 001-A: %s aprovações de registro restauradas', registrados)
+        return registrados
+    except Exception:
+        logger.exception('❌ Erro na restauração dos registros')
+        return registrados
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: ReembolsoView
+# CLASSE: ReembolsoLegadoView — PATCH 001-A (tabela reembolsos histórica)
 # ────────────────────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: ReembolsoView
-# ────────────────────────────────────────────────────────────────────────────────
-class ReembolsoView(discord.ui.View):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
+class ReembolsoLegadoView(discord.ui.View):
+    """Compatibilidade com cartões criados pela tabela de reembolsos anterior."""
     def __init__(self, reembolso_id):
         super().__init__(timeout=None)
-        self.reembolso_id = reembolso_id
+        self.reembolso_id = int(reembolso_id)
 
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: _checar_permissao
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def _checar_permissao(self, interaction: discord.Interaction) -> bool:
-        is_admin = interaction.user.guild_permissions.administrator
-        # Apenas 01 e 02
-        is_lider = any(r.id in [CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles)
-        if not is_admin and not is_lider:
-            await interaction.response.send_message("❌ Apenas o **01** ou o **02** podem aprovar ou recusar reembolsos!", ephemeral=True)
-            return False
-        return True
+    async def interaction_check(self, interaction):
+        permitido = (interaction.user.guild_permissions.administrator or
+                     any(r.id in (CARGO_01_ID, CARGO_02_ID) for r in interaction.user.roles))
+        if not permitido:
+            await interaction.response.send_message('❌ Apenas cargo 01/02 ou ADM.', ephemeral=True)
+        return permitido
 
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: confirmar
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="✅ Confirmar Reembolso", style=discord.ButtonStyle.success, custom_id="btn_confirmar_reembolso")
-    async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self._checar_permissao(interaction):
-            return
-
+    async def _executar(self, interaction, aprovar):
         await interaction.response.defer(ephemeral=True)
         pool = await get_pool()
-        
-        async with pool.acquire() as conn:
-            reembolso = await conn.fetchrow("SELECT * FROM reembolsos WHERE id = $1 AND status = 'pendente'", self.reembolso_id)
-            if not reembolso:
-                await interaction.followup.send("⚠️ Este reembolso já foi processado ou não existe.", ephemeral=True)
-                return
+        if not pool:
+            return await interaction.followup.send('❌ Banco indisponível.', ephemeral=True)
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow('SELECT * FROM reembolsos WHERE id=$1 FOR UPDATE', self.reembolso_id)
+                    if not row or row['status'] != 'pendente':
+                        return await interaction.followup.send('⚠️ Já processado.', ephemeral=True)
+                    if aprovar:
+                        ok = await movimentar_caixa('compra', row['valor'],
+                            f"Reembolso legado #{self.reembolso_id}: {row['item']}",
+                            interaction.user.id, 'limpo', conn=conn)
+                        if not ok:
+                            raise ValueError('Saldo limpo insuficiente ou falha no caixa.')
+                    await conn.execute("UPDATE reembolsos SET status=$1, finalizado_por=$2, finalizado_em=NOW() WHERE id=$3",
+                        'aprovado' if aprovar else 'recusado', str(interaction.user.id), self.reembolso_id)
+            try:
+                await atualizar_card_reembolso_v810(interaction.message, aprovar, interaction.user)
+            except discord.HTTPException:
+                logger.exception('⚠️ Reembolso legado processado, mas o card não foi atualizado')
+            await interaction.followup.send('✅ Reembolso processado.' if aprovar else '❌ Reembolso recusado.', ephemeral=True)
+            if aprovar:
+                await enviar_painel_caixa()
+        except ValueError as erro:
+            await interaction.followup.send(f'❌ {erro}', ephemeral=True)
+        except Exception:
+            logger.exception('❌ Falha processando reembolso legado #%s', self.reembolso_id)
+            await interaction.followup.send('❌ Falha; nenhuma operação confirmada.', ephemeral=True)
 
-            # Desconta do caixa e registra no histórico
-            await movimentar_caixa(
-                tipo="compra",
-                valor=reembolso["valor"],
-                motivo=f"Reembolso aprovado: {reembolso['item']} ({reembolso['quantidade']} un) para <@{reembolso['user_id']}>",
-                autor=interaction.user.id
-            )
+    @discord.ui.button(label='✅ Confirmar Reembolso', style=discord.ButtonStyle.success, custom_id='btn_confirmar_reembolso')
+    async def confirmar(self, interaction, button):
+        await self._executar(interaction, True)
 
-            # Atualiza o banco
-            await conn.execute(
-                "UPDATE reembolsos SET status = 'aprovado', finalizado_por = $1, finalizado_em = NOW() WHERE id = $2",
-                str(interaction.user.id), self.reembolso_id
-            )
-            
-            # Registra na tabela de compras (para o relatório financeiro reconhecer)
-            await conn.execute(
-                "INSERT INTO compras (produto, valor, comprado_por, data) VALUES ($1, $2, $3, NOW())",
-                f"[Compra] {reembolso['item']}", reembolso["valor"], reembolso["user_id"]
-            )
+    @discord.ui.button(label='❌ Recusar Reembolso', style=discord.ButtonStyle.danger, custom_id='btn_recusar_reembolso')
+    async def recusar(self, interaction, button):
+        await self._executar(interaction, False)
 
-        embed = interaction.message.embeds[0]
-        embed.color = 0x2ecc71
-        for i, field in enumerate(embed.fields):
-            if field.name == "🚨 STATUS":
-                embed.set_field_at(i, name="🚨 STATUS", value="✅ **REEMBOLSADO E PAGO**", inline=False)
-                break
-        embed.add_field(name="👤 APROVADO POR", value=f"{interaction.user.mention}", inline=False)
-        
-        await interaction.message.edit(embed=embed, view=None)
-        await interaction.followup.send("✅ Reembolso aprovado e dinheiro retirado do caixa!", ephemeral=True)
-        
-        await enviar_painel_caixa()
-
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: recusar
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="❌ Recusar Reembolso", style=discord.ButtonStyle.danger, custom_id="btn_recusar_reembolso")
-    async def recusar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self._checar_permissao(interaction):
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        pool = await get_pool()
-
-        async with pool.acquire() as conn:
-            reembolso = await conn.fetchrow("SELECT * FROM reembolsos WHERE id = $1 AND status = 'pendente'", self.reembolso_id)
-            if not reembolso:
-                await interaction.followup.send("⚠️ Este reembolso já foi processado ou não existe.", ephemeral=True)
-                return
-
-            await conn.execute(
-                "UPDATE reembolsos SET status = 'recusado', finalizado_por = $1, finalizado_em = NOW() WHERE id = $2",
-                str(interaction.user.id), self.reembolso_id
-            )
-
-            # Apenas registra no log do caixa que foi recusado (não mexe no saldo)
-            await movimentar_caixa(
-                tipo="ajuste_menos", # Tipo ajuste, mas sem valor real
-                valor=0,
-                motivo=f"Reembolso RECUSADO: {reembolso['item']} ({reembolso['quantidade']} un) de <@{reembolso['user_id']}>",
-                autor=interaction.user.id
-            )
-
-        embed = interaction.message.embeds[0]
-        embed.color = 0xe74c3c
-        for i, field in enumerate(embed.fields):
-            if field.name == "🚨 STATUS":
-                embed.set_field_at(i, name="🚨 STATUS", value="❌ **REEMBOLSO RECUSADO**", inline=False)
-                break
-        embed.add_field(name="👤 RECUSADO POR", value=f"{interaction.user.mention}", inline=False)
-
-        await interaction.message.edit(embed=embed, view=None)
-        await interaction.followup.send("❌ Reembolso recusado.", ephemeral=True)
-        
-        await enviar_painel_caixa()
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarReembolsoModal
 # ────────────────────────────────────────────────────────────────────────────────
-class ConfirmarReembolsoModal(discord.ui.Modal, title="✅ Confirmar Reembolso"):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ConfirmarReembolsoModal — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
+class ConfirmarReembolsoModal(discord.ui.Modal, title='✅ Confirmar Reembolso'):
+    confirmacao = discord.ui.TextInput(label='Digite CONFIRMAR para autorizar', placeholder='CONFIRMAR', required=True, max_length=20)
+
     def __init__(self, compra_id, mensagem_original, valor, item, membro_id):
-        super().__init__(); self.compra_id = compra_id; self.mensagem_original = mensagem_original
-        self.valor = valor; self.item = item; self.membro_id = membro_id
-    confirmacao = discord.ui.TextInput(label="Digite CONFIRMAR para autorizar", placeholder="CONFIRMAR", required=True, max_length=20)
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def on_submit(self, interaction: discord.Interaction):
-        if self.confirmacao.value.strip().upper() != "CONFIRMAR":
-            await interaction.response.send_message("❌ Confirmação incorreta.", ephemeral=True); return
+        super().__init__(timeout=300)
+        self.compra_id = int(compra_id)
+        self.mensagem_original = mensagem_original
+        self.valor = int(valor)
+        self.item = item
+        self.membro_id = membro_id
+
+    async def on_submit(self, interaction):
+        if not (interaction.user.guild_permissions.administrator or any(r.id in (CARGO_01_ID, CARGO_02_ID) for r in interaction.user.roles)):
+            return await interaction.response.send_message('❌ Acesso negado.', ephemeral=True)
+        if self.confirmacao.value.strip().upper() != 'CONFIRMAR':
+            return await interaction.response.send_message('❌ Confirmação incorreta.', ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            status = await conn.fetchval("SELECT reembolsado FROM compras WHERE id = $1", self.compra_id)
-            if status: await interaction.followup.send("⚠️ Já foi pago!", ephemeral=True); return
-            valores = await buscar_caixa()
-            if valores["limpo"] < self.valor:
-                await interaction.followup.send(f"❌ Saldo Limpo insuficiente! Tem: {formatar_dinheiro(valores['limpo'])}", ephemeral=True); return
-            await movimentar_caixa("compra", self.valor, f"Reembolso: {self.item} para {self.membro_id}", interaction.user.id, "limpo")
-            await conn.execute("UPDATE compras SET reembolsado = true, reembolsado_por = $1, data_reembolso = NOW() WHERE id = $2", str(interaction.user.id), self.compra_id)
-        
-        embed = self.mensagem_original.embeds[0]
-        embed.color = 0x2ECC71
-        for i, field in enumerate(embed.fields):
-            if field.name == "📌 STATUS":
-                embed.set_field_at(i, name="📌 STATUS", value=f"✅ **REEMBOLSADO**\nPago por {interaction.user.mention}", inline=False); break
-        await self.mensagem_original.edit(embed=embed, view=None)
-        await interaction.followup.send("✅ Reembolso confirmado e descontado do Caixa Limpo!", ephemeral=True)
-        await enviar_painel_caixa()
+        resultado = await processar_reembolso_compra_v810(self.compra_id, interaction.user.id, True)
+        if resultado['status'] != 'ok':
+            return await interaction.followup.send(f"⚠️ {resultado['mensagem']}", ephemeral=True)
+        try:
+            await atualizar_card_reembolso_v810(self.mensagem_original, True, interaction.user)
+        except Exception:
+            logger.exception('⚠️ Compra #%s paga, edição do card falhou', self.compra_id)
+        await interaction.followup.send('✅ Reembolso confirmado uma única vez e descontado do Caixa Limpo!', ephemeral=True)
+        try:
+            await enviar_painel_caixa()
+        except Exception:
+            logger.exception('⚠️ Falha atualizando painel caixa pós-reembolso')
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RecusarReembolsoModal
 # ────────────────────────────────────────────────────────────────────────────────
-class RecusarReembolsoModal(discord.ui.Modal, title="❌ Recusar Reembolso"):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RecusarReembolsoModal — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
+class RecusarReembolsoModal(discord.ui.Modal, title='❌ Recusar Reembolso'):
+    motivo = discord.ui.TextInput(label='Motivo da recusa', placeholder='Ex: Valor errado', style=discord.TextStyle.paragraph, required=True, max_length=1000)
+
     def __init__(self, compra_id, mensagem_original, item, membro_id):
-        super().__init__(); self.compra_id = compra_id; self.mensagem_original = mensagem_original
-        self.item = item; self.membro_id = membro_id
-    motivo = discord.ui.TextInput(label="Motivo da recusa", placeholder="Ex: Valor errado", style=discord.TextStyle.paragraph, required=True)
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def on_submit(self, interaction: discord.Interaction):
+        super().__init__(timeout=300)
+        self.compra_id = int(compra_id)
+        self.mensagem_original = mensagem_original
+        self.item = item
+        self.membro_id = membro_id
+
+    async def on_submit(self, interaction):
+        if not (interaction.user.guild_permissions.administrator or any(r.id in (CARGO_01_ID, CARGO_02_ID) for r in interaction.user.roles)):
+            return await interaction.response.send_message('❌ Acesso negado.', ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute("UPDATE compras SET recusado = true, reembolsado_por = $1, motivo_recusa = $2, data_reembolso = NOW() WHERE id = $3", str(interaction.user.id), self.motivo.value, self.compra_id)
-        embed = self.mensagem_original.embeds[0]
-        embed.color = 0xE74C3C
-        for i, field in enumerate(embed.fields):
-            if field.name == "📌 STATUS":
-                embed.set_field_at(i, name="📌 STATUS", value=f"❌ **RECUSADO** por {interaction.user.mention}", inline=False); break
-        embed.add_field(name="📝 MOTIVO", value=f"```yaml\n{self.motivo.value}\n```", inline=False)
-        await self.mensagem_original.edit(embed=embed, view=None)
-        await interaction.followup.send("✅ Reembolso recusado.", ephemeral=True)
+        resultado = await processar_reembolso_compra_v810(self.compra_id, interaction.user.id, False, self.motivo.value)
+        if resultado['status'] != 'ok':
+            return await interaction.followup.send(f"⚠️ {resultado['mensagem']}", ephemeral=True)
+        try:
+            await atualizar_card_reembolso_v810(self.mensagem_original, False, interaction.user, self.motivo.value)
+        except Exception:
+            logger.exception('⚠️ Compra #%s recusada, edição do card falhou', self.compra_id)
+        await interaction.followup.send('✅ Recusa registrada sem descontar caixa.', ephemeral=True)
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ReembolsoView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: ReembolsoView — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
 class ReembolsoView(discord.ui.View):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, compra_id, valor, item, membro_id):
-        super().__init__(timeout=None); self.compra_id = compra_id; self.valor = valor; self.item = item; self.membro_id = membro_id
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: interaction_check
-    # ────────────────────────────────────────────────────────────────────────────────
+        super().__init__(timeout=None)
+        self.compra_id = int(compra_id)
+        self.valor = int(valor)
+        self.item = str(item)
+        self.membro_id = str(membro_id)
+
     async def interaction_check(self, interaction):
-        if not any(r.id in [CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Apenas **01** ou **02**!", ephemeral=True); return False
-        return True
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: confirmar
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="✅ Confirmar", style=discord.ButtonStyle.success, custom_id="btn_confirmar_reembolso")
-    async def confirmar(self, i, b): await i.response.send_modal(ConfirmarReembolsoModal(self.compra_id, i.message, self.valor, self.item, self.membro_id))
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: recusar
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="❌ Recusar", style=discord.ButtonStyle.danger, custom_id="btn_recusar_reembolso")
-    async def recusar(self, i, b): await i.response.send_modal(RecusarReembolsoModal(self.compra_id, i.message, self.item, self.membro_id))
+        permitido = (interaction.user.guild_permissions.administrator or
+                     any(r.id in (CARGO_01_ID, CARGO_02_ID) for r in interaction.user.roles))
+        if not permitido:
+            await interaction.response.send_message('❌ Apenas cargo 01/02 ou ADM podem tratar reembolso.', ephemeral=True)
+        return permitido
+
+    @discord.ui.button(label='✅ Confirmar', style=discord.ButtonStyle.success, custom_id='btn_confirmar_reembolso')
+    async def confirmar(self, interaction, button):
+        await interaction.response.send_modal(ConfirmarReembolsoModal(
+            self.compra_id, interaction.message, self.valor, self.item, self.membro_id))
+
+    @discord.ui.button(label='❌ Recusar', style=discord.ButtonStyle.danger, custom_id='btn_recusar_reembolso')
+    async def recusar(self, interaction, button):
+        await interaction.response.send_modal(RecusarReembolsoModal(
+            self.compra_id, interaction.message, self.item, self.membro_id))
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCompraModal (Com Sistema de Reembolso)
 # ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCompraModal
 # ────────────────────────────────────────────────────────────────────────────────
-class RegistrarCompraModal(discord.ui.Modal, title="💸 Registrar Lançamento"):
-    tipo_lancamento = discord.ui.TextInput(label="🏷️ Tipo de Lançamento", placeholder="Ex: Compra, Salário, Aluguel", required=True, max_length=50)
-    descricao = discord.ui.TextInput(label="📦 Descrição / Produto", placeholder="Ex: Pólvora, Salário", required=True, max_length=100)
-    quantidade = discord.ui.TextInput(label="🔢 Quantidade (opcional)", placeholder="Ex: 500", required=False, max_length=10)
-    brinde = discord.ui.TextInput(label="🎁 Brinde (opcional)", placeholder="Ex: 50", required=False, max_length=10)
-    valor = discord.ui.TextInput(label="💰 Valor total", placeholder="Ex: 40000", required=False)
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: RegistrarCompraModal — PATCH 001-B, V8.1.0
+# ────────────────────────────────────────────────────────────────────────────────
+class RegistrarCompraModal(discord.ui.Modal, title='💸 Registrar Lançamento'):
+    tipo_lancamento = discord.ui.TextInput(label='🏷️ Tipo de Lançamento', placeholder='Ex: Compra, Salário, Aluguel', required=True, max_length=50)
+    descricao = discord.ui.TextInput(label='📦 Descrição / Produto', placeholder='Ex: Embalagens, Pólvora', required=True, max_length=100)
+    quantidade = discord.ui.TextInput(label='🔢 Quantidade (opcional)', placeholder='Ex: 25000', required=False, max_length=10)
+    brinde = discord.ui.TextInput(label='🎁 Brinde (opcional)', placeholder='Ex: 50', required=False, max_length=10)
+    valor = discord.ui.TextInput(label='💰 Valor total', placeholder='Ex: 2000000', required=False)
 
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction):
         await interaction.response.defer(ephemeral=True)
         tipo = self.tipo_lancamento.value.strip().capitalize()
         descricao = self.descricao.value.strip()
-        if not descricao: return await interaction.followup.send("❌ Descrição inválida!", ephemeral=True)
-        
-        # O safe_int agora limpa os pontos corretamente (ex: "25.000" vira 25000)
-        qtd_compra = safe_int(self.quantidade.value) if self.quantidade.value else 0
-        qtd_brinde = safe_int(self.brinde.value) if self.brinde.value else 0
-        valor_input = safe_int(self.valor.value) if self.valor.value else 0
-        valor_compra = valor_input
-
-        produto_norm = normalizar_texto(descricao)
-        preco_unitario = 0
-        if "polvora" in produto_norm or "polvor" in produto_norm: preco_unitario = PRECO_POLVORA
-        elif "embalagem" in produto_norm or "embalagen" in produto_norm: preco_unitario = PRECO_EMBALAGEM_POR_UNIDADE
-            
-        if valor_compra <= 0:
-            if preco_unitario > 0 and qtd_compra > 0: valor_compra = int(qtd_compra * preco_unitario)
-            else: return await interaction.followup.send("❌ Valor inválido! Digite o valor total.", ephemeral=True)
-
-        if qtd_compra == 0 and preco_unitario > 0: qtd_compra = int(valor_compra / preco_unitario)
-        qtd_total_estoque = qtd_compra + qtd_brinde
-
-        is_dono = any(r.id in [CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles) or interaction.user.guild_permissions.administrator
-
+        if not descricao:
+            return await interaction.followup.send('❌ Descrição inválida.', ephemeral=True)
+        qtd = safe_int(self.quantidade.value) if self.quantidade.value else 0
+        brinde = safe_int(self.brinde.value) if self.brinde.value else 0
+        valor = safe_int(self.valor.value) if self.valor.value else 0
+        if qtd < 0 or brinde < 0 or valor < 0:
+            return await interaction.followup.send('❌ Valores negativos não são permitidos.', ephemeral=True)
+        insumo = classificar_insumo_compra_v810(descricao)
+        preco_unit = PRECO_POLVORA if insumo == 'polvora' else PRECO_EMBALAGEM_POR_UNIDADE if insumo == 'embalagem' else None
+        if valor <= 0:
+            if not preco_unit or qtd <= 0:
+                return await interaction.followup.send('❌ Informe valor total ou quantidade com preço conhecido.', ephemeral=True)
+            valor = int(qtd * preco_unit)
+        if qtd <= 0 and preco_unit:
+            qtd = int(valor / preco_unit)
+        is_dono = (interaction.user.guild_permissions.administrator or
+                   any(r.id in (CARGO_01_ID, CARGO_02_ID) for r in interaction.user.roles))
         pool = await get_pool()
-        async with pool.acquire() as conn:
-            compra_id = await conn.fetchval("INSERT INTO compras (produto, valor, comprado_por, data) VALUES ($1, $2, $3, $4) RETURNING id", f"[{tipo}] {descricao}", valor_compra, str(interaction.user.id), agora_db())
+        if not pool:
+            return await interaction.followup.send('❌ PostgreSQL indisponível; compra não registrada.', ephemeral=True)
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    compra_id, tipo_insumo, total = await registrar_compra_estoque_v810(
+                        conn, tipo, descricao, qtd, brinde, valor, interaction.user.id, is_dono)
+        except Exception:
+            logger.exception('❌ Erro no lançamento/estoque da compra %s', descricao)
+            return await interaction.followup.send('❌ Erro no lançamento; compra, estoque e caixa foram revertidos juntos.', ephemeral=True)
 
-            if qtd_total_estoque > 0:
-                if "polvora" in produto_norm: await atualizar_estoque_polvora(qtd_total_estoque, "adicionar")
-                elif "embalagem" in produto_norm: await atualizar_estoque_embalagens(qtd_total_estoque, "adicionar")
-
+        estoque_info = f'📦 Estoque: +{fmt_num(total)} {tipo_insumo}\n' if tipo_insumo and total else ''
         if is_dono:
-            await movimentar_caixa("compra", valor_compra, f"{tipo}: {descricao}", interaction.user.id, "limpo")
-            
-            embed = discord.Embed(
-                title="",
-                description=(
-                    f"# 💸 NOVO LANÇAMENTO\n"
-                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
-                    f"> 🏷️ **Tipo:** `{tipo}`\n"
-                    f"> 📦 **Descrição:** `{descricao}`\n"
-                    f"> 💰 **Valor:** `{formatar_dinheiro(valor_compra)}`\n"
-                    f"> 👤 **Registrado por:** {interaction.user.mention}\n\n"
-                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
-                    f"> 📌 **STATUS:** `✅ CAIXA LIMPO DEBITADO`"
-                ),
-                color=0x3498DB,
-                timestamp=agora()
-            )
-            embed.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
-            embed.set_footer(text=f"🛡️ VDR 442 • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
-            
+            embed = discord.Embed(title='💸 NOVO LANÇAMENTO',
+                description=(f'🏷️ **Tipo:** {tipo}\n📦 **Descrição:** {descricao}\n'
+                             f'🔢 **Quantidade:** {fmt_num(total)}\n{estoque_info}'
+                             f'💰 **Valor:** {formatar_dinheiro(valor)}\n'
+                             f'👤 **Registrado por:** {interaction.user.mention}\n'
+                             '✅ **Caixa Limpo debitado.**'), color=0x3498db, timestamp=agora())
             canal = interaction.guild.get_channel(CANAL_HISTORICO_LANCAMENTOS_ID)
-            if canal: await canal.send(embed=embed)
-            await interaction.followup.send("✅ Lançamento registrado e descontado do Caixa!", ephemeral=True)
-            await enviar_painel_registrar_compra(); await enviar_painel_caixa()
+            if canal:
+                try:
+                    await canal.send(embed=embed)
+                except discord.HTTPException:
+                    logger.exception('⚠️ Compra #%s salva, mas o log não foi enviado', compra_id)
+            await interaction.followup.send(f'✅ Compra #{compra_id} registrada, estoque atualizado e Caixa debitado!\n{estoque_info}', ephemeral=True)
+            try:
+                await enviar_painel_registrar_compra()
+                await enviar_painel_caixa()
+            except Exception:
+                logger.exception('⚠️ Não foi possível atualizar os painéis financeiros')
         else:
-            embed_reembolso = discord.Embed(
-                title="",
-                description=(
-                    f"# 💸 SOLICITAÇÃO DE REEMBOLSO\n"
-                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
-                    f"> 👤 **Membro:** {interaction.user.mention}\n"
-                    f"> 📦 **Item:** `{descricao}`\n"
-                    f"> 💰 **Valor:** `{formatar_dinheiro(valor_compra)}`\n\n"
-                    f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
-                    f"> 📌 **STATUS:** `⏳ AGUARDANDO APROVAÇÃO`\n\n"
-                    f"> ⚠️ **Atenção:** O valor **NÃO** foi descontado do caixa ainda."
-                ),
-                color=0xF39C12,
-                timestamp=agora()
-            )
-            embed_reembolso.set_author(name="🕴️ VDR 442 • FINANCEIRO", icon_url=bot.user.display_avatar.url if bot.user else None)
-            embed_reembolso.set_footer(text=f"🛡️ VDR 442 • {agora().strftime('%d/%m/%Y %H:%M')}", icon_url=bot.user.display_avatar.url if bot.user else None)
-            
-            canal_reembolso = interaction.guild.get_channel(CANAL_COMPRAS_REEMBOLSO_ID)
-            if canal_reembolso:
-                await canal_reembolso.send(content=f"<@&{CARGO_01_ID}> <@&{CARGO_02_ID}>", embed=embed_reembolso, view=ReembolsoView(compra_id, valor_compra, descricao, interaction.user.mention))
-                await interaction.followup.send("✅ Compra registrada! Solicitação enviada para reembolso.", ephemeral=True)
-            else:
-                await interaction.followup.send("⚠️ Compra registrada, mas o canal de reembolso não foi encontrado.", ephemeral=True)
+            embed = discord.Embed(
+                title='💸 SOLICITAÇÃO DE REEMBOLSO',
+                description=(f'👤 **Membro:** {interaction.user.mention}\n'
+                             f'📦 **Item:** `{descricao}`\n'
+                             f'🔢 **Quantidade:** {fmt_num(qtd)} + brinde {fmt_num(brinde)}\n'
+                             f'💰 **Valor:** `{formatar_dinheiro(valor)}`\n'
+                             f'{estoque_info}\n'
+                             '📌 **STATUS:** `⏳ AGUARDANDO APROVAÇÃO`\n'
+                             '⚠️ O valor **NÃO** foi descontado do caixa ainda.'),
+                color=0xf39c12, timestamp=agora())
+            embed.set_footer(text=f'VDR442 • COMPRA #{compra_id} • PATCH 001-B')
+            canal = interaction.guild.get_channel(CANAL_COMPRAS_REEMBOLSO_ID)
+            if not canal:
+                return await interaction.followup.send(
+                    f'⚠️ Compra #{compra_id} e estoque registrados, mas o canal de reembolso não foi encontrado. Solicite conferência da gerência.', ephemeral=True)
+            try:
+                msg = await canal.send(
+                    content=f'<@&{CARGO_01_ID}> <@&{CARGO_02_ID}>',
+                    embed=embed,
+                    view=ReembolsoView(compra_id, valor, descricao, interaction.user.mention))
+                async with pool.acquire() as conn:
+                    await conn.execute('UPDATE compras SET reembolso_mensagem_id=$1 WHERE id=$2', str(msg.id), compra_id)
+                await interaction.followup.send(
+                    f'✅ Compra #{compra_id} registrada; reembolso pendente.\n{estoque_info}O estoque já foi atualizado.', ephemeral=True)
+            except Exception:
+                logger.exception('❌ Compra #%s salva; falha ao publicar reembolso', compra_id)
+                await interaction.followup.send(
+                    f'⚠️ Compra #{compra_id} e estoque salvos, porém o card de reembolso NÃO foi publicado/vinculado. Avise a gerência; não refaça a compra.', ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RegistrarCompraView
@@ -6738,40 +6921,199 @@ def identificar_item_inteligente(texto):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_bau_estoque
 # ────────────────────────────────────────────────────────────────────────────────
-async def atualizar_bau_estoque(item_nome, quantidade, operacao="adicionar"):
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: canonicalizar_item_bau_v810 — PATCH 001-C
+# ────────────────────────────────────────────────────────────────────────────────
+def canonicalizar_item_bau_v810(nome):
+    """Sinônimos seguros, especialmente muni/munição; mantém calibres distintos."""
+    chave = normalizar_texto(str(nome or '')).replace('_', ' ')
+    chave = re.sub(r'\s+', ' ', chave).strip(' .,-')
+    aliases = {
+        'muni': 'municao', 'munis': 'municao', 'municao': 'municao',
+        'municoes': 'municao', 'munic': 'municao', 'municao comum': 'municao',
+        'municao geral': 'municao', 'municao normal': 'municao',
+        'balas de arma': 'municao', 'balas': 'municao',
+        'muni de sub': 'municao sub', 'muni sub': 'municao sub',
+        'municao de sub': 'municao sub', 'municao sub': 'municao sub',
+        'municoes sub': 'municao sub', 'municoes de sub': 'municao sub',
+        'municao smg': 'municao sub', 'municao de smg': 'municao sub',
+        'muni de smg': 'municao sub', 'muni smg': 'municao sub',
+        'muni de fuzil': 'municao fuzil', 'muni fuzil': 'municao fuzil',
+        'municao fuzil': 'municao fuzil', 'municao de fuzil': 'municao fuzil',
+        'municoes fuzil': 'municao fuzil', 'municoes de fuzil': 'municao fuzil',
+        'municao rifle': 'municao fuzil', 'municao de rifle': 'municao fuzil',
+        'muni de pt': 'municao pt', 'muni pt': 'municao pt',
+        'municao pt': 'municao pt', 'municao de pt': 'municao pt',
+        'municao pistola': 'municao pt', 'municao de pistola': 'municao pt',
+        'muni pistola': 'municao pt', 'muni de pistola': 'municao pt',
+        'municoes pistola': 'municao pt',
+        'muni escopeta': 'municao escopeta', 'municao escopeta': 'municao escopeta',
+        'municao de escopeta': 'municao escopeta',
+        'muni sniper': 'municao sniper', 'municao sniper': 'municao sniper',
+        'municao de sniper': 'municao sniper',
+        'coletes': 'colete', 'colt': 'colete', 'clt': 'colete',
+        'soros': 'soro', 'soro': 'soro', 'soros medicos': 'soro',
+        'pulseiras do hpi': 'pulseira do hpi', 'pulseira hpi': 'pulseira do hpi',
+        'pulseira do hpi': 'pulseira do hpi',
+        'kits lendarios': 'kit lendario', 'kit lendario': 'kit lendario',
+        'kit lendaria': 'kit lendario', 'kit lendários': 'kit lendario',
+        'embalagens': 'embalagem', 'embalagem': 'embalagem',
+        'polvoras': 'polvora', 'polvora': 'polvora',
+        'capsulas': 'capsula', 'capsula': 'capsula',
+    }
+    if chave in aliases:
+        return aliases[chave]
+    return identificar_item_inteligente(chave) if chave else ''
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: migrar_nomes_bau_v810 — PATCH 001-C
+# ────────────────────────────────────────────────────────────────────────────────
+async def migrar_nomes_bau_v810():
+    """Une sinônimos conhecidos no estoque preservando somatório e log bruto."""
     pool = await get_pool()
     if not pool:
-        return
+        return False
     try:
         async with pool.acquire() as conn:
-            existente = await conn.fetchval("SELECT quantidade FROM bau_estoque WHERE item_nome = $1", item_nome)
-            if existente is not None:
-                if operacao == "adicionar":
-                    nova_quantidade = existente + quantidade
+            async with conn.transaction():
+                await conn.execute('SELECT pg_advisory_xact_lock(442, 10010)')
+                linhas = await conn.fetch('SELECT item_nome,quantidade FROM bau_estoque ORDER BY item_nome FOR UPDATE')
+                grupos = {}
+                for row in linhas:
+                    nome = row['item_nome']
+                    # Migrar SOMENTE famílias de alias explicitamente cobertas.
+                    chave = normalizar_texto(nome)
+                    canon = canonicalizar_item_bau_v810(chave)
+                    if canon != chave and (chave.startswith('muni') or chave in
+                        ('coletes','clt','soros','pulseiras do hpi','kits lendarios','embalagens','capsulas','polvoras')):
+                        grupos.setdefault(canon, []).append((nome, int(row['quantidade'] or 0)))
+                for canon, entradas in grupos.items():
+                    for origem, qtd in entradas:
+                        if origem == canon:
+                            continue
+                        await conn.execute('''INSERT INTO bau_estoque(item_nome,quantidade,ultima_atualizacao)
+                            VALUES($1,$2,NOW()) ON CONFLICT(item_nome)
+                            DO UPDATE SET quantidade=bau_estoque.quantidade+EXCLUDED.quantidade,
+                            ultima_atualizacao=NOW()''', canon, qtd)
+                        await conn.execute('DELETE FROM bau_estoque WHERE item_nome=$1', origem)
+        logger.info('✅ PATCH 001-C: sinônimos do baú reconciliados sem perda de unidades')
+        return True
+    except Exception:
+        logger.exception('❌ Migração de sinônimos do baú não concluída')
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: processar_lote_bau_v810 — PATCH 001-C/F
+# ────────────────────────────────────────────────────────────────────────────────
+async def processar_lote_bau_v810(tipo, itens, membro, observacao=None):
+    """Aplica TODOS os itens ou nenhum, evitando saídas sem saldo e logs falsos."""
+    if tipo not in ('entrou','saiu'):
+        raise ValueError('Tipo de movimentação inválido.')
+    pool = await get_pool()
+    if not pool:
+        raise RuntimeError('PostgreSQL indisponível.')
+    canonicos = {}
+    for item, quantidade in itens.items():
+        chave = canonicalizar_item_bau_v810(item)
+        quantidade = int(quantidade)
+        if not chave or quantidade <= 0:
+            raise ValueError(f'Quantidade/nome inválidos: {item}')
+        canonicos[chave] = canonicos.get(chave, 0) + quantidade
+    if not canonicos:
+        raise ValueError('Nenhum item informado.')
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for nome, quantidade in sorted(canonicos.items()):
+                if tipo == 'entrou':
+                    await conn.execute('''INSERT INTO bau_estoque(item_nome,quantidade,ultima_atualizacao)
+                        VALUES($1,$2,NOW()) ON CONFLICT(item_nome)
+                        DO UPDATE SET quantidade=bau_estoque.quantidade+EXCLUDED.quantidade,
+                        ultima_atualizacao=NOW()''', nome, quantidade)
                 else:
-                    nova_quantidade = existente - quantidade
-                    if nova_quantidade < 0:
-                        nova_quantidade = 0
-                await conn.execute("UPDATE bau_estoque SET quantidade = $1, ultima_atualizacao = NOW() WHERE item_nome = $2", nova_quantidade, item_nome)
-            else:
-                if operacao == "remover":
-                    return
-                await conn.execute("INSERT INTO bau_estoque (item_nome, quantidade, ultima_atualizacao) VALUES ($1, $2, NOW())", item_nome, quantidade)
-    except Exception as e:
-        logger.error(f"❌ Erro ao atualizar estoque do baú: {e}")
+                    resultado = await conn.execute('''UPDATE bau_estoque SET quantidade=quantidade-$1,
+                        ultima_atualizacao=NOW() WHERE item_nome=$2 AND quantidade>=$1''', quantidade, nome)
+                    if resultado != 'UPDATE 1':
+                        raise ValueError(f'Saldo insuficiente para {nome} ({quantidade} unidades). Nenhuma retirada foi registrada.')
+                await conn.execute('''INSERT INTO bau_movimentacoes
+                    (tipo,item_nome,quantidade,membro,observacao,data)
+                    VALUES($1,$2,$3,$4,$5,NOW())''', tipo, nome, quantidade, membro, observacao)
+    return canonicos
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_log_bau_v810 — PATCH 001-F
+# ────────────────────────────────────────────────────────────────────────────────
+async def enviar_log_bau_v810(guild, tipo, membro, itens, observacao=None):
+    canal = guild.get_channel(CANAL_BAU_LOG_ID) if guild else None
+    if not canal:
+        logger.warning('⚠️ Canal de log do baú indisponível')
+        return False
+    verbo = 'adicionou' if tipo == 'entrou' else 'pegou'
+    icone = '📥' if tipo == 'entrou' else '📤'
+    # Mensagem simples, compacta e com quebra somente por item, conforme print.
+    linhas = [f'{icone} {membro} {verbo} {fmt_num(q)} {nome}.' for nome, q in itens.items()]
+    if observacao:
+        linhas.append(f'📝 Obs.: {discord.utils.escape_markdown(str(observacao)[:200])}')
+    corpo = '\n'.join(linhas)
+    try:
+        for i in range(0, len(corpo), 1900):
+            await canal.send(corpo[i:i + 1900], allowed_mentions=discord.AllowedMentions.none())
+        return True
+    except discord.HTTPException:
+        logger.exception('⚠️ Log do baú salvo no banco, mas não publicado no Discord')
+        return False
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_bau_estoque — PATCH 001-C
+# ────────────────────────────────────────────────────────────────────────────────
+async def atualizar_bau_estoque(item_nome, quantidade, operacao='adicionar', conn=None):
+    item = canonicalizar_item_bau_v810(item_nome)
+    qtd = int(quantidade)
+    if not item or qtd <= 0 or operacao not in ('adicionar','remover'):
+        return False
+    pool = await get_pool() if conn is None else None
+    if conn is None and not pool:
+        return False
+    async def executar(c):
+        if operacao == 'adicionar':
+            await c.execute("""INSERT INTO bau_estoque(item_nome,quantidade,ultima_atualizacao)
+                VALUES($1,$2,NOW()) ON CONFLICT(item_nome) DO UPDATE
+                SET quantidade=bau_estoque.quantidade+EXCLUDED.quantidade,ultima_atualizacao=NOW()""", item, qtd)
+            return True
+        return await c.execute("""UPDATE bau_estoque SET quantidade=quantidade-$1,
+            ultima_atualizacao=NOW() WHERE item_nome=$2 AND quantidade >= $1""", qtd, item) == 'UPDATE 1'
+    try:
+        if conn is not None:
+            return await executar(conn)
+        async with pool.acquire() as c:
+            async with c.transaction():
+                return await executar(c)
+    except Exception:
+        logger.exception('❌ Falha atualizando baú (%s)', item)
+        return False
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_movimentacao_bau
 # ────────────────────────────────────────────────────────────────────────────────
-async def registrar_movimentacao_bau(tipo, item_nome, quantidade, membro, observacao=None):
-    pool = await get_pool()
-    if not pool:
-        return
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: registrar_movimentacao_bau — PATCH 001-C
+# ────────────────────────────────────────────────────────────────────────────────
+async def registrar_movimentacao_bau(tipo, item_nome, quantidade, membro, observacao=None, conn=None):
+    item = canonicalizar_item_bau_v810(item_nome)
+    pool = await get_pool() if conn is None else None
+    if not item or (not pool and conn is None):
+        return False
     try:
-        async with pool.acquire() as conn:
-            await conn.execute("INSERT INTO bau_movimentacoes (tipo, item_nome, quantidade, membro, observacao, data) VALUES ($1, $2, $3, $4, $5, NOW())", tipo, item_nome, quantidade, membro, observacao)
-    except Exception as e:
-        logger.error(f"❌ Erro ao registrar movimentação: {e}")
+        if conn is not None:
+            await conn.execute("""INSERT INTO bau_movimentacoes(tipo,item_nome,quantidade,membro,observacao,data)
+                VALUES($1,$2,$3,$4,$5,NOW())""", tipo, item, int(quantidade), str(membro), observacao)
+        else:
+            async with pool.acquire() as c:
+                await c.execute("""INSERT INTO bau_movimentacoes(tipo,item_nome,quantidade,membro,observacao,data)
+                    VALUES($1,$2,$3,$4,$5,NOW())""", tipo, item, int(quantidade), str(membro), observacao)
+        return True
+    except Exception:
+        logger.exception('❌ Falha gravando histórico do baú')
+        return False
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: carregar_bau_estoque
@@ -6866,153 +7208,72 @@ async def criar_embed_bau_unificado():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: BauUnificadoModal
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: BauUnificadoModal — PATCH 001-C/F
+# ────────────────────────────────────────────────────────────────────────────────
 class BauUnificadoModal(discord.ui.Modal):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, tipo):
         self.tipo = tipo
-        titulo = "📥 Registrar Entrada" if tipo == "entrou" else "📤 Registrar Saída"
+        titulo = '📥 Registrar Entrada' if tipo == 'entrou' else '📤 Registrar Saída'
         super().__init__(title=titulo)
         self.itens = discord.ui.TextInput(
-            label="📦 Itens (Quantidade Nome)",
-            placeholder="Ex:\n100 placas\n50 c4\n2 fuzil\n10 polvora",
-            style=discord.TextStyle.paragraph, required=True, max_length=500
-        )
+            label='📦 Itens (Quantidade Nome)',
+            placeholder='Ex:\n100 placas\n300 muni de sub\n2 fuzil\n10 polvora',
+            style=discord.TextStyle.paragraph, required=True, max_length=500)
         self.observacao = discord.ui.TextInput(
-            label="📝 Observação (opcional)",
-            placeholder="Ex: Para ação, Para estoque, etc",
-            style=discord.TextStyle.paragraph, required=False, max_length=200
-        )
+            label='📝 Observação (opcional)',
+            placeholder='Ex: Para ação',
+            style=discord.TextStyle.paragraph, required=False, max_length=200)
         self.add_item(self.itens)
         self.add_item(self.observacao)
 
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction):
         await interaction.response.defer(ephemeral=True)
+        itens = {}
+        erros = []
+        for linha in self.itens.value.splitlines():
+            linha = linha.strip().replace(':', ' ')
+            if not linha:
+                continue
+            partes = linha.split()
+            if len(partes) < 2:
+                erros.append(linha)
+                continue
+            try:
+                if partes[0].isdecimal():
+                    qtd = int(partes[0]); nome = ' '.join(partes[1:])
+                elif partes[-1].isdecimal():
+                    qtd = int(partes[-1]); nome = ' '.join(partes[:-1])
+                else:
+                    raise ValueError
+                if qtd <= 0:
+                    raise ValueError
+                chave = canonicalizar_item_bau_v810(nome)
+                if not chave:
+                    raise ValueError
+                itens[chave] = itens.get(chave, 0) + qtd
+            except (ValueError, TypeError):
+                erros.append(linha)
+        if not itens:
+            return await interaction.followup.send('❌ Nenhum item válido foi informado.', ephemeral=True)
+        if erros:
+            # Evita registrar parcialmente algo que o usuário não pretendia.
+            return await interaction.followup.send('❌ Corrija estas linhas antes de tentar novamente: ' + ', '.join(erros[:10]), ephemeral=True)
+        observacao = self.observacao.value.strip() if self.observacao.value else None
         try:
-            nome_membro = interaction.user.display_name
-            itens_dict = {}
-            erros = []
-
-            for linha in self.itens.value.strip().split('\n'):
-                linha = linha.strip()
-                if not linha: continue
-                
-                linha = linha.replace(":", " ")
-                partes = linha.split()
-
-                if len(partes) < 2:
-                    erros.append(f"❌ Formato inválido: `{linha}`")
-                    continue
-
-                try:
-                    quantidade = int(partes[0])
-                    item_nome = " ".join(partes[1:])
-                except ValueError:
-                    try:
-                        quantidade = int(partes[-1])
-                        item_nome = " ".join(partes[:-1])
-                    except ValueError:
-                        erros.append(f"❌ Sem quantidade: `{linha}`")
-                        continue
-
-                item_final = identificar_item_inteligente(item_nome)
-                
-                if quantidade <= 0:
-                    erros.append(f"❌ Quantidade inválida: `{linha}`")
-                    continue
-
-                itens_dict[item_final] = itens_dict.get(item_final, 0) + quantidade
-
-            if erros:
-                msg_erro = "⚠️ **Algumas linhas não puderam ser lidas:**\n" + "\n".join(erros)
-                await interaction.followup.send(msg_erro, ephemeral=True)
-                if not itens_dict: return
-
-            if not itens_dict:
-                await interaction.followup.send("❌ **Nenhum item válido encontrado!**", ephemeral=True)
-                return
-
-            # ─── ATUALIZA O BANCO DE DADOS DIRETAMENTE ───
-            for item, quantidade in itens_dict.items():
-                if self.tipo == "entrou":
-                    await atualizar_bau_estoque(item, quantidade, "adicionar")
-                else:
-                    await atualizar_bau_estoque(item, quantidade, "remover")
-                
-                await registrar_movimentacao_bau(
-                    tipo=self.tipo, item_nome=item, quantidade=quantidade,
-                    membro=nome_membro, observacao=self.observacao.value if self.observacao.value else None
-                )
-
-            log_mensagens = []
-            for item, quantidade in itens_dict.items():
-                if self.tipo == "entrou":
-                    log_mensagens.append(f"📥 **{nome_membro}** adicionou **{quantidade}** {item}.")
-                else:
-                    log_mensagens.append(f"📤 **{nome_membro}** pegou **{quantidade}** {item}.")
-            texto_log = "\n".join(log_mensagens)
-
-            # ─── ATUALIZA O PAINEL NO CANAL ───
-            canal_bau = interaction.guild.get_channel(CANAL_BAU_MEMBROS_ID)
-            if canal_bau:
-                try:
-                    embed = await criar_embed_bau_unificado()
-                    view = BauUnificadoView()
-                    await enviar_ou_atualizar_painel_bau("painel_bau", CANAL_BAU_MEMBROS_ID, embed, view)
-                except Exception as e:
-                    logger.error(f"❌ Erro ao atualizar painel do baú: {e}")
-
-            # ─── ENVIA O LOG PARA O CANAL (ENTRADA OU SAÍDA) ───
-            canal_log = interaction.guild.get_channel(CANAL_BAU_LOG_ID)
-            if canal_log:
-                try:
-                    if self.tipo == "entrou":
-                        embed_log = discord.Embed(
-                            title="",
-                            description=(
-                                f"# 📥 ENTRADA NO BAÚ\n"
-                                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
-                                f"> 👤 **Membro:** `{nome_membro}`\n"
-                                f"> 📝 **Ação:**\n"
-                                f"```diff\n{texto_log}\n```\n"
-                                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
-                                f"> 📅 **Data:** `{agora().strftime('%d/%m/%Y %H:%M')}`"
-                            ),
-                            color=0x2ECC71, # Verde
-                            timestamp=agora()
-                        )
-                    else:
-                        embed_log = discord.Embed(
-                            title="",
-                            description=(
-                                f"# 📤 SAÍDA NO BAÚ\n"
-                                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n\n"
-                                f"> 👤 **Membro:** `{nome_membro}`\n"
-                                f"> 📝 **Ação:**\n"
-                                f"```diff\n{texto_log}\n```\n"
-                                f"**▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬**\n"
-                                f"> 📅 **Data:** `{agora().strftime('%d/%m/%Y %H:%M')}`"
-                            ),
-                            color=0xC0392B, # Vermelho
-                            timestamp=agora()
-                        )
-                    embed_log.set_author(name="🕴️ VDR 442 • LOGÍSTICA", icon_url=bot.user.display_avatar.url if bot.user else None)
-                    embed_log.set_footer(text=f"🛡️ VDR 442 • Log de Baú", icon_url=bot.user.display_avatar.url if bot.user else None)
-                    await canal_log.send(embed=embed_log)
-                except Exception as e:
-                    logger.error(f"❌ Erro ao enviar log do baú: {e}")
-
-            # ─── AVISO DE SUCESSO ───
-            tipo_msg = "entrada" if self.tipo == "entrou" else "saída"
-            await interaction.followup.send(f"✅ **Registro de {tipo_msg} enviado com sucesso!**\n📦 Os itens já foram atualizados no banco.", ephemeral=True)
-
-        except Exception as e:
-            logger.error(f"❌ Erro no BauUnificadoModal: {e}")
-            await interaction.followup.send(f"❌ **Erro:** {str(e)[:100]}", ephemeral=True)
+            gravados = await processar_lote_bau_v810(self.tipo, itens, interaction.user.display_name, observacao)
+        except ValueError as e:
+            return await interaction.followup.send(f'❌ {e}', ephemeral=True)
+        except Exception:
+            logger.exception('❌ Erro ao registrar lote no baú')
+            return await interaction.followup.send('❌ Falha no PostgreSQL. Nenhuma movimentação foi gravada.', ephemeral=True)
+        try:
+            await enviar_log_bau_v810(interaction.guild, self.tipo, interaction.user.display_name, gravados, observacao)
+            embed = await criar_embed_bau_unificado()
+            await enviar_ou_atualizar_painel_bau('painel_bau', CANAL_BAU_MEMBROS_ID, embed, BauUnificadoView())
+        except Exception:
+            logger.exception('⚠️ Lote do baú salvo; falha ao atualizar painel/log')
+        await interaction.followup.send(f'✅ {len(gravados)} item(ns) registrados com sucesso. Estoque atualizado.', ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ConfirmarZerarBauView
@@ -7268,22 +7529,14 @@ async def on_message_bau_ocr(message: discord.Message):
             pass
         return
 
-    for item, quantidade in itens.items():
-        # Aplica a inteligência para corrigir o nome do item lido pelo OCR
-        item_final = identificar_item_inteligente(item)
-        await atualizar_bau_estoque(item_final, quantidade, "adicionar")
-        await registrar_movimentacao_bau(
-            tipo="entrou",
-            item_nome=item_final,
-            quantidade=quantidade,
-            membro=message.author.display_name,
-            observacao="Registrado via OCR (print)"
-        )
-
-    log_msg = "\n".join(f"📥 **{message.author.display_name}** adicionou **{q}** {item} (via OCR)." for item, q in itens.items())
-    canal_log = message.guild.get_channel(pendente.get("canal_id"))
-    if canal_log:
-        await canal_log.send(log_msg)
+    try:
+        itens = await processar_lote_bau_v810(
+            'entrou', itens, message.author.display_name, 'Registrado via OCR (print)')
+    except Exception:
+        logger.exception('❌ OCR do baú: falha ao salvar lote')
+        await message.add_reaction('⚠️')
+        return
+    await enviar_log_bau_v810(message.guild, 'entrou', message.author.display_name, itens, 'Via OCR (print)')
 
     bau_print_pendente.pop(message.author.id, None)
 
@@ -14436,18 +14689,31 @@ async def atualizar_estoque_capsulas(quantidade, operacao="adicionar"):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: atualizar_estoque_embalagens
 # ────────────────────────────────────────────────────────────────────────────────
-async def atualizar_estoque_embalagens(quantidade, operacao="adicionar"):
-    pool = await get_pool()
-    if not pool:
-        return
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_estoque_embalagens — PATCH 001-B
+# ────────────────────────────────────────────────────────────────────────────────
+async def atualizar_estoque_embalagens(quantidade, operacao='adicionar', conn=None):
+    quantidade = int(quantidade)
+    if quantidade < 0 or operacao not in ('adicionar','remover'):
+        return False
+    pool = await get_pool() if conn is None else None
+    if conn is None and not pool:
+        return False
+    async def executar(c):
+        if operacao == 'adicionar':
+            return await c.execute("""UPDATE estoque_embalagens SET quantidade=quantidade+$1,
+                ultima_atualizacao=NOW() WHERE id=1""", quantidade) == 'UPDATE 1'
+        return await c.execute("""UPDATE estoque_embalagens SET quantidade=quantidade-$1,
+            ultima_atualizacao=NOW() WHERE id=1 AND quantidade >= $1""", quantidade) == 'UPDATE 1'
     try:
-        async with pool.acquire() as conn:
-            if operacao == "adicionar":
-                await conn.execute("UPDATE estoque_embalagens SET quantidade = quantidade + $1, ultima_atualizacao = NOW() WHERE id = 1", quantidade)
-            else:
-                await conn.execute("UPDATE estoque_embalagens SET quantidade = quantidade - $1, ultima_atualizacao = NOW() WHERE id = 1 AND quantidade >= $1", quantidade)
-    except Exception as e:
-        logger.error(f"❌ Erro ao atualizar estoque de embalagens: {e}")
+        if conn is not None:
+            return await executar(conn)
+        async with pool.acquire() as c:
+            async with c.transaction():
+                return await executar(c)
+    except Exception:
+        logger.exception('❌ Falha atualizando estoque de embalagens')
+        return False
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: registrar_entrada_insumos
@@ -18345,12 +18611,12 @@ async def verificar_parcelas_vencendo():
 
                 view = MarcarParcelaPagaView(parcela_id, tipo)
 
-                await canal_gerencia.send(embed=embed, view=view)
+                msg_parcela = await canal_gerencia.send(embed=embed, view=view)
 
                 async with pool.acquire() as conn:
                     await conn.execute(
-                        "UPDATE emprestimos_parcelas SET avisada = true WHERE id = $1",
-                        parcela_id
+                        "UPDATE emprestimos_parcelas SET avisada = true, alerta_mensagem_id = $2 WHERE id = $1",
+                        parcela_id, str(msg_parcela.id)
                     )
 
                 await asyncio.sleep(1)
@@ -18601,88 +18867,65 @@ class NovoEmprestimoPagarModal(discord.ui.Modal, title="📤 Novo (A Pagar)"):
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: MarcarParcelaPagaView
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: MarcarParcelaPagaView — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
 class MarcarParcelaPagaView(discord.ui.View):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
     def __init__(self, parcela_id, tipo):
         super().__init__(timeout=None)
-        self.parcela_id = parcela_id
+        self.parcela_id = int(parcela_id)
         self.tipo = tipo
 
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: marcar
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="✅ Paga", style=discord.ButtonStyle.success, custom_id="marcar_parcela_paga", emoji="✅")
-    async def marcar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_admin = interaction.user.guild_permissions.administrator
-        is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID, CARGO_01_ID, CARGO_02_ID, CARGO_03_ID] for r in interaction.user.roles)
-        if not is_admin and not is_gerente:
-            await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
-            return
-
+    @discord.ui.button(label='✅ Paga', style=discord.ButtonStyle.success, custom_id='marcar_parcela_paga', emoji='✅')
+    async def marcar(self, interaction, button):
+        permitido = (interaction.user.guild_permissions.administrator or
+                     any(r.id in (CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID,
+                                  CARGO_01_ID, CARGO_02_ID, CARGO_03_ID) for r in interaction.user.roles))
+        if not permitido:
+            return await interaction.response.send_message('❌ Sem permissão!', ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-
         pool = await get_pool()
         if not pool:
-            return
-
-        async with pool.acquire() as conn:
-            p = await conn.fetchrow("SELECT * FROM emprestimos_parcelas WHERE id=$1", self.parcela_id)
-            if not p:
-                await interaction.followup.send("❌ Não encontrada!", ephemeral=True)
-                return
-            if p["pago"]:
-                await interaction.followup.send("⚠️ Já paga!", ephemeral=True)
-                return
-            e = await conn.fetchrow("SELECT * FROM emprestimos WHERE id=$1", p["emprestimo_id"])
-
-        if not await marcar_parcela_paga(self.parcela_id):
-            await interaction.followup.send("❌ Erro!", ephemeral=True)
-            return
-
+            return await interaction.followup.send('❌ Banco indisponível.', ephemeral=True)
         try:
-            if self.tipo == "receber":
-                await movimentar_caixa(
-                    "parcela_receber",
-                    p["valor"],
-                    f"Parcela {p['numero_parcela']}/{e['total_parcelas']} - #{e['id']:04d}",
-                    interaction.user.id
-                )
-            else:
-                await movimentar_caixa(
-                    "parcela_pagar",
-                    p["valor"],
-                    f"Parcela {p['numero_parcela']}/{e['total_parcelas']} - #{e['id']:04d}",
-                    interaction.user.id
-                )
-        except:
-            pass
-
-        await enviar_painel_emprestimos()
-        await enviar_painel_caixa()
-
-        # ─── NOVO VISUAL FOGO E SANGUE ───
-        embed = interaction.message.embeds[0]
-        
-        # Atualiza o visual da mensagem original
-        embed.color = 0x2ECC71
-        embed.title = ""
-        embed.description = embed.description.replace("🚨 PARCELA A RECEBER", "✅ PARCELA RECEBIDA").replace("🚨 PARCELA A PAGAR", "✅ PARCELA PAGA")
-        embed.description = embed.description.replace("🔴 COBRANÇA PENDENTE", "✅ PAGO").replace("🟠 PAGAMENTO PENDENTE", "✅ PAGO")
-        
-        embed.add_field(
-            name="✅ PAGO POR",
-            value=f"```yaml\n{interaction.user.display_name}\n📅 {agora().strftime('%d/%m/%Y %H:%M')}\n```",
-            inline=False
-        )
-
-        await interaction.message.edit(embed=embed, view=discord.ui.View(timeout=None))
-
-        await interaction.followup.send(
-            f"✅ **Parcela paga!**\n💵 {formatar_dinheiro(p['valor'])}",
-            ephemeral=True
-        )
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    parcela = await conn.fetchrow('SELECT * FROM emprestimos_parcelas WHERE id=$1 FOR UPDATE', self.parcela_id)
+                    if not parcela or parcela['pago']:
+                        return await interaction.followup.send('⚠️ Parcela não existe ou já foi paga.', ephemeral=True)
+                    emprestimo = await conn.fetchrow('SELECT * FROM emprestimos WHERE id=$1 FOR UPDATE', parcela['emprestimo_id'])
+                    if not emprestimo:
+                        raise RuntimeError('Empréstimo original não existe.')
+                    tipo = emprestimo['tipo']
+                    dinheiro = 'parcela_receber' if tipo == 'receber' else 'parcela_pagar'
+                    sucesso = await movimentar_caixa(dinheiro, parcela['valor'],
+                        f"Parcela {parcela['numero_parcela']}/{emprestimo['total_parcelas']} - #{emprestimo['id']:04d}",
+                        interaction.user.id, conn=conn)
+                    if not sucesso:
+                        raise ValueError('Saldo insuficiente ou falha no caixa; parcela continua pendente.')
+                    await conn.execute('UPDATE emprestimos_parcelas SET pago=TRUE, data_pagamento=NOW() WHERE id=$1', self.parcela_id)
+                    await conn.execute('UPDATE emprestimos SET parcelas_pagas=parcelas_pagas+1 WHERE id=$1', emprestimo['id'])
+                    await conn.execute('UPDATE emprestimos SET ativo=FALSE WHERE id=$1 AND parcelas_pagas>=total_parcelas', emprestimo['id'])
+            try:
+                if interaction.message and interaction.message.embeds:
+                    embed = interaction.message.embeds[0].copy()
+                    embed.color = 0x2ecc71
+                    embed.description = (embed.description or '').replace('PARCELA A RECEBER','PARCELA RECEBIDA').replace('PARCELA A PAGAR','PARCELA PAGA')
+                    embed.description = embed.description.replace('COBRANÇA PENDENTE','PAGO').replace('PAGAMENTO PENDENTE','PAGO')
+                    await interaction.message.edit(embed=embed, view=None)
+            except discord.HTTPException:
+                logger.exception('⚠️ Parcela #%s paga mas card não atualizado', self.parcela_id)
+            await interaction.followup.send(f"✅ Parcela registrada: {formatar_dinheiro(parcela['valor'])}", ephemeral=True)
+            try:
+                await enviar_painel_emprestimos()
+                await enviar_painel_caixa()
+            except Exception:
+                logger.exception('⚠️ Erro atualizando painel de empréstimos')
+        except ValueError as e:
+            await interaction.followup.send(f'❌ {e}', ephemeral=True)
+        except Exception:
+            logger.exception('❌ Erro marcando parcela %s', self.parcela_id)
+            await interaction.followup.send('❌ Falha no pagamento da parcela; verifique os logs.', ephemeral=True)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -19459,6 +19702,28 @@ async def calcular_bonificacao_polvora(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: buscar_ponto_ativo
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: desativar_ponto_mecanica_v810 — PATCH 001-E
+# ────────────────────────────────────────────────────────────────────────────────
+async def desativar_ponto_mecanica_v810():
+    """Encerra pontos abertos até a data do deploy, sem apagar históricos."""
+    pool = await get_pool()
+    if not pool:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute('SELECT pg_advisory_xact_lock(442, 14014)')
+                encerrados = await conn.fetch('''UPDATE pontos_mecanica SET
+                    saida=$1, tempo_segundos=GREATEST(0,EXTRACT(EPOCH FROM ($1::timestamp-entrada))::bigint),
+                    ativo=FALSE WHERE ativo=TRUE RETURNING id,user_id''', agora_db())
+                if encerrados:
+                    logger.info('⏱ PATCH 001-E: %s pontos antigos encerrados; histórico preservado', len(encerrados))
+        return True
+    except Exception:
+        logger.exception('❌ Erro encerrando pontos antigos da mecânica')
+        return False
+
 async def buscar_ponto_ativo(user_id):
     pool = await get_pool()
     if not pool:
@@ -19479,26 +19744,12 @@ async def buscar_ponto_ativo(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: abrir_ponto
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: abrir_ponto — PATCH 001-E (desativada)
+# ────────────────────────────────────────────────────────────────────────────────
 async def abrir_ponto(user_id):
-    pool = await get_pool()
-    if not pool:
-        return False
-    try:
-        async with pool.acquire() as conn:
-            ativo = await conn.fetchrow(
-                "SELECT id FROM pontos_mecanica WHERE user_id = $1 AND ativo = true",
-                str(user_id)
-            )
-            if ativo:
-                return False
-            await conn.execute(
-                "INSERT INTO pontos_mecanica (user_id, entrada, ativo) VALUES ($1, $2, true)",
-                str(user_id), agora_db()
-            )
-            return True
-    except Exception as e:
-        logger.error(f"❌ Erro ao abrir ponto: {e}")
-        return False
+    logger.warning('⏱️ Tentativa de operar ponto desativado: abrir_ponto usuário=%s', user_id)
+    return False
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: fechar_ponto
@@ -19506,31 +19757,12 @@ async def abrir_ponto(user_id):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: fechar_ponto
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: fechar_ponto — PATCH 001-E (desativada)
+# ────────────────────────────────────────────────────────────────────────────────
 async def fechar_ponto(user_id):
-    pool = await get_pool()
-    if not pool:
-        return None
-    try:
-        async with pool.acquire() as conn:
-            ponto = await conn.fetchrow(
-                "SELECT * FROM pontos_mecanica WHERE user_id = $1 AND ativo = true ORDER BY entrada DESC LIMIT 1",
-                str(user_id)
-            )
-            if not ponto:
-                return None
-            entrada = ponto["entrada"]
-            if isinstance(entrada, datetime) and entrada.tzinfo is None:
-                entrada = entrada.replace(tzinfo=BRASIL)
-            saida = agora()
-            tempo = int((saida - entrada).total_seconds())
-            await conn.execute(
-                "UPDATE pontos_mecanica SET saida = $1, tempo_segundos = $2, ativo = false WHERE id = $3",
-                para_db_naive(saida), tempo, ponto["id"]
-            )
-            return {"entrada": entrada, "saida": saida, "tempo": tempo}
-    except Exception as e:
-        logger.error(f"❌ Erro ao fechar ponto: {e}")
-        return None
+    logger.warning('⏱️ Tentativa de operar ponto desativado: fechar_ponto usuário=%s', user_id)
+    return False
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -20723,44 +20955,25 @@ class SoldadoMecanicoView(discord.ui.View):
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
     # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__ — PATCH 001-E (sem controles de ponto)
+    # ────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
+        for componente in list(self.children):
+            if getattr(componente, 'custom_id', None) in ('soldado_mecanico_ponto', 'soldado_mecanico_edit_horas'):
+                self.remove_item(componente)
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: ponto_dinamico
     # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ponto_dinamico — PATCH 001-E
+    # ────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🟢 Abrir Ponto", style=discord.ButtonStyle.success, custom_id="soldado_mecanico_ponto", emoji="🟢", row=0)
     async def ponto_dinamico(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) != str(self.user_id):
-            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        ponto_ativo = await buscar_ponto_ativo(self.user_id)
-        if ponto_ativo:
-            resultado = await fechar_ponto(self.user_id)
-            if not resultado:
-                await interaction.followup.send("⚠️ Erro ao fechar ponto. Tente novamente.", ephemeral=True)
-                return
-            await atualizar_embed_meta(self.user_id)
-            tempo_formatado = formatar_horas(resultado["tempo"])
-            await interaction.followup.send(
-                f"✅ **Ponto fechado!**\n"
-                f"⏰ **Entrada:** {resultado['entrada'].strftime('%H:%M:%S')}\n"
-                f"⏰ **Saída:** {resultado['saida'].strftime('%H:%M:%S')}\n"
-                f"⏱️ **Tempo desta sessão:** {tempo_formatado}",
-                ephemeral=True
-            )
-        else:
-            sucesso = await abrir_ponto(self.user_id)
-            if not sucesso:
-                await interaction.followup.send("❌ Erro ao abrir ponto. Tente novamente.", ephemeral=True)
-                return
-            await atualizar_embed_meta(self.user_id)
-            await interaction.followup.send(
-                f"✅ **Ponto aberto às {agora().strftime('%H:%M:%S')}!**\n⏰ O tempo está contando...",
-                ephemeral=True
-            )
+        await interaction.response.send_message('⏱️ Ponto e edição de horas foram desativados; cargo Mecânico permanece.', ephemeral=True)
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: adicionar_dinheiro
@@ -20820,24 +21033,12 @@ class SoldadoMecanicoView(discord.ui.View):
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: editar_horas
     # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_horas — PATCH 001-E
+    # ────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✏️ Editar Horas", style=discord.ButtonStyle.primary, custom_id="soldado_mecanico_edit_horas", emoji="⏰", row=2)
     async def editar_horas(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            is_dono = str(interaction.user.id) == str(self.user_id)
-            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
-            is_admin = interaction.user.guild_permissions.administrator
-            if not is_dono and not is_gerente and not is_admin:
-                await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar as horas!", ephemeral=True)
-                return
-            segundos_atuais = await calcular_horas_semana(self.user_id)
-            modal = EditarHorasModal(self.user_id, segundos_atuais)
-            await interaction.response.send_modal(modal)
-        except Exception as e:
-            logger.error(f"❌ Erro no botão Editar Horas (SoldadoMecânico): {e}")
-            try:
-                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
-            except:
-                pass
+        await interaction.response.send_message('⏱️ Ponto e edição de horas foram desativados; cargo Mecânico permanece.', ephemeral=True)
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: editar_acoes
@@ -20876,44 +21077,25 @@ class MecanicoView(discord.ui.View):
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
     # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__ — PATCH 001-E (sem controles de ponto)
+    # ────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id):
         super().__init__(timeout=None)
         self.user_id = user_id
+        for componente in list(self.children):
+            if getattr(componente, 'custom_id', None) in ('mecanico_ponto_dinamico', 'mecanico_editar_horas'):
+                self.remove_item(componente)
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: ponto_dinamico
     # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────
+    # MÉTODO: ponto_dinamico — PATCH 001-E
+    # ────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="🟢 Abrir Ponto", style=discord.ButtonStyle.success, custom_id="mecanico_ponto_dinamico", emoji="🟢", row=0)
     async def ponto_dinamico(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) != str(self.user_id):
-            await interaction.response.send_message("❌ Apenas o dono desta sala pode usar este botão!", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        ponto_ativo = await buscar_ponto_ativo(self.user_id)
-        if ponto_ativo:
-            resultado = await fechar_ponto(self.user_id)
-            if not resultado:
-                await interaction.followup.send("⚠️ Erro ao fechar ponto. Tente novamente.", ephemeral=True)
-                return
-            await atualizar_embed_meta(self.user_id)
-            tempo_formatado = formatar_horas(resultado["tempo"])
-            await interaction.followup.send(
-                f"✅ **Ponto fechado!**\n"
-                f"⏰ **Entrada:** {resultado['entrada'].strftime('%H:%M:%S')}\n"
-                f"⏰ **Saída:** {resultado['saida'].strftime('%H:%M:%S')}\n"
-                f"⏱️ **Tempo desta sessão:** {tempo_formatado}",
-                ephemeral=True
-            )
-        else:
-            sucesso = await abrir_ponto(self.user_id)
-            if not sucesso:
-                await interaction.followup.send("❌ Erro ao abrir ponto. Tente novamente.", ephemeral=True)
-                return
-            await atualizar_embed_meta(self.user_id)
-            await interaction.followup.send(
-                f"✅ **Ponto aberto às {agora().strftime('%H:%M:%S')}!**\n⏰ O tempo está contando...",
-                ephemeral=True
-            )
+        await interaction.response.send_message('⏱️ Ponto e edição de horas foram desativados; cargo Mecânico permanece.', ephemeral=True)
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: adicionar_dinheiro
@@ -21044,201 +21226,123 @@ class MecanicoView(discord.ui.View):
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: editar_horas
     # ────────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────
+    # MÉTODO: editar_horas — PATCH 001-E
+    # ────────────────────────────────────────────────────────────────────────
     @discord.ui.button(label="✏️ Editar Horas", style=discord.ButtonStyle.primary, custom_id="mecanico_editar_horas", emoji="⏰", row=3)
     async def editar_horas(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            is_dono = str(interaction.user.id) == str(self.user_id)
-            is_gerente = any(r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID] for r in interaction.user.roles)
-            is_admin = interaction.user.guild_permissions.administrator
-            if not is_dono and not is_gerente and not is_admin:
-                await interaction.response.send_message("❌ Apenas o dono da sala, gerentes ou ADM podem editar as horas!", ephemeral=True)
-                return
-            segundos_atuais = await calcular_horas_semana(self.user_id)
-            modal = EditarHorasModal(self.user_id, segundos_atuais)
-            await interaction.response.send_modal(modal)
-        except Exception as e:
-            logger.error(f"❌ Erro no botão Editar Horas: {e}")
-            try:
-                await interaction.response.send_message(f"❌ Erro: {str(e)[:100]}", ephemeral=True)
-            except:
-                pass
+        await interaction.response.send_message('⏱️ Ponto e edição de horas foram desativados; cargo Mecânico permanece.', ephemeral=True)
 # ════════════════════════════════════════════════════════════════════════════════
 # COMPONENTS V2 — PAINEL DE META HÍBRIDO (LayoutView)
 # ════════════════════════════════════════════════════════════════════════════════
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: _v2_montar_container
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: _v2_montar_container — PATCH 001-D/E, V8.1.0
+# ────────────────────────────────────────────────────────────────────────────────
 async def _v2_montar_container(user_id):
-    """
-    Monta o Container (conteúdo visual) do painel de meta V2.
-    Retorna (container, cargos_info) ou (None, None) em caso de erro.
-    """
+    """Mostra dinheiro e pólvora SEMPRE; isentos não recebem cobrança de meta/horas."""
     try:
         guild = bot.get_guild(GUILD_ID)
-        if not guild:
+        membro = guild.get_member(int(user_id)) if guild else None
+        if not membro:
             return None, None
-        member = guild.get_member(int(user_id))
-        if not member:
-            return None, None
-        roles_ids = [r.id for r in member.roles]
-
-        if CARGO_SEM_META_ID in roles_ids:
-            return None, None
-
-        regra = await obter_regra_meta_membro(member)
+        regra = await obter_regra_meta_membro(membro)
         if not regra:
             return None, None
-
         pool = await get_pool()
         if not pool:
             return None, None
         async with pool.acquire() as conn:
-            meta = await conn.fetchrow("SELECT * FROM metas WHERE user_id = $1", str(user_id))
+            meta = await conn.fetchrow('SELECT * FROM metas WHERE user_id=$1', str(user_id))
         if not meta:
             return None, None
-
         dividas = await buscar_dividas_usuario(user_id)
-        
-        # Puxa os valores REAIS do banco, independente de ser isento ou não
-        dinheiro = meta["dinheiro"] or 0
-        dinheiro_acoes = meta.get("dinheiro_acoes") or 0
-        polvora = meta.get("polvora_atual") or 0
+        dinheiro = int(meta['dinheiro'] or 0)
+        polvora = int(meta['polvora_atual'] or 0)
+        dinheiro_acoes = int(meta['dinheiro_acoes'] or 0)
+        isento = bool(regra.get('isento') or regra.get('is_isento_lideranca'))
+        tipo_semana = await buscar_tipo_meta_semana()
+        tipo_regra = regra.get('tipo')
+        meta_dinheiro = int(regra.get('meta_dinheiro') or 0)
+        meta_polvora = int(regra.get('meta_polvora') or 0)
+        meta_acoes = int(regra.get('meta_acoes') or 0)
+        meta_soldado = int(regra.get('meta_soldado') or 0)
 
-        is_mecanico = CARGO_MECANICO_ID in roles_ids
-        is_isento_lideranca = regra.get("is_isento_lideranca", False) or regra.get("isento", False)
-
-        # Define meta e atual
-        if regra["tipo"] == "soldado":
-            meta_valor = regra["meta_soldado"]
-            atual = await buscar_total_soldado()
-            label = "⚔️ META DE SOLDADO (COLETIVA)"
-            is_money = True
-        elif regra["tipo"] == "polvora":
-            meta_valor = regra["meta_polvora"]
-            atual = polvora
-            label = "🧨 META DE PÓLVORA"
-            is_money = False
-        elif regra["tipo"] == "acoes":
-            meta_valor = regra["meta_acoes"]
-            atual = dinheiro_acoes
-            label = "⚔️ META DE AÇÕES"
-            is_money = True
-        elif is_isento_lideranca:
-            meta_valor = 1 # Meta falsa só pra barra não bugar
-            atual = dinheiro
-            label = "🟡 ISENTO DE META"
-            is_money = True
-        else:
-            meta_valor = regra["meta_dinheiro"]
-            atual = dinheiro
-            label = "💰 META DE DINHEIRO SUJO"
-            is_money = True
-
-        pct = min(atual / meta_valor, 1.0) if meta_valor > 0 else 1.0
-        if is_isento_lideranca and atual > 0:
-            pct = 1.0
-        
-        barra = "▓" * int(pct * 20) + "░" * (20 - int(pct * 20))
-        status_emoji = "🟢" if pct >= 1 else "🟡" if pct >= 0.5 else "🔴"
-
-        # ────────────────────────────────────────────────────────────────────────────────
-        # MÉTODO: fmt
-        # ────────────────────────────────────────────────────────────────────────────────
-        def fmt(v, d):
-            return formatar_dinheiro(v) if d else fmt_num(v)
+        def progresso(atual, alvo):
+            if alvo <= 0:
+                return 'Contribuição voluntária / sem obrigação'
+            percentual = min(max(atual, 0) / alvo, 1.0)
+            cheios = int(percentual * 20)
+            marcador = '🟢' if percentual >= 1 else '🟡' if percentual >= 0.5 else '🔴'
+            return f'{marcador} `{"▓" * cheios}{"░" * (20-cheios)}` **{int(percentual * 100)}%**'
 
         container = discord.ui.Container(accent_color=discord.Color(0x9B59B6))
-
-        # Cabeçalho
         container.add_item(discord.ui.Section(
-            discord.ui.TextDisplay(f"# 💀 META SEMANAL\n**{member.display_name.upper()}** • VDR 442"),
-            accessory=discord.ui.Thumbnail(member.display_avatar.url)
-        ))
+            discord.ui.TextDisplay(f'# 💀 META SEMANAL\n**{membro.display_name.upper()}** • VDR 442'),
+            accessory=discord.ui.Thumbnail(membro.display_avatar.url)))
         container.add_item(discord.ui.Separator())
-
-        # Meta
-        if is_isento_lideranca:
-            container.add_item(discord.ui.TextDisplay(
-                f"### 🎯 {label}\n"
-                f"```yaml\n"
-                f"Contribuição: {fmt(atual, is_money)}\n"
-                f"```"
-            ))
-            container.add_item(discord.ui.TextDisplay(
-                f"**{status_emoji} Status:** `{barra}` **ISENTO**"
-            ))
+        if isento:
+            status = '🛡 ISENTO • Depósitos voluntários permitidos'
+        elif tipo_regra == 'soldado':
+            status = '⚔️ META DE SOLDADO (COLETIVA)'
+        elif tipo_regra == 'acoes':
+            status = '⚔️ META DE AÇÕES'
+        elif tipo_regra == 'ambos':
+            status = '🎯 META DE DINHEIRO E PÓLVORA'
         else:
-            container.add_item(discord.ui.TextDisplay(
-                f"### 🎯 {label}\n"
-                f"```yaml\n"
-                f"Atual: {fmt(atual, is_money)}\n"
-                f"Meta:  {fmt(meta_valor, is_money)}\n"
-                f"```"
-            ))
-            container.add_item(discord.ui.TextDisplay(
-                f"**{status_emoji} Progresso:** `{barra}` **{int(pct*100)}%**"
-            ))
-
-        # MECÂNICO — META DE HORAS
-        if is_mecanico:
-            try:
-                segundos_semana = await calcular_horas_semana(user_id)
-            except Exception:
-                segundos_semana = 0
-            meta_horas_segundos = 6 * 3600
-            pct_horas = min(segundos_semana / meta_horas_segundos, 1.0) if meta_horas_segundos > 0 else 1.0
-            barra_horas = "▓" * int(pct_horas * 20) + "░" * (20 - int(pct_horas * 20))
-
-            if pct_horas >= 1:
-                status_horas = "🟢"
-            elif pct_horas >= 0.5:
-                status_horas = "🟡"
-            else:
-                status_horas = "🔴"
-
-            container.add_item(discord.ui.Separator())
-            container.add_item(discord.ui.TextDisplay(
-                f"### ⏰ META DE HORAS (MECÂNICA)\n"
-                f"```yaml\n"
-                f"Tempo total: {formatar_horas(segundos_semana)} / 6h\n"
-                f"```"
-            ))
-            container.add_item(discord.ui.TextDisplay(
-                f"**{status_horas} Progresso:** `{barra_horas}` **{int(pct_horas*100)}%**"
-            ))
-
-        # Dívidas
-        if dividas["dinheiro"] > 0 or dividas["polvora"] > 0:
-            container.add_item(discord.ui.Separator())
-            texto_div = ""
-            if dividas["dinheiro"] > 0:
-                texto_div += f"💰 Dinheiro: **{formatar_dinheiro(dividas['dinheiro'])}**\n"
-            if dividas["polvora"] > 0:
-                texto_div += f"🧨 Pólvora: **{fmt_num(dividas['polvora'])}** unidades\n"
-            container.add_item(discord.ui.TextDisplay(
-                f"### 🚨 DÍVIDAS PENDENTES\n{texto_div}"
-            ))
-
-        # Footer
+            status = '🧨 SEMANA DE PÓLVORA' if tipo_semana == 'polvora' else '💰 SEMANA DE DINHEIRO'
+        container.add_item(discord.ui.TextDisplay(f'### {status}'))
+        container.add_item(discord.ui.TextDisplay(
+            f'### 💰 DINHEIRO SUJO\n'
+            f'```yaml\nDepositado: {formatar_dinheiro(dinheiro)}\n'
+            + (f'Meta: {formatar_dinheiro(meta_dinheiro)}\n' if meta_dinheiro and not isento else '') + '```'))
+        if meta_dinheiro and not isento:
+            container.add_item(discord.ui.TextDisplay(progresso(dinheiro, meta_dinheiro)))
         container.add_item(discord.ui.Separator())
         container.add_item(discord.ui.TextDisplay(
-            f"-# 🛡 Vida Rasa 442 • Atualizado em {agora().strftime('%d/%m/%Y %H:%M')} • ID: {user_id}"
-        ))
-
-        # Informações dos cargos
-        is_soldado = CARGO_SOLDADO_ID in roles_ids
-        ponto_ativo = await buscar_ponto_ativo(user_id) if is_mecanico else None
-
+            f'### 🧨 PÓLVORA\n'
+            f'```yaml\nDepositado: {fmt_num(polvora)} unidades\n'
+            + (f'Meta: {fmt_num(meta_polvora)} unidades\n' if meta_polvora and not isento else '') + '```'))
+        if meta_polvora and not isento:
+            container.add_item(discord.ui.TextDisplay(progresso(polvora, meta_polvora)))
+        if tipo_regra == 'soldado' and not isento:
+            total_coletivo = await buscar_total_soldado()
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(
+                f'### ⚔️ SOLDADOS — META COLETIVA\n'
+                f'Atual: **{formatar_dinheiro(total_coletivo)}** | Meta: **{formatar_dinheiro(meta_soldado)}**\n'
+                + progresso(total_coletivo, meta_soldado)))
+        elif tipo_regra == 'acoes' and not isento:
+            container.add_item(discord.ui.Separator())
+            container.add_item(discord.ui.TextDisplay(
+                f'### ⚔️ AÇÕES\nDepositado: **{formatar_dinheiro(dinheiro_acoes)}**\n'
+                f'Meta: **{formatar_dinheiro(meta_acoes)}**\n'
+                + progresso(dinheiro_acoes, meta_acoes)))
+        if isento:
+            container.add_item(discord.ui.TextDisplay(
+                '🛡 **ISENTO** — dinheiro e pólvora acima são contribuições, sem obrigação ou dívida nova.'))
+        if dividas['dinheiro'] > 0 or dividas['polvora'] > 0:
+            container.add_item(discord.ui.Separator())
+            texto_div = ''
+            if dividas['dinheiro'] > 0:
+                texto_div += f"💰 Dinheiro: **{formatar_dinheiro(dividas['dinheiro'])}**\n"
+            if dividas['polvora'] > 0:
+                texto_div += f"🧨 Pólvora: **{fmt_num(dividas['polvora'])}** unidades\n"
+            container.add_item(discord.ui.TextDisplay(f'### 🚨 DÍVIDAS PENDENTES\n{texto_div}'))
+        container.add_item(discord.ui.Separator())
+        container.add_item(discord.ui.TextDisplay(
+            f'-# 🛡 Vida Rasa 442 • Atualizado em {agora().strftime("%d/%m/%Y %H:%M")} • ID: {user_id}'))
         cargos_info = {
-            "is_soldado": is_soldado,
-            "is_mecanico": is_mecanico,
-            "is_isento": is_isento_lideranca,
-            "ponto_ativo": ponto_ativo,
+            'is_soldado': CARGO_SOLDADO_ID in [r.id for r in membro.roles],
+            'is_mecanico': CARGO_MECANICO_ID in [r.id for r in membro.roles],
+            'is_isento': isento,
+            'ponto_ativo': None,
         }
-
         return container, cargos_info
-    except Exception as e:
-        logger.error(f"❌ Erro ao montar container V2: {e}")
+    except Exception:
+        logger.exception('❌ Erro ao montar painel V2 de %s', user_id)
         return None, None
 
 
@@ -21255,102 +21359,39 @@ class V2MetaView(discord.ui.LayoutView):
     # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
     # ────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__ — PATCH 001-E
+    # ────────────────────────────────────────────────────────────────────────────
     def __init__(self, user_id, container, cargos_info):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.add_item(container)
 
-        is_soldado = cargos_info["is_soldado"]
-        is_mecanico = cargos_info["is_mecanico"]
-        is_isento = cargos_info["is_isento"]
-        ponto_ativo = cargos_info["ponto_ativo"]
-
-        # ═══════════════════════════════════════════════════════════════════════
-        # LINHA 1 — Botões principais
-        # ═══════════════════════════════════════════════════════════════════════
         row1 = discord.ui.ActionRow()
-
-        btn_add_din = discord.ui.Button(
-            label="Adicionar Dinheiro", emoji="💰",
-            style=discord.ButtonStyle.success,
-            custom_id=f"v2_add_din_{user_id}"
-        )
+        btn_add_din = discord.ui.Button(label='Adicionar Dinheiro', emoji='💰',
+            style=discord.ButtonStyle.success, custom_id=f'v2_add_din_{user_id}')
         btn_add_din.callback = self._add_dinheiro
         row1.add_item(btn_add_din)
-
-        # Agora também aparece para os membros isentos.
-        btn_add_pol = discord.ui.Button(
-            label="Adicionar Pólvora", emoji="🧨",
-            style=discord.ButtonStyle.success,
-            custom_id=f"v2_add_pol_{user_id}"
-        )
+        btn_add_pol = discord.ui.Button(label='Adicionar Pólvora', emoji='🧨',
+            style=discord.ButtonStyle.success, custom_id=f'v2_add_pol_{user_id}')
         btn_add_pol.callback = self._add_polvora
         row1.add_item(btn_add_pol)
-
-        if is_mecanico:
-            if ponto_ativo:
-                label_ponto = "Fechar Ponto"
-                emoji_ponto = "🔴"
-                style_ponto = discord.ButtonStyle.danger
-            else:
-                label_ponto = "Abrir Ponto"
-                emoji_ponto = "🟢"
-                style_ponto = discord.ButtonStyle.success
-
-            btn_ponto = discord.ui.Button(
-                label=label_ponto,
-                emoji=emoji_ponto,
-                style=style_ponto,
-                custom_id=f"v2_ponto_{user_id}"
-            )
-            btn_ponto.callback = self._ponto_dinamico
-            row1.add_item(btn_ponto)
-
         self.add_item(row1)
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # LINHA 2 — Edições e controles
-        # ═══════════════════════════════════════════════════════════════════════
         row2 = discord.ui.ActionRow()
-
-        btn_edit_meta = discord.ui.Button(
-            label="Editar Meta",
-            emoji="✏️",
-            style=discord.ButtonStyle.primary,
-            custom_id=f"v2_edit_meta_{user_id}"
-        )
+        btn_edit_meta = discord.ui.Button(label='Editar Meta', emoji='✏️',
+            style=discord.ButtonStyle.primary, custom_id=f'v2_edit_meta_{user_id}')
         btn_edit_meta.callback = self._editar_meta
         row2.add_item(btn_edit_meta)
-
-        btn_edit_valor = discord.ui.Button(
-            label="Editar Valor",
-            emoji="⚙️",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"v2_edit_valor_{user_id}"
-        )
+        btn_edit_valor = discord.ui.Button(label='Editar Valor', emoji='⚙️',
+            style=discord.ButtonStyle.secondary, custom_id=f'v2_edit_valor_{user_id}')
         btn_edit_valor.callback = self._editar_valor
         row2.add_item(btn_edit_valor)
-
-        if is_soldado:
-            btn_edit_acoes = discord.ui.Button(
-                label="Editar Ações",
-                emoji="⚔️",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"v2_edit_acoes_{user_id}"
-            )
+        if cargos_info.get('is_soldado'):
+            btn_edit_acoes = discord.ui.Button(label='Editar Ações', emoji='⚔️',
+                style=discord.ButtonStyle.primary, custom_id=f'v2_edit_acoes_{user_id}')
             btn_edit_acoes.callback = self._editar_acoes
             row2.add_item(btn_edit_acoes)
-
-        if is_mecanico:
-            btn_edit_horas = discord.ui.Button(
-                label="Editar Horas",
-                emoji="⏰",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"v2_edit_horas_{user_id}"
-            )
-            btn_edit_horas.callback = self._editar_horas
-            row2.add_item(btn_edit_horas)
-
         self.add_item(row2)
 
     # ────────────────────────────────────────────────────────────────────────────
@@ -21442,57 +21483,11 @@ class V2MetaView(discord.ui.LayoutView):
     # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: _ponto_dinamico
     # ────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _ponto_dinamico — PATCH 001-E (compatibilidade com cartões antigos)
+    # ────────────────────────────────────────────────────────────────────────────
     async def _ponto_dinamico(self, interaction: discord.Interaction):
-        if not self._pode_acionar_sala(interaction.user):
-            await interaction.response.send_message(
-                "❌ Apenas o dono da sala ou o cargo 01 podem usar este botão!",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
-        ponto_ativo = await buscar_ponto_ativo(self.user_id)
-
-        if ponto_ativo:
-            resultado = await fechar_ponto(self.user_id)
-
-            if not resultado:
-                await interaction.followup.send(
-                    "⚠️ Erro ao fechar ponto. Tente novamente.",
-                    ephemeral=True
-                )
-                return
-
-            await atualizar_embed_meta(self.user_id)
-
-            tempo_formatado = formatar_horas(resultado["tempo"])
-
-            await interaction.followup.send(
-                f"✅ **Ponto fechado!**\n"
-                f"⏰ **Entrada:** {resultado['entrada'].strftime('%H:%M:%S')}\n"
-                f"⏰ **Saída:** {resultado['saida'].strftime('%H:%M:%S')}\n"
-                f"⏱️ **Tempo desta sessão:** {tempo_formatado}",
-                ephemeral=True
-            )
-
-        else:
-            sucesso = await abrir_ponto(self.user_id)
-
-            if not sucesso:
-                await interaction.followup.send(
-                    "❌ Erro ao abrir ponto. Tente novamente.",
-                    ephemeral=True
-                )
-                return
-
-            await atualizar_embed_meta(self.user_id)
-
-            await interaction.followup.send(
-                f"✅ **Ponto aberto às {agora().strftime('%H:%M:%S')}!\n"
-                "⏰ O tempo está contando...",
-                ephemeral=True
-            )
+        await interaction.response.send_message('⏱️ O sistema de ponto da mecânica foi desativado. O benefício do cargo Mecânico permanece.', ephemeral=True)
 
     # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: _editar_meta
@@ -21634,37 +21629,11 @@ class V2MetaView(discord.ui.LayoutView):
     # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: _editar_horas
     # ────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────────
+    # MÉTODO: _editar_horas — PATCH 001-E (compatibilidade com cartões antigos)
+    # ────────────────────────────────────────────────────────────────────────────
     async def _editar_horas(self, interaction: discord.Interaction):
-        is_dono = str(interaction.user.id) == str(self.user_id)
-
-        is_gerente = any(
-            r.id in [
-                CARGO_GERENTE_ID,
-                CARGO_GERENTE_GERAL_ID,
-                CARGO_GERENTE_MECANICA_ID
-            ]
-            for r in interaction.user.roles
-        )
-
-        is_lider_01 = any(
-            r.id == CARGO_01_ID
-            for r in interaction.user.roles
-        )
-
-        is_admin = interaction.user.guild_permissions.administrator
-
-        if not (is_dono or is_gerente or is_lider_01 or is_admin):
-            await interaction.response.send_message(
-                "❌ Sem permissão para editar horas!",
-                ephemeral=True
-            )
-            return
-
-        segundos_atuais = await calcular_horas_semana(self.user_id)
-
-        await interaction.response.send_modal(
-            EditarHorasModal(self.user_id, segundos_atuais)
-        )
+        await interaction.response.send_message('⏱️ O sistema de ponto da mecânica foi desativado. O benefício do cargo Mecânico permanece.', ephemeral=True)
 
 # ════════════════════════════════════════════════════════════════════════════════
 # FIM DA CLASSE: V2MetaView
@@ -22653,294 +22622,11 @@ class EditarHorasModal(
     # ────────────────────────────────────────────────────────────────────────────
     # MÉTODO: on_submit
     # ────────────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit — PATCH 001-E (desativado)
+    # ────────────────────────────────────────────────────────────────────────
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        papeis = getattr(interaction.user, "roles", [])
-
-        autorizado = (
-            str(interaction.user.id) == str(self.user_id)
-            or any(
-                r.id in (
-                    CARGO_01_ID,
-                    CARGO_GERENTE_ID,
-                    CARGO_GERENTE_GERAL_ID,
-                    CARGO_GERENTE_MECANICA_ID
-                )
-                for r in papeis
-            )
-            or interaction.user.guild_permissions.administrator
-        )
-
-        if not autorizado:
-            await interaction.followup.send(
-                "❌ Sem permissão para editar estas horas.",
-                ephemeral=True
-            )
-            return
-
-        acao = self.acao.value.strip().upper()
-
-        if acao not in ("ADICIONAR", "REMOVER"):
-            await interaction.followup.send(
-                "❌ Ação inválida: use ADICIONAR ou REMOVER.",
-                ephemeral=True
-            )
-            return
-
-        # ────────────────────────────────────────────────────────────────────────
-        # VALIDAÇÃO DO VALOR
-        # ────────────────────────────────────────────────────────────────────────
-        try:
-            from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-
-            horas = Decimal(
-                self.horas.value.strip().replace(",", ".")
-            )
-
-            if not horas.is_finite() or horas <= 0:
-                raise ValueError("Horas devem ser positivas.")
-
-            segundos = int(
-                (horas * 3600).to_integral_value(
-                    rounding=ROUND_HALF_UP
-                )
-            )
-
-            if segundos <= 0 or segundos > 7 * 24 * 3600:
-                raise ValueError(
-                    "O ajuste deve ter de 1 segundo até 168 horas."
-                )
-
-        except (InvalidOperation, ValueError, OverflowError):
-            await interaction.followup.send(
-                "❌ Horas inválidas. Exemplos: "
-                "2 ou 0.5 (30min). Máximo 168h por ajuste.",
-                ephemeral=True
-            )
-            return
-
-        delta = segundos if acao == "ADICIONAR" else -segundos
-
-        pool = await get_pool()
-
-        if not pool:
-            await interaction.followup.send(
-                "❌ Banco indisponível. Nenhuma hora alterada.",
-                ephemeral=True
-            )
-            return
-
-        # ────────────────────────────────────────────────────────────────────────
-        # ATUALIZAÇÃO TRANSACIONAL
-        # ────────────────────────────────────────────────────────────────────────
-        try:
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-
-                    await conn.execute(
-                        "SELECT pg_advisory_xact_lock(hashtext($1))",
-                        f"ajuste_horas:{self.user_id}"
-                    )
-
-                    momento = agora_db()
-
-                    segunda = (
-                        momento - timedelta(
-                            days=momento.weekday()
-                        )
-                    ).replace(
-                        hour=0,
-                        minute=0,
-                        second=0,
-                        microsecond=0
-                    )
-
-                    proxima_segunda = segunda + timedelta(days=7)
-
-                    fechado = await conn.fetchval("""
-                        SELECT COALESCE(SUM(tempo_segundos), 0)
-                        FROM pontos_mecanica
-                        WHERE user_id = $1
-                          AND ativo = FALSE
-                          AND entrada >= $2
-                          AND entrada < $3
-                    """,
-                        str(self.user_id),
-                        segunda,
-                        proxima_segunda
-                    )
-
-                    abertos = await conn.fetch("""
-                        SELECT entrada
-                        FROM pontos_mecanica
-                        WHERE user_id = $1
-                          AND ativo = TRUE
-                          AND entrada < $2
-                    """,
-                        str(self.user_id),
-                        momento
-                    )
-
-                    total_aberto = sum(
-                        max(
-                            0,
-                            int(
-                                (
-                                    momento
-                                    - max(
-                                        p["entrada"],
-                                        segunda
-                                    )
-                                ).total_seconds()
-                            )
-                        )
-                        for p in abertos
-                        if p["entrada"]
-                    )
-
-                    antes = max(
-                        0,
-                        int(fechado or 0) + total_aberto
-                    )
-
-                    # Nunca permitir total negativo.
-                    if delta < 0 and segundos > antes:
-                        raise ValueError(
-                            "Não é possível remover "
-                            f"{formatar_horas(segundos)}; "
-                            "o total atual é "
-                            f"{formatar_horas(antes)}."
-                        )
-
-                    # Salva ajuste da semana atual.
-                    # Não apaga nem modifica pontos anteriores.
-                    # Tempo negativo representa remoção manual.
-                    await conn.execute("""
-                        INSERT INTO pontos_mecanica (
-                            user_id,
-                            entrada,
-                            saida,
-                            tempo_segundos,
-                            ativo
-                        )
-                        VALUES ($1, $2, $2, $3, FALSE)
-                    """,
-                        str(self.user_id),
-                        momento,
-                        delta
-                    )
-
-                    depois = antes + delta
-
-            # ────────────────────────────────────────────────────────────────────
-            # REGISTRO NA AUDITORIA
-            # ────────────────────────────────────────────────────────────────────
-            try:
-                await registrar_auditoria(
-                    user_id=str(interaction.user.id),
-                    acao=AuditAcao.EDITAR_HORAS,
-                    modulo=AuditModulo.HORAS,
-                    item_id=str(self.user_id),
-                    item_nome=await pegar_apelido(
-                        self.user_id,
-                        interaction.guild
-                    ),
-                    dados_antes={"tempo": antes},
-                    dados_depois={"tempo": depois},
-                    detalhes=(
-                        f"{acao}: {formatar_horas(segundos)} "
-                        f"por {interaction.user.id}; "
-                        "ajuste manual preservado"
-                    )
-                )
-
-            except Exception as erro:
-                logger.exception(
-                    "⚠️ Ajuste de horas salvo, mas "
-                    "falha na auditoria: %s",
-                    erro
-                )
-
-            # ────────────────────────────────────────────────────────────────────
-            # ATUALIZAÇÃO DO PAINEL
-            # ────────────────────────────────────────────────────────────────────
-            try:
-                await atualizar_embed_meta(self.user_id)
-
-            except Exception as erro:
-                logger.exception(
-                    "⚠️ Ajuste de horas salvo, mas "
-                    "falha na atualização visual: %s",
-                    erro
-                )
-
-            # ────────────────────────────────────────────────────────────────────
-            # RESPOSTA
-            # ────────────────────────────────────────────────────────────────────
-            embed = discord.Embed(
-                title="✅ HORAS ATUALIZADAS!",
-                description=f"**👤 <@{self.user_id}>**",
-                color=0x2ECC71,
-                timestamp=agora()
-            )
-
-            embed.add_field(
-                name="⏰ Alteração",
-                value=(
-                    f"{acao}: {formatar_horas(segundos)}"
-                ),
-                inline=True
-            )
-
-            embed.add_field(
-                name="⏰ Total antes",
-                value=formatar_horas(antes),
-                inline=True
-            )
-
-            embed.add_field(
-                name="⏰ Novo total",
-                value=formatar_horas(depois),
-                inline=True
-            )
-
-            embed.add_field(
-                name="👤 Editado por",
-                value=interaction.user.mention,
-                inline=False
-            )
-
-            embed.set_footer(
-                text=(
-                    "🛡 Vida Rasa 442 • "
-                    "Sistema de Horas (Mecânica)"
-                )
-            )
-
-            await interaction.followup.send(
-                embed=embed,
-                ephemeral=True
-            )
-
-        except ValueError as erro:
-            await interaction.followup.send(
-                f"❌ {erro}",
-                ephemeral=True
-            )
-
-        except Exception as erro:
-            logger.exception(
-                "❌ Falha editando horas de %s: %s",
-                self.user_id,
-                erro
-            )
-
-            await interaction.followup.send(
-                "❌ Horas não alteradas. "
-                "Verifique os logs do Railway.",
-                ephemeral=True
-            )
+        await interaction.response.send_message('⏱️ A edição de horas foi desativada; histórico antigo preservado.', ephemeral=True)
 
 # ════════════════════════════════════════════════════════════════════════════════
 # FIM DA CLASSE: EditarHorasModal
@@ -24400,56 +24086,11 @@ class RelatorioHorasModal(discord.ui.Modal, title="⏰ RELATÓRIO DE HORAS"):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: resetar_horas_semana_manual
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: resetar_horas_semana_manual — PATCH 001-E
+# ────────────────────────────────────────────────────────────────────────────────
 async def resetar_horas_semana_manual(guild):
-    if not guild:
-        return {"sucesso": False, "erro": "Guild não encontrada"}
-    pool = await get_pool()
-    if not pool:
-        return {"sucesso": False, "erro": "Banco de dados indisponível"}
-    
-    try:
-        cargo_mecanico = guild.get_role(CARGO_MECANICO_ID)
-        if not cargo_mecanico:
-            return {"sucesso": False, "erro": "Cargo de mecânico não encontrado"}
-        
-        atualizados = 0
-        hoje = agora()
-        segunda = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-        domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
-        
-        async with pool.acquire() as conn:
-            for member in guild.members:
-                if member.bot or cargo_mecanico not in member.roles:
-                    continue
-                
-                segundos = await calcular_horas_periodo(member.id, segunda, domingo)
-                
-                if segundos > 0:
-                    # Salva no histórico antes de zerar
-                    await conn.execute("""
-                        INSERT INTO horas_historico (user_id, nome, segundos_totais, data_inicio, data_fim, data_fechamento)
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                    """, str(member.id), member.display_name, segundos, para_db_naive(segunda), para_db_naive(domingo), agora_db())
-                    
-                    atualizados += 1
-                
-                # Atualiza o embed
-                try:
-                    if str(member.id) in metas_cache:
-                        await atualizar_embed_meta(member.id)
-                except:
-                    pass
-                    
-            # Deleta os pontos da semana atual para zerar
-            await conn.execute("""
-                DELETE FROM pontos_mecanica 
-                WHERE entrada >= $1 AND entrada <= $2
-            """, para_db_naive(segunda), para_db_naive(domingo))
-            
-        return {"sucesso": True, "atualizados": atualizados}
-    except Exception as e:
-        logger.error(f"Erro ao resetar horas manual: {e}")
-        return {"sucesso": False, "erro": str(e)}
+    return {'sucesso': False, 'erro': 'O ponto de mecânica foi desativado. Nenhum histórico pode ser apagado.'}
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: ResetarHorasSemanaButton
@@ -24551,51 +24192,12 @@ class ConfirmarResetHorasView(discord.ui.View):
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: confirmar
     # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(
-        label="✅ CONFIRMAR RESET",
-        style=discord.ButtonStyle.danger,
-        custom_id="confirmar_reset_horas",
-        emoji="✅"
-    )
+    # ────────────────────────────────────────────────────────────────────────
+    # MÉTODO: confirmar — PATCH 001-E (desativado)
+    # ────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(label='✅ CONFIRMAR RESET', style=discord.ButtonStyle.danger, custom_id='confirmar_reset_horas', emoji='✅')
     async def confirmar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-
-        resultado = await resetar_horas_semana_manual(interaction.guild)
-
-        if not resultado.get("sucesso"):
-            await interaction.followup.send(f"❌ **Erro:** {resultado.get('erro', 'Desconhecido')}", ephemeral=True)
-            return
-
-        atualizados = resultado.get("atualizados", 0)
-
-        try:
-            await registrar_auditoria(
-                user_id=str(interaction.user.id),
-                acao=AuditAcao.RESETAR_HORAS,
-                modulo=AuditModulo.HORAS,
-                item_id=None,
-                item_nome="Reset manual de horas",
-                detalhes=f"Reset manual — {atualizados} embeds atualizados"
-            )
-        except Exception as e:
-            logger.error(f"❌ Erro ao auditar reset de horas: {e}")
-
-        embed = discord.Embed(
-            title="✅ HORAS RESETADAS COM SUCESSO!",
-            description=(
-                "**Todas as horas da semana atual foram zeradas.**\n\n"
-                f"📊 **Resumo:**\n"
-                f"• 👤 Embeds atualizados: **{atualizados}**\n"
-                f"• 📌 O histórico da semana foi salvo antes de zerar."
-            ),
-            color=0x2ecc71,
-            timestamp=agora()
-        )
-        embed.set_footer(
-            text=f"Reset realizado por {interaction.user.display_name}",
-            icon_url=bot.user.display_avatar.url if bot.user else None
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.response.send_message('⏱️ O sistema de ponto foi desativado. Nenhum dado foi apagado.', ephemeral=True)
 
     # ────────────────────────────────────────────────────────────────────────────────
     # MÉTODO: cancelar
@@ -26333,8 +25935,8 @@ async def enviar_painel_relatorio_metas():
             "### 🔒 FECHAR METAS\n"
             "> Fecha a semana anterior, salva o histórico e zera a semana.\n"
             "> A dívida deve ser somente o valor restante.\n\n"
-            "### 📊 RELATÓRIOS E HORAS\n"
-            "> Relatórios de metas e horas; reinício de horas quando autorizado.\n\n"
+            "### 📊 RELATÓRIOS\n"
+            "> Relatórios de metas e acompanhamento semanal.\n\n"
             "### 📋 GERENCIAMENTO DE DÍVIDAS\n"
             "> Ver dívidas, limpar individualmente ou perdoar todas.\n"
         ),
@@ -26366,8 +25968,7 @@ async def enviar_painel_relatorio_metas():
     # ────────────────────────────────────────────────────────────────────────────
     view.add_item(RelatorioMetasButton())
     view.add_item(FecharMetasAutomaticoButton())
-    view.add_item(RelatorioHorasButton())
-    view.add_item(ResetarHorasSemanaButton())
+    # PATCH 001-E: controles de horas retirados; arquivos históricos preservados.
 
     # ────────────────────────────────────────────────────────────────────────────
     # BOTÕES: TIPO SEMANAL E CONFIGURAÇÃO POR CARGO
@@ -26524,9 +26125,9 @@ async def verificar_vencimento_blindados():
             embed.add_field(name="💰 Taxa", value=formatar_dinheiro(b['valor_taxa']), inline=True)
             embed.add_field(name="📅 Venceu em", value=b['data_vencimento'].strftime('%d/%m/%Y'), inline=True)
             embed.add_field(name="📌 STATUS", value="🔴 **VENCIDO**", inline=False)
-            await canal_aviso.send(content=f"<@&{CARGO_01_ID}> <@&{CARGO_02_ID}>", embed=embed, view=AlertaVencimentoView(b['id']))
+            msg_alerta = await canal_aviso.send(content=f"<@&{CARGO_01_ID}> <@&{CARGO_02_ID}>", embed=embed, view=AlertaVencimentoView(b['id']))
             async with pool.acquire() as conn:
-                await conn.execute("UPDATE blindados SET alerta_enviado = true, status = 'vencido' WHERE id = $1", b['id'])
+                await conn.execute("UPDATE blindados SET alerta_enviado = true, status = 'vencido', alerta_mensagem_id = $2 WHERE id = $1", b['id'], str(msg_alerta.id))
             await asyncio.sleep(1)
     except Exception as e: logger.error(f"❌ Erro verificação blindados: {e}")
 
@@ -31078,8 +30679,7 @@ def criar_view_por_painel(nome):
         # ────────────────────────────────────────────────────────────────────────
         view.add_item(RelatorioMetasButton())
         view.add_item(FecharMetasAutomaticoButton())
-        view.add_item(RelatorioHorasButton())
-        view.add_item(ResetarHorasSemanaButton())
+        # PATCH 001-E: relatórios e reset de horas removidos do painel.
 
         # ────────────────────────────────────────────────────────────────────────
         # CONFIGURAÇÃO DE METAS
@@ -32577,63 +32177,13 @@ async def cmd_atualizar_acesso_resp(ctx):
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: cmd_resetar_horas
 # ────────────────────────────────────────────────────────────────────────────────
-@bot.command(name="resetar_horas")
+# ────────────────────────────────────────────────────────────────────────────────
+# COMANDO: cmd_resetar_horas — PATCH 001-E (desativado)
+# ────────────────────────────────────────────────────────────────────────────────
+@bot.command(name='resetar_horas')
 @commands.has_permissions(administrator=True)
 async def cmd_resetar_horas(ctx):
-    is_admin = ctx.author.guild_permissions.administrator
-    is_gerente = any(
-        r.id in [CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_GERENTE_MECANICA_ID]
-        for r in ctx.author.roles
-    )
-    if not is_admin and not is_gerente:
-        await ctx.send("❌ Apenas **ADM** ou **GERENTES** podem resetar as horas!")
-        return
-
-    cargo_mecanico = ctx.guild.get_role(CARGO_MECANICO_ID)
-    total_mecanicos = 0
-    total_horas = 0
-
-    if cargo_mecanico:
-        hoje = agora()
-        segunda = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-        domingo = segunda + timedelta(days=6, hours=23, minutes=59, seconds=59)
-
-        for member in ctx.guild.members:
-            if member.bot:
-                continue
-            if cargo_mecanico not in member.roles:
-                continue
-            segundos = await calcular_horas_periodo(member.id, segunda, domingo)
-            if segundos > 0:
-                total_mecanicos += 1
-                total_horas += segundos
-
-    embed = discord.Embed(
-        title="⚠️ ── RESETAR HORAS DA SEMANA ── ⚠️",
-        description=(
-            "**ATENÇÃO!** Esta ação irá **ZERAR TODAS AS HORAS** "
-            "dos mecânicos da **semana atual**.\n\n"
-            "📌 **O que será resetado:**\n"
-            "• Todos os pontos abertos serão fechados\n"
-            "• Todos os pontos da semana serão apagados\n"
-            "• Histórico da semana atual será removido\n"
-            "• Todos os mecânicos voltarão para **0h 0min**\n\n"
-            f"📊 **Ação afetará:**\n"
-            f"• 👥 Mecânicos com horas: **{total_mecanicos}**\n"
-            f"• ⏰ Total a ser zerado: **{formatar_horas(total_horas)}**\n\n"
-            "⚠️ **Esta ação é IRREVERSÍVEL!**\n\n"
-            "Clique em **✅ CONFIRMAR RESET** para continuar."
-        ),
-        color=0xe74c3c,
-        timestamp=agora()
-    )
-    embed.set_footer(
-        text="🛡 Vida Rasa 442 • Reset de Horas (Mecânica)",
-        icon_url=bot.user.display_avatar.url if bot.user else None
-    )
-
-    view = ConfirmarResetHorasView()
-    await ctx.send(embed=embed, view=view)
+    await ctx.send('⏱️ O sistema de ponto da mecânica foi desativado. O histórico foi preservado.')
 
 # ────────────────────────────────────────────────────────────────────────────────
 # COMANDO: !testar_aviso_quarta
@@ -34820,6 +34370,89 @@ async def carregar_dados_iniciais():
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_botoes_metas
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restaurar_parcelas_e_blindados_v810 — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
+async def restaurar_parcelas_e_blindados_v810(reconciliar_antigos=False):
+    """Reanexa confirmações individuais sem reabrir operações já pagas."""
+    pool = await get_pool()
+    if not pool:
+        return 0
+    total = 0
+    try:
+        if reconciliar_antigos:
+            gerencia = bot.get_channel(CANAL_GERENCIA_ID)
+            if gerencia:
+                async for msg in gerencia.history(limit=None):
+                    if msg.author.id != bot.user.id or not msg.components or not msg.embeds:
+                        continue
+                    embed = msg.embeds[0]
+                    footer = embed.footer.text or ''
+                    desc = embed.description or ''
+                    match_emp = re.search(r'Empr[eé]stimo\s*#\s*(\d+)', footer, re.I)
+                    match_parc = re.search(r'Parcela:\*\*\s*`?(\d+)\s*/', desc, re.I)
+                    if not match_emp or not match_parc or '[TESTE]' in (embed.title or ''):
+                        continue
+                    async with pool.acquire() as conn:
+                        row = await conn.fetchrow('''SELECT ep.id FROM emprestimos_parcelas ep
+                            WHERE ep.emprestimo_id=$1 AND ep.numero_parcela=$2 AND ep.pago=FALSE
+                                AND ep.alerta_mensagem_id IS NULL''', int(match_emp.group(1)), int(match_parc.group(1)))
+                        if row:
+                            await conn.execute('UPDATE emprestimos_parcelas SET alerta_mensagem_id=$1 WHERE id=$2', str(msg.id), row['id'])
+        async with pool.acquire() as conn:
+            parcelas = await conn.fetch('''SELECT ep.id,ep.alerta_mensagem_id,e.tipo
+                FROM emprestimos_parcelas ep JOIN emprestimos e ON e.id=ep.emprestimo_id
+                WHERE ep.pago=FALSE AND ep.alerta_mensagem_id IS NOT NULL''')
+            blindados = await conn.fetch("SELECT id,alerta_mensagem_id FROM blindados WHERE status='vencido' AND ativo=TRUE AND alerta_mensagem_id IS NOT NULL")
+        for p in parcelas:
+            try:
+                view = MarcarParcelaPagaView(p['id'], p['tipo'])
+                bot.add_view(view, message_id=int(p['alerta_mensagem_id']))
+                total += 1
+            except Exception:
+                logger.exception('❌ Falha restaurando parcela #%s', p['id'])
+        for b in blindados:
+            try:
+                view = AlertaVencimentoView(b['id'])
+                bot.add_view(view, message_id=int(b['alerta_mensagem_id']))
+                total += 1
+            except Exception:
+                logger.exception('❌ Falha restaurando alerta de blindado #%s', b['id'])
+        logger.info('🔒 PATCH 001-A: %s botões de parcelas e blindados restaurados', total)
+        return total
+    except Exception:
+        logger.exception('❌ Falha global na restauração de parcelas/blindados')
+        return total
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restabelecer_operacoes_pendentes_v810 — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
+async def restabelecer_operacoes_pendentes_v810(reconciliar_antigos=False):
+    """Reconciliador das operações persistentes. Falhas isoladas por setor."""
+    for nome, operacao in (
+        ('reembolsos', recuperar_reembolsos_pendentes_v810),
+        ('registros', restabelecer_registros_pendentes_v810),
+        ('parcelas e blindados', restaurar_parcelas_e_blindados_v810),
+    ):
+        try:
+            await operacao(reconciliar_antigos=reconciliar_antigos)
+        except Exception:
+            logger.exception('❌ Erro isolado restaurando %s', nome)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: vigiar_operacoes_pendentes_v810 — PATCH 001-A
+# ────────────────────────────────────────────────────────────────────────────────
+async def vigiar_operacoes_pendentes_v810():
+    """Tenta recuperar registros após queda temporária do PostgreSQL."""
+    while not bot.is_closed():
+        try:
+            await asyncio.sleep(300)
+            await restabelecer_operacoes_pendentes_v810(reconciliar_antigos=False)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception('❌ Falha na vigilância dos botões pendentes')
+
 async def restaurar_botoes_metas():
     """
     Restaura os callbacks das mensagens V2 existentes
@@ -35051,6 +34684,11 @@ async def on_ready():
         bot.inicializando = False
         return
 
+    # PATCH 001-A/B/C/E: preparar estruturas e encerrar ponto antigo sem apagar histórico.
+    await preparar_financeiro_v810()
+    await migrar_nomes_bau_v810()
+    await desativar_ponto_mecanica_v810()
+    await restabelecer_operacoes_pendentes_v810(reconciliar_antigos=False)
     guild = bot.get_guild(GUILD_ID)
 
     if guild:
@@ -35118,8 +34756,11 @@ async def on_ready():
 
                 try:
                     view_instance = obj()
-                    view_instance.timeout = None
-
+                    # PATCH 001-A: não converter menus de confirmação temporária
+                    # em operações permanentes sem estado recuperável.
+                    if not view_instance.is_persistent():
+                        ignoradas += 1
+                        continue
                     bot.add_view(view_instance)
                     registradas += 1
 
@@ -35187,6 +34828,14 @@ async def on_ready():
     await restaurar_transferencias_finalizadas()
     await restaurar_acoes()
     await restaurar_botoes_metas()
+    # Reconciliação completa de cards antigos sem IDs salvos executada fora
+    # da inicialização principal para não bloquear os painéis do bot.
+    if not getattr(bot, '_v810_recuperador_iniciado', False):
+        bot._v810_recuperador_iniciado = True
+        asyncio.create_task(restabelecer_operacoes_pendentes_v810(reconciliar_antigos=True),
+            name='vdr442_recuperar_botoes_antigos_v810')
+        asyncio.create_task(vigiar_operacoes_pendentes_v810(),
+            name='vdr442_vigiar_botoes_v810')
 
     await setup_status()
 
@@ -35247,7 +34896,7 @@ async def on_ready():
     bot.inicializando = False
 
     logger.info("=" * 50)
-    logger.info("✅ BOT ONLINE 100% COMPLETO - v8.0")
+    logger.info("✅ BOT ONLINE - %s (PATCH 001-A/B/C/D/E/F)", VERSAO_BOT)
     logger.info("=" * 50)
 
 # ────────────────────────────────────────────────────────────────────────────────
