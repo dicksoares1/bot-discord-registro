@@ -96,7 +96,8 @@ bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 # ────────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger('VDR_BOT_V8')
-VERSAO_BOT = 'V8.1.0'  # PATCH 001-A/B/C/D/E/F
+VERSAO_BOT = 'V8.2.0'  # PATCH 002-A/B/C — preserva PATCH 001
+PATCH_ATUAL = 'PATCH 002-A/B/C'
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 1.2 — TOKENS E VARIÁVEIS DE AMBIENTE
@@ -658,6 +659,40 @@ async def inicializar_tabelas(pool):
             )
         """)
 
+        # ────────────────────────────────────────────────────────────────────────
+        # PATCH 002-C — DADOS ADICIONAIS DE BLINDADOS (SEM APAGAR REGISTROS)
+        # ────────────────────────────────────────────────────────────────────────
+        for ddl in (
+            "ALTER TABLE blindados ADD COLUMN IF NOT EXISTS placa VARCHAR(20)",
+            "ALTER TABLE blindados ADD COLUMN IF NOT EXISTS nome_responsavel VARCHAR(100)",
+            "ALTER TABLE blindados ADD COLUMN IF NOT EXISTS propriedade VARCHAR(20)",
+            "ALTER TABLE blindados ADD COLUMN IF NOT EXISTS taxa_paga_pela_faccao BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE blindados ADD COLUMN IF NOT EXISTS alerta_mensagem_id VARCHAR(30)",
+        ):
+            await conn.execute(ddl)
+        await conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_blindado_placa_ativa_v820
+            ON blindados(placa) WHERE placa IS NOT NULL AND ativo=TRUE""")
+        await conn.execute("""CREATE TABLE IF NOT EXISTS blindados_taxas_historico (
+            id BIGSERIAL PRIMARY KEY,
+            blindado_id INTEGER NOT NULL REFERENCES blindados(id),
+            valor BIGINT NOT NULL,
+            dias INTEGER NOT NULL,
+            registrado_por VARCHAR(30),
+            operacao VARCHAR(30) NOT NULL,
+            custeador VARCHAR(30),
+            observacao TEXT,
+            registrado_em TIMESTAMP DEFAULT NOW()
+        )""")
+        await conn.execute("ALTER TABLE blindados_taxas_historico ADD COLUMN IF NOT EXISTS custeador VARCHAR(30)")
+        await conn.execute("""CREATE TABLE IF NOT EXISTS blindados_alteracoes (
+            id BIGSERIAL PRIMARY KEY,
+            blindado_id INTEGER NOT NULL REFERENCES blindados(id),
+            alterado_por VARCHAR(30),
+            antes JSONB NOT NULL,
+            depois JSONB NOT NULL,
+            data TIMESTAMP DEFAULT NOW()
+        )""")
+
         # ═══════════════ TABELAS FINANCEIRAS ═══════════════
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS compras (
@@ -735,6 +770,26 @@ async def inicializar_tabelas(pool):
                 data TIMESTAMP DEFAULT NOW()
             )
         """)
+        # ────────────────────────────────────────────────────────────────────────
+        # PATCH 002-B — FILA PERSISTENTE DE LOGS DAS SAÍDAS DO GALPÃO
+        # ────────────────────────────────────────────────────────────────────────
+        await conn.execute("""CREATE TABLE IF NOT EXISTS vendas_logs_saida_pendentes (
+            id BIGSERIAL PRIMARY KEY,
+            pedido_numero INTEGER NOT NULL,
+            entrega_id INTEGER NOT NULL,
+            numero_parcela INTEGER NOT NULL,
+            retirado_por VARCHAR(30) NOT NULL,
+            organizacao TEXT,
+            pt_pacotes INTEGER DEFAULT 0,
+            sub_pacotes INTEGER DEFAULT 0,
+            data_criacao TIMESTAMP DEFAULT NOW(),
+            mensagem_id VARCHAR(30),
+            publicado_em TIMESTAMP,
+            UNIQUE(entrega_id, numero_parcela)
+        )""")
+        await conn.execute("""CREATE INDEX IF NOT EXISTS idx_saida_logs_pendentes_v820
+            ON vendas_logs_saida_pendentes(id) WHERE publicado_em IS NULL""")
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS entregas_parceladas (
                 id SERIAL PRIMARY KEY,
@@ -10911,8 +10966,110 @@ async def registrar_saida_estoque(pedido_numero, tipo, pacotes, retirado_por, co
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: confirmar_entrega_com_baixa_estoque
 # ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: publicar_logs_entregas_pendentes_v820 — PATCH 002-B
+# ────────────────────────────────────────────────────────────────────────────────
+async def publicar_logs_entregas_pendentes_v820(limite=30):
+    """Publica/reconcilia saídas já baixadas. Nunca altera o estoque.
+
+    O outbox é preenchido dentro da transação da entrega. A publicação
+    posterior é recuperável mesmo se o Discord/Railway cair após a baixa.
+    """
+    canal = bot.get_channel(CANAL_BAU_GALPAO_SUL_ID)
+    if canal is None:
+        logger.warning('⚠️ Galpão Sul indisponível para publicar logs de saída')
+        return 0
+    pool = await get_pool()
+    if not pool:
+        return 0
+    enviados = 0
+    try:
+        for _ in range(max(0, min(int(limite), 100))):
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    pendente = await conn.fetchrow('''
+                        SELECT * FROM vendas_logs_saida_pendentes
+                        WHERE publicado_em IS NULL
+                        ORDER BY id
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                    ''')
+                    if pendente is None:
+                        break
+                    marcador = f"VDR442-RETIRADA-{pendente['id']}"
+                    mensagem = None
+                    if pendente['mensagem_id']:
+                        try:
+                            mensagem = await canal.fetch_message(int(pendente['mensagem_id']))
+                        except discord.NotFound:
+                            mensagem = None
+                        except discord.HTTPException:
+                            raise
+                    if mensagem is None:
+                        # Recupera queda ocorrida APÓS enviar mas ANTES do commit.
+                        # Sem limite artificial de 100/1000 mensagens.
+                        # Para saídas recém-registradas, procura mensagens recentes;
+                        # pendências antigas podem ter o log muito distante no histórico.
+                        idade_segundos = max(0, (agora_db() - pendente['data_criacao']).total_seconds())
+                        limite_busca = None if idade_segundos > 300 else 100
+                        async for antiga in canal.history(limit=limite_busca):
+                            if antiga.author.id != bot.user.id:
+                                continue
+                            if any(
+                                emb.footer and emb.footer.text and marcador in emb.footer.text
+                                for emb in antiga.embeds
+                            ):
+                                mensagem = antiga
+                                break
+                    if mensagem is None:
+                        membro = canal.guild.get_member(int(pendente['retirado_por'])) if str(pendente['retirado_por']).isdigit() else None
+                        nome = membro.display_name if membro else str(pendente['retirado_por'])
+                        itens = []
+                        if pendente['pt_pacotes']:
+                            itens.append(f"PT: {fmt_num(pendente['pt_pacotes'])} pacotes")
+                        if pendente['sub_pacotes']:
+                            itens.append(f"SUB: {fmt_num(pendente['sub_pacotes'])} pacotes")
+                        embed = discord.Embed(
+                            title='📦 — SAÍDA DO BAÚ — 📦',
+                            description=(
+                                f"👤 **RETIRADO POR:** {discord.utils.escape_markdown(nome)}\n"
+                                f"🏷️ **PARA A ENTREGA DA ORG:** {discord.utils.escape_markdown(str(pendente['organizacao'] or 'Não informada'))}\n"
+                                f"📦 **ITENS RETIRADOS:** {' | '.join(itens)}\n"
+                                f"🧾 **PEDIDO:** #{pendente['pedido_numero']}"
+                                + (f" • PARCELA {pendente['numero_parcela']}" if pendente['entrega_id'] else '')
+                            ),
+                            color=0x5865F2,
+                            timestamp=pendente['data_criacao']
+                        )
+                        embed.set_footer(text=f"Sistema VDR442 • {marcador}")
+                        mensagem = await canal.send(embed=embed)
+                    await conn.execute('''
+                        UPDATE vendas_logs_saida_pendentes
+                        SET mensagem_id=$2, publicado_em=NOW()
+                        WHERE id=$1 AND publicado_em IS NULL
+                    ''', pendente['id'], str(mensagem.id))
+                    enviados += 1
+    except Exception:
+        logger.exception('❌ Falha publicando/reconciliando logs de saídas')
+    return enviados
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: vigiar_logs_entregas_v820 — PATCH 002-B
+# ────────────────────────────────────────────────────────────────────────────────
+async def vigiar_logs_entregas_v820():
+    """Continua publicando logs pendentes após falhas temporárias e deploys."""
+    while not bot.is_closed():
+        try:
+            await asyncio.sleep(180)
+            await publicar_logs_entregas_pendentes_v820(limite=100)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception('❌ Vigia dos logs do galpão Sul')
+
+
 async def confirmar_entrega_com_baixa_estoque(pedido_numero, entrega_id, numero_parcela,
-                                               pt, sub, entregador_id):
+                                               pt, sub, entregador_id, organizacao=None):
     """Registra a entrega e desconta PT/SUB em UMA transação PostgreSQL.
 
     A chave única (entrega_id, numero_parcela) em entregas_status impede
@@ -11014,8 +11171,23 @@ async def confirmar_entrega_com_baixa_estoque(pedido_numero, entrega_id, numero_
                 if not registro:
                     raise RuntimeError("Falha ao concluir entrega. Estoque revertido.")
 
+                # A mesma transação da baixa salva a intenção de publicar o log.
+                # Chave por entrega/parcela: um único log por saída efetiva.
+                await conn.execute("""
+                    INSERT INTO vendas_logs_saida_pendentes
+                        (pedido_numero, entrega_id, numero_parcela, retirado_por,
+                         organizacao, pt_pacotes, sub_pacotes)
+                    VALUES($1,$2,$3,$4,$5,$6,$7)
+                    ON CONFLICT(entrega_id, numero_parcela) DO NOTHING
+                """, pedido_numero, entrega_id, numero_parcela, entregador_id,
+                    str(organizacao or 'Não informada')[:200], pt//50, sub//50)
+
                 pago = bool(estado["pago"])
 
+        try:
+            await publicar_logs_entregas_pendentes_v820(limite=5)
+        except Exception:
+            logger.exception('⚠️ A saída foi baixada, mas o log ficou pendente no banco')
         return {"ok": True, "pago": pago, "pt": pt, "sub": sub,
                 "pacotes_pt": pt // 50, "pacotes_sub": sub // 50}
     except Exception as e:
@@ -13228,7 +13400,8 @@ class StatusView(discord.ui.View):
             entrega_id=dados["entrega_id"],
             numero_parcela=dados["entrega_atual"],
             pt=dados["pt"], sub=dados["sub"],
-            entregador_id=interaction.user.id
+            entregador_id=interaction.user.id,
+            organizacao=dados.get("organizacao", "Não informada")
         )
         # Uma entrega já baixada no banco NÃO é erro e NÃO recebe outra baixa.
         ja_entregue = bool(resultado.get("ja_entregue"))
@@ -14390,13 +14563,7 @@ async def enviar_painel_vendas():
 
     estoque = await carregar_estoque()
 
-    # Lógica de cores para a barra de progresso do estoque
-    pct_pt = min(estoque['PT'] / 1000, 1.0)
-    pct_sub = min(estoque['SUB'] / 1000, 1.0)
-    
-    barra_pt = "▓" * int(pct_pt * 10) + "░" * (10 - int(pct_pt * 10))
-    barra_sub = "▓" * int(pct_sub * 10) + "░" * (10 - int(pct_sub * 10))
-
+    # PATCH 002-A: somente saldo real, sem barras com teto artificial.
     embed = discord.Embed(
         title="🛒 ── CENTRAL DE VENDAS ── 🛒",
         description="**Sistema de Encomendas • VDR 442**\n*Gerencie os pedidos, o estoque e as comissões*",
@@ -14414,8 +14581,6 @@ async def enviar_painel_vendas():
             f"PT:  {fmt_num(estoque['PT'])} pacotes\n"
             f"SUB: {fmt_num(estoque['SUB'])} pacotes\n"
             f"```\n"
-            f"`PT:  ` {barra_pt}\n"
-            f"`SUB: ` {barra_sub}"
         ),
         inline=False
     )
@@ -26003,133 +26168,515 @@ async def enviar_painel_relatorio_metas():
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: CadastrarBlindadoModal
 # ────────────────────────────────────────────────────────────────────────────────
-class CadastrarBlindadoModal(discord.ui.Modal, title="🚗 Cadastrar Blindado"):
-    membro = discord.ui.TextInput(label="👤 Membro", placeholder="Nome ou @menção", required=True)
-    passaporte = discord.ui.TextInput(label="🆔 Passaporte", placeholder="Ex: 123456", required=True)
-    veiculo = discord.ui.TextInput(label="🚙 Tipo de Blindado", placeholder="Ex: Insurgent", required=True)
-    valor = discord.ui.TextInput(label="💰 Valor da Taxa (R$)", placeholder="Ex: 500000", required=True)
-    dias = discord.ui.TextInput(label="📅 Dias (Padrão 15)", placeholder="Ex: 15", required=False, default="15")
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def on_submit(self, interaction: discord.Interaction):
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH 002-C — GESTÃO DE BLINDADOS: PLACA, RESPONSÁVEL, PROPRIEDADE E TAXAS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: pode_gerenciar_blindados_v820
+# ────────────────────────────────────────────────────────────────────────────────
+def pode_gerenciar_blindados_v820(member):
+    if member is None or not hasattr(member, 'roles'):
+        return False
+    permitidos = {
+        CARGO_01_ID, CARGO_02_ID, CARGO_03_ID,
+        CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID,
+        CARGO_GERENTE_MECANICA_ID
+    }
+    return member.guild_permissions.administrator or any(r.id in permitidos for r in member.roles)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: normalizar_placa_blindado_v820
+# ────────────────────────────────────────────────────────────────────────────────
+def normalizar_placa_blindado_v820(placa):
+    placa = re.sub(r'[^A-Za-z0-9]', '', str(placa or '')).upper()
+    if not (4 <= len(placa) <= 12):
+        raise ValueError('A placa deve conter de 4 a 12 letras/números.')
+    return placa
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: exibir_blindado_v820
+# ────────────────────────────────────────────────────────────────────────────────
+def exibir_blindado_v820(row):
+    propriedade = str(row.get('propriedade') or 'NAO_INFORMADO').upper()
+    dono = '🏴 FACÇÃO' if propriedade == 'FACCAO' else ('👤 PARTICULAR' if propriedade == 'PARTICULAR' else '❔ A confirmar')
+    return (
+        f"**#{row['id']} • {row['tipo_veiculo'] or 'Sem modelo'}** | "
+        f"`{row.get('placa') or 'PLACA PENDENTE'}` | "
+        f"{row.get('passaporte') or '—'} - {row.get('nome_responsavel') or row.get('user_id') or 'Não informado'}\n"
+        f"{dono} • Taxa {formatar_dinheiro(row['valor_taxa'] or 0)} • "
+        f"Vence {row['data_vencimento'].strftime('%d/%m/%Y') if row['data_vencimento'] else '—'}"
+    )
+
+# ────────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: atualizar_painel_blindados_v820
+# ────────────────────────────────────────────────────────────────────────────────
+async def atualizar_painel_blindados_v820():
+    try:
+        await enviar_painel_blindados()
+    except Exception:
+        logger.exception('❌ Não foi possível atualizar o painel de blindados')
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: BlindadosSelecionarResponsavelView
+# ────────────────────────────────────────────────────────────────────────────────
+class BlindadosSelecionarResponsavelView(discord.ui.View):
+    def __init__(self, autor_id):
+        super().__init__(timeout=180)
+        self.autor_id = int(autor_id)
+        self.responsavel_id = None
+        self.propriedade = 'PARTICULAR'
+        usuarios = discord.ui.UserSelect(placeholder='Selecione quem está com o blindado na garagem', row=0)
+        usuarios.callback = self.escolher_usuario
+        self.add_item(usuarios)
+        proprietario = discord.ui.Select(
+            placeholder='Escolha de quem é o veículo',
+            options=[
+                discord.SelectOption(label='Particular (a facção paga a taxa)', value='PARTICULAR', emoji='👤', default=True),
+                discord.SelectOption(label='Veículo da facção', value='FACCAO', emoji='🏴')
+            ], row=1
+        )
+        proprietario.callback = self.escolher_propriedade
+        self.add_item(proprietario)
+
+    async def escolher_usuario(self, interaction):
+        if not pode_gerenciar_blindados_v820(interaction.user) or interaction.user.id != self.autor_id:
+            return await interaction.response.send_message('❌ Sem autorização.', ephemeral=True)
+        self.responsavel_id = interaction.data['values'][0]
+        await interaction.response.send_message('✅ Responsável selecionado. Escolha a propriedade e clique em Continuar.', ephemeral=True)
+
+    async def escolher_propriedade(self, interaction):
+        if not pode_gerenciar_blindados_v820(interaction.user) or interaction.user.id != self.autor_id:
+            return await interaction.response.send_message('❌ Sem autorização.', ephemeral=True)
+        self.propriedade = interaction.data['values'][0]
+        await interaction.response.send_message('✅ Propriedade definida. Clique em Continuar.', ephemeral=True)
+
+    @discord.ui.button(label='➡️ Continuar cadastro', style=discord.ButtonStyle.success, row=2)
+    async def continuar(self, interaction, button):
+        if not pode_gerenciar_blindados_v820(interaction.user) or interaction.user.id != self.autor_id:
+            return await interaction.response.send_message('❌ Sem autorização.', ephemeral=True)
+        if not self.responsavel_id:
+            return await interaction.response.send_message('❌ Selecione primeiro o membro responsável pela garagem.', ephemeral=True)
+        try:
+            membro = interaction.guild.get_member(int(self.responsavel_id)) or await interaction.guild.fetch_member(int(self.responsavel_id))
+        except discord.HTTPException:
+            return await interaction.response.send_message('❌ O responsável não foi encontrado neste servidor.', ephemeral=True)
+        if membro.bot:
+            return await interaction.response.send_message('❌ Escolha um membro, não um bot.', ephemeral=True)
+        await interaction.response.send_modal(CadastrarBlindadoModal(membro.id, self.propriedade))
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: CadastrarBlindadoModal
+# ────────────────────────────────────────────────────────────────────────────────
+class CadastrarBlindadoModal(discord.ui.Modal, title='🚗 Cadastrar Blindado'):
+    passaporte = discord.ui.TextInput(label='Passaporte do responsável', placeholder='Ex: 820', max_length=30)
+    veiculo = discord.ui.TextInput(label='Modelo do veículo', placeholder='Ex: XLS2 / STD', max_length=100)
+    placa = discord.ui.TextInput(label='Placa do veículo', placeholder='Ex: ABC1234', max_length=20)
+    valor = discord.ui.TextInput(label='Valor da taxa (R$)', placeholder='Ex: 500000', max_length=20)
+    dias = discord.ui.TextInput(label='Validade da taxa (dias)', default='15', max_length=4)
+
+    def __init__(self, responsavel_id, propriedade):
+        super().__init__(timeout=300)
+        self.responsavel_id = int(responsavel_id)
+        self.propriedade = propriedade
+
+    async def on_submit(self, interaction):
+        if not pode_gerenciar_blindados_v820(interaction.user):
+            return await interaction.response.send_message('❌ Somente 01, 02, 03 e Gerência podem cadastrar.', ephemeral=True)
         await interaction.response.defer(ephemeral=True)
         try:
-            valor_taxa = safe_int(self.valor.value); qtd_dias = safe_int(self.dias.value) if self.dias.value else 15
-            if valor_taxa <= 0 or qtd_dias <= 0: raise ValueError
-        except: return await interaction.followup.send("❌ Valores inválidos!", ephemeral=True)
-        data_vencimento = agora() + timedelta(days=qtd_dias)
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute("INSERT INTO blindados (user_id, passaporte, tipo_veiculo, valor_taxa, dias, data_vencimento) VALUES ($1, $2, $3, $4, $5, $6)", self.membro.value, self.passaporte.value, self.veiculo.value, valor_taxa, qtd_dias, para_db_naive(data_vencimento))
-        embed = discord.Embed(title="✅ BLINDADO CADASTRADO", color=0x2ECC71)
-        embed.add_field(name="👤 Membro", value=self.membro.value, inline=True)
-        embed.add_field(name="🚙 Veículo", value=self.veiculo.value, inline=True)
-        embed.add_field(name="💰 Taxa", value=formatar_dinheiro(valor_taxa), inline=True)
-        embed.add_field(name="📅 Vence em", value=data_vencimento.strftime('%d/%m/%Y'), inline=True)
-        await interaction.followup.send(embed=embed, ephemeral=True)
+            placa = normalizar_placa_blindado_v820(self.placa.value)
+            valor = safe_int(self.valor.value)
+            dias = safe_int(self.dias.value)
+            if valor <= 0 or not 1 <= dias <= 3650:
+                raise ValueError('Valor deve ser positivo e prazo entre 1 e 3650 dias.')
+            if not self.passaporte.value.strip() or not self.veiculo.value.strip():
+                raise ValueError('Modelo e passaporte são obrigatórios.')
+            membro = interaction.guild.get_member(self.responsavel_id) or await interaction.guild.fetch_member(self.responsavel_id)
+            if membro.bot:
+                raise ValueError('Responsável não pode ser bot.')
+            pool = await get_pool()
+            if not pool:
+                raise RuntimeError('Banco indisponível.')
+            vencimento = para_db_naive(agora() + timedelta(days=dias))
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    existe = await conn.fetchval('SELECT id FROM blindados WHERE placa=$1 AND ativo=TRUE FOR UPDATE', placa)
+                    if existe:
+                        raise ValueError(f'A placa {placa} já está ativa no cadastro #{existe}.')
+                    bid = await conn.fetchval('''INSERT INTO blindados
+                        (user_id, passaporte, tipo_veiculo, placa, nome_responsavel, propriedade,
+                         taxa_paga_pela_faccao, valor_taxa, dias, data_vencimento, status, ativo)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pago',TRUE) RETURNING id''',
+                        str(membro.id), self.passaporte.value.strip(), self.veiculo.value.strip().upper(),
+                        placa, membro.display_name, self.propriedade,
+                        self.propriedade == 'PARTICULAR', valor, dias, vencimento)
+                    await conn.execute('''INSERT INTO blindados_taxas_historico
+                        (blindado_id, valor, dias, registrado_por, operacao, custeador, observacao)
+                        VALUES ($1,$2,$3,$4,'cadastro',$5,'Taxa inicial informada; sem movimentação automática do caixa')''',
+                        bid, valor, dias, str(interaction.user.id), 'FACCAO' if self.propriedade == 'PARTICULAR' else 'NAO_APLICAVEL')
+            await interaction.followup.send(
+                f'✅ **Blindado #{bid} cadastrado**\n🚙 {self.veiculo.value.upper()} • `{placa}`\n'
+                f'👤 {self.passaporte.value} - {membro.display_name}\n'
+                f"🏴 Propriedade: {'Particular — taxa por conta da facção' if self.propriedade == 'PARTICULAR' else 'Facção'}\n"
+                f'💰 Taxa informada: {formatar_dinheiro(valor)} • Próximo vencimento: {vencimento:%d/%m/%Y}\n'
+                'ℹ️ Nenhum débito foi realizado no caixa.', ephemeral=True)
+            await atualizar_painel_blindados_v820()
+        except (ValueError, RuntimeError) as erro:
+            await interaction.followup.send(f'❌ {erro}', ephemeral=True)
+        except asyncpg.UniqueViolationError:
+            await interaction.followup.send('❌ Essa placa já existe no cadastro ativo.', ephemeral=True)
+        except Exception:
+            logger.exception('❌ Erro cadastrado blindado no PATCH 002')
+            await interaction.followup.send('❌ Falha no cadastro; confira os logs do Railway.', ephemeral=True)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: EditarBlindadoModal
+# ────────────────────────────────────────────────────────────────────────────────
+class EditarBlindadoModal(discord.ui.Modal, title='✏️ Editar Blindado'):
+    def __init__(self, row):
+        super().__init__(timeout=300)
+        self.blindado_id = int(row['id'])
+        self.modelo = discord.ui.TextInput(label='Modelo', default=row['tipo_veiculo'] or '', max_length=100)
+        self.placa = discord.ui.TextInput(label='Placa', default=row['placa'] or '', max_length=20)
+        self.passaporte = discord.ui.TextInput(label='Passaporte', default=row['passaporte'] or '', max_length=30)
+        self.responsavel = discord.ui.TextInput(label='Nome do responsável da garagem', default=row['nome_responsavel'] or row['user_id'] or '', max_length=100)
+        self.propriedade = discord.ui.TextInput(label='Proprietário (FACCAO ou PARTICULAR)', default=row['propriedade'] or 'PARTICULAR', max_length=20)
+        for campo in (self.modelo, self.placa, self.passaporte, self.responsavel, self.propriedade):
+            self.add_item(campo)
+
+    async def on_submit(self, interaction):
+        if not pode_gerenciar_blindados_v820(interaction.user):
+            return await interaction.response.send_message('❌ Sem permissão.', ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            propriedade = normalizar_texto(self.propriedade.value).replace('ç', 'c').upper()
+            if propriedade in ('FACÇÃO', 'FACCAO'):
+                propriedade = 'FACCAO'
+            if propriedade not in ('FACCAO', 'PARTICULAR'):
+                raise ValueError('Propriedade precisa ser FACCAO ou PARTICULAR.')
+            placa = normalizar_placa_blindado_v820(self.placa.value)
+            pool = await get_pool()
+            if not pool:
+                raise RuntimeError('Banco indisponível.')
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    antigo = await conn.fetchrow('SELECT * FROM blindados WHERE id=$1 AND ativo=TRUE FOR UPDATE', self.blindado_id)
+                    if not antigo:
+                        raise ValueError('Blindado não encontrado ou inativo.')
+                    conflito = await conn.fetchval('SELECT id FROM blindados WHERE placa=$1 AND ativo=TRUE AND id<>$2', placa, self.blindado_id)
+                    if conflito:
+                        raise ValueError(f'Placa já cadastrada no blindado #{conflito}.')
+                    await conn.execute('''UPDATE blindados SET tipo_veiculo=$2, placa=$3, passaporte=$4,
+                        nome_responsavel=$5, propriedade=$6, taxa_paga_pela_faccao=$7
+                        WHERE id=$1''', self.blindado_id, self.modelo.value.strip().upper(), placa,
+                        self.passaporte.value.strip(), self.responsavel.value.strip(), propriedade,
+                        propriedade == 'PARTICULAR')
+                    await conn.execute('''INSERT INTO blindados_alteracoes
+                        (blindado_id, alterado_por, antes, depois) VALUES ($1,$2,$3::jsonb,$4::jsonb)''',
+                        self.blindado_id, str(interaction.user.id),
+                        json.dumps({'modelo': antigo['tipo_veiculo'], 'placa': antigo['placa'],
+                                    'passaporte': antigo['passaporte'], 'responsavel': antigo['nome_responsavel'],
+                                    'propriedade': antigo['propriedade']}),
+                        json.dumps({'modelo': self.modelo.value.strip().upper(), 'placa': placa,
+                                    'passaporte': self.passaporte.value.strip(), 'responsavel': self.responsavel.value.strip(),
+                                    'propriedade': propriedade}))
+            await interaction.followup.send(f'✅ Blindado #{self.blindado_id} atualizado com auditoria.', ephemeral=True)
+            await atualizar_painel_blindados_v820()
+        except (ValueError, RuntimeError) as erro:
+            await interaction.followup.send(f'❌ {erro}', ephemeral=True)
+        except asyncpg.UniqueViolationError:
+            await interaction.followup.send('❌ Placa duplicada.', ephemeral=True)
+        except Exception:
+            logger.exception('❌ Edição de blindado #%s', self.blindado_id)
+            await interaction.followup.send('❌ Falha na edição. Consulte logs.', ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: RenovarBlindadoModal
 # ────────────────────────────────────────────────────────────────────────────────
-class RenovarBlindadoModal(discord.ui.Modal, title="💰 Dar Baixa / Renovar"):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
-    def __init__(self, blindado_id, mensagem_original):
-        super().__init__(); self.blindado_id = blindado_id; self.mensagem_original = mensagem_original
-    valor = discord.ui.TextInput(label="💰 Valor Pago (R$)", placeholder="Ex: 500000", required=True)
-    dias = discord.ui.TextInput(label="📅 Dias Renovados", placeholder="Ex: 15", required=True, default="15")
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def on_submit(self, interaction: discord.Interaction):
+class RenovarBlindadoModal(discord.ui.Modal, title='💰 Registrar Taxa / Renovar'):
+    valor = discord.ui.TextInput(label='Valor da taxa paga/registrada (R$)', placeholder='Ex: 500000')
+    dias = discord.ui.TextInput(label='Dias renovados', default='15')
+
+    def __init__(self, blindado_id, mensagem_original=None):
+        super().__init__(timeout=300)
+        self.blindado_id = int(blindado_id)
+        self.mensagem_original = mensagem_original
+
+    async def on_submit(self, interaction):
+        if not pode_gerenciar_blindados_v820(interaction.user):
+            return await interaction.response.send_message('❌ Somente 01, 02, 03 e Gerência podem registrar taxas.', ephemeral=True)
         await interaction.response.defer(ephemeral=True)
         try:
-            valor_pago = safe_int(self.valor.value); qtd_dias = safe_int(self.dias.value)
-            if valor_pago <= 0 or qtd_dias <= 0: raise ValueError
-        except: return await interaction.followup.send("❌ Valores inválidos!", ephemeral=True)
-        nova_data = agora() + timedelta(days=qtd_dias)
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute("UPDATE blindados SET valor_taxa = $1, dias = $2, data_vencimento = $3, status = 'pago', alerta_enviado = false WHERE id = $4", valor_pago, qtd_dias, para_db_naive(nova_data), self.blindado_id)
-        embed = self.mensagem_original.embeds[0]; embed.color = 0x2ECC71
-        for i, field in enumerate(embed.fields):
-            if field.name == "📌 STATUS": embed.set_field_at(i, name="📌 STATUS", value=f"✅ **PAGO / RENOVADO** por {interaction.user.mention}", inline=False); break
-        embed.add_field(name="💰 NOVA TAXA", value=f"```yaml\n{formatar_dinheiro(valor_pago)} | {qtd_dias} dias\nVence: {nova_data.strftime('%d/%m/%Y')}\n```", inline=False)
-        await self.mensagem_original.edit(embed=embed, view=None)
-        await interaction.followup.send(f"✅ Baixa dada! Renovado até {nova_data.strftime('%d/%m/%Y')}.", ephemeral=True)
+            valor = safe_int(self.valor.value)
+            dias = safe_int(self.dias.value)
+            if valor <= 0 or not 1 <= dias <= 3650:
+                raise ValueError('Valor ou prazo inválido.')
+            pool = await get_pool()
+            if not pool:
+                raise RuntimeError('Banco indisponível.')
+            nova_data = para_db_naive(agora() + timedelta(days=dias))
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow('SELECT * FROM blindados WHERE id=$1 AND ativo=TRUE FOR UPDATE', self.blindado_id)
+                    if not row:
+                        raise ValueError('Blindado inexistente/inativo.')
+                    # Evita duplo lançamento por reenvio do mesmo alerta ao mesmo tempo.
+                    if self.mensagem_original and row['status'] == 'pago' and not row['alerta_enviado']:
+                        raise ValueError('Essa cobrança já foi renovada. Nenhuma duplicação realizada.')
+                    repetida = await conn.fetchval("""
+                        SELECT id FROM blindados_taxas_historico
+                        WHERE blindado_id=$1 AND registrado_por=$2 AND valor=$3
+                          AND dias=$4 AND operacao='renovacao'
+                          AND registrado_em > NOW() - INTERVAL '30 seconds'
+                        LIMIT 1
+                    """, self.blindado_id, str(interaction.user.id), valor, dias)
+                    if repetida:
+                        raise ValueError('Essa renovação já foi registrada nos últimos 30 segundos.')
+                    await conn.execute('''UPDATE blindados SET valor_taxa=$2, dias=$3, data_vencimento=$4,
+                        status='pago', alerta_enviado=FALSE, alerta_mensagem_id=NULL WHERE id=$1''',
+                        self.blindado_id, valor, dias, nova_data)
+                    await conn.execute('''INSERT INTO blindados_taxas_historico
+                        (blindado_id, valor, dias, registrado_por, operacao, custeador, observacao)
+                        VALUES ($1,$2,$3,$4,'renovacao',$5,'Taxa registrada pela gerência; sem débito automático no caixa')''',
+                        self.blindado_id, valor, dias, str(interaction.user.id), 'FACCAO' if row['propriedade'] == 'PARTICULAR' else 'NAO_APLICAVEL')
+            if self.mensagem_original and self.mensagem_original.embeds:
+                try:
+                    embed = self.mensagem_original.embeds[0].copy()
+                    embed.color = 0x2ECC71
+                    for i, f in enumerate(embed.fields):
+                        if f.name == '📌 STATUS':
+                            embed.set_field_at(i, name='📌 STATUS', value=f'✅ RENOVADO por {interaction.user.mention}', inline=False)
+                    await self.mensagem_original.edit(embed=embed, view=None)
+                except discord.HTTPException:
+                    logger.exception('⚠️ Taxa salva, mas falhou atualização do alerta')
+            await interaction.followup.send(
+                f'✅ Taxa do blindado #{self.blindado_id} registrada: {formatar_dinheiro(valor)}.\n'
+                f'📅 Novo vencimento: {nova_data:%d/%m/%Y}.\n'
+                'ℹ️ Nenhuma movimentação automática foi lançada no caixa.', ephemeral=True)
+            await atualizar_painel_blindados_v820()
+        except (ValueError, RuntimeError) as erro:
+            await interaction.followup.send(f'❌ {erro}', ephemeral=True)
+        except Exception:
+            logger.exception('❌ Renovação do blindado #%s', self.blindado_id)
+            await interaction.followup.send('❌ Falha na renovação. Consulte logs.', ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: AlertaVencimentoView
 # ────────────────────────────────────────────────────────────────────────────────
 class AlertaVencimentoView(discord.ui.View):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
-    def __init__(self, blindado_id): super().__init__(timeout=None); self.blindado_id = blindado_id
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: dar_baixa
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="💰 Dar Baixa / Pago", style=discord.ButtonStyle.success, custom_id="blindado_baixa")
-    async def dar_baixa(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not any(r.id in [CARGO_DONO_MORRO_ID, CARGO_GERENTE_ID, CARGO_GERENTE_GERAL_ID, CARGO_01_ID, CARGO_02_ID] for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Apenas a gerência pode dar baixa!", ephemeral=True)
+    def __init__(self, blindado_id):
+        super().__init__(timeout=None)
+        self.blindado_id = int(blindado_id)
+
+    @discord.ui.button(label='💰 Dar Baixa / Pago', style=discord.ButtonStyle.success, custom_id='blindado_baixa')
+    async def dar_baixa(self, interaction, button):
+        if not pode_gerenciar_blindados_v820(interaction.user):
+            return await interaction.response.send_message('❌ Somente 01, 02, 03 e Gerência.', ephemeral=True)
         await interaction.response.send_modal(RenovarBlindadoModal(self.blindado_id, interaction.message))
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CLASSE: BlindadosSelecionarVeiculoView
+# ────────────────────────────────────────────────────────────────────────────────
+class BlindadosSelecionarVeiculoView(discord.ui.View):
+    def __init__(self, rows, acao, autor_id, pagina=0):
+        super().__init__(timeout=180)
+        self.rows = [dict(x) for x in rows]
+        self.acao = acao
+        self.autor_id = int(autor_id)
+        self.pagina = max(0, min(pagina, (len(self.rows)-1)//25))
+        self.montar()
+
+    def montar(self):
+        self.clear_items()
+        inicio = self.pagina*25
+        grupo = self.rows[inicio:inicio+25]
+        seletor = discord.ui.Select(
+            placeholder=f'Selecione blindado ({inicio+1}-{inicio+len(grupo)} de {len(self.rows)})',
+            options=[discord.SelectOption(
+                label=f"#{b['id']} {b['tipo_veiculo'] or 'Sem modelo'} | {b['placa'] or 'Sem placa'}"[:100],
+                description=f"{b['passaporte'] or '—'} - {b['nome_responsavel'] or b['user_id'] or '—'}"[:100],
+                value=str(b['id'])) for b in grupo], row=0
+        )
+        seletor.callback = self.escolher
+        self.add_item(seletor)
+        if self.pagina > 0:
+            anterior = discord.ui.Button(label='⬅️ Anterior', style=discord.ButtonStyle.secondary, row=1)
+            anterior.callback = self.anterior
+            self.add_item(anterior)
+        if inicio + 25 < len(self.rows):
+            proximo = discord.ui.Button(label='Próxima ➡️', style=discord.ButtonStyle.secondary, row=1)
+            proximo.callback = self.proximo
+            self.add_item(proximo)
+
+    async def anterior(self, interaction):
+        if interaction.user.id != self.autor_id or not pode_gerenciar_blindados_v820(interaction.user):
+            return await interaction.response.send_message('❌ Sem autorização.', ephemeral=True)
+        self.pagina -= 1
+        self.montar()
+        await interaction.response.edit_message(view=self)
+
+    async def proximo(self, interaction):
+        if interaction.user.id != self.autor_id or not pode_gerenciar_blindados_v820(interaction.user):
+            return await interaction.response.send_message('❌ Sem autorização.', ephemeral=True)
+        self.pagina += 1
+        self.montar()
+        await interaction.response.edit_message(view=self)
+
+    async def escolher(self, interaction):
+        if interaction.user.id != self.autor_id or not pode_gerenciar_blindados_v820(interaction.user):
+            return await interaction.response.send_message('❌ Sem autorização.', ephemeral=True)
+        blindado_id = int(interaction.data['values'][0])
+        pool = await get_pool()
+        if not pool:
+            return await interaction.response.send_message('❌ Banco indisponível.', ephemeral=True)
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow('SELECT * FROM blindados WHERE id=$1 AND ativo=TRUE', blindado_id)
+        if row is None:
+            return await interaction.response.send_message('❌ Blindado não encontrado.', ephemeral=True)
+        if self.acao == 'editar':
+            return await interaction.response.send_modal(EditarBlindadoModal(row))
+        if self.acao == 'taxa':
+            return await interaction.response.send_modal(RenovarBlindadoModal(blindado_id))
+        dados = dict(row)
+        dono = 'FACÇÃO' if dados['propriedade'] == 'FACCAO' else ('PARTICULAR' if dados['propriedade'] == 'PARTICULAR' else 'NÃO INFORMADO')
+        embed = discord.Embed(title=f"🚗 BLINDADO #{blindado_id} — {dados['tipo_veiculo']}", color=0x3498DB)
+        embed.description = (
+            f"**Placa:** `{dados['placa'] or 'PENDENTE'}`\n"
+            f"**Responsável na garagem:** {dados['passaporte'] or '—'} - {dados['nome_responsavel'] or dados['user_id'] or '—'}\n"
+            f"**Proprietário:** {dono}\n"
+            f"**Taxa custeada pela facção (veículo particular):** {'SIM' if dados['taxa_paga_pela_faccao'] else 'NÃO'}\n"
+            f"**Taxa:** {formatar_dinheiro(dados['valor_taxa'] or 0)}\n"
+            f"**Situação:** {dados['status']}\n"
+            f"**Vencimento:** {dados['data_vencimento'].strftime('%d/%m/%Y') if dados['data_vencimento'] else '—'}"
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # CLASSE: PainelBlindadosView
 # ────────────────────────────────────────────────────────────────────────────────
 class PainelBlindadosView(discord.ui.View):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
-    def __init__(self): super().__init__(timeout=None)
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: cadastrar
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="🚗 Cadastrar Blindado", style=discord.ButtonStyle.primary, custom_id="blindado_cadastrar", emoji="🚗")
-    async def cadastrar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not any(r.id in [CARGO_01_ID, CARGO_02_ID, CARGO_GERENTE_ID] for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Apenas Gerentes/01/02 podem cadastrar!", ephemeral=True)
-        await interaction.response.send_modal(CadastrarBlindadoModal())
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label='🚗 Cadastrar Blindado', style=discord.ButtonStyle.primary, custom_id='blindado_cadastrar')
+    async def cadastrar(self, interaction, button):
+        if not pode_gerenciar_blindados_v820(interaction.user):
+            return await interaction.response.send_message('❌ Apenas 01, 02, 03 e Gerência.', ephemeral=True)
+        await interaction.response.send_message('Selecione o responsável na garagem e indique a propriedade:',
+                                                view=BlindadosSelecionarResponsavelView(interaction.user.id), ephemeral=True)
+
+    async def selecionar(self, interaction, acao):
+        if not pode_gerenciar_blindados_v820(interaction.user):
+            return await interaction.response.send_message('❌ Apenas 01, 02, 03 e Gerência.', ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        pool = await get_pool()
+        if not pool:
+            return await interaction.followup.send('❌ Banco indisponível.', ephemeral=True)
+        async with pool.acquire() as conn:
+            rows = await conn.fetch('SELECT * FROM blindados WHERE ativo=TRUE ORDER BY id DESC')
+        if not rows:
+            return await interaction.followup.send('Nenhum blindado cadastrado ainda.', ephemeral=True)
+        await interaction.followup.send('Selecione o veículo para ' + {'editar':'editar','taxa':'registrar taxa','consultar':'consultar'}[acao] + ':',
+                                        view=BlindadosSelecionarVeiculoView(rows, acao, interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label='✏️ Editar', style=discord.ButtonStyle.secondary, custom_id='blindado_editar_v820')
+    async def editar(self, interaction, button):
+        await self.selecionar(interaction, 'editar')
+
+    @discord.ui.button(label='💰 Registrar Taxa', style=discord.ButtonStyle.success, custom_id='blindado_taxa_v820')
+    async def taxa(self, interaction, button):
+        await self.selecionar(interaction, 'taxa')
+
+    @discord.ui.button(label='📋 Consultar', style=discord.ButtonStyle.secondary, custom_id='blindado_consultar_v820')
+    async def consultar(self, interaction, button):
+        await self.selecionar(interaction, 'consultar')
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: enviar_painel_blindados
 # ────────────────────────────────────────────────────────────────────────────────
 async def enviar_painel_blindados():
     canal = bot.get_channel(CANAL_BLINDADOS_CADASTRO_ID)
-    if not canal: return
-    embed = discord.Embed(title="🚗 ── CONTROLE DE BLINDADOS ── 🚗", description="**VDR 442 • Gestão de Taxas**\n*Registre os blindados e controle os vencimentos.*", color=0x3498DB)
-    embed.add_field(name="📖 COMO FUNCIONA:", value="**1️⃣** Clique em **🚗 Cadastrar Blindado**.\n**2️⃣** Informe membro, passaporte, tipo e valor.\n**3️⃣** O prazo padrão é de 15 dias.\n**4️⃣** Quando vencer, a liderança receberá um alerta.", inline=False)
-    await enviar_ou_atualizar_painel("painel_blindados", CANAL_BLINDADOS_CADASTRO_ID, embed, PainelBlindadosView())
+    if canal is None:
+        logger.error('❌ Canal de blindados não encontrado')
+        return
+    pool = await get_pool()
+    if not pool:
+        logger.error('❌ Banco indisponível para painel de blindados')
+        return
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''SELECT id, tipo_veiculo, placa, passaporte, nome_responsavel,
+            user_id, propriedade, valor_taxa, data_vencimento
+            FROM blindados WHERE ativo=TRUE ORDER BY id DESC''')
+    embed = discord.Embed(title='🚗 CONTROLE DE BLINDADOS • VDR 442',
+        description=('**Cadastro de veículos e controle de taxas**\n'
+                     '👤 **PARTICULAR:** taxa de responsabilidade da facção.\n'
+                     '🏴 **FACÇÃO:** veículo do patrimônio da facção.\n'
+                     'A inclusão/renovação registra o controle interno; **não movimenta o caixa automaticamente**.'),
+        color=0x3498DB, timestamp=agora())
+    if not rows:
+        embed.add_field(name='📋 BLINDADOS CADASTRADOS', value='Nenhum veículo cadastrado.', inline=False)
+    else:
+        # Respeita limite de 1024 caracteres do campo e 25 campos por embed.
+        linhas = [exibir_blindado_v820(dict(row)) for row in rows]
+        blocos = []
+        atual = ''
+        for linha in linhas[:20]:
+            if atual and len(atual) + len(linha) + 2 > 980:
+                blocos.append(atual)
+                atual = ''
+            atual += ('\n\n' if atual else '') + linha
+        if atual:
+            blocos.append(atual)
+        for i, bloco in enumerate(blocos[:12]):
+            embed.add_field(name='📋 VEÍCULOS' if i == 0 else '📋 CONTINUAÇÃO', value=bloco, inline=False)
+        if len(rows) > 20:
+            embed.add_field(name='📁 OUTROS VEÍCULOS', value=f'Mostrando 20 de {len(rows)}. Use 📋 Consultar para acessar qualquer cadastro.', inline=False)
+    embed.set_footer(text='VDR 442 • Gestão de blindados • Botões persistentes')
+    await enviar_ou_atualizar_painel('painel_blindados', CANAL_BLINDADOS_CADASTRO_ID, embed, PainelBlindadosView())
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: verificar_vencimento_blindados
+# LOOP: verificar_vencimento_blindados
 # ────────────────────────────────────────────────────────────────────────────────
 @tasks.loop(hours=1)
 async def verificar_vencimento_blindados():
     pool = await get_pool()
-    if not pool: return
+    if not pool:
+        return
     try:
         async with pool.acquire() as conn:
-            vencidos = await conn.fetch("SELECT * FROM blindados WHERE data_vencimento <= NOW() AND status = 'pago' AND alerta_enviado = false AND ativo = true")
-        if not vencidos: return
+            vencidos = await conn.fetch('''SELECT * FROM blindados
+                WHERE data_vencimento <= NOW() AND status='pago'
+                  AND alerta_enviado=FALSE AND ativo=TRUE ORDER BY data_vencimento''')
         canal_aviso = bot.get_channel(CANAL_BLINDADOS_VENCIMENTO_ID)
-        if not canal_aviso: return
+        if canal_aviso is None:
+            return
         for b in vencidos:
-            embed = discord.Embed(title="🚨 ── ALERTA DE VENCIMENTO ── 🚨", description="**A taxa do blindado venceu e precisa ser cobrada!**", color=0xE74C3C, timestamp=agora())
-            embed.add_field(name="👤 Membro", value=b['user_id'], inline=True)
-            embed.add_field(name="🆔 Passaporte", value=b['passaporte'], inline=True)
-            embed.add_field(name="🚙 Veículo", value=b['tipo_veiculo'], inline=True)
-            embed.add_field(name="💰 Taxa", value=formatar_dinheiro(b['valor_taxa']), inline=True)
-            embed.add_field(name="📅 Venceu em", value=b['data_vencimento'].strftime('%d/%m/%Y'), inline=True)
-            embed.add_field(name="📌 STATUS", value="🔴 **VENCIDO**", inline=False)
-            msg_alerta = await canal_aviso.send(content=f"<@&{CARGO_01_ID}> <@&{CARGO_02_ID}>", embed=embed, view=AlertaVencimentoView(b['id']))
+            embed = discord.Embed(title='🚨 TAXA DE BLINDADO VENCIDA',
+                description=('**A taxa precisa de renovação.**\n'
+                    f"🚙 **Modelo:** {b['tipo_veiculo']}\n"
+                    f"🔤 **Placa:** {b['placa'] or 'Não informada'}\n"
+                    f"👤 **Responsável:** {b['passaporte'] or '—'} - {b['nome_responsavel'] or b['user_id'] or '—'}\n"
+                    f"🏴 **Proprietário:** {'PARTICULAR — FACÇÃO PAGA A TAXA' if b['propriedade'] == 'PARTICULAR' else 'FACÇÃO' if b['propriedade'] == 'FACCAO' else 'A confirmar'}\n"
+                    f"💰 **Valor:** {formatar_dinheiro(b['valor_taxa'] or 0)}\n"
+                    f"📅 **Vencido em:** {b['data_vencimento']:%d/%m/%Y}"),
+                color=0xE74C3C, timestamp=agora())
+            embed.add_field(name='📌 STATUS', value='🔴 VENCIDO', inline=False)
+            msg = await canal_aviso.send(content=f'<@&{CARGO_01_ID}> <@&{CARGO_02_ID}> <@&{CARGO_03_ID}>',
+                embed=embed, view=AlertaVencimentoView(b['id']),
+                allowed_mentions=discord.AllowedMentions(roles=True))
             async with pool.acquire() as conn:
-                await conn.execute("UPDATE blindados SET alerta_enviado = true, status = 'vencido', alerta_mensagem_id = $2 WHERE id = $1", b['id'], str(msg_alerta.id))
-            await asyncio.sleep(1)
-    except Exception as e: logger.error(f"❌ Erro verificação blindados: {e}")
+                await conn.execute('''UPDATE blindados SET alerta_enviado=TRUE,
+                    status='vencido', alerta_mensagem_id=$2
+                    WHERE id=$1 AND status='pago' AND alerta_enviado=FALSE''', b['id'], str(msg.id))
+            await asyncio.sleep(0.5)
+    except Exception:
+        logger.exception('❌ Verificação de vencimentos dos blindados')
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FIM DO PATCH 002-C — GESTÃO DE BLINDADOS
+# ═══════════════════════════════════════════════════════════════════════════════
+
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ║  BLOCO 15 — SISTEMA DE GRUPOS                                               ║
@@ -34704,6 +35251,18 @@ async def on_ready():
         f"{agora().strftime('%d/%m/%Y %H:%M:%S')}"
     )
 
+    # PATCH 002-B: recupera logs de saídas ainda pendentes no galpão Sul.
+    try:
+        asyncio.create_task(
+            publicar_logs_entregas_pendentes_v820(limite=30),
+            name='vdr442_recuperar_logs_saida_v820'
+        )
+    except Exception:
+        logger.exception('❌ Agendamento da recuperação inicial dos logs de saídas')
+    if not getattr(bot, '_v820_vigia_logs_iniciada', False):
+        bot._v820_vigia_logs_iniciada = True
+        asyncio.create_task(vigiar_logs_entregas_v820(), name='vdr442_logs_saida_v820')
+
     # ────────────────────────────────────────────────────────────────────────────
     # RESTAURAÇÃO URGENTE: CONFIRMAÇÕES DE METAS POR ID DA MENSAGEM
     # ────────────────────────────────────────────────────────────────────────────
@@ -34896,7 +35455,7 @@ async def on_ready():
     bot.inicializando = False
 
     logger.info("=" * 50)
-    logger.info("✅ BOT ONLINE - %s (PATCH 001-A/B/C/D/E/F)", VERSAO_BOT)
+    logger.info("✅ BOT ONLINE - %s (PATCH 002-A/B/C)", VERSAO_BOT)
     logger.info("=" * 50)
 
 # ────────────────────────────────────────────────────────────────────────────────
