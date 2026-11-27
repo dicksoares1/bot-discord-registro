@@ -96,8 +96,8 @@ bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 # ────────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger('VDR_BOT_V8')
-VERSAO_BOT = 'V8.3.0'  # PATCH 003 — fluxo entrega > pagamento > finalizado
-PATCH_ATUAL = 'PATCH 003'
+VERSAO_BOT = 'V8.4.0'  # PATCH 004 — central de transferências acumuladas
+PATCH_ATUAL = 'PATCH 004'
 
 # ────────────────────────────────────────────────────────────────────────────────
 # 1.2 — TOKENS E VARIÁVEIS DE AMBIENTE
@@ -286,7 +286,7 @@ CANAL_CHAT_PRODUCAO_ID = 1422853066541109338
 CANAL_CHAT_VENDAS_ID = 1365372467723501723
 CANAL_DOACOES_ID = 1564271778266878103
 CANAL_LOG_DOACOES_ID = 1564274094818590720
-CANAL_COMPROVANTES_ID = 1479649961967620106
+CANAL_TRANSFERENCIAS_ID = 1479649961967620106
 CANAL_ADVERTENCIAS_ID = 1567512659673489408
 CANAL_HISTORICO_ADV_ID = 1567512954176544768
 CANAL_COMPRAS_REEMBOLSO_ID = 1569430787336441959
@@ -10440,53 +10440,23 @@ async def enviar_embed_pedido_finalizado(
         )
 
         # ────────────────────────────────────────────────────────────────────────
-        # BOTÃO INDIVIDUAL DO CARD
+        # PATCH 004 — CARD DEFINITIVO SEM BOTÃO DE TRANSFERÊNCIA ANTIGO
         # ────────────────────────────────────────────────────────────────────────
-        view = None
-
-        if not cancelada and not transferido_para:
-            view = FinalizadosView(
-                entrega_id=entrega_id,
-                pedido_numero=pedido_numero,
-                valor_total=valor_total,
-                pt=pt,
-                sub=sub,
-                numero_parcela=numero_parcela
-            )
-
-        # ────────────────────────────────────────────────────────────────────────
-        # ENVIA O CARD
-        # ────────────────────────────────────────────────────────────────────────
-        msg = await safe_request(
-            canal.send,
-            embed=embed,
-            view=view
-        )
-
+        msg = await safe_request(canal.send, embed=embed)
         if not msg:
             return False
-
-        # ────────────────────────────────────────────────────────────────────────
-        # GUARDA O ID EXATO DA MENSAGEM NO POSTGRESQL
-        # ────────────────────────────────────────────────────────────────────────
-        if view:
-            await BotaoPersistente.salvar_botao(
-                msg.id,
-                canal.id,
-                "finalizado_transferencia",
-                {
-                    "entrega_id": entrega_id,
-                    "pedido_numero": pedido_numero,
-                    "valor_total": valor_total,
-                    "pt": pt,
-                    "sub": sub,
-                    "numero_parcela": (
-                        int(numero_parcela)
-                        if numero_parcela is not None
-                        else None
-                    )
-                }
-            )
+        if not cancelada and not transferido_para:
+            pool = await get_pool()
+            if pool:
+                chave_entrega = int(entrega_id or 0)
+                chave_parcela = int(numero_parcela) if chave_entrega and numero_parcela is not None else int(pedido_numero)
+                async with pool.acquire() as conn:
+                    await conn.execute('''
+                        UPDATE vendas_repasses_v840
+                           SET mensagem_finalizado=$3, atualizado_em=NOW()
+                         WHERE entrega_id=$1 AND numero_parcela=$2
+                    ''', chave_entrega, chave_parcela, str(msg.id))
+                await anexar_repasses_ao_card_v840(chave_entrega, chave_parcela)
 
         return True
 
@@ -11218,416 +11188,34 @@ async def verificar_estoque_suficiente(tipo, pacotes_necessarios):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: migrar_chave_transferencias_por_card
-# ────────────────────────────────────────────────────────────────────────────────
-async def migrar_chave_transferencias_por_card():
-    """
-    Troca a restrição antiga de transferência por pedido/parcela
-    pela identidade da mensagem individual da entrega.
-
-    Preserva todos os registros existentes.
-    Recusa alterações caso encontre dados históricos duplicados.
-    """
-    pool = await get_pool()
-
-    if not pool:
-        logger.error(
-            "❌ PostgreSQL indisponível para migração de transferências."
-        )
-        return False
-
-    try:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-
-                # Evita migrações simultâneas.
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(442, 12012)"
-                )
-
-                existe = await conn.fetchval(
-                    "SELECT to_regclass('public.vendas_transferencias') "
-                    "IS NOT NULL"
-                )
-
-                if not existe:
-                    raise RuntimeError(
-                        "Tabela vendas_transferencias ausente. "
-                        "Verificar criação das tabelas."
-                    )
-
-                # Não permite um ID de mensagem com duas transferências.
-                repetidos = await conn.fetchrow("""
-                    SELECT mensagem_id, COUNT(*) AS total
-                    FROM vendas_transferencias
-                    WHERE mensagem_id IS NOT NULL
-                      AND TRIM(mensagem_id) <> ''
-                    GROUP BY mensagem_id
-                    HAVING COUNT(*) > 1
-                    LIMIT 1
-                """)
-
-                if repetidos:
-                    raise RuntimeError(
-                        f"Mensagem {repetidos['mensagem_id']} possui "
-                        f"{repetidos['total']} transferências antigas. "
-                        "Auditar antes de criar o índice único."
-                    )
-
-                # Uma transferência por CARD.
-                await conn.execute("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS
-                        uq_vdr_vendas_transf_mensagem
-                    ON vendas_transferencias (mensagem_id)
-                    WHERE mensagem_id IS NOT NULL
-                      AND mensagem_id <> ''
-                """)
-
-                # Localiza a restrição antiga que impedia diversas
-                # transferências dentro do mesmo pedido e entrega.
-                restricoes = await conn.fetch("""
-                    SELECT c.conname
-                    FROM pg_constraint c
-                    WHERE c.conrelid =
-                        'vendas_transferencias'::regclass
-                      AND c.contype = 'u'
-                      AND (
-                          SELECT array_agg(
-                              a.attname::text ORDER BY u.ord
-                          )
-                          FROM unnest(c.conkey)
-                          WITH ORDINALITY AS u(attnum, ord)
-                          JOIN pg_attribute a
-                            ON a.attrelid = c.conrelid
-                           AND a.attnum = u.attnum
-                      ) = ARRAY[
-                          'pedido_numero',
-                          'entrega_id',
-                          'numero_parcela'
-                      ]::text[]
-                """)
-
-                for restricao in restricoes:
-                    nome_sql = (
-                        '"'
-                        + restricao["conname"].replace('"', '""')
-                        + '"'
-                    )
-
-                    await conn.execute(
-                        "ALTER TABLE vendas_transferencias "
-                        f"DROP CONSTRAINT {nome_sql}"
-                    )
-
-                # Índices auxiliares.
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS
-                        idx_vdr_transf_pedido_entrega
-                    ON vendas_transferencias (
-                        pedido_numero,
-                        entrega_id,
-                        numero_parcela
-                    )
-                """)
-
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS
-                        idx_vdr_botoes_finalizados
-                    ON botoes_persistentes (tipo, canal_id)
-                """)
-
-                # Confirma que a regra antiga realmente saiu.
-                antigas = await conn.fetchval("""
-                    SELECT COUNT(*)
-                    FROM pg_constraint c
-                    WHERE c.conrelid =
-                        'vendas_transferencias'::regclass
-                      AND c.contype = 'u'
-                      AND (
-                          SELECT array_agg(
-                              a.attname::text ORDER BY u.ord
-                          )
-                          FROM unnest(c.conkey)
-                          WITH ORDINALITY AS u(attnum, ord)
-                          JOIN pg_attribute a
-                            ON a.attrelid = c.conrelid
-                           AND a.attnum = u.attnum
-                      ) = ARRAY[
-                          'pedido_numero',
-                          'entrega_id',
-                          'numero_parcela'
-                      ]::text[]
-                """)
-
-                if antigas:
-                    raise RuntimeError(
-                        "A restrição antiga de parcela ainda está presente."
-                    )
-
-        logger.info(
-            "✅ Transferências: identidade única por mensagem_id; "
-            "histórico preservado."
-        )
-        return True
-
-    except Exception:
-        logger.exception(
-            "❌ Migração de transferências por card NÃO concluída."
-        )
-        return False
-
-# ────────────────────────────────────────────────────────────────────────────────
-# FIM DA FUNÇÃO: migrar_chave_transferencias_por_card
 # ────────────────────────────────────────────────────────────────────────────────
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: buscar_identidade_card_transferencia
-# ────────────────────────────────────────────────────────────────────────────────
-async def buscar_identidade_card_transferencia(
-    mensagem,
-    pedido_embed
-):
-    """
-    Identifica entrega e parcela usando exclusivamente
-    o card clicado e seu registro persistente.
-
-    Nunca usa MAX(numero_parcela) do pedido.
-    """
-    embed = (
-        mensagem.embeds[0]
-        if mensagem.embeds
-        else None
-    )
-
-    if not embed:
-        raise ValueError(
-            "Card sem embed da venda."
-        )
-
-    footer = (
-        embed.footer.text
-        if embed.footer and embed.footer.text
-        else ""
-    )
-
-    id_achado = re.search(
-        r"\bID:\s*(\d+)",
-        footer
-    )
-
-    parcela_achada = re.search(
-        r"\bParcela:\s*(\d+)",
-        footer,
-        re.IGNORECASE
-    )
-
-    entrega_footer = (
-        int(id_achado.group(1))
-        if id_achado
-        else 0
-    )
-
-    parcela_footer = (
-        int(parcela_achada.group(1))
-        if parcela_achada
-        else None
-    )
-
-    pool = await get_pool()
-
-    if not pool:
-        raise RuntimeError(
-            "PostgreSQL indisponível."
-        )
-
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-            SELECT dados
-            FROM botoes_persistentes
-            WHERE mensagem_id = $1
-              AND tipo = 'finalizado_transferencia'
-            ORDER BY criado_em DESC
-            LIMIT 1
-        """, str(mensagem.id))
-
-    dados = row["dados"] if row else None
-
-    if isinstance(dados, str):
-        dados = json.loads(dados)
-
-    dados = (
-        dados
-        if isinstance(dados, dict)
-        else {}
-    )
-
-    pedido_salvo = int(
-        dados.get("pedido_numero") or 0
-    )
-
-    if (
-        pedido_salvo
-        and pedido_salvo != int(pedido_embed)
-    ):
-        raise ValueError(
-            "Pedido do card diverge do cadastro persistente."
-        )
-
-    entrega_salva = int(
-        dados.get("entrega_id") or 0
-    )
-
-    if (
-        entrega_footer
-        and entrega_salva
-        and entrega_footer != entrega_salva
-    ):
-        raise ValueError(
-            "ID da entrega diverge entre card e PostgreSQL."
-        )
-
-    entrega = entrega_footer or entrega_salva
-
-    parcela_salva = dados.get(
-        "numero_parcela"
-    )
-
-    parcela_salva = (
-        int(parcela_salva)
-        if parcela_salva not in (
-            None,
-            "",
-            0,
-            "0"
-        )
-        else None
-    )
-
-    if (
-        parcela_footer
-        and parcela_salva
-        and parcela_footer != parcela_salva
-    ):
-        raise ValueError(
-            "Parcela do card diverge do cadastro persistente."
-        )
-
-    parcela = parcela_footer or parcela_salva
-
-    if (
-        entrega
-        and parcela is not None
-        and parcela < 1
-    ):
-        raise ValueError(
-            "Número da parcela inválido."
-        )
-
-    return (
-        entrega,
-        parcela if entrega else int(pedido_embed)
-    )
-
-# ────────────────────────────────────────────────────────────────────────────────
-# FIM DA FUNÇÃO: buscar_identidade_card_transferencia
 # ────────────────────────────────────────────────────────────────────────────────
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: conferir_transferencia_card_no_banco
-# ────────────────────────────────────────────────────────────────────────────────
-async def conferir_transferencia_card_no_banco(mensagem_id):
-    """
-    Consulta exclusivamente a transferência confirmada
-    da mensagem indicada.
-    """
-    pool = await get_pool()
-
-    if not pool:
-        return None
-
-    async with pool.acquire() as conn:
-        return await conn.fetchrow("""
-            SELECT
-                nome_destino,
-                confirmado_por,
-                confirmado_em,
-                valor
-            FROM vendas_transferencias
-            WHERE mensagem_id = $1
-            LIMIT 1
-        """, str(mensagem_id))
-
-# ────────────────────────────────────────────────────────────────────────────────
-# FIM DA FUNÇÃO: conferir_transferencia_card_no_banco
 # ────────────────────────────────────────────────────────────────────────────────
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: atualizar_card_transferencia_confirmada
 # ────────────────────────────────────────────────────────────────────────────────
-async def atualizar_card_transferencia_confirmada(
-    mensagem,
-    registro,
-    guild=None
-):
-    """
-    Atualiza somente o card da transferência confirmada.
-    Não modifica outras entregas do mesmo pedido.
-    """
-    if not mensagem.embeds:
-        raise ValueError(
-            "Card não possui embed para atualização."
-        )
 
-    embed = mensagem.embeds[0].copy()
-
-    transferencia_ja_exibida = any(
-        "TRANSFERÊNCIA" in (campo.name or "").upper()
-        and "Transferido para:" in (campo.value or "")
-        for campo in embed.fields
-    )
-
-    if not transferencia_ja_exibida:
-        autor = await _nome_responsavel_venda(
-            registro["confirmado_por"],
-            guild
-        )
-
-        data = registro["confirmado_em"]
-
-        data_str = (
-            data.strftime("%d/%m/%Y %H:%M")
-            if data
-            else "—"
-        )
-
-        embed.add_field(
-            name="📤 TRANSFERÊNCIA CONFIRMADA",
-            value=(
-                f"**Transferido para:** "
-                f"{registro['nome_destino']}\n"
-                f"**Confirmado por:** "
-                f"{autor or registro['confirmado_por']}\n"
-                f"**Data:** {data_str}"
-            ),
-            inline=False
-        )
-
-    embed.color = 0x2ECC71
-
-    await mensagem.edit(
-        embed=embed,
-        view=None
-    )
-
-    await apagar_botao_transferencia_persistente(
-        mensagem.id
-    )
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FIM DA FUNÇÃO: atualizar_card_transferencia_confirmada
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+# ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -11636,557 +11224,9 @@ async def atualizar_card_transferencia_confirmada(
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: ConfirmarTransferenciaModal
 # ────────────────────────────────────────────────────────────────────────────────
-class ConfirmarTransferenciaModal(
-    discord.ui.Modal,
-    title="📤 CONFIRMAR TRANSFERÊNCIA"
-):
-
-    transferido_para = discord.ui.TextInput(
-        label="📤 Transferido para:",
-        placeholder="Digite o nome da pessoa (ex: Dreck ou Leon)",
-        required=True,
-        max_length=50
-    )
-
-    # ────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────
-    def __init__(
-        self,
-        interaction,
-        mensagem_original,
-        entrega_id,
-        pedido_numero,
-        valor,
-        pt,
-        sub,
-        numero_parcela=None
-    ):
-        super().__init__(timeout=300)
-
-        self.mensagem_original = mensagem_original
-        self.entrega_id = int(entrega_id or 0)
-        self.pedido_numero = int(pedido_numero)
-        self.valor_total = int(valor or 0)
-        self.pt = int(pt or 0)
-        self.sub = int(sub or 0)
-
-        self.numero_parcela = (
-            int(numero_parcela)
-            if numero_parcela is not None
-            else None
-        )
-
-    # ────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────
-    async def on_submit(
-        self,
-        interaction: discord.Interaction
-    ):
-        await interaction.response.defer(
-            ephemeral=True
-        )
-
-        destino = (
-            self.transferido_para.value
-            .strip()
-            .upper()
-        )
-
-        if not destino:
-            await interaction.followup.send(
-                "❌ Informe quem recebeu a transferência.",
-                ephemeral=True
-            )
-            return
-
-        pool = await get_pool()
-
-        if not pool:
-            await interaction.followup.send(
-                "❌ PostgreSQL indisponível; "
-                "nada foi confirmado.",
-                ephemeral=True
-            )
-            return
-
-        mensagem = self.mensagem_original
-
-        if not mensagem or not mensagem.embeds:
-            await interaction.followup.send(
-                "❌ Card original indisponível. "
-                "Nada foi registrado.",
-                ephemeral=True
-            )
-            return
-
-        try:
-            # ────────────────────────────────────────────────────────────────────
-            # GARANTE QUE A MIGRAÇÃO DE IDENTIDADE FOI CONCLUÍDA
-            # ────────────────────────────────────────────────────────────────────
-            if not getattr(
-                bot,
-                "_vdr_transf_por_card_migrada",
-                False
-            ):
-                migrada = (
-                    await migrar_chave_transferencias_por_card()
-                )
-
-                if not migrada:
-                    raise RuntimeError(
-                        "Migração do identificador do card pendente. "
-                        "Consulte os logs do Railway; "
-                        "nada foi alterado."
-                    )
-
-                bot._vdr_transf_por_card_migrada = True
-
-            # ────────────────────────────────────────────────────────────────────
-            # CONFERE O CARD ORIGINAL
-            # ────────────────────────────────────────────────────────────────────
-            embed = mensagem.embeds[0]
-
-            dados = await extrair_dados_pedido_do_embed(
-                embed
-            )
-
-            pedido = int(
-                dados.get("pedido_numero") or 0
-            )
-
-            if (
-                pedido <= 0
-                or pedido != self.pedido_numero
-            ):
-                raise ValueError(
-                    "Número do pedido diverge do card original."
-                )
-
-            if (
-                "VENDA FINALIZADA"
-                not in (embed.title or "").upper()
-            ):
-                raise ValueError(
-                    "A mensagem não é um card de venda finalizada."
-                )
-
-            # O card pode ter sido editado após outro clique.
-            if any(
-                "Transferido para:" in str(campo.value)
-                for campo in embed.fields
-            ):
-                anterior = (
-                    await conferir_transferencia_card_no_banco(
-                        mensagem.id
-                    )
-                )
-
-                if not anterior:
-                    raise ValueError(
-                        "O card já mostra uma transferência, "
-                        "mas o histórico não a confirma. "
-                        "Solicite auditoria; nada foi duplicado."
-                    )
-
-            # ────────────────────────────────────────────────────────────────────
-            # IDENTIDADE REAL DA ENTREGA / PARCELA
-            # ────────────────────────────────────────────────────────────────────
-            entrega, parcela = (
-                await buscar_identidade_card_transferencia(
-                    mensagem,
-                    pedido
-                )
-            )
-
-            if entrega != self.entrega_id:
-                raise ValueError(
-                    "A entrega mudou durante a confirmação. "
-                    "Abra novamente."
-                )
-
-            if parcela != self.numero_parcela:
-                raise ValueError(
-                    "A parcela mudou durante a confirmação. "
-                    "Abra novamente."
-                )
-
-            # ────────────────────────────────────────────────────────────────────
-            # VERIFICA QUANTIDADE E VALOR
-            # ────────────────────────────────────────────────────────────────────
-            pt_card = int(
-                dados.get("pt") or 0
-            )
-
-            sub_card = int(
-                dados.get("sub") or 0
-            )
-
-            valor = (
-                pt_card * 50
-                + sub_card * 90
-            )
-
-            if valor <= 0:
-                raise ValueError(
-                    "Card sem valor válido. "
-                    "Solicite auditoria da venda."
-                )
-
-            if (
-                self.valor_total
-                and valor != self.valor_total
-            ):
-                raise ValueError(
-                    "Valor do card foi alterado. "
-                    "Abra novamente."
-                )
-
-            if (
-                self.pt,
-                self.sub
-            ) != (
-                pt_card,
-                sub_card
-            ):
-                raise ValueError(
-                    "Quantidades do card mudaram. "
-                    "Abra novamente."
-                )
-
-            # ────────────────────────────────────────────────────────────────────
-            # CARD LEGADO SEM PARCELA EXATA
-            #
-            # Permite confirmação pelo ID da mensagem,
-            # mas NÃO inventa qual parcela foi transferida.
-            # ────────────────────────────────────────────────────────────────────
-            parcela_banco = (
-                int(parcela)
-                if parcela is not None
-                else 0
-            )
-
-            registro = None
-            duplicada = False
-
-            # ────────────────────────────────────────────────────────────────────
-            # TRANSAÇÃO SEGURA POR MENSAGEM
-            # ────────────────────────────────────────────────────────────────────
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-
-                    # Uma confirmação simultânea por card.
-                    await conn.execute(
-                        "SELECT pg_advisory_xact_lock($1::bigint)",
-                        int(mensagem.id)
-                    )
-
-                    anterior = await conn.fetchrow("""
-                        SELECT
-                            nome_destino,
-                            confirmado_por,
-                            confirmado_em,
-                            valor
-                        FROM vendas_transferencias
-                        WHERE mensagem_id = $1
-                        FOR UPDATE
-                    """, str(mensagem.id))
-
-                    if anterior:
-                        registro = anterior
-                        duplicada = True
-
-                    else:
-                        # ────────────────────────────────────────────────────────
-                        # CONFERE SE O PEDIDO ESTÁ VÁLIDO
-                        # ────────────────────────────────────────────────────────
-                        venda = await conn.fetchrow("""
-                            SELECT
-                                pedido_numero,
-                                cancelado
-                            FROM vendas
-                            WHERE pedido_numero = $1
-                            FOR UPDATE
-                        """, pedido)
-
-                        if venda is None:
-                            raise ValueError(
-                                "Pedido não encontrado no PostgreSQL."
-                            )
-
-                        if venda["cancelado"]:
-                            raise ValueError(
-                                "Pedido cancelado. "
-                                "Transferência bloqueada."
-                            )
-
-                        # ────────────────────────────────────────────────────────
-                        # VALIDA A PARCELA EXATA
-                        # ────────────────────────────────────────────────────────
-                        if (
-                            entrega
-                            and parcela is not None
-                        ):
-                            estado = await conn.fetchrow("""
-                                SELECT
-                                    id,
-                                    pedido_numero,
-                                    entregue,
-                                    pago,
-                                    cancelado,
-                                    pt,
-                                    sub
-                                FROM entregas_status
-                                WHERE entrega_id = $1
-                                  AND numero_parcela = $2
-                                FOR UPDATE
-                            """, entrega, parcela)
-
-                            if (
-                                not estado
-                                or int(
-                                    estado["pedido_numero"]
-                                ) != pedido
-                            ):
-                                raise ValueError(
-                                    "Registro exato desta parcela "
-                                    "não encontrado. "
-                                    "Transferência não lançada; "
-                                    "solicite auditoria."
-                                )
-
-                            if (
-                                estado["cancelado"]
-                                or not (
-                                    estado["entregue"]
-                                    and estado["pago"]
-                                )
-                            ):
-                                raise ValueError(
-                                    "A parcela ainda não está "
-                                    "entregue e paga, "
-                                    "ou foi cancelada. "
-                                    "Transferência bloqueada."
-                                )
-
-                            pt_salvo = int(
-                                estado["pt"] or 0
-                            )
-
-                            sub_salvo = int(
-                                estado["sub"] or 0
-                            )
-
-                            if (
-                                pt_salvo or sub_salvo
-                            ) and (
-                                pt_salvo,
-                                sub_salvo
-                            ) != (
-                                pt_card,
-                                sub_card
-                            ):
-                                raise ValueError(
-                                    "Quantidades da parcela "
-                                    "divergem do card."
-                                )
-
-                        # ────────────────────────────────────────────────────────
-                        # INSERE TRANSFERÊNCIA POR ID DE MENSAGEM
-                        # ────────────────────────────────────────────────────────
-                        await conn.execute("""
-                            INSERT INTO vendas_transferencias (
-                                pedido_numero,
-                                entrega_id,
-                                numero_parcela,
-                                mensagem_id,
-                                nome_destino,
-                                confirmado_por,
-                                valor,
-                                confirmado_em
-                            )
-                            VALUES (
-                                $1, $2, $3, $4,
-                                $5, $6, $7, NOW()
-                            )
-                        """,
-                            pedido,
-                            entrega,
-                            parcela_banco,
-                            str(mensagem.id),
-                            destino,
-                            str(interaction.user.id),
-                            valor
-                        )
-
-                        # ────────────────────────────────────────────────────────
-                        # ATUALIZA APENAS A PARCELA CORRETA
-                        # ────────────────────────────────────────────────────────
-                        if (
-                            entrega
-                            and parcela is not None
-                        ):
-                            await conn.execute("""
-                                UPDATE entregas_status
-                                SET transferido_para = $1
-                                WHERE entrega_id = $2
-                                  AND numero_parcela = $3
-                                  AND pedido_numero = $4
-                            """,
-                                destino,
-                                entrega,
-                                parcela,
-                                pedido
-                            )
-
-                        elif not entrega:
-                            await conn.execute("""
-                                UPDATE entregas_status
-                                SET transferido_para = $1
-                                WHERE entrega_id = 0
-                                  AND numero_parcela = $2
-                                  AND pedido_numero = $2
-                                  AND entregue = true
-                                  AND pago = true
-                            """,
-                                destino,
-                                pedido
-                            )
-
-                        # ────────────────────────────────────────────────────────
-                        # CONSULTA O REGISTRO RECÉM-GRAVADO
-                        # ────────────────────────────────────────────────────────
-                        registro = await conn.fetchrow("""
-                            SELECT
-                                nome_destino,
-                                confirmado_por,
-                                confirmado_em,
-                                valor
-                            FROM vendas_transferencias
-                            WHERE mensagem_id = $1
-                        """, str(mensagem.id))
-
-            # ────────────────────────────────────────────────────────────────────
-            # BANCO CONFIRMADO: ATUALIZA SOMENTE O CARD
-            # ────────────────────────────────────────────────────────────────────
-            try:
-                await atualizar_card_transferencia_confirmada(
-                    mensagem,
-                    registro,
-                    interaction.guild
-                )
-
-            except Exception:
-                logger.exception(
-                    "⚠️ Transferência salva mas falhou "
-                    "edição do card %s",
-                    mensagem.id
-                )
-
-                await interaction.followup.send(
-                    "✅ Transferência salva com segurança "
-                    "no PostgreSQL, mas não foi possível "
-                    "atualizar o card no Discord. "
-                    "A restauração tentará corrigir o visual.",
-                    ephemeral=True
-                )
-                return
-
-            # ────────────────────────────────────────────────────────────────────
-            # DUPLICIDADE: SOMENTE PARA O MESMO CARD
-            # ────────────────────────────────────────────────────────────────────
-            if duplicada:
-                await interaction.followup.send(
-                    f"ℹ️ Esta entrega já tinha transferência "
-                    f"para **{registro['nome_destino']}**; "
-                    "nada foi duplicado.",
-                    ephemeral=True
-                )
-                return
-
-            # ────────────────────────────────────────────────────────────────────
-            # LOG SEM LANÇAR NOVO PAGAMENTO NO CAIXA
-            # ────────────────────────────────────────────────────────────────────
-            canal_log = (
-                interaction.guild.get_channel(
-                    CANAL_LOGS_GERAIS_ID
-                )
-                if interaction.guild
-                else None
-            )
-
-            if canal_log:
-                try:
-                    await canal_log.send(
-                        embed=discord.Embed(
-                            title=(
-                                "📤 TRANSFERÊNCIA CONFIRMADA "
-                                "— ENTREGA"
-                            ),
-                            description=(
-                                f"Pedido #{pedido:04d} "
-                                f"• Card `{mensagem.id}`\n"
-                                f"{'Parcela ' + str(parcela) if entrega and parcela else 'Card legado/entrega única'}\n"
-                                f"Destino: **{destino}**\n"
-                                f"Confirmado por: "
-                                f"{interaction.user.mention}\n"
-                                f"Valor: {formatar_dinheiro(valor)}"
-                            ),
-                            color=0x2ECC71,
-                            timestamp=agora()
-                        )
-                    )
-
-                except Exception:
-                    logger.exception(
-                        "⚠️ Erro ao escrever log "
-                        "da transferência %s",
-                        mensagem.id
-                    )
-
-            # ────────────────────────────────────────────────────────────────────
-            # RETORNO FINAL
-            # ────────────────────────────────────────────────────────────────────
-            await interaction.followup.send(
-                f"✅ Transferência DESTA ENTREGA "
-                f"confirmada para **{destino}**. "
-                "Os outros cards não foram alterados "
-                "e o caixa não foi creditado novamente.",
-                ephemeral=True
-            )
-
-        except asyncpg.UniqueViolationError:
-            await interaction.followup.send(
-                "⚠️ Esta mensagem já possui transferência. "
-                "Nenhum lançamento duplicado foi feito.",
-                ephemeral=True
-            )
-
-        except (ValueError, RuntimeError) as erro:
-            await interaction.followup.send(
-                f"❌ {erro}",
-                ephemeral=True
-            )
-
-        except Exception:
-            logger.exception(
-                "❌ Transferência não concluída "
-                "no card %s",
-                mensagem.id
-            )
-
-            await interaction.followup.send(
-                "❌ Erro ao confirmar. "
-                "Nada deve ser repetido sem consultar "
-                "o status desse card no PostgreSQL.",
-                ephemeral=True
-            )
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FIM DA CLASSE: ConfirmarTransferenciaModal
 # ────────────────────────────────────────────────────────────────────────────────
 
 
@@ -12371,323 +11411,60 @@ class ConfirmarDoacaoView(discord.ui.View):
         except:
             pass
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: ComprovanteModal (Para enviar o print)
 # ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: ComprovanteModal
 # ────────────────────────────────────────────────────────────────────────────────
-class ComprovanteModal(discord.ui.Modal, title="📎 Enviar Comprovante"):
-    link_imagem = discord.ui.TextInput(
-        label="🔗 Link da Imagem (Imgur, etc)", 
-        placeholder="Cole o link da foto do comprovante aqui", 
-        required=True
-    )
-
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
-    def __init__(self, pedido_numero):
-        super().__init__()
-        self.pedido_numero = pedido_numero
-
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: on_submit
-    # ────────────────────────────────────────────────────────────────────────────────
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        canal_comprovantes = bot.get_channel(CANAL_COMPROVANTES_ID)
-        if not canal_comprovantes:
-            await interaction.followup.send("❌ Canal de comprovantes não encontrado.", ephemeral=True)
-            return
-
-        # Envia o comprovante para o canal
-        embed = discord.Embed(
-            title=f"🧾 COMPROVANTE RECEBIDO",
-            description=f"**Pedido:** #{self.pedido_numero:04d}\n**Enviado por:** {interaction.user.mention}",
-            color=0x2ecc71,
-            timestamp=agora()
-        )
-        embed.set_image(url=self.link_imagem.value)
-        await canal_comprovantes.send(embed=embed)
-
-        # Atualiza o banco de dados marcando como Pago
-        pool = await get_pool()
-        if pool:
-            async with pool.acquire() as conn:
-                await conn.execute("UPDATE vendas SET pago = true, data_pagamento = NOW() WHERE pedido_numero = $1", self.pedido_numero)
-
-        await interaction.followup.send(f"✅ Comprovante do pedido **#{self.pedido_numero:04d}** registrado com sucesso! O pedido foi marcado como **PAGO**.", ephemeral=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: BotaoComprovanteView (Para o DM e para o Painel)
 # ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: BotaoComprovanteView
 # ────────────────────────────────────────────────────────────────────────────────
-class BotaoComprovanteView(discord.ui.View):
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────────
-    def __init__(self, pedido_numero):
-        super().__init__(timeout=None) # Timeout None para não expirar
-        self.pedido_numero = pedido_numero
-
-    # ────────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: anexar
-    # ────────────────────────────────────────────────────────────────────────────────
-    @discord.ui.button(label="📎 Anexar Comprovante", style=discord.ButtonStyle.success, custom_id="btn_anexar_comprovante")
-    async def anexar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Verifica se quem clicou é o dono do pedido (opcional, mas seguro)
-        # Aqui ele só abre o modal para colar o link
-        await interaction.response.send_modal(ComprovanteModal(self.pedido_numero))
 
 # ────────────────────────────────────────────────────────────────────────────────
 
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: apagar_botao_transferencia_persistente
 # ────────────────────────────────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────────────────────
-# FUNÇÃO: apagar_botao_transferencia_persistente
 # ────────────────────────────────────────────────────────────────────────────────
-async def apagar_botao_transferencia_persistente(mensagem_id):
-    pool = await get_pool()
-    if not pool: return False
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM botoes_persistentes WHERE mensagem_id=$1 AND tipo='finalizado_transferencia'", str(mensagem_id))
-        return True
-    except Exception as e:
-        logger.error("❌ Falha ao limpar botão da transferência: %s", e)
-        return False
+
 
 
 # ────────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO: restaurar_transferencias_finalizadas
 # ────────────────────────────────────────────────────────────────────────────────
 async def restaurar_transferencias_finalizadas():
-    """
-    Restaura todos os cards com botão persistente
-    identificados no PostgreSQL.
-
-    Não confunde diferentes entregas do mesmo pedido.
-    Não depende das últimas 1.000 mensagens do Discord.
-    """
-    canal = bot.get_channel(
-        CANAL_PEDIDOS_FINALIZADOS_ID
-    )
-
-    if not canal:
-        logger.error(
-            "❌ Canal de Finalizados indisponível."
-        )
-        return 0
-
+    # PATCH 004: desativa botões antigos sem apagar repasses confirmados no banco.
     pool = await get_pool()
-
-    if not pool:
-        logger.error(
-            "❌ Banco indisponível para restaurar transferências."
-        )
+    canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
+    if not pool or not canal:
         return 0
-
-    # ────────────────────────────────────────────────────────────────────────────
-    # MIGRAÇÃO DE IDENTIDADE POR CARD
-    # ────────────────────────────────────────────────────────────────────────────
-    migrou = (
-        await migrar_chave_transferencias_por_card()
-    )
-
-    if not migrou:
-        logger.error(
-            "❌ Restauração interrompida: "
-            "chave única por mensagem não habilitada."
-        )
-        return 0
-
-    bot._vdr_transf_por_card_migrada = True
-
-    # ────────────────────────────────────────────────────────────────────────────
-    # FALLBACK PARA CARDS LEGADOS
-    # ────────────────────────────────────────────────────────────────────────────
     try:
-        view_global = FinalizadosView()
-
-        bot.add_view(
-            view_global
-        )
-
-    except Exception:
-        logger.exception(
-            "❌ Falha registrando View global "
-            "de transferências antigas."
-        )
-
-    try:
-        # ────────────────────────────────────────────────────────────────────────
-        # CARREGA TODOS OS CARDS SALVOS
-        # ────────────────────────────────────────────────────────────────────────
         async with pool.acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT
-                    mensagem_id,
-                    canal_id,
-                    dados
-                FROM botoes_persistentes
-                WHERE tipo = 'finalizado_transferencia'
-                  AND canal_id = $1
-                ORDER BY criado_em ASC
-            """, str(canal.id))
-
-            confirmados = await conn.fetch("""
-                SELECT
-                    mensagem_id,
-                    nome_destino,
-                    confirmado_por,
-                    confirmado_em,
-                    valor
-                FROM vendas_transferencias
-                WHERE mensagem_id IS NOT NULL
-                  AND mensagem_id <> ''
-            """)
-
-        por_msg = {
-            str(registro["mensagem_id"]): registro
-            for registro in confirmados
-        }
-
-        restaurados = 0
+            pendentes = await conn.fetch('''
+                SELECT mensagem_id FROM botoes_persistentes
+                WHERE tipo='finalizado_transferencia' AND canal_id=$1
+            ''', str(canal.id))
         corrigidos = 0
-        falhas = 0
-
-        # ────────────────────────────────────────────────────────────────────────
-        # RESTAURA CADA MENSAGEM INDEPENDENTEMENTE
-        # ────────────────────────────────────────────────────────────────────────
-        for row in rows:
-            mid_str = str(
-                row["mensagem_id"] or ""
-            )
-
-            if not mid_str.isdecimal():
-                logger.warning(
-                    "⚠️ ID de card inválido "
-                    "na persistência: %s",
-                    mid_str
-                )
-                falhas += 1
-                continue
-
-            mid = int(mid_str)
-
-            # ────────────────────────────────────────────────────────────────────
-            # CARD JÁ CONFIRMADO
-            # ────────────────────────────────────────────────────────────────────
-            if mid_str in por_msg:
-                try:
-                    msg = await canal.fetch_message(
-                        mid
-                    )
-
-                    if msg.embeds and msg.components:
-                        await atualizar_card_transferencia_confirmada(
-                            msg,
-                            por_msg[mid_str],
-                            canal.guild
-                        )
-
-                    else:
-                        await apagar_botao_transferencia_persistente(
-                            mid
-                        )
-
-                    corrigidos += 1
-
-                except discord.NotFound:
-                    await apagar_botao_transferencia_persistente(
-                        mid
-                    )
-
-                except Exception:
-                    logger.exception(
-                        "⚠️ Falha reconciliando "
-                        "card confirmado %s",
-                        mid
-                    )
-                    falhas += 1
-
-                continue
-
-            # ────────────────────────────────────────────────────────────────────
-            # CARD PENDENTE: REGISTRA SUA PRÓPRIA VIEW
-            # ────────────────────────────────────────────────────────────────────
+        for row in pendentes:
             try:
-                dados = row["dados"]
-
-                if isinstance(dados, str):
-                    dados = json.loads(dados)
-
-                dados = (
-                    dados
-                    if isinstance(dados, dict)
-                    else {}
-                )
-
-                view = FinalizadosView(
-                    entrega_id=dados.get(
-                        "entrega_id"
-                    ),
-                    numero_parcela=dados.get(
-                        "numero_parcela"
-                    ),
-                    pedido_numero=dados.get(
-                        "pedido_numero",
-                        0
-                    ),
-                    valor_total=dados.get(
-                        "valor_total",
-                        0
-                    ),
-                    pt=dados.get("pt", 0),
-                    sub=dados.get("sub", 0),
-                    is_doacao=False
-                )
-
-                if not view.is_persistent():
-                    raise RuntimeError(
-                        "FinalizadosView não é persistente."
-                    )
-
-                bot.add_view(
-                    view,
-                    message_id=mid
-                )
-
-                restaurados += 1
-
+                msg = await canal.fetch_message(int(row['mensagem_id']))
+                if msg.components:
+                    await msg.edit(view=None)
+                corrigidos += 1
+            except discord.NotFound:
+                corrigidos += 1
             except Exception:
-                logger.exception(
-                    "❌ Falha reativando "
-                    "botão do card %s",
-                    mid
-                )
-                falhas += 1
-
-        logger.info(
-            "✅ Transferências por card: "
-            "%s botões restaurados, "
-            "%s cards confirmados reconciliados, "
-            "%s falhas.",
-            restaurados,
-            corrigidos,
-            falhas
-        )
-
-        return restaurados
-
+                logger.exception('⚠️ Falha ocultando botão legado da mensagem %s', row['mensagem_id'])
+                continue
+            async with pool.acquire() as conn:
+                await conn.execute('''
+                    DELETE FROM botoes_persistentes
+                    WHERE tipo='finalizado_transferencia' AND mensagem_id=$1
+                ''', str(row['mensagem_id']))
+        logger.info('✅ PATCH 004: %s botões antigos desativados; histórico preservado', corrigidos)
+        return corrigidos
     except Exception:
-        logger.exception(
-            "❌ Erro geral na restauração de transferências."
-        )
+        logger.exception('❌ Falha desativando transferências antigas nos cards')
         return 0
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -12696,219 +11473,677 @@ async def restaurar_transferencias_finalizadas():
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# CLASSE: FinalizadosView
 # ────────────────────────────────────────────────────────────────────────────────
-class FinalizadosView(discord.ui.View):
 
-    # ────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BLOCO 12 — PATCH 004 / V8.4.0 — CENTRAL DE TRANSFERÊNCIAS ACUMULADAS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: preparar_transferencias_v840
+# ───────────────────────────────────────────────────────────────────────────────
+async def preparar_transferencias_v840():
+    """Migração aditiva e conservadora: pagamentos anteriores NÃO geram cobrança nova."""
+    pool = await get_pool()
+    if pool is None:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS vendas_repasses_v840 (
+                        entrega_id INTEGER NOT NULL,
+                        numero_parcela INTEGER NOT NULL,
+                        pedido_numero INTEGER NOT NULL,
+                        recebido_por VARCHAR(30),
+                        valor_total BIGINT NOT NULL CHECK (valor_total >= 0),
+                        valor_repassado BIGINT NOT NULL DEFAULT 0 CHECK (valor_repassado >= 0),
+                        situacao VARCHAR(30) NOT NULL DEFAULT 'pendente',
+                        mensagem_finalizado VARCHAR(30),
+                        criado_em TIMESTAMP DEFAULT NOW(),
+                        atualizado_em TIMESTAMP DEFAULT NOW(),
+                        PRIMARY KEY (entrega_id, numero_parcela),
+                        CHECK (valor_repassado <= valor_total)
+                    )
+                ''')
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS vendas_transferencias_lotes_v840 (
+                        id BIGSERIAL PRIMARY KEY,
+                        solicitado_por VARCHAR(30) NOT NULL,
+                        valor BIGINT NOT NULL CHECK (valor > 0),
+                        mensagem_origem VARCHAR(30) UNIQUE NOT NULL,
+                        mensagem_arquivo VARCHAR(30),
+                        comprovante_url TEXT,
+                        data TIMESTAMP DEFAULT NOW()
+                    )
+                ''')
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS vendas_transferencias_itens_v840 (
+                        lote_id BIGINT NOT NULL REFERENCES vendas_transferencias_lotes_v840(id),
+                        entrega_id INTEGER NOT NULL,
+                        numero_parcela INTEGER NOT NULL,
+                        valor BIGINT NOT NULL CHECK (valor > 0),
+                        PRIMARY KEY (lote_id, entrega_id, numero_parcela),
+                        FOREIGN KEY (entrega_id, numero_parcela)
+                            REFERENCES vendas_repasses_v840(entrega_id, numero_parcela)
+                    )
+                ''')
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS vendas_transferencias_solicitacoes_v840 (
+                        id BIGSERIAL PRIMARY KEY,
+                        usuario_id VARCHAR(30) NOT NULL,
+                        selecao JSONB NOT NULL,
+                        valor BIGINT NOT NULL CHECK (valor > 0),
+                        situacao VARCHAR(25) NOT NULL DEFAULT 'aguardando_print',
+                        mensagem_origem VARCHAR(30),
+                        criada_em TIMESTAMP DEFAULT NOW(),
+                        expira_em TIMESTAMP NOT NULL DEFAULT (NOW() + INTERVAL '2 hours')
+                    )
+                ''')
+                await conn.execute('''
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_transferencia_solicitacao_aberta_v840
+                    ON vendas_transferencias_solicitacoes_v840 (usuario_id)
+                    WHERE situacao IN ('aguardando_print', 'processando')
+                ''')
+                await conn.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_repasses_usuario_v840
+                    ON vendas_repasses_v840(recebido_por, situacao, criado_em)
+                ''')
+                # Legado: apenas observa o saldo histórico. Jamais insere cobrança
+                # do passado sem identificar se o dinheiro já foi transferido fora do bot.
+                await conn.execute('''
+                    INSERT INTO vendas_repasses_v840 (
+                        entrega_id, numero_parcela, pedido_numero, recebido_por,
+                        valor_total, valor_repassado, situacao
+                    )
+                    SELECT e.entrega_id, e.numero_parcela, e.pedido_numero,
+                           e.pago_por, GREATEST(0, COALESCE(e.pt,0)*50 + COALESCE(e.sub,0)*90),
+                           0, 'legado_sem_cobranca'
+                    FROM entregas_status e
+                    WHERE e.pago = true AND COALESCE(e.cancelado,false)=false
+                    ON CONFLICT (entrega_id,numero_parcela) DO NOTHING
+                ''')
+                # Após falha do processo, nenhuma imagem é apagada prematuramente.
+                await conn.execute('''
+                    UPDATE vendas_transferencias_solicitacoes_v840
+                       SET situacao='expirada'
+                     WHERE situacao IN ('aguardando_print','processando')
+                       AND expira_em < NOW()
+                ''')
+                await conn.execute('''
+                    UPDATE vendas_transferencias_solicitacoes_v840
+                       SET situacao='aguardando_print'
+                     WHERE situacao='processando'
+                       AND mensagem_origem IS NULL
+                       AND criada_em < NOW() - INTERVAL '15 minutes'
+                ''')
+        return True
+    except Exception:
+        logger.exception('❌ PATCH 004: falha nas tabelas de repasses')
+        return False
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: consultar_repasses_v840
+# ───────────────────────────────────────────────────────────────────────────────
+async def consultar_repasses_v840(usuario_id, limite=25):
+    pool = await get_pool()
+    if pool is None:
+        raise RuntimeError('PostgreSQL indisponível.')
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT entrega_id, numero_parcela, pedido_numero, valor_total,
+                   valor_repassado, (valor_total-valor_repassado) AS restante,
+                   criado_em
+            FROM vendas_repasses_v840
+            WHERE recebido_por=$1 AND situacao IN ('pendente','parcial')
+              AND valor_total > valor_repassado
+            ORDER BY criado_em, pedido_numero, numero_parcela
+            LIMIT $2
+        ''', str(usuario_id), int(limite))
+        total, quantidade = await conn.fetchrow('''
+            SELECT COALESCE(SUM(valor_total-valor_repassado),0)::BIGINT AS valor,
+                   COUNT(*)::INT AS quantidade
+            FROM vendas_repasses_v840
+            WHERE recebido_por=$1 AND situacao IN ('pendente','parcial')
+              AND valor_total > valor_repassado
+        ''', str(usuario_id))
+    return rows, int(total), int(quantidade)
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: formatar_valor_repasses_v840
+# ───────────────────────────────────────────────────────────────────────────────
+def formatar_valor_repasses_v840(valor):
+    return f"R$ {int(valor):,}".replace(',', '.')
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: interpretar_valor_repasses_v840
+# ───────────────────────────────────────────────────────────────────────────────
+def interpretar_valor_repasses_v840(valor):
+    texto = str(valor or '').strip().lower().replace('r$', '').replace(' ', '')
+    if not texto:
+        return None
+    if ',' in texto:
+        base, decimais = texto.rsplit(',', 1)
+        if not decimais.isdigit() or int(decimais) != 0:
+            raise ValueError('A transferência deve ter valor inteiro, sem centavos.')
+        texto = base
+    elif '.' in texto and len(texto.rsplit('.', 1)[1]) == 2:
+        base, decimais = texto.rsplit('.', 1)
+        if decimais == '00':
+            texto = base
+    texto = texto.replace('.', '')
+    if not texto.isdigit() or int(texto) <= 0:
+        raise ValueError('Digite um valor válido maior que zero.')
+    return int(texto)
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# CLASSE: TransferenciaValorModalV840
+# ───────────────────────────────────────────────────────────────────────────────
+class TransferenciaValorModalV840(discord.ui.Modal, title='🏦 Preparar transferência'):
+    valor = discord.ui.TextInput(
+        label='Valor enviado (opcional: vazio = total)',
+        placeholder='Ex.: 1470000 ou 1.470.000',
+        required=False, max_length=30)
+
+    # ───────────────────────────────────────────────────────────────────────────
     # MÉTODO: __init__
-    # ────────────────────────────────────────────────────────────────────────────
-    def __init__(
-        self,
-        entrega_id=None,
-        pedido_numero=0,
-        valor_total=0,
-        pt=0,
-        sub=0,
-        is_doacao=False,
-        numero_parcela=None
-    ):
+    # ───────────────────────────────────────────────────────────────────────────
+    def __init__(self, usuario_id, chaves):
+        super().__init__(timeout=300)
+        self.usuario_id = str(usuario_id)
+        self.chaves = [(int(a), int(b)) for a, b in chaves]
+
+    # ───────────────────────────────────────────────────────────────────────────
+    # MÉTODO: on_submit
+    # ───────────────────────────────────────────────────────────────────────────
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        if str(interaction.user.id) != self.usuario_id:
+            await interaction.followup.send('❌ Essa seleção pertence a outra pessoa.', ephemeral=True)
+            return
+        pool = await get_pool()
+        if pool is None:
+            await interaction.followup.send('❌ Banco indisponível.', ephemeral=True)
+            return
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute('''
+                        UPDATE vendas_transferencias_solicitacoes_v840
+                           SET situacao='expirada'
+                         WHERE usuario_id=$1 AND situacao='aguardando_print'
+                           AND expira_em < NOW()
+                    ''', self.usuario_id)
+                    ativa = await conn.fetchval('''
+                        SELECT id FROM vendas_transferencias_solicitacoes_v840
+                        WHERE usuario_id=$1 AND situacao IN ('aguardando_print','processando')
+                    ''', self.usuario_id)
+                    if ativa:
+                        raise ValueError('Você já tem um envio de print aberto. Envie a imagem ou cancele o envio anterior.')
+                    validas, total = [], 0
+                    for entrega, parcela in self.chaves:
+                        row = await conn.fetchrow('''
+                            SELECT valor_total, valor_repassado
+                            FROM vendas_repasses_v840
+                            WHERE entrega_id=$1 AND numero_parcela=$2
+                              AND recebido_por=$3 AND situacao IN ('pendente','parcial')
+                            FOR UPDATE
+                        ''', entrega, parcela, self.usuario_id)
+                        if row and int(row['valor_total']) > int(row['valor_repassado']):
+                            validas.append([entrega, parcela])
+                            total += int(row['valor_total']) - int(row['valor_repassado'])
+                    if not validas or total <= 0:
+                        raise ValueError('As pendências selecionadas já foram quitadas ou não pertencem a você.')
+                    valor = interpretar_valor_repasses_v840(self.valor.value) or total
+                    if valor > total:
+                        raise ValueError(f'Valor maior que o saldo selecionado: {formatar_valor_repasses_v840(total)}.')
+                    await conn.execute('''
+                        INSERT INTO vendas_transferencias_solicitacoes_v840
+                            (usuario_id, selecao, valor)
+                        VALUES ($1,$2::jsonb,$3)
+                    ''', self.usuario_id, json.dumps(validas), valor)
+            await interaction.followup.send(
+                f'📸 **Envie agora o print da transferência neste canal.**\n'
+                f'🏦 Valor informado: **{formatar_valor_repasses_v840(valor)}**\n'
+                'O comprovante será arquivado em **Pedidos Finalizados**, '
+                'e a imagem original será apagada **somente após o registro seguro**.\n'
+                'A solicitação expira em **2 horas**; se precisar, use **Cancelar envio**.',
+                ephemeral=True)
+        except (ValueError, asyncpg.UniqueViolationError) as exc:
+            await interaction.followup.send(f'⚠️ {exc}', ephemeral=True)
+        except Exception:
+            logger.exception('❌ Preparar lote de transferências')
+            await interaction.followup.send('❌ Não foi possível preparar o envio. Nenhum saldo foi alterado.', ephemeral=True)
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# CLASSE: SelecionarPendenciasTransferenciaV840
+# ───────────────────────────────────────────────────────────────────────────────
+class SelecionarPendenciasTransferenciaV840(discord.ui.Select):
+    # ───────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ───────────────────────────────────────────────────────────────────────────
+    def __init__(self, usuario_id, rows):
+        self.usuario_id = str(usuario_id)
+        options = []
+        for row in rows:
+            chave = f"{row['entrega_id']}:{row['numero_parcela']}"
+            options.append(discord.SelectOption(
+                label=f"Pedido #{row['pedido_numero']} • Parcela {row['numero_parcela']}"[:100],
+                description=f"Pendente: {formatar_valor_repasses_v840(row['restante'])}"[:100],
+                value=chave))
+        super().__init__(placeholder='Selecione um ou mais pagamentos', options=options,
+                         min_values=1, max_values=min(25, len(options)))
+
+    # ───────────────────────────────────────────────────────────────────────────
+    # MÉTODO: callback
+    # ───────────────────────────────────────────────────────────────────────────
+    async def callback(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != self.usuario_id:
+            await interaction.response.send_message('❌ Esta lista não pertence a você.', ephemeral=True)
+            return
+        chaves = [tuple(int(x) for x in valor.split(':')) for valor in self.values]
+        await interaction.response.send_modal(TransferenciaValorModalV840(self.usuario_id, chaves))
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# CLASSE: SelecionarPendenciasViewV840
+# ───────────────────────────────────────────────────────────────────────────────
+class SelecionarPendenciasViewV840(discord.ui.View):
+    # ───────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ───────────────────────────────────────────────────────────────────────────
+    def __init__(self, usuario_id, rows):
+        super().__init__(timeout=180)
+        self.add_item(SelecionarPendenciasTransferenciaV840(usuario_id, rows))
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# CLASSE: CentralTransferenciasViewV840
+# ───────────────────────────────────────────────────────────────────────────────
+class CentralTransferenciasViewV840(discord.ui.View):
+    # ───────────────────────────────────────────────────────────────────────────
+    # MÉTODO: __init__
+    # ───────────────────────────────────────────────────────────────────────────
+    def __init__(self):
         super().__init__(timeout=None)
 
-        self.entrega_id = entrega_id
-        self.pedido_numero = int(
-            pedido_numero or 0
-        )
-        self.valor_total = int(
-            valor_total or 0
-        )
-        self.pt = int(
-            pt or 0
-        )
-        self.sub = int(
-            sub or 0
-        )
-        self.is_doacao = is_doacao
-        self.numero_parcela = numero_parcela
-
-        # ────────────────────────────────────────────────────────────────────────
-        # BOTÃO PERSISTENTE DA TRANSFERÊNCIA
-        # ────────────────────────────────────────────────────────────────────────
-        if not is_doacao:
-            botao = discord.ui.Button(
-                label="📤 Confirmar Transferência",
-                style=discord.ButtonStyle.success,
-                custom_id="confirmar_transferencia_fixo",
-                emoji="📤"
-            )
-
-            botao.callback = (
-                self.abrir_modal_transferencia
-            )
-
-            self.add_item(botao)
-
-    # ────────────────────────────────────────────────────────────────────────────
-    # MÉTODO: abrir_modal_transferencia
-    # ────────────────────────────────────────────────────────────────────────────
-    async def abrir_modal_transferencia(
-        self,
-        interaction: discord.Interaction
-    ):
-        msg = interaction.message
-
-        if not msg or not msg.embeds:
-            await interaction.response.send_message(
-                "❌ Card de venda indisponível.",
-                ephemeral=True
-            )
-            return
-
+    # ───────────────────────────────────────────────────────────────────────────
+    # MÉTODO: meu_saldo
+    # ───────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(label='💰 Meu saldo pendente', style=discord.ButtonStyle.secondary,
+                       custom_id='vdr840_saldo_repasses')
+    async def meu_saldo(self, interaction: discord.Interaction, button):
+        await interaction.response.defer(ephemeral=True)
         try:
-            embed = msg.embeds[0]
-
-            if (
-                "VENDA FINALIZADA"
-                not in (embed.title or "").upper()
-            ):
-                raise ValueError(
-                    "Essa mensagem não é uma venda finalizada."
-                )
-
-            # ────────────────────────────────────────────────────────────────────
-            # IDENTIFICA O PEDIDO DO CARD REALMENTE CLICADO
-            # ────────────────────────────────────────────────────────────────────
-            dados = await extrair_dados_pedido_do_embed(
-                embed
-            )
-
-            pedido = int(
-                dados.get("pedido_numero") or 0
-            )
-
-            if pedido <= 0:
-                raise ValueError(
-                    "Número do pedido não encontrado no card."
-                )
-
-            # Não consulta o banco antes de responder à
-            # interação para evitar timeout do Discord.
-            if any(
-                "Transferido para:" in str(campo.value)
-                for campo in embed.fields
-            ):
-                raise ValueError(
-                    "Esse card já exibe "
-                    "uma transferência confirmada."
-                )
-
-            # ────────────────────────────────────────────────────────────────────
-            # ENTREGA E PARCELA DO PRÓPRIO CARD
-            # ────────────────────────────────────────────────────────────────────
-            footer = (
-                embed.footer.text
-                if embed.footer and embed.footer.text
-                else ""
-            )
-
-            m_entrega = re.search(
-                r"\bID:\s*(\d+)",
-                footer
-            )
-
-            m_parcela = re.search(
-                r"\bParcela:\s*(\d+)",
-                footer,
-                re.IGNORECASE
-            )
-
-            entrega = (
-                int(m_entrega.group(1))
-                if m_entrega
-                else int(self.entrega_id or 0)
-            )
-
-            parcela = (
-                int(m_parcela.group(1))
-                if m_parcela
-                else (
-                    int(self.numero_parcela)
-                    if self.numero_parcela
-                    else None
-                )
-            )
-
-            # Pedido sem entrega parcelada.
-            if not entrega:
-                parcela = pedido
-
-            # ────────────────────────────────────────────────────────────────────
-            # QUANTIDADES E VALOR DO CARD
-            # ────────────────────────────────────────────────────────────────────
-            pt = int(
-                dados.get("pt") or 0
-            )
-
-            sub = int(
-                dados.get("sub") or 0
-            )
-
-            valor = (
-                pt * 50
-                + sub * 90
-            )
-
-            if valor <= 0:
-                raise ValueError(
-                    "Quantidade/valor inválido no card."
-                )
-
-            # ────────────────────────────────────────────────────────────────────
-            # MODAL INDIVIDUAL DE TRANSFERÊNCIA
-            # ────────────────────────────────────────────────────────────────────
-            await interaction.response.send_modal(
-                ConfirmarTransferenciaModal(
-                    interaction=interaction,
-                    mensagem_original=msg,
-                    entrega_id=entrega,
-                    pedido_numero=pedido,
-                    valor=valor,
-                    pt=pt,
-                    sub=sub,
-                    numero_parcela=parcela
-                )
-            )
-
-        except (RuntimeError, ValueError) as erro:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"❌ {erro}",
-                    ephemeral=True
-                )
-
+            rows, total, quantidade = await consultar_repasses_v840(interaction.user.id)
+            linhas = [f"• #{r['pedido_numero']} / parcela {r['numero_parcela']}: {formatar_valor_repasses_v840(r['restante'])}" for r in rows]
+            texto = '\n'.join(linhas) if linhas else 'Nenhum saldo pendente.'
+            if quantidade > len(rows):
+                texto += f'\n… e mais {quantidade-len(rows)} registros.'
+            await interaction.followup.send(
+                f'🏦 **Seu saldo a transferir: {formatar_valor_repasses_v840(total)}**\n'
+                f'📦 {quantidade} entrega(s) pendente(s).\n\n{texto}'[:1950], ephemeral=True)
         except Exception:
-            logger.exception(
-                "❌ Erro ao abrir transferência "
-                "do card %s",
-                msg.id
-            )
+            logger.exception('❌ Consulta da central de transferências')
+            await interaction.followup.send('❌ Falha ao consultar seu saldo.', ephemeral=True)
 
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ Falha ao abrir transferência. "
-                    "Consulte os logs.",
-                    ephemeral=True
-                )
+    # ───────────────────────────────────────────────────────────────────────────
+    # MÉTODO: iniciar_transferencia
+    # ───────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(label='📤 Registrar transferência', style=discord.ButtonStyle.success,
+                       custom_id='vdr840_registrar_repasses')
+    async def iniciar_transferencia(self, interaction: discord.Interaction, button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            rows, total, quantidade = await consultar_repasses_v840(interaction.user.id)
+            if not rows:
+                await interaction.followup.send('✅ Você não tem pagamentos pendentes para transferir.', ephemeral=True)
+                return
+            await interaction.followup.send(
+                f'📦 **Selecione as entregas desta transferência.**\n'
+                f'Saldo total: **{formatar_valor_repasses_v840(total)}** ({quantidade} pendências).\n'
+                'Você pode selecionar até 25 registros por lote; se houver mais, '
+                'os demais continuarão disponíveis após este envio.',
+                view=SelecionarPendenciasViewV840(interaction.user.id, rows), ephemeral=True)
+        except Exception:
+            logger.exception('❌ Iniciar transferência')
+            await interaction.followup.send('❌ Não foi possível listar as pendências.', ephemeral=True)
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FIM DA CLASSE: FinalizadosView
-# ────────────────────────────────────────────────────────────────────────────────
+    # ───────────────────────────────────────────────────────────────────────────
+    # MÉTODO: cancelar_envio
+    # ───────────────────────────────────────────────────────────────────────────
+    @discord.ui.button(label='❌ Cancelar envio de print', style=discord.ButtonStyle.danger,
+                       custom_id='vdr840_cancelar_repasses')
+    async def cancelar_envio(self, interaction: discord.Interaction, button):
+        await interaction.response.defer(ephemeral=True)
+        pool = await get_pool()
+        if pool is None:
+            await interaction.followup.send('❌ Banco indisponível.', ephemeral=True)
+            return
+        async with pool.acquire() as conn:
+            result = await conn.execute('''
+                UPDATE vendas_transferencias_solicitacoes_v840
+                   SET situacao='cancelada'
+                 WHERE usuario_id=$1 AND situacao='aguardando_print'
+            ''', str(interaction.user.id))
+        await interaction.followup.send(
+            '✅ Solicitação de print cancelada; nenhum saldo foi alterado.'
+            if result.endswith('1') else
+            'ℹ️ Você não tem envio de print aberto para cancelar.', ephemeral=True)
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: enviar_painel_transferencias_v840
+# ───────────────────────────────────────────────────────────────────────────────
+async def enviar_painel_transferencias_v840():
+    canal = bot.get_channel(CANAL_TRANSFERENCIAS_ID)
+    if canal is None:
+        logger.error('❌ PATCH 004: canal de transferências não encontrado: %s', CANAL_TRANSFERENCIAS_ID)
+        return False
+    embed = discord.Embed(
+        title='🏦 CENTRAL DE TRANSFERÊNCIAS — VIDA RASA 442',
+        description=(
+            '**Reúna os pagamentos recebidos e envie apenas um comprovante.**\n\n'
+            '1️⃣ Clique em **Meu saldo pendente**.\n'
+            '2️⃣ Clique em **Registrar transferência** e marque os pedidos/parcelas.\n'
+            '3️⃣ Informe quanto transferiu (pode ser parcial).\n'
+            '4️⃣ Envie a **imagem do comprovante neste canal**, após a solicitação do bot.\n'
+            '5️⃣ O bot arquiva a imagem em Finalizados e baixa somente os valores transferidos.\n\n'
+            '👑 Recebimentos confirmados diretamente pelo **cargo 01** ficam dispensados.\n'
+            '⚠️ Use **Cancelar envio de print** se preparar uma transferência errada.\n'
+            '🔒 Transferência **não credita o caixa outra vez**.'),
+        color=0x2ECC71, timestamp=agora())
+    embed.set_footer(text='VDR442 • PATCH 004 / V8.4.0')
+    try:
+        await enviar_ou_atualizar_painel('central_transferencias_v840', CANAL_TRANSFERENCIAS_ID,
+                                        embed, CentralTransferenciasViewV840())
+        return True
+    except Exception:
+        logger.exception('❌ Não foi possível publicar a central de transferências')
+        return False
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: anexar_repasses_ao_card_v840
+# ───────────────────────────────────────────────────────────────────────────────
+async def anexar_repasses_ao_card_v840(entrega_id, numero_parcela):
+    """Atualiza o card existente; o comprovante permanece arquivado no Discord."""
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow('''
+            SELECT mensagem_finalizado, valor_total, valor_repassado, situacao
+            FROM vendas_repasses_v840
+            WHERE entrega_id=$1 AND numero_parcela=$2
+        ''', int(entrega_id), int(numero_parcela))
+        ultimo = await conn.fetchrow('''
+            SELECT l.comprovante_url, l.id
+            FROM vendas_transferencias_itens_v840 i
+            JOIN vendas_transferencias_lotes_v840 l ON l.id=i.lote_id
+            WHERE i.entrega_id=$1 AND i.numero_parcela=$2
+            ORDER BY l.id DESC LIMIT 1
+        ''', int(entrega_id), int(numero_parcela))
+    if not row or not row['mensagem_finalizado']:
+        return False
+    canal = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
+    if canal is None:
+        return False
+    try:
+        msg = await canal.fetch_message(int(row['mensagem_finalizado']))
+        if not msg.embeds:
+            return False
+        embed = msg.embeds[0].copy()
+        status = str(row['situacao'])
+        restante = int(row['valor_total']) - int(row['valor_repassado'])
+        texto = ('👑 Dispensado — recebido diretamente pelo 01' if status == 'dispensado'
+                 else '📚 Histórico anterior à central (sem cobrança automática)' if status == 'legado_sem_cobranca'
+                 else f"Transferido: {formatar_valor_repasses_v840(row['valor_repassado'])}\n"
+                      f"Restante: {formatar_valor_repasses_v840(restante)}\n"
+                      f"Situação: {'✅ Quitado' if status == 'quitado' else '⏳ Aguardando repasse'}")
+        if ultimo:
+            texto += f"\n🧾 Comprovante mais recente: lote #{ultimo['id']}"
+            if ultimo['comprovante_url']:
+                embed.set_image(url=ultimo['comprovante_url'])
+        indice = next((i for i, f in enumerate(embed.fields)
+                       if f.name == '🏦 REPASSE À FACÇÃO'), None)
+        if indice is None:
+            if len(embed.fields) >= 25:
+                logger.warning('⚠️ Card %s sem espaço para campo de repasse', msg.id)
+                return False
+            embed.add_field(name='🏦 REPASSE À FACÇÃO', value=texto[:1024], inline=False)
+        else:
+            embed.set_field_at(indice, name='🏦 REPASSE À FACÇÃO', value=texto[:1024], inline=False)
+        await msg.edit(embed=embed, view=None)
+        return True
+    except discord.NotFound:
+        logger.warning('⚠️ Card finalizado não encontrado para repasse: %s', row['mensagem_finalizado'])
+    except Exception:
+        logger.exception('❌ Erro ao atualizar card finalizado do repasse %s/%s', entrega_id, numero_parcela)
+    return False
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: processar_print_transferencia_v840
+# ───────────────────────────────────────────────────────────────────────────────
+async def processar_print_transferencia_v840(message: discord.Message):
+    """Recebe somente print solicitado, arquiva antes de apagar e lança lote idempotente."""
+    if message.guild is None or message.channel.id != CANAL_TRANSFERENCIAS_ID:
+        return False
+    if not message.attachments:
+        return False
+    anexo = next((a for a in message.attachments if
+                  (a.content_type or '').lower().startswith('image/') or
+                  (not a.content_type and a.filename.lower().endswith(('.png','.jpg','.jpeg','.webp')))), None)
+    if anexo is None:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    usuario = str(message.author.id)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Adquire uma única solicitação por usuário (atualização atômica).
+            pedido = await conn.fetchrow('''
+                UPDATE vendas_transferencias_solicitacoes_v840
+                   SET situacao='processando', mensagem_origem=$2
+                 WHERE id=(
+                     SELECT id FROM vendas_transferencias_solicitacoes_v840
+                     WHERE usuario_id=$1 AND situacao='aguardando_print'
+                       AND expira_em > NOW()
+                     ORDER BY id DESC LIMIT 1
+                 ) AND situacao='aguardando_print'
+                 RETURNING id, selecao, valor
+            ''', usuario, str(message.id))
+    if not pedido:
+        return False
+    arquivo = None
+    try:
+        destino = bot.get_channel(CANAL_PEDIDOS_FINALIZADOS_ID)
+        if destino is None:
+            raise RuntimeError('Canal Finalizados indisponível; print original preservado.')
+        # Copia o arquivo para mensagem controlada pelo bot ANTES de apagar original.
+        arquivo = await anexo.to_file()
+        embed = discord.Embed(
+            title=f'🏦 COMPROVANTE DE TRANSFERÊNCIA — LOTE #{pedido["id"]}',
+            description=(f'👤 Transferido por: {message.author.mention}\n'
+                         f'💰 Valor: **{formatar_valor_repasses_v840(pedido["valor"])}**\n'
+                         '📋 Pedidos e parcelas detalhados no registro do lote.\n'
+                         '⚠️ Arquivo preservado para auditoria.'), color=0x2ECC71,
+            timestamp=agora())
+        msg_arquivo = await destino.send(embed=embed, file=arquivo)
+        if not msg_arquivo.attachments:
+            raise RuntimeError('Discord não confirmou o arquivo arquivado.')
+        url = msg_arquivo.attachments[0].url
+        selecao = pedido['selecao']
+        if isinstance(selecao, str):
+            selecao = json.loads(selecao)
+        chaves = [(int(e), int(p)) for e, p in selecao]
+        if not chaves:
+            raise ValueError('Solicitação sem parcelas selecionadas.')
+        lancamentos = []
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                solicitacao = await conn.fetchrow('''
+                    SELECT id, usuario_id, situacao, mensagem_origem
+                    FROM vendas_transferencias_solicitacoes_v840
+                    WHERE id=$1 FOR UPDATE
+                ''', pedido['id'])
+                if (not solicitacao or solicitacao['situacao'] != 'processando'
+                        or solicitacao['mensagem_origem'] != str(message.id)):
+                    raise RuntimeError('Solicitação alterada; nenhum valor foi baixado.')
+                faltando = int(pedido['valor'])
+                for entrega, parcela in chaves:
+                    row = await conn.fetchrow('''
+                        SELECT pedido_numero, valor_total, valor_repassado
+                        FROM vendas_repasses_v840
+                        WHERE entrega_id=$1 AND numero_parcela=$2
+                          AND recebido_por=$3 AND situacao IN ('pendente','parcial')
+                        FOR UPDATE
+                    ''', entrega, parcela, usuario)
+                    if not row:
+                        continue
+                    livre = int(row['valor_total']) - int(row['valor_repassado'])
+                    alocar = min(livre, faltando)
+                    if alocar <= 0:
+                        continue
+                    lancamentos.append((entrega, parcela, int(row['pedido_numero']), alocar))
+                    faltando -= alocar
+                    if faltando == 0:
+                        break
+                if faltando:
+                    raise ValueError('O saldo das parcelas mudou; comprovante guardado, mas baixa bloqueada para auditoria.')
+                lote = await conn.fetchval('''
+                    INSERT INTO vendas_transferencias_lotes_v840 (
+                        solicitado_por, valor, mensagem_origem, mensagem_arquivo,
+                        comprovante_url
+                    ) VALUES ($1,$2,$3,$4,$5) RETURNING id
+                ''', usuario, int(pedido['valor']), str(message.id), str(msg_arquivo.id), url)
+                for entrega, parcela, numero_pedido, alocar in lancamentos:
+                    await conn.execute('''
+                        INSERT INTO vendas_transferencias_itens_v840 (
+                            lote_id, entrega_id, numero_parcela, valor
+                        ) VALUES ($1,$2,$3,$4)
+                    ''', lote, entrega, parcela, alocar)
+                    await conn.execute('''
+                        UPDATE vendas_repasses_v840
+                        SET valor_repassado=valor_repassado+$3,
+                            situacao=CASE WHEN valor_repassado+$3>=valor_total
+                                THEN 'quitado' ELSE 'parcial' END,
+                            atualizado_em=NOW()
+                        WHERE entrega_id=$1 AND numero_parcela=$2
+                    ''', entrega, parcela, alocar)
+                await conn.execute('''
+                    UPDATE vendas_transferencias_solicitacoes_v840
+                    SET situacao='concluida' WHERE id=$1
+                ''', pedido['id'])
+        # O comprovante e o lote financeiro estão seguros: pode apagar o original.
+        try:
+            await message.delete()
+        except discord.Forbidden:
+            logger.warning('⚠️ Sem Gerenciar Mensagens no canal de transferências')
+        except discord.HTTPException:
+            logger.exception('⚠️ Falha apagando print original do lote %s', lote)
+        for entrega, parcela, _, _ in lancamentos:
+            await anexar_repasses_ao_card_v840(entrega, parcela)
+        descricao = '\n'.join(
+            f"• Pedido #{n} / parcela {p}: {formatar_valor_repasses_v840(v)}"
+            for _, p, n, v in lancamentos)
+        try:
+            atualizado = msg_arquivo.embeds[0].copy()
+            atualizado.description += '\n\n**✅ ITENS CONCILIADOS:**\n' + descricao[:1400]
+            atualizado.set_image(url=url)
+            await msg_arquivo.edit(embed=atualizado)
+        except Exception:
+            logger.exception('⚠️ Comprovante arquivado; falha apenas visual no lote %s', lote)
+        try:
+            await message.channel.send(
+                f'✅ {message.author.mention}, transferência **#{lote}** registrada: '
+                f'**{formatar_valor_repasses_v840(pedido["valor"])}**. '
+                'O comprovante está arquivado em Pedidos Finalizados.',
+                delete_after=35)
+        except discord.HTTPException:
+            logger.warning('⚠️ Lote %s confirmado, falha apenas na mensagem de retorno', lote)
+        return True
+    except Exception as erro:
+        logger.exception('❌ Falha no print de transferência de %s', usuario)
+        # Nunca informar falha financeira se o lote já foi gravado no banco.
+        try:
+            async with pool.acquire() as conn:
+                status_atual = await conn.fetchval('''
+                    SELECT situacao FROM vendas_transferencias_solicitacoes_v840
+                    WHERE id=$1
+                ''', pedido['id'])
+            if status_atual == 'concluida':
+                logger.warning('⚠️ Repasse concluído; falha apenas após commit na etapa visual')
+                return True
+        except Exception:
+            logger.exception('⚠️ Não foi possível verificar resultado do lote')
+        # Não faz baixa parcial: transação reverte todas as parcelas juntas.
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute('''
+                    UPDATE vendas_transferencias_solicitacoes_v840
+                       SET situacao='aguardando_print', mensagem_origem=NULL
+                     WHERE id=$1 AND situacao='processando'
+                ''', pedido['id'])
+        except Exception:
+            logger.exception('❌ Falha liberando solicitação para nova tentativa')
+        try:
+            await message.reply('⚠️ Comprovante NÃO conciliado. Seu print foi preservado. '
+                                'Avise a gerência e consulte os logs antes de reenviar.')
+        except Exception:
+            pass
+        return True
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FUNÇÃO: restaurar_central_transferencias_v840
+# ───────────────────────────────────────────────────────────────────────────────
+async def restaurar_central_transferencias_v840():
+    """Restaura painel, solicitações e cards que precisam refletir repasses."""
+    if not await preparar_transferencias_v840():
+        return False
+    try:
+        bot.add_view(CentralTransferenciasViewV840())
+    except ValueError:
+        # A View já pode ter sido registrada no on_ready.
+        pass
+    ok = await enviar_painel_transferencias_v840()
+    pool = await get_pool()
+    if pool:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch('''
+                SELECT DISTINCT i.entrega_id, i.numero_parcela
+                FROM vendas_transferencias_itens_v840 i
+                JOIN vendas_repasses_v840 r
+                  ON r.entrega_id=i.entrega_id AND r.numero_parcela=i.numero_parcela
+                WHERE r.mensagem_finalizado IS NOT NULL
+            ''')
+        for row in rows:
+            try:
+                await anexar_repasses_ao_card_v840(row['entrega_id'], row['numero_parcela'])
+            except Exception:
+                logger.exception('⚠️ Repasse pendente de atualização visual: %s', dict(row))
+    return ok
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FIM — PATCH 004 / V8.4.0 — CENTRAL DE TRANSFERÊNCIAS
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # ════════════════════════════════════════════════════════════════════════════════
 # BLOCO 12 — FUNÇÃO: confirmar_pagamento_venda_com_caixa
 # ════════════════════════════════════════════════════════════════════════════════
 async def confirmar_pagamento_venda_com_caixa(pedido_numero, entrega_id, numero_parcela,
-                                               pt, sub, valor, recebido_por):
+                                               pt, sub, valor, recebido_por, isento_cargo_01=False):
     """Grava pagamento e movimentação no caixa uma única vez, em uma transação.
 
     A linha de entregas_status é bloqueada (FOR UPDATE) para que dois cliques,
@@ -12981,7 +12216,18 @@ async def confirmar_pagamento_venda_com_caixa(pedido_numero, entrega_id, numero_
                 )
                 if not valor_creditado:
                     raise RuntimeError("Falha ao creditar o caixa; pagamento revertido.")
-                return {"ok": True, "ja_pago": False, "entregue": bool(estado["entregue"])}
+                # PATCH 004: obrigação de repasse do recebedor (não do vendedor).
+                # A baixa e o caixa só persistem se esta linha também for gravada.
+                await conn.execute('''
+                    INSERT INTO vendas_repasses_v840 (
+                        entrega_id,numero_parcela,pedido_numero,recebido_por,
+                        valor_total,valor_repassado,situacao
+                    ) VALUES ($1,$2,$3,$4,$5,0,$6)
+                    ON CONFLICT (entrega_id,numero_parcela) DO NOTHING
+                ''', entrega_id, numero_parcela, pedido_numero, recebido_por, valor,
+                    'dispensado' if isento_cargo_01 else 'pendente')
+                return {"ok": True, "ja_pago": False, "entregue": bool(estado["entregue"]),
+                        "dispensado": bool(isento_cargo_01)}
     except Exception as erro:
         logger.exception("❌ Pagamento do pedido #%s não concluído: %s", pedido_numero, erro)
         return {"ok": False, "motivo": str(erro)}
@@ -13667,7 +12913,8 @@ class StatusView(discord.ui.View):
         resultado = await confirmar_pagamento_venda_com_caixa(
             pedido_numero=dados["pedido_numero"], entrega_id=dados["entrega_id"],
             numero_parcela=dados["entrega_atual"], pt=dados["pt"], sub=dados["sub"],
-            valor=dados["valor_total"], recebido_por=interaction.user.id
+            valor=dados["valor_total"], recebido_por=interaction.user.id,
+            isento_cargo_01=any(role.id == CARGO_01_ID for role in interaction.user.roles)
         )
         if not resultado["ok"]:
             await interaction.followup.send(
@@ -31434,16 +30681,9 @@ class BotaoPersistente:
         if tipo == "meta":
             return MetaView(dados.get("user_id"))
         elif tipo == "venda":
-            # ─── SE ESTIVER NO CANAL DE FINALIZADOS, OBRIGA A USAR A VIEW LIMPA ───
+            # PATCH 004: em Finalizados não há botão de transferência individual.
             if canal_id and int(canal_id) == CANAL_PEDIDOS_FINALIZADOS_ID:
-                return FinalizadosView(
-                    entrega_id=dados.get("entrega_id"),
-                    pedido_numero=dados.get("pedido_numero", 0),
-                    valor_total=dados.get("valor_total", 0),
-                    pt=dados.get("pt", 0),
-                    sub=dados.get("sub", 0),
-                    is_doacao=dados.get("is_doacao", False)
-                )
+                return None
             # Pedidos a Pagar têm somente o botão de pagamento.
             elif canal_id and int(canal_id) == CANAL_PEDIDOS_A_PAGAR_ID:
                 return StatusView(
@@ -31568,6 +30808,9 @@ def criar_view_por_painel(nome):
             return None
         except Exception:
             return None
+
+    if nome == "central_transferencias_v840":
+        return CentralTransferenciasViewV840()
 
     if nome == "painel_registro":
         return RegistroView()
@@ -35632,6 +34875,10 @@ async def on_ready():
     await migrar_nomes_bau_v810()
     await desativar_ponto_mecanica_v810()
     await restabelecer_operacoes_pendentes_v810(reconciliar_antigos=False)
+    if not await preparar_transferencias_v840():
+        logger.critical('❌ PATCH 004: central de transferências indisponível. Corrija o banco antes de registrar novos pagamentos.')
+        bot.inicializando = False
+        return
     guild = bot.get_guild(GUILD_ID)
 
     if guild:
@@ -35781,6 +35028,7 @@ async def on_ready():
     await BotaoPersistente.restaurar_botoes()
     await restaurar_botoes_vendas()
     await restaurar_transferencias_finalizadas()
+    await restaurar_central_transferencias_v840()
     await restaurar_acoes()
     await restaurar_botoes_metas()
     # Reconciliação completa de cards antigos sem IDs salvos executada fora
@@ -35851,7 +35099,7 @@ async def on_ready():
     bot.inicializando = False
 
     logger.info("=" * 50)
-    logger.info("✅ BOT ONLINE - %s (PATCH 003)", VERSAO_BOT)
+    logger.info("✅ BOT ONLINE - %s (PATCH 004)", VERSAO_BOT)
     logger.info("=" * 50)
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -35870,6 +35118,16 @@ async def on_message(message: discord.Message):
         return
 
     canal = message.channel
+
+    # PATCH 004: somente imagens de solicitações de repasse ativas são consumidas.
+    if (message.guild and message.guild.id == GUILD_ID
+            and getattr(canal, 'id', 0) == CANAL_TRANSFERENCIAS_ID
+            and message.attachments):
+        try:
+            if await processar_print_transferencia_v840(message):
+                return
+        except Exception:
+            logger.exception('❌ Falha isolada no processamento de transferências')
 
     # ═══════════════════════════════════════════════════════════════════════════
     # DETECÇÃO DE COMPROVANTE DE DOAÇÃO NO DM
